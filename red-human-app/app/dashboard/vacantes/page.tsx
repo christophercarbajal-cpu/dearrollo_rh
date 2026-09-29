@@ -79,6 +79,7 @@ import { usePuedeDecidir } from "@/components/sesion";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
 import { cn } from "@/lib/utils";
 import { usePolling } from "@/lib/use-polling";
+import { textoFecha } from "@/lib/fechas";
 
 const estadoTone: Record<Vacante["estado"], "good" | "neutral" | "warn" | "bad"> = {
   Publicada: "good",
@@ -212,7 +213,7 @@ export default function Vacantes() {
   function fechaCorta(iso: string | null | undefined): string | null {
     if (!iso) return null;
     try {
-      return new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "short" });
+      return textoFecha(iso, { day: "numeric", month: "short" }) || null;
     } catch {
       return null;
     }
@@ -1682,7 +1683,7 @@ function DetalleVacante({
 
         {v.estado === "Eliminada" && (
           <Aviso tono="warn">
-            Esta vacante fue eliminada{v.eliminadaPor ? ` por ${v.eliminadaPor}` : ""}{v.eliminadaEn ? ` el ${new Date(v.eliminadaEn).toLocaleDateString("es-MX")}` : ""}.
+            Esta vacante fue eliminada{v.eliminadaPor ? ` por ${v.eliminadaPor}` : ""}{v.eliminadaEn ? ` el ${textoFecha(v.eliminadaEn)}` : ""}.
             No aparece en tableros, portal ni WhatsApp; su historial se conserva.
           </Aviso>
         )}

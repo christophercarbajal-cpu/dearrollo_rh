@@ -12,7 +12,6 @@ plantillas) y deja rastro en `NotificacionEnviada`.
 import re
 from datetime import datetime
 from typing import List, Optional
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -28,7 +27,8 @@ from ..serial import nombre_empresa_candidato
 # SQLite descarta el offset de un DateTime(timezone=True) y se queda con los números de reloj
 # tal cual, así que hay que convertir a UTC explícitamente antes de guardar (ya nos mordió
 # antes en este proyecto, ver candidatos.py::programar_entrevista_humana histórico).
-TZ_MEXICO = ZoneInfo("America/Mexico_City")
+from .. import fechas
+from ..fechas import TZ_ORG as TZ_MEXICO  # zona de la organización (app/fechas.py)
 
 _MESES_LARGO = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -40,7 +40,7 @@ RE_CORREO = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def _fecha_hora_legible_mx(dt: datetime) -> str:
     local = dt.astimezone(TZ_MEXICO)
-    return f"{local.day} de {_MESES_LARGO[local.month - 1]} a las {local.strftime('%H:%M')}"
+    return fechas.con_zona(f"{local.day} de {_MESES_LARGO[local.month - 1]} a las {local.strftime('%H:%M')}")
 
 
 def _detalle_modalidad(eh: EntrevistaHumana, c: Postulacion) -> str:
@@ -352,7 +352,8 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
         e = c.expediente
         empresa = extra.get("empresa") or (nombre_empresa_candidato(v) if v else "") or "la empresa"
         fecha = extra.get("fecha_ingreso")
-        fecha_txt = _fecha_hora_legible_mx(fecha).split(" a las")[0] if fecha else "por confirmar"
+        # fecha de ingreso = día de calendario (medianoche UTC): se lee sin convertir de zona
+        fecha_txt = f"{fechas.dia(fecha).day} de {_MESES_LARGO[fechas.dia(fecha).month - 1]}" if fecha else "por confirmar"
         datos = [
             ("Puesto", extra.get("puesto") or (e.puesto if e else "") or puesto),
             ("Empresa", empresa),

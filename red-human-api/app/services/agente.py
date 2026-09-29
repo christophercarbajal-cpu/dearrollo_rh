@@ -19,7 +19,6 @@ import inspect
 import json
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -40,7 +39,7 @@ from ..routers import vacantes as r_vacantes
 from ..routers import webhooks as r_webhooks
 
 MODEL = settings.openai_model
-TZ_MEXICO = ZoneInfo("America/Mexico_City")
+from ..fechas import TZ_ORG as TZ_MEXICO  # zona de la organización (app/fechas.py)
 MUESTRA_MAXIMA = 10  # Q4: conteo total + muestra de 8-10 + navegación, nunca una tabla completa
 MAX_RONDAS = 6  # tope duro de vueltas de function-calling por pregunta
 

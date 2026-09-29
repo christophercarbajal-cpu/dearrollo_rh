@@ -32,9 +32,9 @@ def _fecha_hora(fecha: str, hora: str) -> tuple[str, str]:
             dt = datetime.fromisoformat(f)
         else:
             dt = datetime.fromisoformat(f + "T" + (h or "00:00"))
-        from zoneinfo import ZoneInfo
+        from ..fechas import TZ_ORG
 
-        dt = dt.replace(tzinfo=ZoneInfo("America/Mexico_City"))
+        dt = dt.replace(tzinfo=TZ_ORG)
         texto_fecha, texto_hora = pc.fecha_hora_mx(dt)
         return texto_fecha, (texto_hora if h or "T" in f else "")
     except ValueError:

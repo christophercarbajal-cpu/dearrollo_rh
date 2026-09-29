@@ -5,10 +5,11 @@ import unicodedata
 from datetime import timedelta, date, datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from .database import Base
+from .fechas import FechaUTC
 
 
 def ahora() -> datetime:
@@ -71,7 +72,7 @@ class Vacante(Base):
     estado: Mapped[str] = mapped_column(String(30), default="Borrador")  # Publicada | Borrador | En revisión | Cerrada | Eliminada
     # CRUD (2026-09-15): baja LÓGICA — la fila y sus postulaciones/entrevistas/expedientes se conservan;
     # deja de aparecer en listados, portal, menú de WhatsApp y métricas.
-    eliminada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    eliminada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     eliminada_por: Mapped[str] = mapped_column(String(150), default="")
     requisitos: Mapped[str] = mapped_column(Text, default="")
     descripcion: Mapped[str] = mapped_column(Text, default="")
@@ -103,11 +104,11 @@ class Vacante(Base):
     # {"occ": {titulo, copy, page, etiquetas}, "linkedin": {...}, "portal": {...}, "whatsapp": {...}}
     publicaciones: Mapped[dict] = mapped_column(JSON, default=dict)
 
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
     # Fase C: fecha de primera publicación — se estampa automáticamente en publicar(), nunca captura manual.
     # NULL para vacantes que aún no se han publicado o que existían antes del deploy de Fase C.
-    publicada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    publicada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     # Origen: si esta vacante nació de una requisición autorizada (módulo 4). Puede ser null
     # para vacantes creadas directamente por RH sin pasar por el flujo de requisición.
@@ -165,12 +166,12 @@ class Candidato(Base):
     cv_datos: Mapped[dict] = mapped_column(JSON, default=dict)
     wa_nombre: Mapped[str] = mapped_column(String(200), default="")  # nombre del perfil de WhatsApp
     wa_id: Mapped[str] = mapped_column(String(30), default="", index=True)  # ID de WhatsApp (tel tal como lo envía Meta)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Modo Prueba (solo admin, ver ConfiguracionSistema): nunca aparece en listados/reportes de RH.
     es_prueba: Mapped[bool] = mapped_column(Boolean, default=False)
     # CRUD (2026-09-15): baja LÓGICA de la persona (LFPDPPP: derecho de cancelación con rastro en
     # bitácora). Sus postulaciones se cierran (motivo `eliminado`); nada se borra físicamente.
-    eliminado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    eliminado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     eliminado_por: Mapped[str] = mapped_column(String(150), default="")
     # Cuenta (Fase A multi-cuenta).
     cuenta_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cuentas.id"), nullable=True, index=True)
@@ -189,19 +190,19 @@ class Candidato(Base):
     evidencia: Mapped[str] = mapped_column(Text, default="")
     analisis: Mapped[dict] = mapped_column(JSON, default=dict)
     consentimiento: Mapped[bool] = mapped_column(Boolean, default=False)
-    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     prefiltro_completo: Mapped[bool] = mapped_column(Boolean, default=False)
-    videollamada_agendada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    videollamada_agendada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     videollamada_liga: Mapped[str] = mapped_column(String(300), default="")
     videollamada_aviso_noshow_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
-    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     resultado_apto: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # LEGADO más antiguo — puente para scripts/migrar_entrevistas_humanas.py.
     entrevista_humana_entrevistador: Mapped[str] = mapped_column(String(150), default="")
     entrevista_humana_tipo: Mapped[str] = mapped_column(String(20), default="")
     entrevista_humana_usuario_id: Mapped[Optional[int]] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     entrevista_humana_correo_externo: Mapped[str] = mapped_column(String(200), default="")
-    entrevista_humana_fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    entrevista_humana_fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     entrevista_humana_modalidad: Mapped[str] = mapped_column(String(20), default="")
     entrevista_humana_liga: Mapped[str] = mapped_column(String(300), default="")
     entrevista_humana_ubicacion: Mapped[str] = mapped_column(String(300), default="")
@@ -276,7 +277,7 @@ class Postulacion(Base):
 
     activa: Mapped[bool] = mapped_column(Boolean, default=True)  # False = cerrada (ver motivo_cierre)
     motivo_cierre: Mapped[str] = mapped_column(String(30), default="")  # ver MOTIVOS_CIERRE
-    cerrada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cerrada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     origen: Mapped[str] = mapped_column(String(30), default="formulario")  # ver ORIGENES_POSTULACION
     # Copia de Candidato.es_prueba al crear (para filtrar métricas sin JOIN).
     es_prueba: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -299,18 +300,18 @@ class Postulacion(Base):
     actividades_omitidas: Mapped[list] = mapped_column(JSON, default=list)
     # Fase C: resultado vigente ("el más reciente gana"), ver candidatos._recalcular_resultado_apto.
     resultado_apto: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     # --- Consentimiento LFPDPPP: por proceso de selección ---
     consentimiento: Mapped[bool] = mapped_column(Boolean, default=False)
-    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     # --- Zero-Touch fase 1: videollamada agendada por el agente (herramienta agendar_videollamada) ---
-    videollamada_agendada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    videollamada_agendada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     videollamada_liga: Mapped[str] = mapped_column(String(300), default="")
     videollamada_aviso_noshow_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     # --- Relaciones ---
     candidato: Mapped["Candidato"] = relationship(
@@ -424,7 +425,7 @@ class EntrevistaHumana(Base):
     # Fase 7B: id del evento de calendario (Graph) cuando la videollamada la creó Teams — sirve para
     # modificar/cancelar la reunión; "" = liga manual.
     teams_evento_id: Mapped[str] = mapped_column(String(300), default="")
-    fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     modalidad: Mapped[str] = mapped_column(String(20), default="")  # Presencial|Videollamada|Llamada
     liga: Mapped[str] = mapped_column(String(300), default="")  # obligatoria si modalidad=Videollamada
     ubicacion: Mapped[str] = mapped_column(String(300), default="")  # obligatoria si modalidad=Presencial
@@ -442,9 +443,9 @@ class EntrevistaHumana(Base):
     # carrera (ver candidatos.py: RH siempre puede sobreescribir después, para corregir).
     resultado_capturado_por: Mapped[str] = mapped_column(String(20), default="")
     # 2026-09-19: recordatorio automático (job) y cierre del ciclo desde la liga del entrevistador.
-    recordatorio_enviado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    evaluada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    recordatorio_enviado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    evaluada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     candidato: Mapped["Candidato"] = relationship(foreign_keys=[candidato_id])
     postulacion: Mapped[Optional["Postulacion"]] = relationship(back_populates="entrevistas_humanas")
@@ -466,7 +467,7 @@ class Archivo(Base):
     notas_ia: Mapped[str] = mapped_column(Text, default="")
     extraccion: Mapped[dict] = mapped_column(JSON, default=dict)
     subido_por: Mapped[str] = mapped_column(String(150), default="RH")
-    subido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    subido_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     candidato: Mapped[Candidato] = relationship(back_populates="archivos")
 
@@ -507,23 +508,23 @@ class Entrevista(Base):
     # Vacío mientras sigue abierta. La transición a evaluada/interrumpida SOLO ocurre en /finalizar.
     cierre: Mapped[str] = mapped_column(String(20), default="")
     motivo: Mapped[str] = mapped_column(String(30), default="")  # ver MOTIVOS_ENTREVISTA
-    iniciada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    finalizada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    iniciada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    finalizada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # 2026-09-17: última vez que el navegador sincronizó el transcript (modo avatar) o hubo turno de
     # texto. Con ella el job `cerrar_entrevistas_inactivas` cierra y evalúa entrevistas cuya pestaña
     # se cerró sin /finalizar — antes se quedaban `en_curso` para siempre y RH no veía nada.
-    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Reapertura explícita por RH: cada intento anterior se archiva aquí ({transcript, evaluacion,
     # cierre, finalizada_en}) — nunca se pisa ni se borra.
     intentos_previos: Mapped[list] = mapped_column(JSON, default=list)
     consentimiento: Mapped[bool] = mapped_column(Boolean, default=False)
-    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    programada_para: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consentimiento_fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    programada_para: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Videollamada de Google Meet generada a mano por RH (botones del panel) — independiente
     # de `token`/avatar Anam de arriba. Usa el mismo generador mock que la herramienta
     # agendar_videollamada del agente (ver services/ia.agendar_videollamada_mock).
     liga_meet: Mapped[str] = mapped_column(String(300), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     candidato: Mapped[Candidato] = relationship(foreign_keys=[candidato_id])
     postulacion: Mapped[Optional["Postulacion"]] = relationship(back_populates="entrevistas")
@@ -542,7 +543,7 @@ class Mensaje(Base):
     # id del mensaje en WhatsApp (wamid…). Meta reenvía el webhook si no le
     # contestamos rápido; guardarlo evita procesar dos veces el mismo mensaje.
     wa_id: Mapped[str] = mapped_column(String(80), default="", index=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     candidato: Mapped[Candidato] = relationship(foreign_keys=[candidato_id])
     postulacion: Mapped[Optional["Postulacion"]] = relationship(back_populates="mensajes")
@@ -590,11 +591,11 @@ class Requisicion(Base):
 
     estado: Mapped[str] = mapped_column(String(30), default="borrador")
     autorizada_por: Mapped[str] = mapped_column(String(150), default="")
-    autorizada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    autorizada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     comentario_autorizacion: Mapped[str] = mapped_column(Text, default="")
 
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
     # Cuenta/Cliente (Fase A multi-cuenta) — la Vacante que nace de esta Requisición hereda
     # estos valores automáticamente (regla de Fase E).
@@ -625,12 +626,12 @@ class Empleado(Base):
     seniority: Mapped[str] = mapped_column(String(40), default="")
     skills: Mapped[list] = mapped_column(JSON, default=list)  # [str] — insumo del match del Radar Interno
     anios_experiencia: Mapped[float] = mapped_column(Float, default=0.0)
-    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     jefe_directo_id: Mapped[Optional[int]] = mapped_column(ForeignKey("empleados.id"), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
     # si esta persona fue contratada a través de la plataforma, queda la trazabilidad completa
     candidato_origen_id: Mapped[Optional[int]] = mapped_column(ForeignKey("candidatos.id"), nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Cuenta/Cliente (Fase A multi-cuenta) — el Radar Interno compara Requisición contra
     # Empleados del mismo Cliente.
     cuenta_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cuentas.id"), nullable=True, index=True)
@@ -659,7 +660,7 @@ class SugerenciaMovilidad(Base):
     evidencia: Mapped[str] = mapped_column(Text, default="")
     estado: Mapped[str] = mapped_column(String(20), default="sugerida")
     revisado_por: Mapped[str] = mapped_column(String(150), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     requisicion: Mapped["Requisicion"] = relationship(back_populates="sugerencias")
     empleado: Mapped["Empleado"] = relationship(back_populates="sugerencias")
@@ -733,38 +734,38 @@ class Expediente(Base):
     tipo_contratacion: Mapped[str] = mapped_column(String(60), default="")
     ubicacion: Mapped[str] = mapped_column(String(150), default="")
     jefe_directo: Mapped[str] = mapped_column(String(150), default="")
-    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # 2026-09-19 (Bloque 3): empresa contratante capturada en las condiciones (default: la visible de la vacante).
     # 2026-09-20 (B2): SOLO una razón social configurada en la Cuenta (Cuenta.razon_social o la de un Cliente);
     # nunca texto libre — ver routers.cuentas.razones_sociales / candidatos.guardar_condiciones_contratacion.
     empresa: Mapped[str] = mapped_column(String(200), default="")
-    condiciones_guardadas_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    condiciones_guardadas_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # 2026-09-20 (B2): «Tiempo determinado» = duración (número + unidad) y fecha de término CALCULADA
     # (`calcular_fecha_termino`), nunca capturada a mano. Vacíos en los demás tipos de contratación.
     duracion_contrato: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     duracion_unidad: Mapped[str] = mapped_column(String(10), default="")  # UNIDADES_DURACION
-    fecha_termino: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_termino: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # --- preparación de ingreso (Onboarding, bloque 4) ---
     contrato: Mapped[str] = mapped_column(String(20), default="Pendiente")  # Pendiente | Firmado
     alta_administrativa: Mapped[str] = mapped_column(String(20), default="Pendiente")  # Pendiente | Realizada
     equipo_accesos: Mapped[str] = mapped_column(String(20), default="Pendiente")  # Pendiente | Listo | No aplica
     estado: Mapped[str] = mapped_column(String(20), default="integracion")  # integracion | completo | alta
     alta_autorizada_por: Mapped[str] = mapped_column(String(150), default="")
-    alta_fecha: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    alta_fecha: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     seleccionado_por: Mapped[str] = mapped_column(String(150), default="")
     # Liga pública para que el candidato suba sus documentos sin sesión (Lote 4). Nullable:
     # los expedientes creados antes de este lote no tienen uno hasta que se genera perezosamente
     # (ver candidatos._disparar_mensaje_onboarding) — no es de un solo uso como el de
     # EntrevistaHumana, sigue válido hasta que el expediente llega a estado "alta".
     token: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True, nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Fase 5 (2026-09-15): instrucciones de ingreso que RH captura en Contratación (hora y lugar de
     # llegada, con quién presentarse, qué llevar…). Van en el mensaje automático de bienvenida al alta.
     instrucciones_ingreso: Mapped[str] = mapped_column(Text, default="")
     # Fase 3 (2026-09-15): «recordar hasta» — fecha límite que respeta el cron de recordatorios de
     # documentos. Null = sin recordatorios automáticos para este expediente.
-    documentos_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    ultimo_recordatorio_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    documentos_hasta: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    ultimo_recordatorio_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     documentos_vencidos_avisado: Mapped[bool] = mapped_column(Boolean, default=False)
     # 2026-09-17: recordatorios en 3 niveles progresivos (ligero → intermedio → definitivo). Cuenta los
     # enviados (automáticos y manuales); el nivel del SIGUIENTE es min(enviados+1, 3). Tras el
@@ -775,13 +776,13 @@ class Expediente(Base):
     plantilla_onboarding_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Onboarding v2 (Fase 3): fecha REAL de llegada («Confirmar ingreso»). Con ella el alta se habilita y los
     # plazos pendientes se recalculan contra la fecha real (si no, contra la prevista `fecha_ingreso`).
-    fecha_ingreso_real: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_ingreso_real: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     ingreso_confirmado_por: Mapped[str] = mapped_column(String(150), default="")
-    ingreso_confirmado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ingreso_confirmado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # «Cerrar Onboarding» (manual, nunca automático) y «No ingresó» (solo antes del alta).
-    onboarding_cerrado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    onboarding_cerrado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     onboarding_cerrado_por: Mapped[str] = mapped_column(String(150), default="")
-    no_ingreso_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    no_ingreso_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     no_ingreso_por: Mapped[str] = mapped_column(String(150), default="")
     no_ingreso_motivo: Mapped[str] = mapped_column(Text, default="")
 
@@ -854,21 +855,21 @@ class Documento(Base):
     notas_ia: Mapped[str] = mapped_column(Text, default="")
     validacion: Mapped[dict] = mapped_column(JSON, default=dict)  # salida cruda de ia.validar_documento
     revisado_por: Mapped[str] = mapped_column(String(150), default="")
-    subido_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    subido_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
     # 2026-09-20 (B3, trazabilidad): cuándo y por qué canal se PIDIÓ el documento (primera solicitud +
     # historial de solicitudes/recordatorios) y cuándo/por dónde se RECIBIÓ. Lo escriben
     # `services.recordatorios.marcar_solicitud_documentos` y `contratacion._registrar_documento` /
     # `marcar_documento`; nunca cambian la etapa de la postulación (B5).
-    solicitado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    solicitado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     solicitado_canal: Mapped[str] = mapped_column(String(40), default="")  # whatsapp | correo | whatsapp, correo
     solicitudes: Mapped[list] = mapped_column(JSON, default=list)  # [{en, canal, tipo: solicitud|recordatorio, por}]
-    recibido_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    recibido_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     recibido_canal: Mapped[str] = mapped_column(String(40), default="")  # whatsapp | liga | rh | fisico
     # Onboarding v2 (2026-09-28): «No aplica» lo marca SOLO una persona de RH y siempre con motivo.
     motivo_no_aplica: Mapped[str] = mapped_column(Text, default="")
     no_aplica_por: Mapped[str] = mapped_column(String(150), default="")
-    no_aplica_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    no_aplica_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Onboarding v2 (Fase 2): documento INTERNO de RH (el contrato firmado). Nunca se le pide al candidato,
     # no entra al porcentaje ni a recordatorios y solo se carga por su acción propia.
     interno: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -919,21 +920,21 @@ class Colaborador(Base):
     jefe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("colaboradores.id", use_alter=True, name="fk_colaborador_jefe"), nullable=True)
     cv_ruta: Mapped[str] = mapped_column(String(400), default="")
     cv_nombre: Mapped[str] = mapped_column(String(255), default="")
-    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_ingreso: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
     dado_de_alta_por: Mapped[str] = mapped_column(String(150), default="")
     candidato_origen_id: Mapped[Optional[int]] = mapped_column(ForeignKey("candidatos.id"), nullable=True)
     expediente_id: Mapped[Optional[int]] = mapped_column(ForeignKey("expedientes.id"), nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Cuenta/Cliente (Fase A multi-cuenta) — hereda de la Vacante/Candidato de origen al dar de alta.
     cuenta_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cuentas.id"), nullable=True, index=True)
     cliente_id: Mapped[Optional[int]] = mapped_column(ForeignKey("clientes.id"), nullable=True, index=True)
 
     # 2026-09-15: baja (activo=False, conserva historial) y eliminación LÓGICA (limpieza de pruebas).
-    baja_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    baja_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     baja_motivo: Mapped[str] = mapped_column(String(300), default="")
     baja_por: Mapped[str] = mapped_column(String(150), default="")
-    eliminado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    eliminado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     eliminado_por: Mapped[str] = mapped_column(String(150), default="")
 
     candidato_origen: Mapped[Optional["Candidato"]] = relationship()
@@ -976,11 +977,11 @@ class Cuenta(Base):
     # vacantes y sus personas (ruteo dedicado, comportamiento anterior).
     whatsapp_exclusivo: Mapped[bool] = mapped_column(Boolean, default=False)
     estado: Mapped[str] = mapped_column(String(20), default="Activa")  # Activa | Inactiva | Eliminada
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
     # Fase 2 (2026-09-15): baja lógica. Una Cuenta eliminada conserva TODO (vacantes, postulaciones,
     # bitácora) pero deja de aparecer en listados/selector y el webhook de WhatsApp no la usa.
-    eliminada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    eliminada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     eliminada_por: Mapped[str] = mapped_column(String(150), default="")
 
     clientes: Mapped[List["Cliente"]] = relationship(back_populates="cuenta")
@@ -1003,7 +1004,7 @@ class Cliente(Base):
     razon_social: Mapped[str] = mapped_column(String(200), default="")
     nombre_comercial: Mapped[str] = mapped_column(String(200), default="")
     estado: Mapped[str] = mapped_column(String(20), default="Activo")  # Activo | Inactivo
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     cuenta: Mapped["Cuenta"] = relationship(back_populates="clientes")
 
@@ -1074,8 +1075,8 @@ class Plantilla(Base):
     enfoque_entrevista: Mapped[str] = mapped_column(String(30), default="profesional")  # Fase 4
 
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora, nullable=True)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora, nullable=True)
 
     cuenta: Mapped["Cuenta"] = relationship()
     cliente: Mapped[Optional["Cliente"]] = relationship()
@@ -1171,9 +1172,9 @@ class Usuario(Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
     debe_cambiar_pass: Mapped[bool] = mapped_column(Boolean, default=False)
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
-    bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    ultimo_acceso: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    ultimo_acceso: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Visibilidad automática (Fase A): si puede alternar Mío/Mi equipo, y a quién reporta.
     ve_equipo: Mapped[bool] = mapped_column(Boolean, default=False)
     reporta_a_id: Mapped[Optional[int]] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
@@ -1212,10 +1213,10 @@ class Sesion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256 del token de la cookie
     usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
-    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    expira_en: Mapped[datetime] = mapped_column(FechaUTC(), index=True)
     ip: Mapped[str] = mapped_column(String(60), default="")
     agente: Mapped[str] = mapped_column(String(255), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     usuario: Mapped[Usuario] = relationship(back_populates="sesiones")
 
@@ -1245,7 +1246,7 @@ class Bitacora(Base):
     __tablename__ = "bitacora"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    ts: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actor: Mapped[str] = mapped_column(String(150))
     accion: Mapped[str] = mapped_column(String(80))
     entidad: Mapped[str] = mapped_column(String(40))
@@ -1294,7 +1295,7 @@ class DocumentoConocimiento(Base):
     areas: Mapped[list] = mapped_column(JSON, default=list)    # [str] vacío = todas las áreas
     puestos: Mapped[list] = mapped_column(JSON, default=list)  # [str] vacío = todos los puestos
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     fragmentos: Mapped[List["FragmentoConocimiento"]] = relationship(back_populates="documento", cascade="all, delete-orphan")
 
@@ -1323,7 +1324,7 @@ class ConsultaConocimiento(Base):
     respuesta: Mapped[dict] = mapped_column(JSON, default=dict)
     sin_evidencia: Mapped[bool] = mapped_column(Boolean, default=False)
     modo: Mapped[str] = mapped_column(String(20), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
 
 def registrar(db: Session, actor: str, accion: str, entidad: str, entidad_id: str, detalle: Optional[dict] = None) -> Bitacora:
@@ -1391,7 +1392,7 @@ class Curso(Base):
     estado: Mapped[str] = mapped_column(String(20), default="Borrador")  # Borrador | Publicado | Archivado
     obligatorio: Mapped[bool] = mapped_column(Boolean, default=False)
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     # Cuenta (Fase A multi-cuenta) — a diferencia del resto, Curso no cuelga de ningún
     # Candidato/Vacante, así que necesita su propia columna en vez de resolverse por join.
     cuenta_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cuentas.id"), nullable=True, index=True)
@@ -1450,9 +1451,9 @@ class AsignacionCurso(Base):
     calificacion: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # %
     aprobado: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     asignado_por: Mapped[str] = mapped_column(String(150), default="")
-    asignado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    iniciado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    completado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    asignado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    iniciado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    completado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     curso: Mapped["Curso"] = relationship(back_populates="asignaciones")
     colaborador: Mapped[Optional["Colaborador"]] = relationship(overlaps="asignaciones_curso")
@@ -1547,7 +1548,7 @@ class ReglaNotificacion(Base):
     entrevistador_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False)
     cliente_correo: Mapped[bool] = mapped_column(Boolean, default=False)
     cliente_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
 
 class NotificacionEnviada(Base):
@@ -1565,7 +1566,7 @@ class NotificacionEnviada(Base):
     canal: Mapped[str] = mapped_column(String(20))  # correo | whatsapp
     enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     detalle: Mapped[str] = mapped_column(Text, default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
 
 class IntegracionTeams(Base):
@@ -1581,10 +1582,10 @@ class IntegracionTeams(Base):
     nombre_m365: Mapped[str] = mapped_column(String(200), default="")
     access_token_cifrado: Mapped[str] = mapped_column(Text, default="")
     refresh_token_cifrado: Mapped[str] = mapped_column(Text, default="")
-    expira_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expira_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     scopes: Mapped[str] = mapped_column(String(300), default="")
     conectado_por: Mapped[str] = mapped_column(String(150), default="")  # nombre de la persona de RH
-    conectado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    conectado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     ultimo_error: Mapped[str] = mapped_column(Text, default="")
 
 
@@ -1609,6 +1610,7 @@ TABLAS_MODULOS_RH = (
     "plantillas_onboarding", "tareas_onboarding",  # Onboarding v2 (2026-09-28)
     "pruebas_psicometricas", "evaluaciones_candidato",  # Evaluaciones y verificaciones (2026-09-28)
     "firmas_documentos",  # Dropbox Sign (2026-09-29)
+    "evaluaciones", "eventos_evaluacion",  # Evaluaciones unificadas — Fase 1 (2026-09-29)
 )
 
 # --- Desempeño ---
@@ -1663,14 +1665,14 @@ class CicloDesempeno(Base):
     duplicado_de: Mapped[str] = mapped_column(String(20), default="")  # DES-#### de origen al duplicar
     # cambios a criterios/metas DESPUÉS de iniciar: [{fecha, usuario, criterio_id, campo, anterior, nuevo, motivo}]
     historial_cambios: Mapped[list] = mapped_column(JSON, default=list)
-    iniciado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    iniciado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     cerrado_por: Mapped[str] = mapped_column(String(150), default="")
     escala_maxima: Mapped[int] = mapped_column(Integer, default=100)  # calificación 0-100 por defecto
     generado_con_ia: Mapped[bool] = mapped_column(Boolean, default=False)
     estado: Mapped[str] = mapped_column(String(20), default="borrador")  # ver ESTADOS_CICLO_DESEMPENO
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    cerrado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    cerrado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     evaluaciones: Mapped[List["EvaluacionDesempeno"]] = relationship(back_populates="ciclo", cascade="all, delete-orphan")
 
@@ -1705,8 +1707,8 @@ class EvaluacionDesempeno(Base):
     calificacion: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # 0-escala_maxima
     brechas: Mapped[list] = mapped_column(JSON, default=list)  # [{tema, brecha, accion_sugerida}] → plan de capacitación
     comentarios: Mapped[str] = mapped_column(Text, default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    completada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    completada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     ciclo: Mapped["CicloDesempeno"] = relationship(back_populates="evaluaciones")
     colaborador: Mapped["Colaborador"] = relationship()
@@ -1733,13 +1735,13 @@ class AccionDesempeno(Base):
     tipo: Mapped[str] = mapped_column(String(20), default="accion")  # accion | curso
     descripcion: Mapped[str] = mapped_column(Text, default="")
     responsable: Mapped[str] = mapped_column(String(150), default="")
-    fecha_compromiso: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_compromiso: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     estado: Mapped[str] = mapped_column(String(20), default="abierta")  # ver ESTADOS_ACCION_DESEMPENO
     curso_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     asignacion_curso_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
     evaluacion: Mapped["EvaluacionDesempeno"] = relationship()
 
@@ -1760,8 +1762,8 @@ class PlantillaDesempeno(Base):
     pesos_personalizados: Mapped[bool] = mapped_column(Boolean, default=False)
     activa: Mapped[bool] = mapped_column(Boolean, default=True)  # «eliminar» = desactivar
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
 
 # --- Clima ---
@@ -1792,9 +1794,9 @@ class MedicionClima(Base):
     estado: Mapped[str] = mapped_column(String(20), default="borrador")  # ver ESTADOS_MEDICION_CLIMA
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga pública /clima/{token}
     permite_externos: Mapped[bool] = mapped_column(Boolean, default=False)
-    abierta_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cierra_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cerrada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    abierta_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    cierra_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    cerrada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     cerrada_por: Mapped[str] = mapped_column(String(150), default="")  # nombre de RH o «sistema» (cron)
     plantilla_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # trazabilidad, sin FK
     # Destinatarios elegidos al abrir: {areas: [...], sedes: [...]} (solo para mostrar qué filtro se usó).
@@ -1802,7 +1804,7 @@ class MedicionClima(Base):
     # Análisis con IA a demanda (botón «Analizar resultados con Red Human»), el más reciente al final.
     analisis: Mapped[list] = mapped_column(JSON, default=list)
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     respuestas: Mapped[List["RespuestaClima"]] = relationship(back_populates="medicion", cascade="all, delete-orphan")
     participaciones: Mapped[List["ParticipacionClima"]] = relationship(back_populates="medicion", cascade="all, delete-orphan")
@@ -1829,7 +1831,7 @@ class RespuestaClima(Base):
     respuestas: Mapped[dict] = mapped_column(JSON, default=dict)  # {pregunta_id: valor}
     # En mediciones ANÓNIMAS solo se guarda el DÍA (00:00 UTC): con la hora exacta se podría cruzar
     # contra la participación. Identificadas: hora exacta.
-    enviado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    enviado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
     medicion: Mapped["MedicionClima"] = relationship(back_populates="respuestas")
     colaborador: Mapped[Optional["Colaborador"]] = relationship()
@@ -1852,10 +1854,10 @@ class ParticipacionClima(Base):
     colaborador_id: Mapped[int] = mapped_column(ForeignKey("colaboradores.id"), index=True)
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga personal /clima/{token}
     respondio: Mapped[bool] = mapped_column(Boolean, default=False)
-    invitado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    invitado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     invitado_por: Mapped[str] = mapped_column(String(150), default="")
     recordatorios_enviados: Mapped[int] = mapped_column(Integer, default=0)
-    ultimo_recordatorio_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultimo_recordatorio_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     medicion: Mapped["MedicionClima"] = relationship(back_populates="participaciones")
     colaborador: Mapped["Colaborador"] = relationship()
@@ -1875,8 +1877,8 @@ class PlantillaClima(Base):
     preguntas: Mapped[list] = mapped_column(JSON, default=list)  # mismo formato que MedicionClima.preguntas
     activa: Mapped[bool] = mapped_column(Boolean, default=True)  # «eliminar» = desactivar
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
 
 def puede_ver_conocimiento(doc: "DocumentoConocimiento", colaborador: Optional["Colaborador"]) -> bool:
@@ -1935,8 +1937,8 @@ class PlantillaOnboarding(Base):
     curso_induccion_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     activa: Mapped[bool] = mapped_column(Boolean, default=True)  # «eliminar» = desactivar
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
 
 class TareaOnboarding(Base):
@@ -1955,16 +1957,16 @@ class TareaOnboarding(Base):
     obligatoria: Mapped[bool] = mapped_column(Boolean, default=True)
     responsable: Mapped[str] = mapped_column(String(150), default="")
     dias_relativos: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # respecto a la fecha de ingreso
-    fecha_limite: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_limite: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     estado: Mapped[str] = mapped_column(String(20), default="pendiente")  # ESTADOS_TAREA_ONBOARDING
     motivo_cancelacion: Mapped[str] = mapped_column(Text, default="")
     notas: Mapped[str] = mapped_column(Text, default="")
     realizada_por: Mapped[str] = mapped_column(String(150), default="")
-    realizada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    realizada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     cancelada_por: Mapped[str] = mapped_column(String(150), default="")
-    cancelada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     creada_por: Mapped[str] = mapped_column(String(150), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
 
 # --- Evaluaciones y verificaciones del candidato (2026-09-28) ---
@@ -2023,8 +2025,8 @@ class PruebaPsicometrica(Base):
     url: Mapped[str] = mapped_column(String(500), default="")  # modo «Enlace externo»
     activa: Mapped[bool] = mapped_column(Boolean, default=True)
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
 
 class EvaluacionCandidato(Base):
@@ -2054,7 +2056,7 @@ class EvaluacionCandidato(Base):
     requiere_consentimiento_expreso: Mapped[bool] = mapped_column(Boolean, default=False)  # estudio médico
     consentimiento_token: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     consentimiento_texto: Mapped[str] = mapped_column(Text, default="")  # copia exacta aceptada
-    consentimiento_aceptado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consentimiento_aceptado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     consentimiento_evidencia: Mapped[dict] = mapped_column(JSON, default=dict)  # nombre tecleado, IP, navegador, huella
     # --- resultado / informe ---
     archivo: Mapped[str] = mapped_column(String(300), default="")
@@ -2062,19 +2064,196 @@ class EvaluacionCandidato(Base):
     mime: Mapped[str] = mapped_column(String(80), default="")
     resultado_resumen: Mapped[str] = mapped_column(Text, default="")
     resultado_cargado_por: Mapped[str] = mapped_column(String(150), default="")
-    resultado_cargado_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resultado_cargado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     dictamen: Mapped[str] = mapped_column(String(30), default="")  # DICTAMENES_GENERALES | DICTAMENES_MEDICOS
     comentario_revision: Mapped[str] = mapped_column(Text, default="")
     revisada_por: Mapped[str] = mapped_column(String(150), default="")
-    revisada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revisada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     historial: Mapped[list] = mapped_column(JSON, default=list)  # [{fecha, usuario, de, a, detalle}]
     asignada_por: Mapped[str] = mapped_column(String(150), default="")
-    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora, onupdate=ahora)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
 
     @property
     def es_medico(self) -> bool:
         return self.tipo == "medico"
+
+
+# ============================================================
+# Evaluaciones unificadas — Fase 1 (2026-09-29, especificación de Raúl)
+# ============================================================
+# Toda evaluación del candidato (entrevista humana, médica, psicométrica, …) se crea, se sigue y se cierra con
+# el MISMO objeto. Sustituye a `EntrevistaHumana` y `EvaluacionCandidato` (que se conservan intactas como origen
+# de `scripts/migrar_evaluaciones_unificadas.py`). La Entrevista Red Human (IA) queda FUERA: sigue en
+# `entrevistas` con su sala y su etapa, y solo se muestra como insumo de solo lectura.
+# Reglas: una segunda entrevista/estudio = registro NUEVO; nadie sobrescribe a nadie (todo va a
+# `eventos_evaluacion`); recibir o guardar un resultado NUNCA escribe `Postulacion.etapa`.
+TIPOS_EVALUACION_U = {
+    "entrevista_humana": "Entrevista humana",
+    "medica": "Médica",
+    "psicometrica": "Psicométrica",
+    "socioeconomica": "Socioeconómica",
+    "tecnica": "Técnica o caso práctico",
+    "referencias": "Referencias",
+    "otra": "Otra",
+}
+TIPO_DESDE_LEGADO = {"medico": "medica", "socioeconomico": "socioeconomica"}  # el resto conserva su clave
+# «¿Cómo se realizará?» — sustituye al selector «Modo».
+FORMAS_EVALUACION = {
+    "asignada": "Asignar a una persona",
+    "registro_directo": "Registrar resultado ahora",
+    "liga_otro_sistema": "Enviar liga de otro sistema",
+    "integrada": "Usar proveedor integrado",
+}
+FORMA_DESDE_MODO = {"manual": "registro_directo", "enlace": "liga_otro_sistema", "integrada": "integrada"}
+EVALUADORES_TIPO = ("interno", "externo")
+# Solo estos cinco estados. El consentimiento NO es un estado (ver CONSENTIMIENTOS).
+ESTADOS_EVALUACION_U = {
+    "pendiente": "Pendiente",
+    "realizada_sin_resultado": "Realizada · Resultado pendiente",
+    "con_resultado": "Con resultado",
+    "no_realizada": "No realizada",
+    "cancelada": "Cancelada",
+}
+# Transiciones por acción de seguimiento. Además: registrar un resultado desde cualquier estado distinto de
+# Cancelada deja «Con resultado» (`puede_registrar_resultado`); «Con resultado» se complementa/corrige sin
+# cambiar de estado.
+TRANSICIONES_EVALUACION = {
+    "pendiente": ("realizada_sin_resultado", "con_resultado", "no_realizada", "cancelada"),
+    "realizada_sin_resultado": ("con_resultado", "cancelada"),
+    "con_resultado": (),
+    "no_realizada": ("pendiente", "cancelada"),  # pendiente = reprogramar
+    "cancelada": (),
+}
+# Condición aparte del estado. Etiqueta en la tarjeta: solo pendiente y rechazado muestran algo.
+CONSENTIMIENTOS = {"no_requerido": "", "pendiente": "En espera de consentimiento", "otorgado": "", "rechazado": "Consentimiento rechazado"}
+TIPOS_CON_CONSENTIMIENTO = ("medica",)
+MODALIDADES_CITA = ("Presencial", "Videollamada", "Teléfono")
+MODALIDAD_DESDE_LEGADO = {"Llamada": "Teléfono"}
+# Conclusión: obligatoria SOLO en entrevista humana; en los demás tipos es opcional y basta un comentario o un
+# adjunto. La médica conserva el estándar clínico (Apto / Apto con restricciones / No apto).
+CONCLUSIONES_ENTREVISTA = {"avanzar": "Avanzar", "no_avanzar": "No avanzar", "requiere_otra_entrevista": "Requiere otra entrevista"}
+CONCLUSIONES_MEDICAS = DICTAMENES_MEDICOS
+CONCLUSIONES_GENERALES = DICTAMENES_GENERALES
+REALIZADA_POR_NO_ESPECIFICADO = "No especificado"
+# Por dónde entró cada cosa (eventos y `registrada_via`).
+CANALES_EVALUACION = ("sistema", "liga_evaluador", "liga_candidato", "proveedor", "migracion")
+ACCIONES_EVENTO_EVALUACION = (
+    "creada", "modificada", "reprogramada", "envio", "recordatorio", "cambio_estado", "consentimiento",
+    "resultado_registrado", "resultado_corregido", "resultado_complementado", "adjunto_agregado", "migrada",
+)
+BASE_CODIGO_EVALUACION = 50000  # códigos nuevos EVA-5xxxx; los EVA-7xxx migrados conservan el suyo
+
+
+def conclusiones_de(tipo: str) -> dict:
+    if tipo == "entrevista_humana":
+        return CONCLUSIONES_ENTREVISTA
+    return CONCLUSIONES_MEDICAS if tipo == "medica" else CONCLUSIONES_GENERALES
+
+
+def puede_registrar_resultado(estado: str) -> bool:
+    return estado != "cancelada"
+
+
+class Evaluacion(Base):
+    """Una evaluación del candidato ligada a una POSTULACIÓN (persona + vacante). Nunca escribe `Postulacion.etapa`.
+    `cuenta_id`/`postulacion_id`/… son enteros indexados SIN llave foránea (tabla del paso NO fatal)."""
+
+    __tablename__ = "evaluaciones"
+    __table_args__ = (UniqueConstraint("origen_tabla", "origen_id", name="uq_evaluacion_origen"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    codigo: Mapped[str] = mapped_column(String(20), index=True)  # EVA-####
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    postulacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    candidato_id: Mapped[int] = mapped_column(Integer, index=True)  # persona (desnormalizado para historial)
+    vacante_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    tipo: Mapped[str] = mapped_column(String(20))  # TIPOS_EVALUACION_U
+    nombre: Mapped[str] = mapped_column(String(200), default="")  # obligatorio solo con tipo «otra»
+    forma: Mapped[str] = mapped_column(String(20))  # FORMAS_EVALUACION
+    # --- evaluador (solo forma «asignada»): datos copiados con los que se notificó ---
+    evaluador_tipo: Mapped[str] = mapped_column(String(10), default="")  # interno | externo
+    evaluador_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    evaluador_contacto_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # ClienteContacto reutilizable
+    evaluador_nombre: Mapped[str] = mapped_column(String(150), default="")
+    evaluador_correo: Mapped[str] = mapped_column(String(200), default="")
+    evaluador_whatsapp: Mapped[str] = mapped_column(String(30), default="")
+    token_evaluador: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga sin cuenta; lo genera Red Human
+    instrucciones: Mapped[str] = mapped_column(Text, default="")
+    # --- liga de otro sistema / proveedor integrado (funciones actuales «Enlace externo» e «Integrada») ---
+    liga_externa_candidato: Mapped[str] = mapped_column(String(500), default="")
+    prueba_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # PruebaPsicometrica
+    proveedor: Mapped[str] = mapped_column(String(150), default="")
+    id_proveedor: Mapped[str] = mapped_column(String(150), default="")
+    clave_proveedor: Mapped[str] = mapped_column(String(60), default="", index=True)  # webhook de Psicométricas.mx
+    resultado_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    paso_integrada: Mapped[str] = mapped_column(String(20), default="")  # PASOS_INTEGRADA
+    # --- cita (opcional): se guarda UTC + la zona con la que se capturó ---
+    cita_fecha_hora: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    cita_zona_horaria: Mapped[str] = mapped_column(String(50), default="")
+    cita_modalidad: Mapped[str] = mapped_column(String(20), default="")  # MODALIDADES_CITA
+    cita_direccion: Mapped[str] = mapped_column(String(300), default="")  # obligatoria si Presencial
+    cita_liga_videollamada: Mapped[str] = mapped_column(String(500), default="")  # obligatoria si Videollamada
+    cita_telefono: Mapped[str] = mapped_column(String(30), default="")
+    teams_evento_id: Mapped[str] = mapped_column(String(300), default="")
+    # --- estado + condición de consentimiento ---
+    estado: Mapped[str] = mapped_column(String(30), default="pendiente")  # ESTADOS_EVALUACION_U
+    motivo_estado: Mapped[str] = mapped_column(Text, default="")  # no realizada / cancelada
+    consentimiento: Mapped[str] = mapped_column(String(15), default="no_requerido")  # CONSENTIMIENTOS
+    consentimiento_token: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    consentimiento_texto: Mapped[str] = mapped_column(Text, default="")  # copia EXACTA aceptada
+    consentimiento_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    consentimiento_evidencia: Mapped[dict] = mapped_column(JSON, default=dict)
+    # --- resultado (formulario único) ---
+    conclusion: Mapped[str] = mapped_column(String(30), default="")  # conclusiones_de(tipo); "" = sin conclusión
+    comentarios: Mapped[str] = mapped_column(Text, default="")
+    adjuntos: Mapped[list] = mapped_column(JSON, default=list)  # [{id, archivo, nombre, mime, subido_por, subido_via, subido_en}]
+    realizada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    realizada_por: Mapped[str] = mapped_column(String(200), default="")  # AUTOR real; "" = «No especificado»
+    realizada_por_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    registrada_por: Mapped[str] = mapped_column(String(150), default="")  # quién CAPTURÓ (nunca se asume autor)
+    registrada_por_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    registrada_via: Mapped[str] = mapped_column(String(20), default="")  # CANALES_EVALUACION
+    registrada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    resultado_version: Mapped[int] = mapped_column(Integer, default=0)  # «Este resultado cambió mientras lo editabas»
+    resultado_visto_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)  # etiqueta «Nuevo resultado»
+    recordatorio_enviado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # --- trazabilidad ---
+    creado_por: Mapped[str] = mapped_column(String(150), default="")
+    creado_por_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+    # registro del que se migró («entrevistas_humanas» | «evaluaciones_candidato»); vacío = nació aquí
+    origen_tabla: Mapped[str] = mapped_column(String(40), default="")
+    origen_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    @property
+    def nombre_visible(self) -> str:
+        return self.nombre or TIPOS_EVALUACION_U.get(self.tipo, self.tipo)
+
+    @property
+    def nuevo_resultado(self) -> bool:
+        return self.registrada_via == "liga_evaluador" and self.resultado_visto_en is None
+
+
+class EventoEvaluacion(Base):
+    """Historial append-only de una evaluación (creación, modificación, reprogramación, envíos, cambios de estado,
+    resultado registrado/corregido/complementado). NUNCA se edita ni se borra."""
+
+    __tablename__ = "eventos_evaluacion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    evaluacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    accion: Mapped[str] = mapped_column(String(40))  # ACCIONES_EVENTO_EVALUACION
+    actor: Mapped[str] = mapped_column(String(150), default="")  # usuario, evaluador o «sistema»
+    actor_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    canal: Mapped[str] = mapped_column(String(20), default="sistema")  # CANALES_EVALUACION
+    fecha: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, index=True)
+    estado_anterior: Mapped[str] = mapped_column(String(30), default="")
+    estado_nuevo: Mapped[str] = mapped_column(String(30), default="")
+    anteriores: Mapped[dict] = mapped_column(JSON, default=dict)  # valores previos de lo que cambió
+    detalle: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 # --- Firma electrónica incrustada con Dropbox Sign (2026-09-29) ---
@@ -2101,5 +2280,5 @@ class FirmaDocumento(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     eventos: Mapped[list] = mapped_column(JSON, default=list)  # [{fecha, tipo}]
     creado_por: Mapped[str] = mapped_column(String(150), default="")
-    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=ahora)
-    firmada_en: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    firmada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)

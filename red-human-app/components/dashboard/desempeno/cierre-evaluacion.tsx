@@ -17,8 +17,10 @@ import {
   agregarNotaDesempeno, crearAccionDesempeno, editarAccionDesempeno, fetchAccionesEvaluacion, fetchCursos, propuestaIaDesempeno,
   type AccionDesempeno, type BrechaDesempeno, type CambioDesempeno, type CriterioDesempeno, type Curso, type EvaluacionDesempeno,
 } from "@/lib/api";
+import { textoDia, textoFecha } from "@/lib/fechas";
 
-const fecha = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" }) : "");
+const FORMATO = { day: "numeric", month: "short", year: "numeric" } as const;
+const fecha = (iso?: string | null) => textoFecha(iso, FORMATO);
 const ESTADO_ACCION: Record<string, string> = { abierta: "Abierta", en_proceso: "En proceso", completada: "Completada", cancelada: "Cancelada" };
 
 /* ---------------- Notas de avance ---------------- */
@@ -209,7 +211,7 @@ export function AccionesBrechas({ evaluacion, brechasGuardadas, puedeEditar }: {
           <li key={a.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-border-soft p-3 text-[13px]">
             <span className="min-w-0 flex-1">
               <b>{a.tipo === "curso" ? `Curso: ${a.curso?.titulo ?? ""}` : a.descripcion || "Acción"}</b>
-              <span className="block text-[11px] text-ink-3">Brecha: {a.brecha} · {a.responsable}{a.fechaCompromiso ? ` · para el ${fecha(a.fechaCompromiso)}` : ""}{a.asignacion ? ` · asignado en Capacitación (${a.asignacion})` : ""}</span>
+              <span className="block text-[11px] text-ink-3">Brecha: {a.brecha} · {a.responsable}{a.fechaCompromiso ? ` · para el ${textoDia(a.fechaCompromiso, FORMATO)}` : ""}{a.asignacion ? ` · asignado en Capacitación (${a.asignacion})` : ""}</span>
             </span>
             {puedeEditar ? (
               <select value={a.estado} onChange={(e) => cambiarEstado(a, e.target.value as AccionDesempeno["estado"])} className="h-9 rounded-lg border border-border-soft bg-surface px-2 text-[12px]" aria-label="Estado de la acción">

@@ -15,17 +15,13 @@ import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-
 import { cerrarOnboarding, confirmarIngresoOnboarding, generarTareasOnboarding, registrarNoIngreso } from "@/lib/api";
 import type { NuevoIngreso, ResumenTableroOnboarding } from "@/lib/phase2";
 import { cn } from "@/lib/utils";
+import { hoyLocal, textoDia } from "@/lib/fechas";
 
 type Aviso = { tono: "ok" | "error" | "warn" | "info"; texto: string } | null;
 
-function hoyLocal() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function fechaCorta(iso: string | null) {
   // las fechas de ingreso se guardan a medianoche UTC del día capturado: se leen como día, sin zona
-  return iso ? new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  return textoDia(iso, { day: "numeric", month: "short", year: "numeric" }) || "—";
 }
 
 function Barra({ pct, tono }: { pct: number; tono: "good" | "brand" }) {

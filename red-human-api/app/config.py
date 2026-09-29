@@ -6,6 +6,10 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./redhuman.db"
 
+    # Zona horaria de la organización (2026-09-29): la base guarda UTC; todo lo que se MUESTRA o se
+    # CAPTURA como hora de reloj usa esta zona (`app/fechas.py`). El frontend lee NEXT_PUBLIC_ZONA_HORARIA.
+    zona_horaria: str = "America/Mexico_City"
+
     # 2026-09-15 (arranque en vivo): las vacantes/candidatos de EJEMPLO ya no se siembran solos en una
     # base vacía. Solo con SEMBRAR_DEMO=true (demos, scripts de verificación). Para una base que ya los
     # tiene: `scripts/limpiar_datos_demo.py --forzar` (baja lógica, conserva historial).

@@ -11,6 +11,7 @@ import { fetchClientesColaboradores, fetchColaboradores, type Colaborador } from
 import { usePolling } from "@/lib/use-polling";
 import { PerfilColaborador } from "@/components/dashboard/perfil-colaborador";
 import { usePuedeDecidir } from "@/components/sesion";
+import { textoDia } from "@/lib/fechas";
 
 export default function Colaboradores() {
   const [datos, setDatos] = useState<Colaborador[]>([]);
@@ -174,7 +175,7 @@ export default function Colaboradores() {
                 {c.fechaIngreso && (
                   <span className="flex items-center gap-1.5">
                     <CalendarClock className="h-3.5 w-3.5" />
-                    Ingresó {new Date(c.fechaIngreso).toLocaleDateString("es-MX")}
+                    Ingresó {textoDia(c.fechaIngreso)}
                   </span>
                 )}
                 {c.jefeDirecto && (

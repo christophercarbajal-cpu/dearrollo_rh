@@ -97,7 +97,7 @@ with TestClient(app) as client:
     r = client.get("/api/emails/preview/candidato?modalidad=Presencial")
     check("Reforma 222" in r.text and "Unirme a la entrevista" not in r.text, "variante presencial (lugar en vez de liga)")
     r = client.get("/api/emails/preview/entrevistador?json=1").json()
-    check(r["parametros_meta"] == ["Mariana López", "Carlos Hernández Ruiz", "Abogado Fiscalista", "jueves 24 de septiembre de 2026", "10:30 h", r["datos"]["liga_expediente"]], "orden de los 6 parámetros de Meta en la vista previa")
+    check(r["parametros_meta"] == ["Mariana López", "Carlos Hernández Ruiz", "Abogado Fiscalista", "jueves 24 de septiembre de 2026", "10:30 h (hora de Ciudad de México)", r["datos"]["liga_expediente"]], "orden de los 6 parámetros de Meta en la vista previa (hora con su zona, 2026-09-29)")
 
     # ================= 2. Disparo al asignar Entrevista Humana =================
     print("\n--- 2. Asignar Entrevista Humana → WhatsApp (plantilla) + correos ---")
@@ -117,7 +117,7 @@ with TestClient(app) as client:
     params = WA_PLANTILLA[0][2]
     check(len(params) == 6, "exactamente 6 parámetros posicionales")
     check(params[0] == admin.nombre and params[1] == "Carlos Hernández" and params[2] == vac["titulo"], "1 entrevistador · 2 candidato · 3 vacante")
-    check("2026" in params[3] and "septiembre" in params[3] and params[4].endswith(" h"), f"4 fecha «{params[3]}» · 5 hora «{params[4]}» (hora de México)")
+    check("2026" in params[3] and "septiembre" in params[3] and params[4].endswith(" h (hora de Ciudad de México)"), f"4 fecha «{params[3]}» · 5 hora «{params[4]}» (hora de México)")
     check(params[5].startswith(settings.app_url + "/entrevista-humana/") and len(params[5]) > len(settings.app_url) + 25, "6 liga al expediente del candidato (sala del entrevistador)")
     check(res[("entrevistador", "whatsapp")]["enviado"] is True and "plantilla" in res[("entrevistador", "whatsapp")], "resultado visible para RH: plantilla enviada")
     check(any(t[0] == "5512345678" for t in WA_TEXTO), "el candidato recibe su WhatsApp de texto (aviso de entrevista)")
@@ -155,7 +155,7 @@ with TestClient(app) as client:
     # ================= 2c. Vista previa con datos reales =================
     print("\n--- 2c. Vista previa dinámica (query params) ---")
     r = client.get("/api/emails/preview/candidato?evento=modificada&candidato=Ana%20Ruiz&entrevistador=Luis%20P%C3%A9rez&vacante=Cajera&empresa=Grupo%20CARBE&fecha=2026-09-24&hora=10:30&modalidad=Videollamada&liga=https://meet.google.com/abc&json=1").json()
-    check(r["asunto"] == "Tu entrevista para Cajera fue modificada" and r["datos"]["fecha"] == "jueves 24 de septiembre de 2026" and r["datos"]["hora"] == "10:30 h", "fecha ISO + hora del formulario → texto legible en México")
+    check(r["asunto"] == "Tu entrevista para Cajera fue modificada" and r["datos"]["fecha"] == "jueves 24 de septiembre de 2026" and r["datos"]["hora"] == "10:30 h (hora de Ciudad de México)", "fecha ISO + hora del formulario → texto legible en México")
     check(r["datos"]["liga_conexion"] == "https://meet.google.com/abc" and r["datos"]["entrevistador"] == "Luis Pérez", "liga y entrevistador reales")
     r = client.get("/api/emails/preview/entrevistador?candidato=Ana%20Ruiz&vacante=Cajera&modalidad=Presencial&ubicacion=Reforma%20222&fecha=2026-09-24")
     check(r.status_code == 200 and "Ana Ruiz" in r.text and "Reforma 222" in r.text and "Mariana" not in r.text, "vista previa del entrevistador con datos reales (sin mock)")

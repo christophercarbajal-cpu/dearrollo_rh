@@ -10,11 +10,11 @@ import json
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import settings
+from ..fechas import TZ_ORG
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -858,7 +858,7 @@ def agenda_turno(
 
     # Ancla temporal explícita: sin esto el modelo no tiene forma de saber qué día es "hoy" y
     # no puede resolver fechas relativas ("mañana", "el próximo lunes", "8am") de forma confiable.
-    ahora = datetime.now(ZoneInfo("America/Mexico_City"))
+    ahora = datetime.now(TZ_ORG)
     referencia_fecha = (
         f"Hoy es {_DIAS_SEMANA_ES[ahora.weekday()]} {ahora.isoformat(timespec='minutes')} "
         "(hora de Ciudad de México, America/Mexico_City). Úsalo como referencia para interpretar "

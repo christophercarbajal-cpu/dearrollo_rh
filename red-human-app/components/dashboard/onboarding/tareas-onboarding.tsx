@@ -11,10 +11,9 @@ import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { CampoRH, ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { cambiarTareaOnboarding, fetchTareasOnboarding, subirContratoFirmado, urlContratoFirmado, type TareaOnboarding } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { textoDia, textoFecha } from "@/lib/fechas";
 
-function fecha(iso: string | null) {
-  return iso ? new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" }) : "";
-}
+const FORMATO = { day: "numeric", month: "short", year: "numeric" } as const;
 
 export function PanelTareasOnboarding({ expedienteId, live, onCambio }: { expedienteId: number; live: boolean; onCambio?: () => void }) {
   const [tareas, setTareas] = useState<TareaOnboarding[] | null>(null);
@@ -67,8 +66,8 @@ export function PanelTareasOnboarding({ expedienteId, live, onCambio }: { expedi
                 </p>
                 <p className="truncate text-[11px] text-ink-3">
                   {t.responsable || "Sin responsable"}
-                  {t.fechaLimite ? ` · vence ${fecha(t.fechaLimite)}` : ""}
-                  {t.estado === "realizada" && t.realizadaPor ? ` · realizada por ${t.realizadaPor} el ${fecha(t.realizadaEn)}` : ""}
+                  {t.fechaLimite ? ` · vence ${textoDia(t.fechaLimite, FORMATO)}` : ""}
+                  {t.estado === "realizada" && t.realizadaPor ? ` · realizada por ${t.realizadaPor} el ${textoFecha(t.realizadaEn, FORMATO)}` : ""}
                   {t.estado === "cancelada" ? ` · cancelada por ${t.canceladaPor}: ${t.motivoCancelacion}` : ""}
                 </p>
               </div>

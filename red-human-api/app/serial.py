@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from . import fechas
 from .config import settings
 from .models import NIVELES_RECORDATORIO, estado_documento_onboarding, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
@@ -28,8 +29,7 @@ def hace(dt: Optional[datetime]) -> str:
     return f"hace {s // (7 * 86400)} semana{'s' if s // (7 * 86400) > 1 else ''}"
 
 
-def iso(dt: Optional[datetime]) -> Optional[str]:
-    return dt.isoformat() if dt else None
+iso = fechas.iso  # 2026-09-29: siempre UTC con «Z» (regla única en app/fechas.py)
 
 
 def fecha_corta(dt: Optional[datetime]) -> str:

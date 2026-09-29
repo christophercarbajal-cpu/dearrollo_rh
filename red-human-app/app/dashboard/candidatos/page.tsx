@@ -128,6 +128,7 @@ import { SwitchModoPrueba } from "@/components/dashboard/switch-modo-prueba";
 import { Toast, type ToastMsg } from "@/components/dashboard/toast";
 import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
+import { ETIQUETA_ZONA, partesLocales, textoCita, textoFecha, textoFechaHora } from "@/lib/fechas";
 
 const etapas: EtapaCandidato[] = [
   "Prefiltro",
@@ -178,9 +179,7 @@ const TEXTO_AVANCE_DIRECTO = "Este candidato avanzará a Entrevista Humana y se 
 const TIPOS_CONTRATACION = ["Tiempo indeterminado", "Tiempo determinado", "Por obra o proyecto", "Honorarios"];
 // 2026-09-20 (B3): formato de la trazabilidad de documentos
 function fechaHoraCorta(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  return textoFechaHora(iso, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) || iso;
 }
 function canalLegible(canal: string): string {
   return canal
@@ -242,14 +241,7 @@ function normalizarTexto(s: string): string {
 
 /** Formatea una fecha ISO a formato corto legible (ej. "10 sep, 14:30") */
 function fechaCorta(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  try {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return null;
-    return d.toLocaleDateString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return null;
-  }
+  return textoFechaHora(iso, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) || null;
 }
 
 /** HOTFIX 2026-09-22 — «Todos» muestra TODAS las postulaciones cargadas, incluidas las que el agente
@@ -2681,7 +2673,7 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
                     {eh.entrevistador || "Sin asignar"}
                     {eh.fecha && (
                       <span className="ml-2 font-normal text-ink-3">
-                        {new Date(eh.fecha).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" })}
+                        {textoCita(eh.fecha)}
                       </span>
                     )}
                   </p>
@@ -3410,7 +3402,7 @@ function PanelEntrevistaHumana({
         />
         <Info
           icon={CalendarClock}
-          v={eh.fecha ? new Date(eh.fecha).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" }) : "Sin fecha"}
+          v={textoCita(eh.fecha) || "Sin fecha"}
         />
         <Info icon={IconoModalidad} v={`Modalidad: ${eh.modalidad || "sin definir"}`} />
         {detalleModalidad && <Info icon={Mail} v={detalleModalidad} />}
@@ -3938,7 +3930,7 @@ function ModalProgramarEntrevista({
               <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Hora</span>
+              <span className="text-sm font-medium text-ink-2">Hora <span className="font-normal text-ink-3">({ETIQUETA_ZONA})</span></span>
               <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} className={inputCls} />
             </label>
           </div>
@@ -4078,9 +4070,11 @@ function ModalModificarEntrevista({
   onClose: () => void;
   onListo: (c: Candidato) => void;
 }) {
-  const fechaInicial = eh.fecha ? new Date(eh.fecha) : null;
-  const [fecha, setFecha] = useState(fechaInicial ? fechaInicial.toISOString().slice(0, 10) : "");
-  const [hora, setHora] = useState(fechaInicial ? fechaInicial.toTimeString().slice(0, 5) : "");
+  // 2026-09-29: se precarga con la hora de la ORGANIZACIÓN (antes tomaba la hora UTC como local y cada
+  // «Modificar» sumaba 6 h a la cita).
+  const inicial = partesLocales(eh.fecha);
+  const [fecha, setFecha] = useState(inicial.fecha);
+  const [hora, setHora] = useState(inicial.hora);
   const [modalidad, setModalidad] = useState<ModalidadEntrevistaHumana>((eh.modalidad || "Videollamada") as ModalidadEntrevistaHumana);
   const [liga, setLiga] = useState(eh.liga || "");
   const [ubicacion, setUbicacion] = useState(eh.ubicacion || "");
@@ -4134,7 +4128,7 @@ function ModalModificarEntrevista({
               />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Hora</span>
+              <span className="text-sm font-medium text-ink-2">Hora <span className="font-normal text-ink-3">({ETIQUETA_ZONA})</span></span>
               <input
                 type="time"
                 value={hora}
@@ -4631,7 +4625,7 @@ function PanelContratacion({
             {guardando ? "Guardando…" : condicionesListas ? "Guardar cambios" : "Guardar condiciones"}
           </Button>
           <span className="text-[12px] text-ink-3">
-            {condicionesListas ? `Condiciones guardadas${cond?.guardadasEn ? ` el ${new Date(cond.guardadasEn).toLocaleDateString("es-MX")}` : ""}.` : "Captura puesto, sueldo, tipo y fecha de ingreso y guarda para habilitar los documentos."}
+            {condicionesListas ? `Condiciones guardadas${cond?.guardadasEn ? ` el ${textoFecha(cond.guardadasEn)}` : ""}.` : "Captura puesto, sueldo, tipo y fecha de ingreso y guarda para habilitar los documentos."}
           </span>
         </div>
       )}

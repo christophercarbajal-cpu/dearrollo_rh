@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from .. import fechas
 from ..config import settings
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_admin, usuario_decisor
@@ -2044,7 +2045,7 @@ async def programar_entrevista_humana(
 
     try:
         # Se captura en hora de México y se normaliza a UTC antes de guardar (ver TZ_MEXICO).
-        fecha_hora = datetime.fromisoformat(f"{datos.fecha}T{datos.hora}").replace(tzinfo=TZ_MEXICO).astimezone(timezone.utc)
+        fecha_hora = fechas.desde_local(datos.fecha, datos.hora)
     except ValueError:
         raise HTTPException(400, "Fecha u hora inválida (fecha ISO: 2026-09-05, hora: 14:30).")
 
@@ -2154,7 +2155,7 @@ async def modificar_entrevista_humana(
         raise HTTPException(400, "Falta la ubicación de la entrevista.")
     try:
         # Se captura en hora de México y se normaliza a UTC antes de guardar (ver TZ_MEXICO).
-        fecha_hora = datetime.fromisoformat(f"{datos.fecha}T{datos.hora}").replace(tzinfo=TZ_MEXICO).astimezone(timezone.utc)
+        fecha_hora = fechas.desde_local(datos.fecha, datos.hora)
     except ValueError:
         raise HTTPException(400, "Fecha u hora inválida (fecha ISO: 2026-09-05, hora: 14:30).")
 

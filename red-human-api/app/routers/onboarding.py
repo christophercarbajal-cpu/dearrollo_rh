@@ -490,7 +490,6 @@ async def _avisar_responsables(
     correo coincide con un Usuario de la Cuenta; si no, se reporta sin enviar (nunca silencioso)."""
     from ..services import plantillas_correo
     from ..services.correo import enviar_correo
-    from ..services.notificaciones import TZ_MEXICO
 
     usuarios = _usuarios_cuenta(db, cuenta.id)
     nombre = e.candidato.nombre if e.candidato else "la persona"
@@ -508,8 +507,9 @@ async def _avisar_responsables(
             continue
         filas = []
         for t in suyas:
-            limite = t.fecha_limite if (t.fecha_limite is None or t.fecha_limite.tzinfo) else t.fecha_limite.replace(tzinfo=timezone.utc)
-            filas.append((t.nombre, limite.astimezone(TZ_MEXICO).strftime("%d/%m/%Y") if limite else "Sin fecha"))
+            # fecha_limite es un DÍA de calendario (medianoche UTC): se lee tal cual, sin convertir de zona
+            # (convertirla a México la corría al día anterior).
+            filas.append((t.nombre, t.fecha_limite.strftime("%d/%m/%Y") if t.fecha_limite else "Sin fecha"))
         try:
             asunto, html = plantillas_correo.html_aviso(
                 titulo or f"Onboarding de {nombre}: tienes tareas asignadas",

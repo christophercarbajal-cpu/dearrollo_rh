@@ -15,7 +15,6 @@ integración con documentos obligatorios pendientes y una fecha «recordar hasta
 """
 
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -24,7 +23,7 @@ from ..models import NIVELES_RECORDATORIO, ConfiguracionSistema, Expediente, Pos
 from . import notificaciones
 from .configuracion import obtener
 
-TZ_MEXICO = ZoneInfo("America/Mexico_City")
+from ..fechas import TZ_ORG as TZ_MEXICO  # zona de la organización (app/fechas.py)
 
 
 def _utc(dt):

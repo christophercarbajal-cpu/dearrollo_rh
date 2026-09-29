@@ -49,6 +49,7 @@ import { usePolling } from "@/lib/use-polling";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { BotonCerrarOnboarding, GestionOnboarding, MiniAvanceOnboarding, ModalNoIngreso } from "@/components/dashboard/onboarding/gestion-onboarding";
 import { UserX } from "lucide-react";
+import { hoyLocal, textoFecha } from "@/lib/fechas";
 
 const docConfig: Record<
   EstadoDoc,
@@ -571,12 +572,12 @@ function Expediente({
               <input
                 type="date"
                 defaultValue={n.documentosHasta ? n.documentosHasta.slice(0, 10) : ""}
-                min={new Date().toISOString().slice(0, 10)}
+                min={hoyLocal()}
                 disabled={Boolean(ocupado)}
                 onChange={(e) => void guardarRecordarHasta(e.target.value)}
                 className="h-8 rounded-lg border border-border-soft bg-surface px-2 text-[12px] outline-none focus:border-brand"
               />
-              {n.ultimoRecordatorioEn && <span className="text-ink-3">· último: {n.ultimoRecordatorioEn.slice(0, 10)}</span>}
+              {n.ultimoRecordatorioEn && <span className="text-ink-3">· último: {textoFecha(n.ultimoRecordatorioEn)}</span>}
             </label>
           </div>
         )}

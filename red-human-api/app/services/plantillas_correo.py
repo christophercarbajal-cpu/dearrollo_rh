@@ -15,11 +15,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from ..config import settings
 
-TZ_MEXICO = ZoneInfo("America/Mexico_City")
+from .. import fechas
+from ..fechas import TZ_ORG as TZ_MEXICO  # zona de la organización (app/fechas.py)
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 _MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
@@ -37,7 +37,7 @@ def fecha_hora_mx(dt: Optional[datetime]) -> tuple[str, str]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     local = dt.astimezone(TZ_MEXICO)
-    return f"{_DIAS[local.weekday()]} {local.day} de {_MESES[local.month - 1]} de {local.year}", f"{local:%H:%M} h"
+    return f"{_DIAS[local.weekday()]} {local.day} de {_MESES[local.month - 1]} de {local.year}", fechas.con_zona(f"{local:%H:%M} h")
 
 
 def _logo_html(empresa: str, logo_url: str = "") -> str:
@@ -282,7 +282,7 @@ MOCK_ENTREVISTA = {
     "vacante": "Abogado Fiscalista",
     "empresa": "Grupo CARBE",
     "fecha": "jueves 24 de septiembre de 2026",
-    "hora": "10:30 h",
+    "hora": fechas.con_zona("10:30 h"),
     "modalidad": "Videollamada",
     "detalle_conexion": "Microsoft Teams · https://teams.microsoft.com/l/meetup-join/ejemplo",
     "liga_conexion": "https://teams.microsoft.com/l/meetup-join/ejemplo",

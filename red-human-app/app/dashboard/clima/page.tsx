@@ -35,13 +35,13 @@ import {
   type AnalisisClima, type CalculoClima, type DestinatariosClima, type EnvioClima, type MedicionClima, type PlantillaClima,
   type PreguntaClima, type PropuestaClima, type ResultadosClima,
 } from "@/lib/api";
+import { ETIQUETA_ZONA, conZona, desdeLocal, partesLocales, textoFechaHora } from "@/lib/fechas";
 
 const ESTADO_TONO: Record<string, "neutral" | "good" | "brand"> = { borrador: "neutral", abierta: "good", cerrada: "brand" };
 const ESTADO_LABEL: Record<string, string> = { borrador: "Borrador", abierta: "Abierta", cerrada: "Cerrada" };
 
 function fechaLocal(iso: string | null | undefined) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return textoFechaHora(iso, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /** «X de Y respondieron · faltan Z · cierra el …» con la hora LOCAL de quien mira. */
@@ -49,8 +49,8 @@ function textoParticipacion(m: MedicionClima, c: CalculoClima) {
   const p = c.participacion;
   if (!p.invitados) return "Aún no hay colaboradores invitados.";
   const partes = [`${p.respondieron} de ${p.invitados} respondieron`, `faltan ${p.faltan}`];
-  if (m.estado === "cerrada") partes.push(`cerró el ${fechaLocal(m.cerradaEn ?? m.cierraEn)}`);
-  else if (m.cierraEn) partes.push(`cierra el ${fechaLocal(m.cierraEn)}`);
+  if (m.estado === "cerrada") partes.push(`cerró el ${conZona(fechaLocal(m.cerradaEn ?? m.cierraEn))}`);
+  else if (m.cierraEn) partes.push(`cierra el ${conZona(fechaLocal(m.cierraEn))}`);
   return partes.join(" · ");
 }
 
@@ -492,12 +492,13 @@ function ResultadosPrueba({ medicion, calculo, onReiniciar, aviso, onCerrarAviso
 
 /* ---------- Modal de envío ---------- */
 
+// <input type="datetime-local"> en la zona de la ORGANIZACIÓN (lib/fechas.ts), no en la del navegador
 function cierrePorDefecto() {
-  const d = new Date();
-  d.setDate(d.getDate() + 7);
-  d.setHours(18, 0, 0, 0);
-  const z = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T18:00`;
+  return `${partesLocales(new Date(Date.now() + 7 * 86_400_000)).fecha}T18:00`;
+}
+
+function instanteLocal(valor: string) {
+  return valor ? desdeLocal(valor.slice(0, 10), valor.slice(11, 16)) : null;
 }
 
 function ModalEnvio({ medicion, onClose, onEnviada }: {
@@ -530,8 +531,8 @@ function ModalEnvio({ medicion, onClose, onEnviada }: {
 
   async function enviar() {
     if (!sel.length) return setError("Elige al menos un destinatario.");
-    const fecha = new Date(cierre);
-    if (!cierre || Number.isNaN(fecha.getTime()) || fecha <= new Date()) return setError("Elige una fecha y hora de cierre en el futuro.");
+    const fecha = instanteLocal(cierre);
+    if (!fecha || fecha <= new Date()) return setError("Elige una fecha y hora de cierre en el futuro.");
     setOcupado(true);
     setError("");
     const r = await abrirMedicionClima(medicion.id, {
@@ -598,7 +599,7 @@ function ModalEnvio({ medicion, onClose, onEnviada }: {
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <CampoRH label="Cierra el" ayuda="Podrás ampliarla mientras esté abierta.">
+            <CampoRH label={`Cierra el (${ETIQUETA_ZONA})`} ayuda="Podrás ampliarla mientras esté abierta.">
               <input type="datetime-local" value={cierre} onChange={(e) => setCierre(e.target.value)} className={inputRH} />
             </CampoRH>
             <CampoRH label="Nota para el mensaje (opcional)">
@@ -781,16 +782,15 @@ function DetalleActiva({ medicion, datos, puedeDecidir, onVolver, onRecargar, av
 function ModalFechaCierre({ medicion, onClose, onListo }: { medicion: MedicionClima; onClose: () => void; onListo: () => void }) {
   const inicial = useMemo(() => {
     if (!medicion.cierraEn) return cierrePorDefecto();
-    const d = new Date(medicion.cierraEn);
-    const z = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+    const p = partesLocales(medicion.cierraEn);
+    return `${p.fecha}T${p.hora}`;
   }, [medicion.cierraEn]);
   const [valor, setValor] = useState(inicial);
   const [error, setError] = useState("");
 
   async function guardar() {
-    const fecha = new Date(valor);
-    if (Number.isNaN(fecha.getTime()) || fecha <= new Date()) return setError("La nueva fecha de cierre debe estar en el futuro.");
+    const fecha = instanteLocal(valor);
+    if (!fecha || fecha <= new Date()) return setError("La nueva fecha de cierre debe estar en el futuro.");
     const r = await editarMedicionClima(medicion.id, { cierraEn: fecha.toISOString() });
     if (!r.ok) return setError(r.error);
     onListo();
@@ -798,7 +798,7 @@ function ModalFechaCierre({ medicion, onClose, onListo }: { medicion: MedicionCl
 
   return (
     <ModalMarco titulo="Cambiar fecha de cierre" onClose={onClose}>
-      <CampoRH label="Cierra el"><input type="datetime-local" value={valor} onChange={(e) => setValor(e.target.value)} className={inputRH} /></CampoRH>
+      <CampoRH label={`Cierra el (${ETIQUETA_ZONA})`}><input type="datetime-local" value={valor} onChange={(e) => setValor(e.target.value)} className={inputRH} /></CampoRH>
       {error && <p className="mt-3 text-sm font-semibold text-bad">{error}</p>}
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="outline" size="sm" onClick={onClose}>Cancelar</Button>

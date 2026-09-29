@@ -19,6 +19,7 @@ import {
   type EntrevistaHumanaPublica,
 } from "@/lib/api";
 import type { ResultadoEntrevistaHumana, RecomendacionEntrevistaHumana } from "@/lib/data";
+import { textoCita } from "@/lib/fechas";
 
 type Fase = "cargando" | "no_disponible" | "formulario" | "enviado";
 
@@ -98,7 +99,7 @@ export default function EvaluacionEntrevistaHumana() {
               <h1 className="font-display mt-3 text-2xl font-bold sm:text-3xl">Expediente de {info.candidato}</h1>
               <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-2">
                 {info.puesto && `Vacante: ${info.puesto}. `}
-                {info.fecha ? `Entrevista el ${new Date(info.fecha).toLocaleString("es-MX", { dateStyle: "long", timeStyle: "short" })}. ` : ""}
+                {info.fecha ? `Entrevista el ${textoCita(info.fecha, { dateStyle: "long", timeStyle: "short" })}. ` : ""}
                 Revisa el proceso y registra tu evaluación al final.
               </p>
             </div>

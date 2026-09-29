@@ -94,6 +94,7 @@ import {
   urlArchivo,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { textoFecha } from "@/lib/fechas";
 
 /* ============================================================
    Configuración — 6 secciones (Punto 2), completadas en Puntos 9-13
@@ -311,8 +312,7 @@ function Entrada({
 }
 
 function fechaCorta(iso: string) {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  return textoFecha(iso, { day: "2-digit", month: "short", year: "numeric" }) || "—";
 }
 
 /* ================================================================== */

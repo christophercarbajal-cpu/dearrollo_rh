@@ -17,6 +17,7 @@ Reglas (especificación Clima v2):
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from .. import fechas
 from ..models import DIMENSION_CLIMA_DEFAULT, ESCALA_CLIMA, MedicionClima, RespuestaClima
 
 FUENTES = ("reales", "prueba")
@@ -59,8 +60,7 @@ def participacion(m: MedicionClima) -> dict:
 def _fecha_cierre(m: MedicionClima) -> str:
     if not m.cierra_en:
         return ""
-    dt = m.cierra_en if m.cierra_en.tzinfo else m.cierra_en.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    return fechas.local(m.cierra_en).strftime("%d/%m/%Y %H:%M h")
 
 
 def resumen_participacion(m: MedicionClima, p: dict) -> str:

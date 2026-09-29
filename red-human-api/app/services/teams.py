@@ -32,7 +32,7 @@ from ..models import IntegracionTeams
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = "offline_access User.Read Calendars.ReadWrite"
-ZONA_MEXICO = "America/Mexico_City"
+ZONA_MEXICO = settings.zona_horaria or "America/Mexico_City"
 DURACION_REUNION_MIN = 60
 MARGEN_REFRESH_SEG = 120
 CALLBACK_PATH = "/integraciones/teams/callback"

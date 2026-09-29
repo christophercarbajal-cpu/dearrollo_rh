@@ -39,6 +39,7 @@ import {
   type EvaluacionDesempeno,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { textoDia, textoFecha } from "@/lib/fechas";
 
 const TONO_DOC: Record<string, string> = {
   recibido: "bg-good-soft text-good",
@@ -179,7 +180,7 @@ export function PerfilColaborador({
           {!c.activo && (
             <Aviso tono="warn">
               Dado de baja{c.bajaPor ? ` por ${c.bajaPor}` : ""}
-              {c.bajaEn ? ` el ${new Date(c.bajaEn).toLocaleDateString("es-MX")}` : ""}
+              {c.bajaEn ? ` el ${textoFecha(c.bajaEn)}` : ""}
               {c.bajaMotivo ? ` — motivo: ${c.bajaMotivo}` : ""}. El historial se conserva.
             </Aviso>
           )}
@@ -210,7 +211,7 @@ export function PerfilColaborador({
               <Dato etiqueta="Puesto" valor={c.puesto} />
               <Dato etiqueta="Sueldo" valor={c.salario} />
               <Dato etiqueta="Tipo de contratación" valor={c.tipoContratacion} />
-              <Dato etiqueta="Fecha de ingreso" valor={c.fechaIngreso ? new Date(c.fechaIngreso).toLocaleDateString("es-MX") : ""} />
+              <Dato etiqueta="Fecha de ingreso" valor={textoDia(c.fechaIngreso)} />
               <Dato etiqueta="Ubicación" valor={c.ubicacion} />
               <Dato etiqueta="Jefe(a) directo(a)" valor={c.jefeDirecto ? `${c.jefeDirecto}${c.jefeId ? ` (${c.jefeId})` : ""}` : ""} />
               <Dato etiqueta="Área" valor={c.area} />
@@ -279,7 +280,7 @@ export function PerfilColaborador({
           <Card className="p-5">
             <Eyebrow>Origen y alta</Eyebrow>
             <div className="mt-3 flex flex-col gap-1.5 text-xs text-ink-3">
-              <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-human" /> Alta autorizada por {c.altaAutorizadaPor || c.dadoDeAltaPor || "RH"}{c.altaFecha ? ` el ${new Date(c.altaFecha).toLocaleDateString("es-MX")}` : ""}</span>
+              <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-human" /> Alta autorizada por {c.altaAutorizadaPor || c.dadoDeAltaPor || "RH"}{c.altaFecha ? ` el ${textoFecha(c.altaFecha)}` : ""}</span>
               {c.candidatoOrigen && (
                 <span className="flex items-center gap-1.5">
                   <Users className="h-3.5 w-3.5" /> Candidato de origen: {c.candidatoOrigen.codigo} · fuente {c.candidatoOrigen.fuente}

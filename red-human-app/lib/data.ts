@@ -22,32 +22,6 @@ export interface RespuestaPrefiltro {
 }
 
 export type TipoEntrevistador = "interno" | "externo";
-export type ResultadoEntrevistaHumana = "aprobado" | "no_aprobado";
-export type RecomendacionEntrevistaHumana = "avanzar" | "no_avanzar" | "segunda_entrevista";
-export type CapturadoPor = "rh" | "entrevistador";
-
-/** Una ronda de Entrevista Humana — un candidato puede tener varias (ver PestanaEvaluaciones). */
-export interface EntrevistaHumana {
-  entrevistador: string;
-  tipo: TipoEntrevistador | "";
-  usuarioId: number | null;
-  correoExterno: string;
-  /** Fase 7B: la videollamada la creó Microsoft Teams (liga automática + invitación de calendario). */
-  porTeams?: boolean;
-  teamsEventoId?: string;
-  fecha: string | null;
-  modalidad: "Presencial" | "Videollamada" | "Llamada" | "";
-  liga: string;
-  ubicacion: string;
-  telefonoContacto: string;
-  comentario: string;
-  realizada: boolean;
-  cancelada: boolean;
-  resultado: ResultadoEntrevistaHumana | null;
-  recomendacion: RecomendacionEntrevistaHumana | null;
-  resultadoCapturadoPor: CapturadoPor | null;
-}
-
 /** Extracción del CV (services/ia.py::CVExtraido) — ver Punto 2/3.B. Todo es opcional: el
  * candidato puede no tener CV, o el análisis puede haber fallado (ver estadoAnalisisCv en
  * candidatos/page.tsx). */
@@ -138,11 +112,8 @@ export interface Candidato {
     creadoEn?: string | null;
     cerradaEn?: string | null;
   }[];
-  /* --- Entrevista Humana (flujo manual) — puede haber varias rondas, ver EntrevistaHumana.
-   * entrevistaHumana es la más reciente; entrevistasHumanas es el historial completo (más
-   * reciente primero). Se mantienen ambas para no romper a quien ya lee "la actual". --- */
-  entrevistaHumana?: EntrevistaHumana | null;
-  entrevistasHumanas?: EntrevistaHumana[];
+  /* Evaluaciones unificadas (2026-09-29): las evaluaciones (entrevista humana incluida) ya no viajan en la ficha;
+   * se piden a GET /evaluaciones/postulaciones/{codigo} (lib/api.fetchEvaluaciones). */
   /* puentes hacia los otros módulos */
   expedienteId?: number | null;
   expedienteProgreso?: number | null;

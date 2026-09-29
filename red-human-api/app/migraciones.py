@@ -181,6 +181,26 @@ def candidatos_sin_postulacion(db) -> int:
     return db.query(Candidato).filter(Candidato.id.not_in(tiene)).count()
 
 
+def evaluaciones_sin_migrar(db) -> int:
+    """Evaluaciones unificadas (2026-09-29): entrevistas humanas y evaluaciones del modelo anterior (con postulación)
+    que todavía no tienen su registro en `evaluaciones`. > 0 = falta scripts/migrar_evaluaciones_unificadas.py."""
+    from sqlalchemy import inspect as _inspect, text as _text
+
+    tablas = set(_inspect(db.get_bind()).get_table_names())
+    if "evaluaciones" not in tablas:
+        return 0
+    n = 0
+    if "entrevistas_humanas" in tablas:
+        n += db.execute(_text(
+            "SELECT COUNT(*) FROM entrevistas_humanas eh WHERE eh.postulacion_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM evaluaciones e WHERE e.origen_tabla = 'entrevistas_humanas' AND e.origen_id = eh.id)")).scalar() or 0
+    if "evaluaciones_candidato" in tablas:
+        n += db.execute(_text(
+            "SELECT COUNT(*) FROM evaluaciones_candidato ev WHERE EXISTS (SELECT 1 FROM postulaciones p WHERE p.id = ev.postulacion_id) "
+            "AND NOT EXISTS (SELECT 1 FROM evaluaciones e WHERE e.origen_tabla = 'evaluaciones_candidato' AND e.origen_id = ev.id)")).scalar() or 0
+    return int(n)
+
+
 def migrar_postulaciones(db) -> dict:
     """Crea la Postulación inicial de cada Candidato que aún no tiene ninguna, copiando el
     estado de proceso que vivía en la persona (columnas LEGADO de `Candidato`), y liga a esa

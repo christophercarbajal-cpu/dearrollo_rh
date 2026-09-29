@@ -16,9 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import Base, SessionLocal, engine
-from .migraciones import crear_tablas_base, crear_tablas_conocimiento, crear_tablas_modulos_rh, candidatos_sin_postulacion, relajar_not_null, sincronizar
+from .migraciones import crear_tablas_base, crear_tablas_conocimiento, crear_tablas_modulos_rh, candidatos_sin_postulacion, relajar_not_null, sincronizar, evaluaciones_sin_migrar
 from .migraciones import asegurar_reglas_entrevistador
-from .routers import agente, auth, candidatos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevista_humana, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
+from .routers import agente, auth, candidatos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
 from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
 from .services import modulos_rh, rag
@@ -83,6 +83,15 @@ async def lifespan(app: FastAPI):
                 f"[fase2] {pendientes} candidato(s) sin postulación: la base no está migrada a Fase 2. "
                 "Corre `python scripts/migrar_postulaciones.py --forzar` (desde red-human-api/) y vuelve a arrancar."
             )
+        # Evaluaciones unificadas (2026-09-29): mismo principio. El código nuevo solo lee `evaluaciones`; con
+        # entrevistas/evaluaciones del modelo anterior sin migrar la ficha las «perdería» → no arranca.
+        if not error_modulos:
+            sin_migrar = evaluaciones_sin_migrar(db)
+            if sin_migrar:
+                raise RuntimeError(
+                    f"[evaluaciones] {sin_migrar} entrevista(s)/evaluación(es) del modelo anterior sin migrar. "
+                    "Corre `python scripts/migrar_evaluaciones_unificadas.py --forzar` (desde red-human-api/) y vuelve a arrancar."
+                )
 
     # 2026-09-14: en el log de arranque queda qué variables de Anam ve ESTE proceso (presencia, no
     # valores). Si la sala "cae a texto" en producción, aquí se ve si es configuración o Anam.
@@ -180,7 +189,6 @@ app.include_router(clientes.router)
 app.include_router(plantillas.router)
 app.include_router(candidatos.router)
 app.include_router(entrevistas.router)
-app.include_router(entrevista_humana.router)
 app.include_router(contratacion.router)
 app.include_router(expediente_publico.router)
 app.include_router(colaboradores.router)

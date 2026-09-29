@@ -65,8 +65,17 @@ def _sanear(nombre: str) -> str:
     return (limpio or "archivo")[:120]
 
 
-def _firma_valida(contenido: bytes, extension: str) -> bool:
-    firmas = FORMATOS[extension][1]
+# Evaluaciones unificadas (2026-09-29): el resultado admite además Word (especificación, sección 5). Solo para
+# adjuntos que lee una PERSONA — los documentos del expediente siguen sin Word (el modelo de visión no lo lee).
+FORMATOS_ADJUNTO_EVALUACION = {
+    **FORMATOS,
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", [bytes.fromhex("504b0304")]),
+    "doc": ("application/msword", [bytes.fromhex("d0cf11e0a1b11ae1")]),
+}
+
+
+def _firma_valida(contenido: bytes, extension: str, formatos: Optional[dict] = None) -> bool:
+    firmas = (formatos or FORMATOS)[extension][1]
     cabecera = contenido[:32]
     if extension == "webp":
         return cabecera.startswith(b"RIFF") and contenido[8:12] == b"WEBP"
@@ -78,14 +87,15 @@ async def validar(archivo: UploadFile, etiqueta: str = "archivo") -> ArchivoVali
     return validar_bytes(await archivo.read(), archivo.filename or "archivo", etiqueta)
 
 
-def validar_bytes(contenido: bytes, nombre_original: str, etiqueta: str = "archivo") -> ArchivoValidado:
+def validar_bytes(contenido: bytes, nombre_original: str, etiqueta: str = "archivo", formatos: Optional[dict] = None) -> ArchivoValidado:
     """Misma validación que `validar` para un binario ya en memoria (2026-09-15: documentos que
     llegan por WhatsApp y se descargan de Meta) — extensión admitida, tamaño y firma binaria."""
     nombre = _sanear(nombre_original or "archivo")
     extension = nombre.rsplit(".", 1)[-1].lower() if "." in nombre else ""
 
-    if extension not in FORMATOS:
-        pista = PISTAS.get(extension, f"Acepta: {EXTENSIONES_OK}.")
+    formatos = formatos or FORMATOS
+    if extension not in formatos:
+        pista = f"Acepta: {', '.join(sorted({e.upper() for e in formatos}))}." if formatos is not FORMATOS else PISTAS.get(extension, f"Acepta: {EXTENSIONES_OK}.")
         raise HTTPException(415, f"No se puede procesar «{nombre}». {pista}")
 
     tamano = len(contenido)
@@ -93,7 +103,7 @@ def validar_bytes(contenido: bytes, nombre_original: str, etiqueta: str = "archi
         raise HTTPException(413, f"El {etiqueta} pesa {tamano // 1024 // 1024} MB; el máximo son 10 MB.")
     if tamano < MIN_BYTES:
         raise HTTPException(422, f"El {etiqueta} está vacío o dañado ({tamano} bytes).")
-    if not _firma_valida(contenido, extension):
+    if not _firma_valida(contenido, extension, formatos):
         raise HTTPException(
             422,
             f"El {etiqueta} dice ser .{extension} pero su contenido no corresponde. "
@@ -104,7 +114,7 @@ def validar_bytes(contenido: bytes, nombre_original: str, etiqueta: str = "archi
         contenido=contenido,
         nombre=nombre,
         extension=extension,
-        mime=FORMATOS[extension][0],
+        mime=formatos[extension][0],
         tamano=tamano,
     )
 

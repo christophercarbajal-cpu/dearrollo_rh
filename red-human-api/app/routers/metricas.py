@@ -182,7 +182,7 @@ def _modulo(db: Session, fn):
 def tablero(db: Session = Depends(get_db), cuenta: Cuenta = Depends(cuenta_actual)):
     """Todo lo que pinta el Tablero de control. Cada consulta filtra por `cuenta.id` (multi-inquilino estricto);
     nada es inventado: sin datos, las series vienen vacías o en cero."""
-    from ..models import Colaborador, EntrevistaHumana
+    from ..models import Colaborador, Evaluacion
     from ..serial import hace
     from ..services.notificaciones import TZ_MEXICO
 
@@ -201,10 +201,11 @@ def tablero(db: Session = Depends(get_db), cuenta: Cuenta = Depends(cuenta_actua
         .join(Postulacion, Entrevista.postulacion_id == Postulacion.id)
         .filter(Postulacion.cuenta_id == cuenta.id, Entrevista.finalizada_en.isnot(None), Entrevista.finalizada_en >= desde_7d).all()
     ]
+    # entrevistas humanas con cita en los últimos 7 días (Evaluaciones unificadas; las canceladas no cuentan)
     ent_h = [
-        _dia_mx(f) for (f,) in db.query(EntrevistaHumana.fecha)
-        .join(Postulacion, EntrevistaHumana.postulacion_id == Postulacion.id)
-        .filter(Postulacion.cuenta_id == cuenta.id, EntrevistaHumana.fecha.isnot(None), EntrevistaHumana.fecha >= desde_7d, EntrevistaHumana.fecha <= ahora).all()
+        _dia_mx(f) for (f,) in db.query(Evaluacion.cita_fecha_hora)
+        .filter(Evaluacion.cuenta_id == cuenta.id, Evaluacion.tipo == "entrevista_humana", Evaluacion.estado != "cancelada",
+                Evaluacion.cita_fecha_hora.isnot(None), Evaluacion.cita_fecha_hora >= desde_7d, Evaluacion.cita_fecha_hora <= ahora).all()
     ]
     actividad = [
         {"dia": DIAS_CORTOS[d.weekday()], "fecha": d.isoformat(), "candidatos": sum(1 for x in nuevas if x == d), "entrevistas": sum(1 for x in ent_ia + ent_h if x == d)}
@@ -314,24 +315,25 @@ def _tablero_onboarding(db: Session, cuenta_id: int) -> dict:
 
 
 def _tablero_evaluaciones(db: Session, cuenta_id: int) -> dict:
-    """Evaluaciones y verificaciones de postulaciones ACTIVAS de personas no eliminadas."""
-    from ..models import EvaluacionCandidato
+    """Evaluaciones (modelo unificado, 2026-09-29) de postulaciones ACTIVAS de personas no eliminadas. Los cinco
+    estados + la condición de consentimiento pendiente + los resultados nuevos que RH aún no abre."""
+    from ..models import Evaluacion
 
-    filas = (
-        db.query(EvaluacionCandidato.estado, func.count(EvaluacionCandidato.id))
-        .join(Postulacion, EvaluacionCandidato.postulacion_id == Postulacion.id)
+    base = (
+        db.query(Evaluacion)
+        .join(Postulacion, Evaluacion.postulacion_id == Postulacion.id)
         .join(Candidato, Postulacion.candidato_id == Candidato.id)
-        .filter(EvaluacionCandidato.cuenta_id == cuenta_id, Postulacion.cuenta_id == cuenta_id, Postulacion.activa.is_(True), Candidato.eliminado_en.is_(None))
-        .group_by(EvaluacionCandidato.estado)
-        .all()
+        .filter(Evaluacion.cuenta_id == cuenta_id, Postulacion.cuenta_id == cuenta_id, Postulacion.activa.is_(True), Candidato.eliminado_en.is_(None))
     )
-    por = {e: int(n) for e, n in filas}
+    por = {e: int(n) for e, n in base.with_entities(Evaluacion.estado, func.count(Evaluacion.id)).group_by(Evaluacion.estado).all()}
     return {
         "pendientes": por.get("pendiente", 0),
-        "enEsperaConsentimiento": por.get("en_espera_consentimiento", 0),
-        "enProceso": por.get("en_proceso", 0),
-        "resultadoRecibido": por.get("resultado_recibido", 0),
-        "revisadas": por.get("revisada", 0),
+        "enEsperaConsentimiento": base.filter(Evaluacion.estado == "pendiente", Evaluacion.consentimiento == "pendiente").count(),
+        "realizadasSinResultado": por.get("realizada_sin_resultado", 0),
+        "conResultado": por.get("con_resultado", 0),
+        "nuevosResultados": base.filter(Evaluacion.estado == "con_resultado", Evaluacion.resultado_visto_en.is_(None),
+                                        Evaluacion.registrada_via.in_(["liga_evaluador", "proveedor"])).count(),
+        "noRealizadas": por.get("no_realizada", 0),
         "porEstado": por,
     }
 

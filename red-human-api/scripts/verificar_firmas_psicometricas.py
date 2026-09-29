@@ -37,7 +37,7 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Cuenta, Documento, EvaluacionCandidato, Expediente, FirmaDocumento, Postulacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
+from app.models import Cuenta, Documento, Evaluacion, EventoEvaluacion, Expediente, FirmaDocumento, Postulacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import dropbox_sign as dsign  # noqa: E402
 from app.services import psicometricas as psi  # noqa: E402
 from app.services.configuracion import obtener  # noqa: E402
@@ -234,9 +234,16 @@ with TestClient(app) as client:
     PR = r.json()["id"]
     r = client.post("/candidatos", headers=H, json={"nombre": "Eva Psico", "telefono": "5599887766", "correo": "eva@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     PE = r.json()["id"]
-    ev1 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json={"tipo": "psicometrica", "prueba_id": PR}).json()
+    # Evaluaciones unificadas (2026-09-29): «Usar proveedor integrado» = forma integrada con la prueba del catálogo
+    NUEVA = {"tipo": "psicometrica", "forma": "integrada", "prueba_id": PR}
+
+    def ev_de(codigo):
+        return next(x for x in client.get(f"/evaluaciones/postulaciones/{PE}", headers=H).json() if x["codigo"] == codigo)
+
+    ev1 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev1['id']}/enviar", headers=H)
-    check(r.status_code == 200 and r.json()["pasoIntegrada"] == "enviada" and r.json()["claveProveedor"] is None, "sin llaves: modo Integrada simulado como antes (degradación)")
+    check(r.status_code == 200 and r.json()["evaluacion"]["pasoIntegrada"] == "enviada" and r.json()["evaluacion"]["claveProveedor"] is None,
+          "sin llaves: modo Integrada simulado como antes (degradación)")
     settings.psicometricas_token = "T" * 20
     settings.psicometricas_usuario = "P" * 20  # compatibilidad: sin PSICOMETRICAS_PASSWORD se usa USUARIO como Password
     check(psi.configurado(), "con PSICOMETRICAS_TOKEN + PSICOMETRICAS_USUARIO: configurado")
@@ -264,39 +271,47 @@ with TestClient(app) as client:
         return R(200, {"cleaver": {"D": 12, "I": 8}, "terman": {"ci": 105}})
 
     psi.httpx.get = _get
-    ev2 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json={"tipo": "psicometrica", "prueba_id": PR}).json()
+    ev2 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev2['id']}/enviar", headers=H)
     url, datos = ENVIADO[-1]
     check(url == "https://admin.psicometricas.mx/api/agregaCandidato" and datos["Token"] == "T" * 20 and datos["Password"] == "P" * 20
           and datos["Candidate"] == "Eva Psico" and datos["Email"] == "eva@correo.mx" and datos["Tests"] == "1,7" and datos["Lang"] == "Mx" and datos["Vacancy"],
           "agregaCandidato con Token, Password, Candidate, Email, Vacancy, Tests «1,7» y Lang Mx")
-    check(r.json()["claveProveedor"] == "1-EUPQ-0116-164" and r.json()["estado"] == "en_proceso", "guarda la clave y queda En proceso (Enviada)")
-    check(r.json()["urlCandidato"] is None, "su API no regresa liga: sin PSICOMETRICAS_URL_CANDIDATO solo se muestra la clave (no se inventa)")
+    e = r.json()["evaluacion"]
+    check(e["claveProveedor"] == "1-EUPQ-0116-164" and e["estado"] == "pendiente" and e["pasoIntegrada"] == "enviada",
+          "guarda la clave y queda Pendiente (paso Enviada)")
+    check(e["urlCandidatoProveedor"] is None, "su API no regresa liga: sin PSICOMETRICAS_URL_CANDIDATO solo se muestra la clave (no se inventa)")
     settings.psicometricas_url_candidato = "https://evaluacion.ejemplo.mx/acceso/{clave}"
-    check(client.get(f"/evaluaciones/postulaciones/{PE}", headers=H).json()[1]["urlCandidato"] == "https://evaluacion.ejemplo.mx/acceso/1-EUPQ-0116-164", "con la plantilla configurada se arma la liga")
+    check(ev_de(ev2["id"])["urlCandidatoProveedor"] == "https://evaluacion.ejemplo.mx/acceso/1-EUPQ-0116-164", "con la plantilla configurada se arma la liga")
     check(client.post(f"/evaluaciones/{ev2['id']}/integracion/avanzar", headers=H).status_code == 409, "conectada al proveedor: ya no se simula a mano")
     settings.psicometricas_webhook_secret = "secreto-xyz"
     check(client.post("/api/webhooks/psicometricas?secreto=malo", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba"}).status_code == 401, "webhook con secreto incorrecto → 401")
     r = client.post("/api/webhooks/psicometricas?secreto=secreto-xyz", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba", "nombre_prueba": "Cleaver"})
     db.expire_all()
-    e2 = db.query(EvaluacionCandidato).filter(EvaluacionCandidato.codigo == ev2["id"]).one()
-    check(r.status_code == 200 and e2.estado == "en_proceso", "aviso NO confirmado por su API (sin fecha_fin): no se guarda nada (anti-falsificación)")
+    e2 = db.query(Evaluacion).filter(Evaluacion.codigo == ev2["id"]).one()
+    check(r.status_code == 200 and e2.estado == "pendiente", "aviso NO confirmado por su API (sin fecha_fin): no se guarda nada (anti-falsificación)")
     ESTADO["fecha_fin"] = "2026-09-29 10:00:00"
     client.post("/api/webhooks/psicometricas?secreto=secreto-xyz", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba"})
     db.expire_all()
-    e2 = db.query(EvaluacionCandidato).filter(EvaluacionCandidato.codigo == ev2["id"]).one()
-    check(e2.estado == "resultado_recibido" and e2.paso_integrada == "resultado_recibido" and e2.archivo and e2.resultado_json.get("terman"),
-          "confirmado (fecha_fin) → descarga JSON + PDF y queda «Resultado recibido» en su pestaña de Evaluaciones")
-    check(e2.resultado_cargado_por == "Psicométricas.mx (automático)" and any("Psicométricas.mx" in h["detalle"] for h in e2.historial), "trazabilidad: quién/cuándo y pasos en el historial")
+    e2 = db.query(Evaluacion).filter(Evaluacion.codigo == ev2["id"]).one()
+    check(e2.estado == "con_resultado" and e2.paso_integrada == "resultado_recibido" and len(e2.adjuntos) == 1 and e2.resultado_json.get("terman"),
+          "confirmado (fecha_fin) → descarga JSON + PDF y queda «Con resultado» (Resultado recibido · Sin conclusión)")
+    check(e2.registrada_por == "Psicométricas.mx (automático)" and e2.registrada_via == "proveedor" and e2.realizada_por
+          and db.query(EventoEvaluacion).filter(EventoEvaluacion.evaluacion_id == e2.id, EventoEvaluacion.canal == "proveedor").count() >= 2,
+          "trazabilidad: quién/cuándo (autor = proveedor, captura vía proveedor) y pasos en el historial")
     client.post("/api/webhooks/psicometricas?secreto=secreto-xyz", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba"})
-    check(client.get(f"/evaluaciones/{ev2['id']}/informe", headers=H).status_code == 200, "reintento idempotente y el informe PDF se descarga")
-    r = client.post(f"/evaluaciones/{ev2['id']}/revisar", headers=H, json={"dictamen": "favorable"})
-    check(r.json()["estado"] == "revisada", "RH revisa y dictamina (HITL) sobre el resultado del proveedor")
+    db.expire_all()
+    e2 = db.query(Evaluacion).filter(Evaluacion.codigo == ev2["id"]).one()
+    check(len(e2.adjuntos) == 1 and client.get(f"/evaluaciones/{ev2['id']}/adjuntos/{e2.adjuntos[0]['id']}", headers=H).status_code == 200,
+          "reintento idempotente y el informe PDF se descarga")
+    r = client.post(f"/evaluaciones/{ev2['id']}/resultado", headers=H, data={"conclusion": "favorable", "modo": "complementar", "version": str(e2.resultado_version)})
+    check(r.status_code == 200 and r.json()["evaluacion"]["conclusion"] == "favorable", "RH agrega su conclusión (HITL) sobre el resultado del proveedor")
     psi.httpx.post = lambda url, data=None, timeout=None: R(401, {"code": "1001", "msg": "Token inválido"})
-    ev3 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json={"tipo": "psicometrica", "prueba_id": PR}).json()
+    ev3 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev3['id']}/enviar", headers=H)
     check(r.status_code == 502 and "1001" in r.json()["detail"], "credencial rechazada → 502 con el motivo del proveedor")
-    check(client.get(f"/evaluaciones/postulaciones/{PE}", headers=H).json()[2]["estado"] == "pendiente", "…y la evaluación no cambió")
+    e3 = ev_de(ev3["id"])
+    check(e3["estado"] == "pendiente" and e3["pasoIntegrada"] == "asignada" and not e3["claveProveedor"], "…y la evaluación no cambió")
     try:
         psi.tests_de("Cleaver")
         check(False, "tests_de debe exigir IDs numéricos")

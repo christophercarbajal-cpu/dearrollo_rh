@@ -164,56 +164,59 @@ with TestClient(app) as client:
     laura.rol = "Usuario"
     db.commit()
     r = client.get("/notificaciones/reglas")
-    check(r.status_code == 200 and len(r.json()) == 13, "GET reglas: un Usuario no-admin puede LEER la configuración (13 eventos: 2026-09-19 agrega vacante_publicada y entrevista_completada)")
+    check(r.status_code == 200 and len(r.json()) == 10,
+          "GET reglas: un Usuario no-admin puede LEER la configuración (10 eventos: Evaluaciones unificadas 2026-09-29 sustituye los 7 de entrevista por 4 de evaluación)")
     r = client.put("/notificaciones/reglas", json=[])
     check(r.status_code == 403, "…pero no guardarla")
     usuario_activo["u"] = admin
     reglas = client.get("/notificaciones/reglas").json()
-    # Fase 7A: la siembra perezosa ya nace con defaults (entrevista_agendada encendida); este bloque
+    # Fase 7A: la siembra perezosa ya nace con defaults (evaluacion_asignada encendida); este bloque
     # prueba la semántica de override, así que fija la regla explícitamente: solo candidato WhatsApp.
-    check(next(x for x in reglas if x["evento"] == "entrevista_agendada")["candidatoCorreo"], "Fase 7A: la regla entrevista_agendada NACE con correo encendido")
+    check(next(x for x in reglas if x["evento"] == "evaluacion_asignada")["candidatoCorreo"], "la regla evaluacion_asignada NACE con correo encendido")
     for x in reglas:
         for k in ("candidatoCorreo", "candidatoWhatsapp", "entrevistadorCorreo", "entrevistadorWhatsapp", "clienteCorreo", "clienteWhatsapp"):
             x[k] = False
-        if x["evento"] == "entrevista_agendada":
+        if x["evento"] == "evaluacion_asignada":
             x["candidatoWhatsapp"] = True
     body = [{"evento": x["evento"], "candidato_correo": x["candidatoCorreo"], "candidato_whatsapp": x["candidatoWhatsapp"],
              "entrevistador_correo": x["entrevistadorCorreo"], "entrevistador_whatsapp": x["entrevistadorWhatsapp"],
              "cliente_correo": x["clienteCorreo"], "cliente_whatsapp": x["clienteWhatsapp"]} for x in reglas]
     r = client.put("/notificaciones/reglas", json=body)
-    check(r.status_code == 200 and next(x for x in r.json() if x["evento"] == "entrevista_agendada")["candidatoWhatsapp"], "PUT en bloque guarda la matriz")
+    check(r.status_code == 200 and next(x for x in r.json() if x["evento"] == "evaluacion_asignada")["candidatoWhatsapp"], "PUT en bloque guarda la matriz")
 
     # postulación de prueba con teléfono
     persona = db.query(Candidato).filter_by(codigo="C-8801").one()
     p = persona.postulaciones_activas[-1]
     p.consentimiento = True
     db.commit()
-    ent = {"tipo_entrevistador": "externo", "entrevistador_nombre": "Ext", "entrevistador_correo": "ext@x.mx", "entrevistador_whatsapp": "5599990000",
-           "fecha": "2026-10-01", "hora": "10:00", "modalidad": "Llamada"}
+    # Evaluaciones unificadas (2026-09-29): la entrevista humana se asigna con «Agregar evaluación»
+    ent = {"tipo": "entrevista_humana", "forma": "asignada",
+           "evaluador": {"tipo": "externo", "nombre": "Ext", "correo": "ext@x.mx", "whatsapp": "5599990000"},
+           "cita": {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Teléfono"}}
 
     def enviados(desde_id):
         return db.query(NotificacionEnviada).filter(NotificacionEnviada.id > desde_id).all()
 
     base = db.query(NotificacionEnviada).count()
     # regla: solo candidato whatsapp. override apaga candidato y enciende entrevistador correo
-    r = client.post(f"/candidatos/{p.codigo}/entrevista-humana", json={**ent, "notificar": {"candidato_whatsapp": False, "entrevistador_correo": True}})
+    r = client.post(f"/evaluaciones/postulaciones/{p.codigo}", json={**ent, "notificar": {"candidato_whatsapp": False, "entrevistador_correo": True}})
     check(r.status_code == 201, "programar entrevista con override")
+    codigo_ev = r.json()["evaluacion"]["codigo"]
     env = enviados(base)
     check([e.destinatario_tipo + ":" + e.canal for e in env] == ["entrevistador:correo"], "override: regla encendida + override apagado → NO envía al candidato; override encendido → SÍ al entrevistador")
-    regla = db.query(ReglaNotificacion).filter_by(cuenta_id=cuenta_a.id, evento="entrevista_agendada").one()
+    regla = db.query(ReglaNotificacion).filter_by(cuenta_id=cuenta_a.id, evento="evaluacion_asignada").one()
     check(regla.candidato_whatsapp and not regla.entrevistador_correo, "la regla guardada NO cambió")
     base = db.query(NotificacionEnviada).count()
-    r = client.post(f"/candidatos/{p.codigo}/entrevista-humana/recordatorio", json={"notificar": {"candidato_whatsapp": True}})
+    r = client.post(f"/evaluaciones/{codigo_ev}/recordatorio", json={"a": "ambos", "notificar": {"candidato_whatsapp": True}})
     check(r.status_code == 200 and [e.destinatario_tipo for e in enviados(base)] == ["candidato"], "recordatorio: regla apagada + override encendido → envía")
     base = db.query(NotificacionEnviada).count()
-    r = client.post(f"/candidatos/{p.codigo}/entrevista-humana/recordatorio")
+    r = client.post(f"/evaluaciones/{codigo_ev}/recordatorio", json={"a": "ambos"})
     check(r.status_code == 200 and enviados(base) == [], "recordatorio sin override → sigue la regla (apagada): no envía")
-    # evento automático (candidato_apto) ignora override: regla apagada → nada aunque el resultado traiga notificar
+    # registrar un resultado nunca avisa al candidato (ni candidato_apto ni recomendación): la decisión es de RH
     base = db.query(NotificacionEnviada).count()
-    r = client.post(f"/candidatos/{p.codigo}/entrevista-humana/resultado", json={"resultado": "aprobado", "recomendacion": "avanzar", "notificar": {"candidato_whatsapp": True}})
-    check(r.status_code == 200, "capturar resultado con override")
-    env = enviados(base)
-    check(all(e.evento == "recomendacion_final" for e in env) and len(env) == 1, "override aplica a recomendacion_final; candidato_apto (automático) siguió la regla apagada")
+    r = client.post(f"/evaluaciones/{codigo_ev}/resultado", data={"conclusion": "avanzar", "version": "0"})
+    check(r.status_code == 200, "capturar resultado desde el sistema")
+    check(enviados(base) == [], "registrar el resultado no manda ningún aviso (tampoco candidato_apto)")
     # alta con override
     r = client.patch(f"/candidatos/{p.codigo}/etapa", json={"etapa": "Contratación"})
     exp_id = r.json()["expedienteId"]

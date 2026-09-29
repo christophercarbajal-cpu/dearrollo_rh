@@ -1494,13 +1494,15 @@ class AsignacionCurso(Base):
 # ============================================================
 
 EVENTOS_NOTIFICACION = [
-    "entrevista_agendada",
-    "recordatorio_entrevista",
-    "entrevista_modificada",
-    "entrevista_cancelada",
+    # Evaluaciones unificadas — Fase 1 (2026-09-29): sustituyen a entrevista_agendada / recordatorio_entrevista /
+    # entrevista_modificada / entrevista_cancelada / entrevista_humana_terminada / recomendacion_final /
+    # entrevista_completada (ya no se disparan; sus reglas guardadas se conservan y el aviso al Cliente las hereda,
+    # ver notificaciones.EVENTO_LEGADO_EVALUACION). Aplican a TODOS los tipos, entrevista humana incluida.
+    "evaluacion_asignada",
+    "evaluacion_reprogramada",
+    "evaluacion_cancelada",
+    "recordatorio_evaluacion",
     "candidato_apto",
-    "entrevista_humana_terminada",
-    "recomendacion_final",
     "contratacion",
     "solicitud_documentos",
     "recordatorio_documentos",
@@ -1508,8 +1510,6 @@ EVENTOS_NOTIFICACION = [
     "instrucciones_ingreso",
     # 2026-09-19: al publicar una vacante, su descripción (HTML) al Cliente y al responsable.
     "vacante_publicada",
-    # 2026-09-19: cierre del ciclo — el entrevistador registró su evaluación desde su liga.
-    "entrevista_completada",
 ]
 
 # Fase 7A (2026-09-12): valores con los que NACE la regla de cada evento cuando una Cuenta no la
@@ -1518,6 +1518,12 @@ EVENTOS_NOTIFICACION = [
 # a candidato y entrevistador cuando existan ambos datos; RH puede apagarlo por acción. Las reglas
 # ya guardadas de una Cuenta NUNCA se tocan desde aquí.
 REGLAS_NOTIFICACION_DEFAULT = {
+    # Evaluaciones unificadas (especificación, sección 7): correo + WhatsApp a los medios disponibles. La matriz
+    # (candidato solo con cita o liga de otro sistema, etc.) la aplica services/evaluaciones.notificar.
+    "evaluacion_asignada": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
+    "evaluacion_reprogramada": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
+    "evaluacion_cancelada": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
+    "recordatorio_evaluacion": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
     "entrevista_agendada": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
     "recordatorio_entrevista": {"candidato_whatsapp": True, "candidato_correo": True, "entrevistador_correo": True, "entrevistador_whatsapp": True},
     "entrevista_humana_terminada": {"entrevistador_correo": True, "entrevistador_whatsapp": True},

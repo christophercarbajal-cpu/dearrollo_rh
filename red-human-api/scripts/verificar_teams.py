@@ -31,7 +31,7 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Candidato, Cuenta, EntrevistaHumana, IntegracionTeams, NotificacionEnviada, Usuario, UsuarioCuenta, Vacante  # noqa: E402
+from app.models import Candidato, Cuenta, Evaluacion, IntegracionTeams, NotificacionEnviada, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import teams  # noqa: E402
 
 OK = 0
@@ -120,7 +120,14 @@ with TestClient(app) as client:
     p.consentimiento = True
     db.commit()
     P = p.codigo
-    base_eh = {"tipo_entrevistador": "interno", "entrevistador_usuario_id": admin.id, "fecha": "2026-10-01", "hora": "10:00", "modalidad": "Videollamada"}
+    # Evaluaciones unificadas (2026-09-29): la entrevista se agenda con «Agregar evaluación» (cita opcional)
+    CITA = {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Videollamada"}
+
+    def agendar(cita_extra=None, **extra):
+        return client.post(f"/evaluaciones/postulaciones/{P}", json={
+            "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+            "cita": {**CITA, **(cita_extra or {})}, **extra,
+        })
 
     # ---------- 1. Modo seguro: sin TEAMS_* ----------
     r = client.get("/integraciones/teams")
@@ -130,10 +137,10 @@ with TestClient(app) as client:
     check(r.status_code == 409, "sin credenciales: conectar → 409 (no rompe)")
     r = client.get("/integraciones/teams/callback", params={"code": "x", "state": "y"}, follow_redirects=False)
     check(r.status_code == 302 and "teams=error" in r.headers["location"], "sin credenciales: callback redirige con teams=error")
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json=base_eh)
+    r = agendar()
     check(r.status_code == 400 and "liga" in r.json()["detail"], "sin Teams: Videollamada exige la liga manual (comportamiento de siempre)")
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={**base_eh, "liga": "https://meet.google.com/abc"})
-    check(r.status_code == 201 and r.json()["candidato"]["entrevistaHumana"]["liga"] == "https://meet.google.com/abc" and r.json()["candidato"]["entrevistaHumana"]["porTeams"] is False,
+    r = agendar({"liga_videollamada": "https://meet.google.com/abc"})
+    check(r.status_code == 201 and r.json()["evaluacion"]["cita"]["ligaVideollamada"] == "https://meet.google.com/abc" and r.json()["evaluacion"]["cita"]["porTeams"] is False,
           "sin Teams: liga manual se guarda tal cual (porTeams=false)")
 
     # ---------- 2. Credenciales ficticias (nombres EXACTOS de las variables) ----------
@@ -171,10 +178,11 @@ with TestClient(app) as client:
     # ---------- 3. Programar Videollamada con Teams ----------
     base = db.query(NotificacionEnviada).count()
     LLAMADAS.clear()
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={**base_eh, "notificar": {"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": False}})
+    r = agendar(notificar={"candidato_correo": True, "candidato_whatsapp": True, "entrevistador_correo": True, "entrevistador_whatsapp": False})
     check(r.status_code == 201, "programar Videollamada con Teams conectado, sin liga → 201")
-    eh = r.json()["candidato"]["entrevistaHumana"]
-    check(eh["liga"] == "https://teams.microsoft.com/l/meetup-join/simulada" and eh["porTeams"] and eh["teamsEventoId"] == "EVT-123",
+    eh = r.json()["evaluacion"]["cita"]
+    ev_db = db.query(Evaluacion).filter_by(codigo=r.json()["evaluacion"]["codigo"]).one()
+    check(eh["ligaVideollamada"] == "https://teams.microsoft.com/l/meetup-join/simulada" and eh["porTeams"] and ev_db.teams_evento_id == "EVT-123",
           "liga de Teams guardada + teams_evento_id")
     evento = next(x for x in LLAMADAS if x[0] == "POST" and x[1].endswith("/me/events"))[2]
     correos = sorted(a["emailAddress"]["address"] for a in evento["attendees"])
@@ -189,29 +197,29 @@ with TestClient(app) as client:
     m = db.query(Mensaje).order_by(Mensaje.id.desc()).first()
     check("teams.microsoft.com/l/meetup-join/simulada" in m.texto, "la liga de Teams va en el WhatsApp de confirmación")
     from app.services.notificaciones import _mensaje
-    eh_db = db.query(EntrevistaHumana).order_by(EntrevistaHumana.id.desc()).first()
-    asunto, html = _mensaje("entrevista_agendada", "candidato", "correo", p, eh_db, "", {})
+    from app.services.evaluaciones import CitaComoEntrevista
+    asunto, html = _mensaje("entrevista_agendada", "candidato", "correo", p, CitaComoEntrevista(ev_db), "", {})
     check("teams.microsoft.com/l/meetup-join/simulada" in html, "la liga de Teams va en el correo de confirmación")
 
     # «Usar otra liga»
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={**base_eh, "usar_teams": False, "liga": "https://zoom.us/j/1"})
-    check(r.status_code == 201 and r.json()["candidato"]["entrevistaHumana"]["liga"] == "https://zoom.us/j/1" and not r.json()["candidato"]["entrevistaHumana"]["porTeams"],
+    r = agendar({"usar_teams": False, "liga_videollamada": "https://zoom.us/j/1"})
+    check(r.status_code == 201 and r.json()["evaluacion"]["cita"]["ligaVideollamada"] == "https://zoom.us/j/1" and not r.json()["evaluacion"]["cita"]["porTeams"],
           "usar_teams=false → liga manual, sin llamar a Graph")
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={**base_eh, "usar_teams": False})
+    r = agendar({"usar_teams": False})
     check(r.status_code == 400, "usar_teams=false sin liga → 400")
     n = len(LLAMADAS)
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={**base_eh, "modalidad": "Presencial", "ubicacion": "Oficina"})
+    r = agendar({"modalidad": "Presencial", "direccion": "Oficina"})
     check(r.status_code == 201 and len(LLAMADAS) == n, "Presencial no toca Teams")
 
     # ---------- 4. Falla de Graph → 502 y nada guardado ----------
-    n_eh = db.query(EntrevistaHumana).count()
+    n_eh = db.query(Evaluacion).count()
     base = db.query(NotificacionEnviada).count()
     MODO["graph_falla"] = True
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json=base_eh)
+    r = agendar()
     MODO["graph_falla"] = False
     db.expire_all()
     check(r.status_code == 502 and "No se pudo crear la reunión de Teams" in r.json()["detail"] and "Usar otra liga" in r.json()["detail"], "Graph falla → 502 con motivo y sugerencia")
-    check(db.query(EntrevistaHumana).count() == n_eh and db.query(NotificacionEnviada).count() == base, "…y NO se guardó la entrevista ni se notificó nada")
+    check(db.query(Evaluacion).count() == n_eh and db.query(NotificacionEnviada).count() == base, "…y NO se guardó la entrevista ni se notificó nada")
     check(db.query(IntegracionTeams).filter_by(cuenta_id=cuenta.id).one().ultimo_error.startswith("ServiceUnavailable"), "el error queda en ultimo_error (Integraciones lo muestra)")
 
     # ---------- 5. Token vencido → refresh ----------
@@ -235,24 +243,25 @@ with TestClient(app) as client:
     db.commit()
 
     # ---------- 6. Modificar / cancelar (best-effort) ----------
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json=base_eh)
-    check(r.status_code == 201 and r.json()["candidato"]["entrevistaHumana"]["porTeams"], "nueva ronda por Teams")
+    r = agendar()
+    check(r.status_code == 201 and r.json()["evaluacion"]["cita"]["porTeams"], "nueva evaluación por Teams")
+    COD = r.json()["evaluacion"]["codigo"]
     LLAMADAS.clear()
-    r = client.patch(f"/candidatos/{P}/entrevista-humana", json={"fecha": "2026-10-02", "hora": "12:00", "modalidad": "Videollamada"})
-    check(r.status_code == 200 and any(x[0] == "PATCH" and "/me/events/EVT-123" in x[1] for x in LLAMADAS) and r.json()["entrevistaHumana"]["liga"].endswith("simulada"),
+    r = client.patch(f"/evaluaciones/{COD}", json={"cita": {"fecha": "2026-10-02", "hora": "12:00", "modalidad": "Videollamada"}})
+    check(r.status_code == 200 and any(x[0] == "PATCH" and "/me/events/EVT-123" in x[1] for x in LLAMADAS) and r.json()["evaluacion"]["cita"]["ligaVideollamada"].endswith("simulada"),
           "modificar: actualiza la reunión de Teams y conserva la liga (no se vuelve a pedir)")
     MODO["graph_falla"] = True
-    r = client.patch(f"/candidatos/{P}/entrevista-humana", json={"fecha": "2026-10-03", "hora": "12:00", "modalidad": "Videollamada"})
+    r = client.patch(f"/evaluaciones/{COD}", json={"cita": {"fecha": "2026-10-03", "hora": "12:00", "modalidad": "Videollamada"}})
     MODO["graph_falla"] = False
     check(r.status_code == 200 and r.json().get("avisoTeams"), "modificar con Graph caído → la acción de RH NO se bloquea, regresa avisoTeams")
     LLAMADAS.clear()
-    r = client.post(f"/candidatos/{P}/entrevista-humana/cancelar", json={})
+    r = client.post(f"/evaluaciones/{COD}/cancelar", json={})
     check(r.status_code == 200 and any(x[0] == "DELETE" and "/me/events/EVT-123" in x[1] for x in LLAMADAS), "cancelar: borra la reunión (Graph manda la cancelación)")
 
     # ---------- 7. Desconectar y secret rotado ----------
     r = client.delete("/integraciones/teams")
     check(r.status_code == 200 and db.query(IntegracionTeams).filter_by(cuenta_id=cuenta.id).count() == 0, "desconectar borra la conexión")
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json=base_eh)
+    r = agendar()
     check(r.status_code == 400, "desconectado → vuelve a pedir la liga manual")
     r = client.get("/integraciones/teams/callback", params={"code": "c2", "state": teams.firmar_state(cuenta.id, admin.id, admin.nombre)}, follow_redirects=False)
     check("teams=ok" in r.headers["location"], "reconectar")

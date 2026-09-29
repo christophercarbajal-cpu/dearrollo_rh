@@ -1,6 +1,6 @@
 """Verificación BLOQUE 1/2 (2026-09-19): correos HTML en todos los eventos + vacante publicada, recordatorio
-automático de Entrevista Humana, liga del entrevistador con expediente, autocierre al evaluar y resultado
-con comentarios opcionales. Modo demo, base desechable.
+automático de Entrevista Humana, liga del evaluador con expediente, autocierre al evaluar y resultado
+con comentarios opcionales (sobre Evaluaciones unificadas desde 2026-09-29). Modo demo, base desechable.
 
 Uso (desde red-human-api/):
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_bloque1_entrevista.py
@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Archivo, Cliente, ClienteContacto, Cuenta, EntrevistaHumana, Usuario, UsuarioCuenta, Vacante  # noqa: E402
+from app.models import Archivo, Cliente, ClienteContacto, Cuenta, Evaluacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import notificaciones as sn  # noqa: E402
 from app.services.notificaciones import TZ_MEXICO  # noqa: E402
 from app.services import recordatorios_entrevista as sre  # noqa: E402
@@ -60,6 +60,9 @@ async def _fake_wa(tel, texto):
 
 sn.enviar_correo = _fake_correo
 sn.enviar_mensaje = _fake_wa
+import app.services.correo as _scorreo  # noqa: E402
+
+_scorreo.enviar_correo = _fake_correo  # el aviso a RH de un resultado importa enviar_correo al momento
 
 with TestClient(app) as client:
     db = SessionLocal()
@@ -113,51 +116,63 @@ with TestClient(app) as client:
     db.commit()
     client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
     CORREOS.clear()
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={"tipo_entrevistador": "interno", "entrevistador_usuario_id": admin.id, "fecha": _cita_en_5h[0], "hora": _cita_en_5h[1], "modalidad": "Llamada", "notificar": {"cliente_correo": False, "cliente_whatsapp": False}})
+    # Evaluaciones unificadas (2026-09-29): «Agregar evaluación» → entrevista humana asignada con cita
+    r = client.post(f"/evaluaciones/postulaciones/{P}", json={
+        "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+        "cita": {"fecha": _cita_en_5h[0], "hora": _cita_en_5h[1], "modalidad": "Teléfono"},
+        "notificar": {"cliente_correo": False, "cliente_whatsapp": False},
+    })
     check(r.status_code == 201, "entrevista humana programada")
+    COD = r.json()["evaluacion"]["codigo"]
     db.expire_all()
-    eh = db.query(EntrevistaHumana).order_by(EntrevistaHumana.id.desc()).first()
-    r = client.get(f"/entrevista-humana/publica/{eh.token}")
+    ev = db.query(Evaluacion).filter_by(codigo=COD).one()
+    token = ev.token_evaluador
+    r = client.get(f"/evaluaciones/publica/{token}")
     check(r.status_code == 200 and r.json()["expediente"], "GET público trae el expediente")
     exp = r.json()["expediente"]
     check(exp["candidato"]["nombre"] == "Carlos Hernández" and exp["score"] == 78 and exp["cv"]["resumen"].startswith("Abogado") and exp["cv"]["habilidades"] == ["Fiscal", "Litigio"], "CV extraído y afinidad de Luna")
     check(exp["analisis"]["brechas"] == ["Sin experiencia en SAT"] and exp["analisis"]["requisitosCumplidos"] == ["Título en Derecho"], "análisis de Luna (requisitos, brechas)")
     check(exp["archivos"] and exp["archivos"][0]["tipo"] == "cv" and exp["vacante"]["titulo"] == "Abogado Fiscalista" and exp["vacante"]["empresa"], "archivos del candidato y vacante/empresa")
-    check(r.json()["yaEvaluada"] is False, "todavía sin evaluar")
+    check(r.json()["yaTieneResultado"] is False, "todavía sin resultado")
 
     # ================= 3. Recordatorio automático =================
-    print("\n--- 3. Recordatorio automático de entrevista (job) ---")
+    print("\n--- 3. Recordatorio automático de la cita (job) ---")
     CORREOS.clear(); WA.clear()
     n = asyncio.run(sre.revisar_recordatorios_entrevista())
-    check(n == 1, "entrevista dentro de las próximas 24 h → 1 recordatorio")
+    check(n == 1, "cita dentro de las próximas 24 h → 1 recordatorio")
     check(any(c[0] == "carlos@correo.mx" and "Recordatorio" in c[1] and "<!doctype html>" in c[2].lower() for c in CORREOS), "candidato: correo HTML de recordatorio")
-    check(any(c[0] == admin.correo and "Recordatorio" in c[1] for c in CORREOS) and any(t[0] == "3399998888" for t in WA), "entrevistador: correo + WhatsApp")
+    check(any(c[0] == admin.correo and "Recordatorio" in c[1] for c in CORREOS) and any(t[0] == "3399998888" for t in WA), "evaluador: correo + WhatsApp")
     check(asyncio.run(sre.revisar_recordatorios_entrevista()) == 0, "no se repite (recordatorio_enviado_en)")
     db.expire_all()
-    check(db.query(EntrevistaHumana).get(eh.id).recordatorio_enviado_en is not None, "queda marcado en la entrevista")
+    check(db.query(Evaluacion).filter_by(codigo=COD).one().recordatorio_enviado_en is not None, "queda marcado en la evaluación")
     cfg = obtener(db); cfg.recordatorio_entrevista_horas = 0; db.commit()
     check(asyncio.run(sre.revisar_recordatorios_entrevista()) == 0, "con 0 horas el job está apagado")
     cfg.recordatorio_entrevista_horas = 24; db.commit()
 
-    # ================= 4. Terminada (liga) en HTML + autocierre =================
-    print("\n--- 4. Autocierre desde la liga del entrevistador ---")
+    # ================= 4. Liga del evaluador: reenviar + resultado =================
+    print("\n--- 4. Resultado desde la liga del evaluador ---")
     CORREOS.clear()
-    r = client.post(f"/candidatos/{P}/entrevista-humana/realizada", json={"notificar": {"entrevistador_correo": True, "cliente_correo": False, "cliente_whatsapp": False}})
-    check(r.status_code == 200, "reenviar liga al entrevistador")
+    r = client.post(f"/evaluaciones/{COD}/reenviar-liga")
+    check(r.status_code == 200, "reenviar liga al evaluador")
     c_e = next((c for c in CORREOS if c[0] == admin.correo), None)
-    check(c_e is not None and "Registra tu evaluación" in c_e[1] and "Registrar mi evaluación" in c_e[2] and eh.token in c_e[2], "correo HTML «registra tu evaluación» con CTA a la liga")
+    check(c_e is not None and "<!doctype html>" in c_e[2].lower() and f"/evaluacion/{token}" in c_e[2], "correo HTML corporativo con la liga del evaluador")
+    check(not any(c[0] == "carlos@correo.mx" for c in CORREOS), "reenviar la liga no le escribe al candidato")
     CORREOS.clear(); WA.clear()
-    r = client.post(f"/entrevista-humana/publica/{eh.token}", json={"resultado": "no_aprobado", "recomendacion": "no_avanzar", "comentario": ""})
-    check(r.status_code == 200 and r.json()["estatus"] == "realizada", "evaluación desde la liga sin comentario (opcional) → 200, estatus realizada")
+    etapa_antes = db.query(Postulacion).filter(Postulacion.codigo == P).one().etapa
+    r = client.post(f"/evaluaciones/publica/{token}/resultado", data={"conclusion": "no_avanzar", "version": "0"})
+    check(r.status_code == 200 and r.json()["evaluacion"]["estado"] == "con_resultado", "resultado desde la liga sin comentario (opcional) → Con resultado")
     db.expire_all()
-    eh = db.query(EntrevistaHumana).get(eh.id)
-    check(eh.realizada and eh.resultado == "no_aprobado" and eh.evaluada_en is not None and eh.resultado_capturado_por == "entrevistador", "la entrevista queda realizada/confirmada con evaluación (autocierre)")
-    check(any(c[0] == "carlos@correo.mx" and "Terminamos tu entrevista" in c[1] and "<!doctype html>" in c[2].lower() for c in CORREOS), "candidato: correo HTML «entrevista completada»")
-    check(any(c[0] == admin.correo and "Entrevista completada" in c[1] and "No aprobado" in c[2] for c in CORREOS), "RH (responsable): correo HTML con el resultado")
-    check(any(c[0] == "paola@sol.mx" and "Entrevista completada" in c[1] for c in CORREOS), "Cliente: correo HTML del cierre")
-    r = client.get(f"/entrevista-humana/publica/{eh.token}")
-    check(r.status_code == 200 and r.json()["yaEvaluada"] is True and r.json()["expediente"], "la liga sigue mostrando el expediente ya evaluada (solo lectura)")
-    check(client.post(f"/entrevista-humana/publica/{eh.token}", json={"resultado": "aprobado", "recomendacion": "avanzar"}).status_code == 404, "…pero no acepta una segunda evaluación")
+    ev = db.query(Evaluacion).filter_by(codigo=COD).one()
+    check(ev.realizada_en is not None and ev.registrada_via == "liga_evaluador" and ev.conclusion == "no_avanzar", "queda realizada y con resultado (autocierre), capturado vía liga")
+    check(any(c[0] == admin.correo and "Nuevo resultado" in c[1] and "No avanzar" in c[2] for c in CORREOS), "RH (responsable): correo HTML con el resultado")
+    check(not any(c[0] in ("carlos@correo.mx", "paola@sol.mx") for c in CORREOS) and not WA, "el candidato y el Cliente NO reciben nada por un resultado (especificación, sección 7)")
+    check(db.query(Postulacion).filter(Postulacion.codigo == P).one().etapa == etapa_antes, "el resultado no mueve la etapa")
+    r = client.get(f"/evaluaciones/publica/{token}")
+    check(r.status_code == 200 and r.json()["yaTieneResultado"] is True and r.json()["expediente"], "la liga sigue mostrando el expediente con resultado (solo lectura)")
+    r = client.post(f"/evaluaciones/publica/{token}/resultado", data={"conclusion": "avanzar", "version": str(ev.resultado_version)})
+    db.expire_all()
+    check(r.status_code == 400 and db.query(Evaluacion).filter_by(codigo=COD).one().conclusion == "no_avanzar",
+          "…un segundo envío no sobrescribe: solo acepta complemento (comentario o adjunto)")
     check(all("<!doctype html>" in c[2].lower() for c in CORREOS), "cero texto plano en los correos")
 
     # ================= 5. RH: resultado con comentario opcional =================
@@ -165,9 +180,15 @@ with TestClient(app) as client:
     r = client.post("/candidatos", json={"nombre": "Ana Ruiz", "telefono": "5599990000", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
     client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Evaluación", "manual": True})
-    client.post(f"/candidatos/{P2}/entrevista-humana", json={"tipo_entrevistador": "interno", "entrevistador_usuario_id": admin.id, "fecha": "2026-10-01", "hora": "10:00", "modalidad": "Llamada", "notificar": {"cliente_correo": False, "cliente_whatsapp": False}})
-    r = client.post(f"/candidatos/{P2}/entrevista-humana/resultado", json={"resultado": "no_aprobado", "recomendacion": "no_avanzar", "comentario": ""})
-    check(r.status_code == 200 and r.json()["entrevistaHumana"]["realizada"] is True and r.json()["entrevistaHumana"]["resultado"] == "no_aprobado", "«Entrevista realizada» + resultado sin comentario → realizada y evaluada en un paso")
+    r = client.post(f"/evaluaciones/postulaciones/{P2}", json={
+        "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+        "cita": {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Teléfono"}, "notificar": {"cliente_correo": False, "cliente_whatsapp": False},
+    })
+    COD2 = r.json()["evaluacion"]["codigo"]
+    r = client.post(f"/evaluaciones/{COD2}/resultado", data={"conclusion": "no_avanzar", "version": "0"})
+    e2 = r.json()["evaluacion"]
+    check(r.status_code == 200 and e2["estado"] == "con_resultado" and e2["realizadaEn"] and e2["conclusion"] == "no_avanzar",
+          "«Registrar resultado» sin comentario → realizada y con resultado en un paso")
 
     db.close()
 

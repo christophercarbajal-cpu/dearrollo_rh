@@ -3,7 +3,7 @@
     .venv/Scripts/python.exe scripts/verificar_tablero.py
 
 Dos Cuentas con datos distintos: cada tablero cuenta SOLO lo suyo (candidatos activos, colaboradores, fuentes,
-recientes, Onboarding con tareas atrasadas y avance, evaluaciones pendientes / esperando revisión, ciclos de
+recientes, Onboarding con tareas atrasadas y avance, evaluaciones por estado (modelo unificado), ciclos de
 Desempeño activos y Clima). Una Cuenta vacía muestra ceros / series vacías, nunca datos inventados.
 """
 
@@ -79,11 +79,12 @@ with TestClient(app) as client:
         r = client.post("/candidatos", json={"nombre": nombre, "telefono": tel, "correo": f"{tel}@a.mx", "vacante": "VAC-A1", "consentimiento": True, "fuente": fuente})
         P[nombre] = r.json()["id"]
     client.patch(f"/candidatos/{P['Mario A']}/etapa", json={"etapa": "Evaluación", "manual": True})
-    # evaluaciones: una pendiente y una con resultado recibido
-    client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "referencias"})
-    ev = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "tecnica"}).json()
-    client.post(f"/evaluaciones/{ev['id']}/enviar")
-    client.post(f"/evaluaciones/{ev['id']}/resultado", data={"resumen": "Resolvió el caso"})
+    # evaluaciones (modelo unificado): una Pendiente, una Realizada · Resultado pendiente y una Con resultado
+    client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "referencias", "forma": "registro_directo"})
+    ev = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "tecnica", "forma": "registro_directo"}).json()["evaluacion"]
+    client.post(f"/evaluaciones/{ev['id']}/realizada")
+    ev3 = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "socioeconomica", "forma": "registro_directo"}).json()["evaluacion"]
+    client.post(f"/evaluaciones/{ev3['id']}/resultado", data={"comentarios": "Visita realizada", "version": "0"})
     # onboarding activo con una tarea atrasada
     exp = client.patch(f"/candidatos/{P['Nora A']}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
     client.patch(f"/candidatos/{P['Nora A']}/condiciones-contratacion", json={"puesto": "Cajero A", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-12-01"})
@@ -119,7 +120,8 @@ with TestClient(app) as client:
     check(o["activos"] == 1 and o["tareasAtrasadas"] == 1 and o["avancePromedio"] is not None and 0 <= o["avancePromedio"] <= 100,
           f"Onboarding: 1 activo, 1 tarea atrasada, avance promedio real ({o})")
     e = t["evaluaciones"]
-    check(e["pendientes"] == 1 and e["resultadoRecibido"] == 1, f"evaluaciones: 1 pendiente y 1 esperando revisión ({e})")
+    check(e["pendientes"] == 1 and e["realizadasSinResultado"] == 1 and e["conResultado"] == 1 and e["nuevosResultados"] == 0,
+          f"evaluaciones: 1 pendiente, 1 con resultado pendiente, 1 con resultado (capturado por RH: no es «nuevo») ({e})")
     d = t["desempeno"]
     check(d["activos"] == 1 and d["personasIncluidas"] == 1 and d["personasCompletadas"] == 0 and d["avance"] == 0,
           f"Desempeño: 1 ciclo activo, 0 de 1 completadas ({d['activos']}, {d['avance']} %)")
@@ -131,7 +133,7 @@ with TestClient(app) as client:
     t = client.get("/metricas/tablero").json()
     check(t["kpis"]["candidatosActivos"] == 5 and t["kpis"]["colaboradoresActivos"] == 3, "B ve sus 5 candidatos y 3 colaboradores")
     check(t["onboarding"]["activos"] == 0 and t["onboarding"]["tareasAtrasadas"] == 0 and t["onboarding"]["avancePromedio"] is None, "B no ve el Onboarding de A")
-    check(t["evaluaciones"]["pendientes"] == 0 and t["evaluaciones"]["resultadoRecibido"] == 0, "B no ve las evaluaciones de A")
+    check(t["evaluaciones"]["pendientes"] == 0 and t["evaluaciones"]["conResultado"] == 0, "B no ve las evaluaciones de A")
     check(t["desempeno"]["activos"] == 0, "B no ve los ciclos de A")
     check(all(r["nombre"].startswith("Persona B") for r in t["recientes"]), "recientes solo de B")
 

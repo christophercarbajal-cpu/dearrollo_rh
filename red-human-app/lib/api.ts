@@ -8,13 +8,7 @@
      human-in-the-loop tienen que verse en pantalla.
    ============================================================ */
 
-import type {
-  Candidato,
-  RecomendacionEntrevistaHumana,
-  ResultadoEntrevistaHumana,
-  TipoEntrevistador,
-  Vacante,
-} from "@/lib/data";
+import type { Candidato, Vacante } from "@/lib/data";
 import type { NuevoIngreso, ResumenTableroOnboarding } from "@/lib/phase2";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -24,7 +18,7 @@ export type Resultado<T> = { ok: true; data: T } | { ok: false; error: string };
 const SIN_API = "No se pudo conectar con la API. Verifica que esté corriendo en " + API;
 
 /** Rutas que el candidato usa sin sesión: un 401 ahí no debe mandarnos al login. */
-const PUBLICAS = ["/salud", "/auth/yo", "/auth/login", "/vacantes/slug/", "/candidatos/postular", "/entrevistas/publica/"];
+const PUBLICAS = ["/salud", "/auth/yo", "/auth/login", "/vacantes/slug/", "/candidatos/postular", "/entrevistas/publica/", "/evaluaciones/publica/"];
 
 /** Un 401 significa que la sesión venció: se manda a login conservando a dónde iba. */
 function sesionCaida(ruta: string) {
@@ -406,18 +400,16 @@ export function quitarUsuarioCuenta(cuentaId: number, usuarioId: number) {
    Fase D · Notificaciones configurables por evento/destinatario/canal (solo admin)
    ============================================================ */
 
-/** Los 11 eventos configurables (puntos 22-26 + Fase 5) — el orden importa para la grilla de
+/** Los eventos configurables (puntos 22-26, Fase 5 y Evaluaciones unificadas) — el orden importa para la grilla de
  * Configuración → Notificaciones, mantenerlo igual al de `EVENTOS_NOTIFICACION` en models.py. */
 export const EVENTOS_NOTIFICACION = [
-  "entrevista_agendada",
-  "recordatorio_entrevista",
-  "entrevista_modificada",
-  "entrevista_cancelada",
+  // Evaluaciones unificadas (2026-09-29): aplican a todas las evaluaciones, entrevista humana incluida.
+  "evaluacion_asignada",
+  "evaluacion_reprogramada",
+  "evaluacion_cancelada",
+  "recordatorio_evaluacion",
   "candidato_apto",
-  "entrevista_humana_terminada",
-  "entrevista_completada",
   "vacante_publicada",
-  "recomendacion_final",
   "contratacion",
   "solicitud_documentos",
   "recordatorio_documentos",
@@ -427,15 +419,12 @@ export const EVENTOS_NOTIFICACION = [
 export type EventoNotificacion = (typeof EVENTOS_NOTIFICACION)[number];
 
 export const NOMBRE_EVENTO_NOTIFICACION: Record<EventoNotificacion, string> = {
-  entrevista_agendada: "Entrevista agendada",
-  recordatorio_entrevista: "Recordatorio de entrevista",
-  entrevista_modificada: "Entrevista modificada",
-  entrevista_cancelada: "Entrevista cancelada",
-  candidato_apto: "Candidato apto",
-  entrevista_humana_terminada: "Entrevista humana terminada",
-  entrevista_completada: "Entrevista completada (evaluación registrada)",
+  evaluacion_asignada: "Evaluación asignada (entrevista humana u otra)",
+  evaluacion_reprogramada: "Evaluación reprogramada",
+  evaluacion_cancelada: "Evaluación cancelada",
+  recordatorio_evaluacion: "Recordatorio de evaluación",
+  candidato_apto: "Candidato apto (Entrevista Red Human)",
   vacante_publicada: "Vacante publicada",
-  recomendacion_final: "Recomendación final disponible",
   contratacion: "Contratación",
   solicitud_documentos: "Solicitud de documentos",
   recordatorio_documentos: "Recordatorio de documentos",
@@ -1075,7 +1064,8 @@ export interface ResultadoNotificacion {
   destino?: string;
 }
 
-const NOMBRE_DESTINATARIO: Record<string, string> = { candidato: "Candidato", entrevistador: "Entrevistador", cliente: "Cliente" };
+// "entrevistador" = el evaluador de una evaluación (Evaluaciones unificadas, 2026-09-29)
+const NOMBRE_DESTINATARIO: Record<string, string> = { candidato: "Candidato", entrevistador: "Evaluador", cliente: "Cliente", rh: "RH" };
 
 /** Fase 7A: una línea legible por envío («✓ Correo al candidato (cand@x.mx)» /
  * «✗ WhatsApp al entrevistador — RESEND_API_KEY sin configurar»). Vacío si no hubo destinatarios. */
@@ -1114,163 +1104,6 @@ export function asignarVacante(codigo: string, vacante: string) {
  * Regresa la postulación NUEVA (más `anterior`/`nueva` con los códigos). */
 export function reiniciarPostulacionPrueba(codigo: string) {
   return post<Candidato & { anterior: string; nueva: string }>(`/candidatos/${codigo}/reiniciar`);
-}
-
-/* ============================================================
-   Entrevista Humana — modal "Programar entrevista" y checkbox "Entrevista realizada"
-   ============================================================ */
-
-export type ModalidadEntrevistaHumana = "Presencial" | "Videollamada" | "Llamada";
-
-export function programarEntrevistaHumana(
-  codigo: string,
-  datos: {
-    tipoEntrevistador: TipoEntrevistador;
-    entrevistadorUsuarioId?: number | null;
-    /** Fase 7A: contacto del Cliente de la vacante; si viene, nombre/correo/WhatsApp salen del contacto. */
-    entrevistadorContactoId?: number | null;
-    /** Fase 7B: false = «Usar otra liga» aunque la Cuenta tenga Teams conectado. */
-    usarTeams?: boolean;
-    entrevistadorNombre?: string;
-    entrevistadorCorreo?: string;
-    entrevistadorWhatsapp?: string;
-    fecha: string;
-    hora: string;
-    modalidad: ModalidadEntrevistaHumana;
-    liga?: string;
-    ubicacion?: string;
-    telefonoContacto?: string;
-    comentario?: string;
-    notificar?: NotificarAccion;
-  },
-) {
-  return post<{ resultados: ResultadoNotificacion[]; advertencias?: string[]; candidato: Candidato }>(`/candidatos/${codigo}/entrevista-humana`, {
-    tipo_entrevistador: datos.tipoEntrevistador,
-    entrevistador_usuario_id: datos.entrevistadorUsuarioId ?? null,
-    entrevistador_contacto_id: datos.entrevistadorContactoId ?? null,
-    usar_teams: datos.usarTeams ?? true,
-    entrevistador_nombre: datos.entrevistadorNombre ?? "",
-    entrevistador_correo: datos.entrevistadorCorreo ?? "",
-    entrevistador_whatsapp: datos.entrevistadorWhatsapp ?? "",
-    fecha: datos.fecha,
-    hora: datos.hora,
-    modalidad: datos.modalidad,
-    liga: datos.liga ?? "",
-    ubicacion: datos.ubicacion ?? "",
-    telefono_contacto: datos.telefonoContacto ?? "",
-    comentario: datos.comentario ?? "",
-    notificar: notificarSnake(datos.notificar),
-  });
-}
-
-/** Botón «Modificar» — edita fecha/modalidad/liga/ubicación de la ronda vigente (Fase D,
- * evento "entrevista_modificada"). No aplica si la ronda ya fue cancelada o realizada. */
-export function modificarEntrevistaHumana(
-  codigo: string,
-  datos: {
-    fecha: string;
-    hora: string;
-    modalidad: ModalidadEntrevistaHumana;
-    liga?: string;
-    ubicacion?: string;
-    telefonoContacto?: string;
-    comentario?: string;
-    notificar?: NotificarAccion;
-  },
-) {
-  return patch<Candidato>(`/candidatos/${codigo}/entrevista-humana`, {
-    fecha: datos.fecha,
-    hora: datos.hora,
-    modalidad: datos.modalidad,
-    liga: datos.liga ?? "",
-    ubicacion: datos.ubicacion ?? "",
-    telefono_contacto: datos.telefonoContacto ?? "",
-    comentario: datos.comentario ?? "",
-    notificar: notificarSnake(datos.notificar),
-  });
-}
-
-/** Botón «Cancelar» — Fase D, evento "entrevista_cancelada". No mueve la etapa del candidato:
- * RH agenda otra ronda o mueve la tarjeta a mano según corresponda. */
-export function cancelarEntrevistaHumana(codigo: string, notificar?: NotificarAccion) {
-  return post<Candidato>(`/candidatos/${codigo}/entrevista-humana/cancelar`, { notificar: notificarSnake(notificar) });
-}
-
-/** Ya no pide resultado — solo confirma que la entrevista ocurrió y dispara el correo con la
- * liga pública al entrevistador (ver registrarResultadoEntrevistaHumana para la captura manual).
- * `forzarPrueba` (Lote 4): inerte salvo que Modo Prueba esté activo en el servidor. */
-export function marcarEntrevistaHumanaRealizada(codigo: string, forzarPrueba = false, notificar?: NotificarAccion) {
-  return post<{ resultados: ResultadoNotificacion[]; candidato: Candidato }>(
-    `/candidatos/${codigo}/entrevista-humana/realizada${forzarPrueba ? "?forzar_prueba=true" : ""}`,
-    { notificar: notificarSnake(notificar) },
-  );
-}
-
-/** Respaldo manual de RH (Eje 1: coexiste con la liga del entrevistador) — también sirve para
- * corregir un resultado ya capturado, por eso mismo endpoint para "capturar" y "corregir". */
-export function registrarResultadoEntrevistaHumana(
-  codigo: string,
-  datos: { resultado: ResultadoEntrevistaHumana; recomendacion: RecomendacionEntrevistaHumana; comentario?: string; notificar?: NotificarAccion },
-  forzarPrueba = false,
-) {
-  return post<Candidato>(`/candidatos/${codigo}/entrevista-humana/resultado${forzarPrueba ? "?forzar_prueba=true" : ""}`, {
-    resultado: datos.resultado,
-    recomendacion: datos.recomendacion,
-    comentario: datos.comentario ?? "",
-    notificar: notificarSnake(datos.notificar),
-  });
-}
-
-export function recordatorioEntrevistaHumana(codigo: string, forzarPrueba = false, notificar?: NotificarAccion) {
-  return post<{ resultados: ResultadoNotificacion[]; candidato: Candidato }>(
-    `/candidatos/${codigo}/entrevista-humana/recordatorio${forzarPrueba ? "?forzar_prueba=true" : ""}`,
-    { notificar: notificarSnake(notificar) },
-  );
-}
-
-/* Liga pública del entrevistador (sin sesión, un solo submit) */
-
-export interface EntrevistaHumanaPublica {
-  candidato: string;
-  puesto: string;
-  fecha: string | null;
-  entrevistador?: string;
-  modalidad?: string;
-  /** 2026-09-19: la liga sigue mostrando el expediente aunque ya se haya evaluado. */
-  yaEvaluada?: boolean;
-  resultado?: string;
-  recomendacion?: string;
-  expediente?: {
-    candidato: { nombre: string; telefono: string; correo: string; fuente: string };
-    vacante: { titulo: string; requisitos: string; perfilIdeal: string; empresa: string };
-    etapa: string;
-    score: number | null;
-    cv: { resumen: string; habilidades: string[]; estudios: string[]; idiomas: string[]; experiencia: (string | { puesto?: string; empresa?: string; periodo?: string })[]; anosExperiencia?: number | null };
-    analisis: { requisitosCumplidos: string[]; brechas: string[]; fortalezas: string[]; alertas: string[]; resumen: string };
-    entrevistaIA: { matchPerfil: number | null; recomendacion: string; resumen: string; fortalezas: string[]; riesgos: string[]; faltante: string[] } | null;
-    capacitacion: { curso: string; aprobado: boolean; calificacion: number }[];
-    archivos: { id: number; tipo: string; nombre: string; mime: string }[];
-    documentos: { tipo: string; estado: string; obligatorio: boolean }[];
-  };
-}
-
-export function urlArchivoEntrevistaHumanaPublica(token: string, archivoId: number) {
-  return urlArchivo(`/entrevista-humana/publica/${token}/archivo/${archivoId}`);
-}
-
-export function fetchEntrevistaHumanaPublica(token: string) {
-  return get<EntrevistaHumanaPublica>(`/entrevista-humana/publica/${token}`);
-}
-
-export function enviarEvaluacionEntrevistaHumana(
-  token: string,
-  datos: { resultado: ResultadoEntrevistaHumana; recomendacion: RecomendacionEntrevistaHumana; comentario?: string },
-) {
-  return post<{ ok: boolean }>(`/entrevista-humana/publica/${token}`, {
-    resultado: datos.resultado,
-    recomendacion: datos.recomendacion,
-    comentario: datos.comentario ?? "",
-  });
 }
 
 /* ============================================================
@@ -3173,9 +3006,6 @@ export function signUrlFirmaCandidato(token: string, firmaId: number) {
 export function asegurarExpediente(codigo: string) {
   return post<Candidato>(`/candidatos/${codigo}/expediente`, {});
 }
-export function sincronizarEvaluacion(codigo: string) {
-  return post<EvaluacionCandidato & { sincronizacion: string }>(`/evaluaciones/${codigo}/sincronizar`, {});
-}
 
 /* -------------------- Tablero de control (2026-09-28): SOLO datos reales, por Cuenta -------------------- */
 export interface TableroControl {
@@ -3189,7 +3019,10 @@ export interface TableroControl {
   pendientesRH: { modulo: number; tipo: string; cantidad: number; texto: string; ruta: string }[];
   /** null = el módulo no está disponible en este servidor (sus tablas no se pudieron crear). */
   onboarding: { activos: number; tareasAtrasadas: number; avancePromedio: number | null; sinTareas: number; listosParaCerrar: number } | null;
-  evaluaciones: { pendientes: number; enEsperaConsentimiento: number; enProceso: number; resultadoRecibido: number; revisadas: number; porEstado: Record<string, number> } | null;
+  evaluaciones: {
+    pendientes: number; enEsperaConsentimiento: number; realizadasSinResultado: number; conResultado: number; nuevosResultados: number;
+    noRealizadas: number; porEstado: Record<string, number>;
+  } | null;
   desempeno: {
     activos: number; borradores: number; personasIncluidas: number; personasCompletadas: number; avance: number | null;
     ciclos: { id: string; nombre: string; periodo: string; incluidas: number; completadas: number; porcentaje: number }[];
@@ -3200,16 +3033,7 @@ export function fetchTablero() {
   return get<TableroControl>("/metricas/tablero");
 }
 
-/* -------------------- Evaluaciones y verificaciones (2026-09-28) -------------------- */
-export type TipoEvaluacion = "psicometrica" | "tecnica" | "referencias" | "medico" | "socioeconomico" | "otra";
-export const TIPOS_EVALUACION: { valor: TipoEvaluacion; texto: string }[] = [
-  { valor: "psicometrica", texto: "Psicométrica" },
-  { valor: "tecnica", texto: "Técnica o caso práctico" },
-  { valor: "referencias", texto: "Referencias" },
-  { valor: "medico", texto: "Médico" },
-  { valor: "socioeconomico", texto: "Socioeconómico" },
-  { valor: "otra", texto: "Otra" },
-];
+/* -------------------- Catálogo de pruebas psicométricas (2026-09-28) -------------------- */
 export type ModoPrueba = "integrada" | "enlace" | "manual";
 export const MODOS_PRUEBA: { valor: ModoPrueba; texto: string }[] = [
   { valor: "integrada", texto: "Integrada" },
@@ -3222,20 +3046,6 @@ export interface PruebaPsicometrica {
 }
 export interface PruebaPsicometricaIn {
   clave: string; nombre: string; descripcion: string; puestos: string[]; modo: ModoPrueba; proveedor: string; id_proveedor: string; url: string; activa: boolean;
-}
-export interface EvaluacionCandidato {
-  id: string; tipo: TipoEvaluacion; tipoTexto: string; nombre: string; pruebaId: number | null; modo: ModoPrueba; modoTexto: string;
-  proveedor: string; idProveedor: string; url: string;
-  estado: "en_espera_consentimiento" | "pendiente" | "en_proceso" | "resultado_recibido" | "revisada" | "fallida"; estadoTexto: string;
-  pasoIntegrada: string | null; siguientePaso: string | null; motivoFallida: string;
-  dictamen: string | null; dictamenTexto: string; dictamenesPosibles: { valor: string; texto: string }[];
-  revisadaPor: string; revisadaEn: string | null;
-  requiereConsentimientoExpreso: boolean; consentimientoAceptadoEn: string | null; ligaConsentimiento: string | null;
-  tieneInforme: boolean; resultadoCargadoPor: string;
-  /** Psicométricas.mx (2026-09-29): clave del candidato en el proveedor y su liga (solo si se configuró). */
-  claveProveedor?: string | null; urlCandidato?: string | null; conectadaProveedor?: boolean; resultadoCargadoEn: string | null; informeRestringido: boolean;
-  asignadaPor: string; creada: string | null; historial: { fecha: string; usuario: string; de: string; a: string; detalle: string }[];
-  resultadoResumen?: string; nombreArchivo?: string; notas?: string; comentarioRevision?: string;
 }
 export interface EvaluacionSugerida { tipo: TipoEvaluacion; prueba_id: number | null; nombre: string }
 export function fetchPruebasPsicometricas(incluirInactivas = false, puesto = "") {
@@ -3253,43 +3063,190 @@ export function editarPruebaPsicometrica(id: number, datos: Partial<PruebaPsicom
 export function inactivarPruebaPsicometrica(id: number) {
   return eliminar<PruebaPsicometrica>(`/evaluaciones/pruebas/${id}`);
 }
-export function fetchEvaluacionesCandidato(codigo: string) {
-  return get<EvaluacionCandidato[]>(`/evaluaciones/postulaciones/${codigo}`);
+
+/* ============================================================
+   Evaluaciones unificadas — Fase 1 (2026-09-29). UN objeto para entrevista humana, médica, psicométrica,
+   socioeconómica, técnica, referencias u otra: pantalla única «Agregar evaluación», formulario único de resultado
+   (el MISMO en el sistema y en la liga del evaluador), cinco estados y el consentimiento médico como condición.
+   Ningún resultado mueve al candidato de etapa.
+   ============================================================ */
+
+export type TipoEvaluacion = "entrevista_humana" | "medica" | "psicometrica" | "socioeconomica" | "tecnica" | "referencias" | "otra";
+export const TIPOS_EVALUACION: { valor: TipoEvaluacion; texto: string }[] = [
+  { valor: "entrevista_humana", texto: "Entrevista humana" },
+  { valor: "medica", texto: "Médica" },
+  { valor: "psicometrica", texto: "Psicométrica" },
+  { valor: "socioeconomica", texto: "Socioeconómica" },
+  { valor: "tecnica", texto: "Técnica o caso práctico" },
+  { valor: "referencias", texto: "Referencias" },
+  { valor: "otra", texto: "Otra" },
+];
+export type FormaEvaluacion = "asignada" | "registro_directo" | "liga_otro_sistema" | "integrada";
+export type EstadoEvaluacion = "pendiente" | "realizada_sin_resultado" | "con_resultado" | "no_realizada" | "cancelada";
+export type CondicionConsentimiento = "no_requerido" | "pendiente" | "otorgado" | "rechazado";
+export type ModalidadCita = "Presencial" | "Videollamada" | "Teléfono";
+export const MODALIDADES_CITA: ModalidadCita[] = ["Presencial", "Videollamada", "Teléfono"];
+export type AccionEvaluacion =
+  | "registrar_resultado" | "marcar_realizada" | "ver_resultado" | "complementar" | "reprogramar" | "recordatorio" | "reenviar_liga"
+  | "modificar" | "no_realizada" | "cancelar" | "enviar_consentimiento" | "programar_otra" | "enviar_proveedor" | "sincronizar" | "avanzar_paso";
+
+export interface AdjuntoEvaluacion { id: string; nombre: string; mime: string; subidoPor: string; subidoVia: string; subidoEn: string | null }
+export interface CitaEvaluacion {
+  fechaHora: string | null; zona: string; modalidad: ModalidadCita | ""; direccion: string; ligaVideollamada: string; telefono: string; porTeams: boolean;
 }
-export function agregarEvaluacionCandidato(codigo: string, datos: { tipo: TipoEvaluacion; nombre?: string; prueba_id?: number | null; modo?: string; proveedor?: string; url?: string; notas?: string }) {
-  return post<EvaluacionCandidato>(`/evaluaciones/postulaciones/${codigo}`, datos);
+export interface Evaluacion {
+  id: string; codigo: string; tipo: TipoEvaluacion; tipoTexto: string; nombre: string; nombrePropio: string;
+  forma: FormaEvaluacion; formaTexto: string; responsable: string;
+  estado: EstadoEvaluacion; estadoTexto: string; motivoEstado: string;
+  consentimiento: CondicionConsentimiento; consentimientoTexto: string; consentimientoEn: string | null; ligaConsentimiento: string | null;
+  evaluador: { tipo: "interno" | "externo" | ""; usuarioId: number | null; contactoId: number | null; nombre: string; correo: string; whatsapp: string } | null;
+  instrucciones: string; ligaExternaCandidato: string; pruebaId: number | null; proveedor: string; idProveedor: string;
+  claveProveedor: string | null; urlCandidatoProveedor: string | null; usaPsicometricas: boolean; pasoIntegrada: string | null; siguientePaso: string | null;
+  cita: CitaEvaluacion | null;
+  conclusion: string | null; conclusionTexto: string; conclusionesPosibles: { valor: string; texto: string }[]; conclusionObligatoria: boolean; sinConclusion: boolean;
+  comentarios: string; adjuntos: AdjuntoEvaluacion[];
+  realizadaPor: string; realizadaEn: string | null; registradaPor: string; registradaVia: string; registradaEn: string | null;
+  resultadoVersion: number; nuevoResultado: boolean; restringido: boolean; tieneAdjuntos: boolean;
+  creadoPor: string; creadoEn: string | null; actualizadoEn: string | null;
+  ligaEvaluador?: string | null;
+  acciones: { principal: AccionEvaluacion | null; secundaria: AccionEvaluacion | null; menu: AccionEvaluacion[] };
 }
-export function enviarEvaluacion(codigo: string) {
-  return post<EvaluacionCandidato>(`/evaluaciones/${codigo}/enviar`, {});
+export interface EventoEvaluacion {
+  id: number; accion: string; accionTexto: string; actor: string; canal: string; canalTexto: string; fecha: string | null;
+  estadoAnterior: string; estadoNuevo: string; estadoAnteriorTexto: string; estadoNuevoTexto: string;
+  anteriores: Record<string, unknown>; detalle: Record<string, unknown>;
+}
+export interface RespuestaEvaluacion {
+  evaluacion: Evaluacion; resultados?: ResultadoNotificacion[]; advertencias?: string[]; candidato?: Candidato; avisoTeams?: string | null; sincronizacion?: string;
+}
+export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
+export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean }
+export interface DatosResultado {
+  conclusion: string; comentarios: string; realizadaPor: string; archivos: File[]; version: number; modo: "registrar" | "corregir" | "complementar";
+}
+
+function evaluadorSnake(e?: EvaluadorEntrada | null) {
+  if (!e) return undefined;
+  return { tipo: e.tipo, usuario_id: e.usuarioId ?? null, contacto_id: e.contactoId ?? null, nombre: e.nombre ?? "", correo: e.correo ?? "", whatsapp: e.whatsapp ?? "" };
+}
+function citaSnake(c?: CitaEntrada | null) {
+  if (!c) return undefined;
+  return { fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "", usar_teams: c.usarTeams ?? true };
+}
+function formResultado(d: DatosResultado) {
+  const form = new FormData();
+  form.append("conclusion", d.conclusion);
+  form.append("comentarios", d.comentarios);
+  form.append("realizada_por", d.realizadaPor);
+  form.append("version", String(d.version));
+  form.append("modo", d.modo);
+  for (const a of d.archivos) form.append("archivos", a);
+  return form;
+}
+
+export function fetchEvaluaciones(codigoPostulacion: string) {
+  return get<Evaluacion[]>(`/evaluaciones/postulaciones/${codigoPostulacion}`);
+}
+export function crearEvaluacion(
+  codigoPostulacion: string,
+  datos: {
+    tipo: TipoEvaluacion; nombre?: string; forma: FormaEvaluacion; evaluador?: EvaluadorEntrada | null; instrucciones?: string;
+    ligaExternaCandidato?: string; pruebaId?: number | null; cita?: CitaEntrada | null; notificar?: NotificarAccion;
+  },
+) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/postulaciones/${codigoPostulacion}`, {
+    tipo: datos.tipo, nombre: datos.nombre ?? "", forma: datos.forma, evaluador: evaluadorSnake(datos.evaluador),
+    instrucciones: datos.instrucciones ?? "", liga_externa_candidato: datos.ligaExternaCandidato ?? "", prueba_id: datos.pruebaId ?? null,
+    cita: citaSnake(datos.cita), notificar: notificarSnake(datos.notificar),
+  });
+}
+export function fetchEvaluacion(codigo: string) {
+  return get<{ evaluacion: Evaluacion; eventos: EventoEvaluacion[] }>(`/evaluaciones/${codigo}`);
+}
+export function modificarEvaluacion(
+  codigo: string,
+  datos: { nombre?: string; instrucciones?: string; ligaExternaCandidato?: string; evaluador?: EvaluadorEntrada | null; cita?: CitaEntrada | null; quitarCita?: boolean; notificar?: NotificarAccion },
+) {
+  return patch<RespuestaEvaluacion>(`/evaluaciones/${codigo}`, {
+    nombre: datos.nombre, instrucciones: datos.instrucciones, liga_externa_candidato: datos.ligaExternaCandidato,
+    evaluador: evaluadorSnake(datos.evaluador), cita: citaSnake(datos.cita), quitar_cita: datos.quitarCita ?? false, notificar: notificarSnake(datos.notificar),
+  });
+}
+export function reprogramarEvaluacion(codigo: string, cita: CitaEntrada, notificar?: NotificarAccion) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/reprogramar`, { cita: citaSnake(cita), notificar: notificarSnake(notificar) });
+}
+export function marcarEvaluacionRealizada(codigo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/realizada`, {});
+}
+export function marcarEvaluacionNoRealizada(codigo: string, motivo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/no-realizada`, { motivo });
+}
+export function cancelarEvaluacion(codigo: string, motivo: string, notificar?: NotificarAccion) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/cancelar`, { motivo, notificar: notificarSnake(notificar) });
+}
+export function registrarResultadoEvaluacion(codigo: string, datos: DatosResultado) {
+  return subir<RespuestaEvaluacion>(`/evaluaciones/${codigo}/resultado`, formResultado(datos));
+}
+export function recordatorioEvaluacion(codigo: string, a: "candidato" | "evaluador" | "ambos") {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/recordatorio`, { a });
+}
+export function reenviarLigaEvaluacion(codigo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/reenviar-liga`, {});
+}
+export function enviarEvaluacionProveedor(codigo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/enviar`, {});
 }
 export function avanzarEvaluacionIntegrada(codigo: string) {
-  return post<EvaluacionCandidato>(`/evaluaciones/${codigo}/integracion/avanzar`, {});
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/integracion/avanzar`, {});
 }
-export function cargarResultadoEvaluacion(codigo: string, resumen: string, archivo?: File | null) {
-  const form = new FormData();
-  form.append("resumen", resumen);
-  if (archivo) form.append("archivo", archivo);
-  return subir<EvaluacionCandidato>(`/evaluaciones/${codigo}/resultado`, form);
-}
-export function revisarEvaluacion(codigo: string, dictamen: string, comentario = "") {
-  return post<EvaluacionCandidato>(`/evaluaciones/${codigo}/revisar`, { dictamen, comentario });
-}
-export function cancelarEvaluacion(codigo: string, motivo: string) {
-  return post<EvaluacionCandidato>(`/evaluaciones/${codigo}/cancelar`, { motivo });
+export function sincronizarEvaluacion(codigo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/sincronizar`, {});
 }
 export function enviarLigaConsentimientoMedico(codigo: string) {
-  return post<{ liga: string; resultados: ResultadoNotificacion[] }>(`/evaluaciones/${codigo}/consentimiento/enviar`, {});
+  return post<{ liga: string; resultados: ResultadoNotificacion[]; advertencias?: string[] }>(`/evaluaciones/${codigo}/consentimiento/enviar`, {});
 }
-export function urlInformeEvaluacion(codigo: string) {
-  return urlArchivo(`/evaluaciones/${codigo}/informe`);
+export function urlAdjuntoEvaluacion(codigo: string, adjuntoId: string) {
+  return urlArchivo(`/evaluaciones/${codigo}/adjuntos/${adjuntoId}`);
+}
+
+/* Liga del evaluador (sin sesión; el token es la credencial) — la usa la MISMA pantalla de resultado. */
+export interface ExpedienteEvaluador {
+  candidato: { nombre: string; telefono: string; correo: string };
+  vacante: { titulo: string; requisitos: string; perfilIdeal: string; empresa: string };
+  cv: { resumen: string; habilidades: string[]; estudios: string[]; idiomas: string[]; experiencia: (string | { puesto?: string; empresa?: string; periodo?: string })[]; anosExperiencia?: number | null };
+  archivos: { id: number; tipo: string; nombre: string; mime: string }[];
+  analisis: { requisitosCumplidos: string[]; brechas: string[]; fortalezas: string[]; alertas: string[]; resumen: string } | null;
+  entrevistaIA: { matchPerfil: number | null; recomendacion: string; resumen: string; fortalezas: string[]; riesgos: string[]; faltante: string[] } | null;
+  capacitacion: { curso: string; aprobado: boolean; calificacion: number }[];
+  documentos: { tipo: string; estado: string; obligatorio: boolean }[];
+}
+export interface EvaluacionPublica {
+  evaluacion: Evaluacion; cancelada: boolean; enEsperaConsentimiento: boolean; yaTieneResultado: boolean; avisoResultadoRh: string;
+  expediente: ExpedienteEvaluador; empresa: string;
+}
+/** Con motivo de error (la pantalla pública distingue liga inválida de falla de red). */
+export async function fetchEvaluacionPublica(token: string): Promise<Resultado<EvaluacionPublica>> {
+  return enviar<EvaluacionPublica>(`/evaluaciones/publica/${token}`, { method: "GET" });
+}
+export function enviarResultadoPublico(token: string, datos: DatosResultado) {
+  return subir<{ ok: boolean; accion: string; evaluacion: Evaluacion }>(`/evaluaciones/publica/${token}/resultado`, formResultado(datos));
+}
+export function urlAdjuntoEvaluacionPublica(token: string, adjuntoId: string) {
+  return `${API}/evaluaciones/publica/${token}/adjuntos/${adjuntoId}`;
+}
+export function urlArchivoEvaluacionPublica(token: string, archivoId: number) {
+  return `${API}/evaluaciones/publica/${token}/archivo/${archivoId}`;
 }
 export function fetchConsentimientoPublico(token: string) {
-  return get<{ candidato: string; empresa: string; puesto: string; evaluacion: string; texto: string; aceptado: boolean; aceptadoEn: string | null; cancelada: boolean }>(
+  return get<{ candidato: string; empresa: string; puesto: string; evaluacion: string; texto: string; aceptado: boolean; rechazado: boolean; aceptadoEn: string | null; cancelada: boolean }>(
     `/evaluaciones/publica/consentimiento/${token}`,
   );
 }
 export function aceptarConsentimientoPublico(token: string, nombre: string) {
   return post<{ ok: boolean; aceptadoEn: string; estado: string }>(`/evaluaciones/publica/consentimiento/${token}/aceptar`, { nombre, acepto: true });
+}
+export function rechazarConsentimientoPublico(token: string) {
+  return post<{ ok: boolean; rechazado: boolean }>(`/evaluaciones/publica/consentimiento/${token}/rechazar`, {});
 }
 
 /* -------------------- Conocimiento: generación y permisos -------------------- */

@@ -32,6 +32,7 @@ from ..routers import clientes as r_clientes
 from ..routers import colaboradores as r_colaboradores
 from ..routers import contratacion as r_contratacion
 from ..routers import entrevistas as r_entrevistas
+from ..routers import evaluaciones as r_evaluaciones
 from ..routers import metricas as r_metricas
 from ..routers import notificaciones as r_notificaciones
 from ..routers import requisiciones as r_requisiciones
@@ -515,46 +516,73 @@ def _ejecutar_asignar_vacante(db, u, cuenta, a):
                     db=db, u=u, cuenta=cuenta)
 
 
+# --- Entrevista humana → Evaluaciones unificadas (2026-09-29): las herramientas conservan su nombre, pero operan
+# sobre la evaluación de tipo entrevista humana (routers/evaluaciones.py). Ningún resultado mueve la etapa. ---
+
+
+def _entrevista_vigente(db, cuenta, codigo: str):
+    """La entrevista humana abierta más reciente de la postulación (ni cancelada ni con resultado)."""
+    from ..models import Evaluacion
+
+    p = r_candidatos._por_codigo(db, codigo, cuenta.id)
+    ev = (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "entrevista_humana",
+                                      Evaluacion.estado.in_(["pendiente", "realizada_sin_resultado", "no_realizada"]))
+          .order_by(Evaluacion.id.desc()).first())
+    if not ev:
+        raise HTTPException(409, "La postulación no tiene una entrevista humana abierta.")
+    return ev
+
+
+def _cita(a):
+    return r_evaluaciones.CitaIn(fecha=a["fecha"], hora=a["hora"], modalidad=a["modalidad"], direccion=a.get("ubicacion", ""),
+                                 liga_videollamada=a.get("liga", ""), telefono=a.get("telefono_contacto", ""))
+
+
 def _ejecutar_programar_entrevista(db, u, cuenta, a):
-    datos = r_candidatos.EntrevistaHumanaIn(
-        tipo_entrevistador=a["tipo_entrevistador"],
-        entrevistador_usuario_id=a.get("entrevistador_usuario_id"),
-        entrevistador_nombre=a.get("entrevistador_nombre", ""),
-        entrevistador_correo=a.get("entrevistador_correo", ""),
-        entrevistador_whatsapp=a.get("entrevistador_whatsapp", ""),
-        fecha=a["fecha"], hora=a["hora"], modalidad=a["modalidad"],
-        liga=a.get("liga", ""), ubicacion=a.get("ubicacion", ""),
-        telefono_contacto=a.get("telefono_contacto", ""), comentario=a.get("comentario", ""),
+    datos = r_evaluaciones.CrearEvaluacionIn(
+        tipo="entrevista_humana", forma="asignada",
+        evaluador=r_evaluaciones.EvaluadorIn(
+            tipo=a["tipo_entrevistador"], usuario_id=a.get("entrevistador_usuario_id"), nombre=a.get("entrevistador_nombre", ""),
+            correo=a.get("entrevistador_correo", ""), whatsapp=a.get("entrevistador_whatsapp", ""),
+        ),
+        instrucciones=a.get("comentario", ""), cita=_cita(a),
     )
-    return _llamar(r_candidatos.programar_entrevista_humana, a["codigo"], datos, db=db, u=u, cuenta=cuenta)
+    return _llamar(r_evaluaciones.crear_evaluacion, a["codigo"], datos, db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_modificar_entrevista(db, u, cuenta, a):
-    datos = r_candidatos.EntrevistaHumanaModificarIn(
-        fecha=a["fecha"], hora=a["hora"], modalidad=a["modalidad"],
-        liga=a.get("liga", ""), ubicacion=a.get("ubicacion", ""),
-        telefono_contacto=a.get("telefono_contacto", ""), comentario=a.get("comentario", ""),
-    )
-    return _llamar(r_candidatos.modificar_entrevista_humana, a["codigo"], datos, db=db, u=u, cuenta=cuenta)
+    ev = _entrevista_vigente(db, cuenta, a["codigo"])
+    datos = r_evaluaciones.ModificarIn(cita=_cita(a), instrucciones=a.get("comentario") if "comentario" in a else None)
+    return _llamar(r_evaluaciones.modificar, ev.codigo, datos, db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_cancelar_entrevista(db, u, cuenta, a):
-    return _llamar(r_candidatos.cancelar_entrevista_humana, a["codigo"], db=db, u=u, cuenta=cuenta)
+    ev = _entrevista_vigente(db, cuenta, a["codigo"])
+    return _llamar(r_evaluaciones.cancelar, ev.codigo, r_evaluaciones.MotivoIn(motivo=a.get("motivo", "") or "Cancelada desde el agente"),
+                   db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_marcar_realizada(db, u, cuenta, a):
-    return _llamar(r_candidatos.marcar_entrevista_humana_realizada, a["codigo"], forzar_prueba=False, db=db, u=u, cuenta=cuenta)
+    ev = _entrevista_vigente(db, cuenta, a["codigo"])
+    return _llamar(r_evaluaciones.marcar_realizada, ev.codigo, db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_registrar_resultado(db, u, cuenta, a):
-    datos = r_candidatos.EntrevistaHumanaResultadoIn(
-        resultado=a["resultado"], recomendacion=a["recomendacion"], comentario=a.get("comentario", "")
-    )
-    return _llamar(r_candidatos.registrar_resultado_entrevista_humana, a["codigo"], datos, forzar_prueba=False, db=db, u=u, cuenta=cuenta)
+    from ..models import Evaluacion
+
+    p = r_candidatos._por_codigo(db, a["codigo"], cuenta.id)
+    ev = (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "entrevista_humana", Evaluacion.estado != "cancelada")
+          .order_by(Evaluacion.id.desc()).first())
+    if not ev:
+        raise HTTPException(409, "La postulación no tiene una entrevista humana a la que registrar resultado.")
+    return _llamar(r_evaluaciones.registrar_resultado, ev.codigo, conclusion=a["conclusion"], comentarios=a.get("comentario", ""),
+                   realizada_por=ev.realizada_por or ev.evaluador_nombre, version=ev.resultado_version, modo="registrar", archivos=None,
+                   db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_recordatorio_entrevista(db, u, cuenta, a):
-    return _llamar(r_candidatos.recordatorio_entrevista_humana, a["codigo"], forzar_prueba=False, db=db, u=u, cuenta=cuenta)
+    ev = _entrevista_vigente(db, cuenta, a["codigo"])
+    return _llamar(r_evaluaciones.recordatorio, ev.codigo, r_evaluaciones.RecordatorioIn(a=a.get("a", "ambos")), db=db, u=u, cuenta=cuenta)
 
 
 def _ejecutar_solicitar_documentos(db, u, cuenta, a):
@@ -730,8 +758,8 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
                 "entrevistador_correo": _p("string", "Correo si es externo"),
                 "entrevistador_whatsapp": _p("string", "WhatsApp si es externo (opcional)"),
                 "fecha": _p("string", "Fecha ISO, ej. 2026-09-20"),
-                "hora": _p("string", "Hora HH:MM, hora de México"),
-                "modalidad": _p("string", "Presencial | Videollamada | Llamada"),
+                "hora": _p("string", "Hora HH:MM, hora de la organización (Ciudad de México)"),
+                "modalidad": _p("string", "Presencial | Videollamada | Teléfono"),
                 "liga": _p("string", "Liga de videollamada, si aplica"),
                 "ubicacion": _p("string", "Ubicación, si es presencial"),
                 "telefono_contacto": _p("string", "Teléfono si es llamada"),
@@ -747,11 +775,11 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         ),
         "schema": {
             "type": "function", "name": "modificar_entrevista_humana",
-            "description": "Cambia fecha/modalidad de la ronda de Entrevista Humana vigente (no aplica si ya fue cancelada o realizada).",
+            "description": "Cambia fecha/modalidad de la entrevista humana abierta más reciente (reprogramación: avisa a candidato y evaluador).",
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
                 "fecha": _p("string", "Fecha ISO"), "hora": _p("string", "Hora HH:MM"),
-                "modalidad": _p("string", "Presencial | Videollamada | Llamada"),
+                "modalidad": _p("string", "Presencial | Videollamada | Teléfono"),
                 "liga": _p("string", "Liga de videollamada, si aplica"),
                 "ubicacion": _p("string", "Ubicación, si es presencial"),
                 "telefono_contacto": _p("string", "Teléfono si es llamada"),
@@ -764,7 +792,7 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         "resumen": lambda db, cuenta, a: f"Cancelar la entrevista programada de {_nombre_candidato(db, cuenta.id, a['codigo'])}.",
         "schema": {
             "type": "function", "name": "cancelar_entrevista_humana",
-            "description": "Cancela la ronda de Entrevista Humana vigente. No mueve la etapa del candidato.",
+            "description": "Cancela la entrevista humana abierta más reciente. No mueve la etapa del candidato.",
             "parameters": {"type": "object", "properties": {"codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)")},
                             "required": ["codigo"], "additionalProperties": False},
         },
@@ -774,7 +802,7 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         "resumen": lambda db, cuenta, a: f"Marcar como realizada la entrevista de {_nombre_candidato(db, cuenta.id, a['codigo'])}.",
         "schema": {
             "type": "function", "name": "marcar_entrevista_humana_realizada",
-            "description": "Confirma que la Entrevista Humana ya ocurrió.",
+            "description": "Marca la entrevista humana como realizada (queda «Realizada · Resultado pendiente»).",
             "parameters": {"type": "object", "properties": {"codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)")},
                             "required": ["codigo"], "additionalProperties": False},
         },
@@ -782,37 +810,37 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
     "registrar_resultado_entrevista_humana": {
         "permiso": "decisor", "ejecutar": _ejecutar_registrar_resultado,
         "resumen": lambda db, cuenta, a: (
-            f"Registrar resultado de {_nombre_candidato(db, cuenta.id, a['codigo'])}: "
-            f"{a['resultado']} ({a['recomendacion']})."
+            f"Registrar resultado de la entrevista de {_nombre_candidato(db, cuenta.id, a['codigo'])}: "
+            f"{ {'avanzar': 'Avanzar', 'no_avanzar': 'No avanzar', 'requiere_otra_entrevista': 'Requiere otra entrevista'}.get(a['conclusion'], a['conclusion']) }."
         ),
         "schema": {
             "type": "function", "name": "registrar_resultado_entrevista_humana",
-            "description": "Captura o corrige el resultado de la Entrevista Humana (respaldo manual de RH).",
+            "description": ("Registra o corrige el resultado de la entrevista humana con su conclusión. Registrar un resultado NO "
+                            "mueve al candidato de etapa ni lo envía a Contratación: esa decisión sigue siendo manual."),
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
-                "resultado": _p("string", "aprobado | no_aprobado", enum=["aprobado", "no_aprobado"]),
-                "recomendacion": _p("string", "avanzar | no_avanzar | segunda_entrevista",
-                                     enum=["avanzar", "no_avanzar", "segunda_entrevista"]),
-                "comentario": _p("string", "Obligatorio si no_aprobado o segunda_entrevista"),
-            }, "required": ["codigo", "resultado", "recomendacion"], "additionalProperties": False},
+                "conclusion": _p("string", "avanzar | no_avanzar | requiere_otra_entrevista",
+                                  enum=["avanzar", "no_avanzar", "requiere_otra_entrevista"]),
+                "comentario": _p("string", "Comentarios opcionales"),
+            }, "required": ["codigo", "conclusion"], "additionalProperties": False},
         },
     },
     "recordatorio_entrevista_humana": {
         "permiso": "decisor", "ejecutar": _ejecutar_recordatorio_entrevista,
         "resumen": lambda db, cuenta, a: (
-            f"Enviar el recordatorio de entrevista configurado (Configuración → Notificaciones) "
-            f"a {_nombre_candidato(db, cuenta.id, a['codigo'])}."
+            f"Enviar recordatorio de la entrevista de {_nombre_candidato(db, cuenta.id, a['codigo'])} "
+            f"({ {'candidato': 'al candidato', 'evaluador': 'al evaluador'}.get(a.get('a', 'ambos'), 'a ambos') })."
         ),
         "schema": {
             "type": "function", "name": "recordatorio_entrevista_humana",
             "description": (
-                "Dispara el evento 'recordatorio_entrevista' — a quién llega (candidato/"
-                "entrevistador/Cliente) y por qué canal lo decide la regla ya configurada de "
-                "la Cuenta, NO este tool. No existe forma de mandarlo solo a un destinatario "
-                "específico; si el usuario pide eso, explícaselo en vez de proponer esta acción."
+                "Manda el recordatorio de la entrevista humana abierta al candidato, al evaluador o a ambos (los "
+                "canales los decide la regla «recordatorio_evaluacion» de la Cuenta)."
             ),
-            "parameters": {"type": "object", "properties": {"codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)")},
-                            "required": ["codigo"], "additionalProperties": False},
+            "parameters": {"type": "object", "properties": {
+                "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
+                "a": _p("string", "candidato | evaluador | ambos", enum=["candidato", "evaluador", "ambos"]),
+            }, "required": ["codigo"], "additionalProperties": False},
         },
     },
     "solicitar_documentos": {
@@ -1064,9 +1092,9 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
             "type": "function", "name": "actualizar_regla_notificacion",
             "description": "[Solo administrador] Cambia a quién/por qué canal notifica un evento (Configuración → Notificaciones).",
             "parameters": {"type": "object", "properties": {
-                "evento": _p("string", "entrevista_agendada | recordatorio_entrevista | entrevista_modificada | "
-                                        "entrevista_cancelada | candidato_apto | entrevista_humana_terminada | "
-                                        "recomendacion_final | contratacion | solicitud_documentos | recordatorio_documentos"),
+                "evento": _p("string", "evaluacion_asignada | evaluacion_reprogramada | evaluacion_cancelada | "
+                                        "recordatorio_evaluacion | candidato_apto | contratacion | solicitud_documentos | "
+                                        "recordatorio_documentos | instrucciones_ingreso | vacante_publicada"),
                 "candidato_correo": _p("boolean", ""), "candidato_whatsapp": _p("boolean", ""),
                 "entrevistador_correo": _p("boolean", ""), "entrevistador_whatsapp": _p("boolean", ""),
                 "cliente_correo": _p("boolean", ""), "cliente_whatsapp": _p("boolean", ""),

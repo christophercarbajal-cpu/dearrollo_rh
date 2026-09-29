@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from . import fechas
 from .config import settings
-from .models import NIVELES_RECORDATORIO, estado_documento_onboarding, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
+from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
 from .services.ia import texto_preguntas, texto_util_candidato
 
@@ -124,7 +124,9 @@ def vacante_dict(
         # Capacitación universal (2026-09-16): curso que se asigna como filtro al quedar apto
         "cursoFiltroId": v.curso_filtro.codigo if v.curso_filtro else None,
         # Evaluaciones (2026-09-28): solo SUGERENCIAS + aviso opcional al enviar a Onboarding
-        "evaluacionesSugeridas": list(v.evaluaciones_sugeridas or []),
+        # tipos con las claves unificadas (2026-09-29): «medico»/«socioeconomico» previos se leen como «medica»/«socioeconomica»
+        "evaluacionesSugeridas": [{**x, "tipo": {"medico": "medica", "socioeconomico": "socioeconomica"}.get(x.get("tipo"), x.get("tipo"))}
+                                  for x in (v.evaluaciones_sugeridas or [])],
         "avisarEvaluacionesAntesOnboarding": bool(v.avisar_evaluaciones_antes_onboarding),
         "cursoFiltroTitulo": v.curso_filtro.titulo if v.curso_filtro else None,
         # embudo de esta vacante (conecta con el pipeline de candidatos)
@@ -157,30 +159,6 @@ def archivo_dict(a: Archivo) -> dict:
     }
 
 
-def _entrevista_humana_dict(eh) -> dict:
-    return {
-        "entrevistador": eh.entrevistador,
-        "tipo": eh.tipo,
-        "usuarioId": eh.usuario_id,
-        "correoExterno": eh.correo_externo,
-        "whatsappExterno": eh.whatsapp_externo or "",
-        "contactoId": eh.contacto_id,  # Fase 7A
-        "teamsEventoId": eh.teams_evento_id or "",  # Fase 7B
-        "porTeams": bool(eh.teams_evento_id),
-        "fecha": iso(eh.fecha),
-        "modalidad": eh.modalidad,
-        "liga": eh.liga,
-        "ubicacion": eh.ubicacion,
-        "telefonoContacto": eh.telefono_contacto,
-        "comentario": eh.comentario,
-        "realizada": eh.realizada,
-        "cancelada": eh.cancelada,
-        "resultado": eh.resultado or None,
-        "recomendacion": eh.recomendacion or None,
-        "resultadoCapturadoPor": eh.resultado_capturado_por or None,
-    }
-
-
 def _dedupe_cap(items: List[Optional[str]], maximo: int) -> List[str]:
     vistos = set()
     salida: List[str] = []
@@ -208,7 +186,7 @@ def _sintesis_global(p: Postulacion) -> dict:
     a = p.analisis or {}
     score = p.score  # SOLO del Análisis de CV (el prefiltro ya no genera score, 2026-09-13)
     resultado_apto = p.resultado_apto
-    ultima_eh = p.entrevistas_humanas[-1] if p.entrevistas_humanas else None
+    ultima_eh = _ultima_entrevista_humana_con_resultado(p)  # Evaluaciones unificadas (2026-09-29)
     ultima_ent = p.entrevistas[-1] if p.entrevistas else None
 
     # 2026-09-13: solo una Entrevista Red Human EVALUADA entra a la evaluación integral. Una
@@ -255,10 +233,10 @@ def _sintesis_global(p: Postulacion) -> dict:
     if match_ia is not None:
         afinidad = round(((afinidad or 0) + match_ia) / 2) if afinidad is not None else match_ia
         fuentes.append(f"Entrevista Red Human: {match_ia}/100 de afinidad")
-    if ultima_eh and ultima_eh.resultado:
-        legible = "aprobado" if ultima_eh.resultado == "aprobado" else "no aprobado"
-        fuentes.append(f"Entrevista Humana con {ultima_eh.entrevistador or 'RH'}: {legible}")
-        objetivo = 100 if ultima_eh.resultado == "aprobado" else 0
+    if ultima_eh and ultima_eh.conclusion in ("avanzar", "no_avanzar"):
+        legible = CONCLUSIONES_ENTREVISTA[ultima_eh.conclusion]
+        fuentes.append(f"Entrevista humana con {ultima_eh.realizada_por or ultima_eh.evaluador_nombre or 'RH'}: {legible}")
+        objetivo = 100 if ultima_eh.conclusion == "avanzar" else 0
         afinidad = round(objetivo if afinidad is None else afinidad * 0.5 + objetivo * 0.5)
     if afinidad is not None:
         afinidad = max(0, min(100, afinidad))
@@ -275,8 +253,8 @@ def _sintesis_global(p: Postulacion) -> dict:
         [*(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],
          *(a.get("brechas") or []),
-         *([f"Segunda entrevista sugerida" + (f": {ultima_eh.comentario}" if ultima_eh.comentario else "")]
-           if ultima_eh and ultima_eh.recomendacion == "segunda_entrevista" else [])],
+         *(["Requiere otra entrevista" + (f": {ultima_eh.comentarios[:200]}" if ultima_eh.comentarios else "")]
+           if ultima_eh and ultima_eh.conclusion == "requiere_otra_entrevista" else [])],
         4,
     )
 
@@ -287,13 +265,14 @@ def _sintesis_global(p: Postulacion) -> dict:
     if resultado_apto is False:
         recomendacion = "No avanzar"
         motivo = "El resultado más reciente del proceso marca al candidato como no apto."
-    elif ultima_eh and ultima_eh.recomendacion == "no_avanzar":
+    elif ultima_eh and ultima_eh.conclusion == "no_avanzar":
         recomendacion = "No avanzar"
-        motivo = "El entrevistador humano recomendó no avanzar."
-    elif resultado_apto is True and ultima_eh and ultima_eh.resultado == "aprobado" and ultima_eh.recomendacion == "avanzar":
+        motivo = "La entrevista humana concluyó no avanzar."
+    elif ultima_eh and ultima_eh.conclusion == "avanzar":
+        # Solo una recomendación: pasar a Contratación sigue siendo una acción manual de RH.
         recomendacion = "Avanzar a contratación"
-        motivo = "La Entrevista Humana confirmó al candidato como aprobado, con recomendación de avanzar."
-    elif ultima_ent and ultima_ent.estado in ("interrumpida", "parcial") and not (ultima_eh and ultima_eh.resultado):
+        motivo = "La entrevista humana concluyó avanzar. La decisión de pasar a Contratación la toma RH."
+    elif ultima_ent and ultima_ent.estado in ("interrumpida", "parcial") and not ultima_eh:
         # 2026-09-13: sin entrevista válida no se recomienda entrevista humana — primero reintentar.
         recomendacion = "Reintentar Entrevista Red Human"
         motivo = (
@@ -304,8 +283,8 @@ def _sintesis_global(p: Postulacion) -> dict:
     elif resultado_apto is True and entrevista_valida:
         recomendacion = "Realizar entrevista humana"
         motivo = (
-            "La Entrevista Humana sugiere una segunda ronda antes de decidir."
-            if ultima_eh and ultima_eh.recomendacion == "segunda_entrevista"
+            "La entrevista humana concluyó que se requiere otra entrevista antes de decidir."
+            if ultima_eh and ultima_eh.conclusion == "requiere_otra_entrevista"
             else "Compatible según Análisis de CV y Entrevista Red Human, pero falta la validación de una Entrevista Humana."
         )
     elif resultado_apto is True:
@@ -379,7 +358,6 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
     v = p.vacante
     exp = p.expediente
     ultima = p.entrevistas[-1] if p.entrevistas else None
-    ultima_eh = p.entrevistas_humanas[-1] if p.entrevistas_humanas else None
     total_postulaciones = len(c.postulaciones)
 
     base = {
@@ -417,10 +395,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "totalPostulaciones": total_postulaciones,
         "yaAplicoAntes": total_postulaciones > 1,
         "enConversacion": c.postulacion_conversacion_id == p.id,
-        # --- Entrevista Humana (flujo manual) — puede haber varias rondas, ver EntrevistaHumana.
-        # "entrevistaHumana" es la más reciente; "entrevistasHumanas" el historial (más reciente primero).
-        "entrevistaHumana": _entrevista_humana_dict(ultima_eh) if ultima_eh else None,
-        "entrevistasHumanas": [_entrevista_humana_dict(eh) for eh in reversed(p.entrevistas_humanas)],
+        # Evaluaciones unificadas (2026-09-29): las evaluaciones (entrevista humana incluida) ya no viajan aquí;
+        # la ficha las pide a GET /evaluaciones/postulaciones/{codigo}.
         # --- Expediente (Contratación) — pertenece a ESTA postulación (decisión P5) ---
         "expedienteId": exp.id if exp else None,
         "expedienteProgreso": exp.progreso if exp else None,
@@ -1110,55 +1086,165 @@ def _url_psico(clave: str):
     return psi.url_candidato(clave) if clave else None
 
 
-def evaluacion_candidato_dict(ev, usuario=None) -> dict:
-    """El informe médico COMPLETO (archivo, resumen, notas, comentario) solo viaja a quien tiene permiso; el resto
-    ve únicamente el estado y el dictamen."""
-    from .models import ESTADOS_EVALUACION, MODOS_PRUEBA, TIPOS_EVALUACION
+def _ultima_entrevista_humana_con_resultado(p):
+    from sqlalchemy.orm import object_session
+
+    from .models import Evaluacion
+
+    db = object_session(p)
+    if db is None:
+        return None
+    return (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "entrevista_humana",
+                                        Evaluacion.estado == "con_resultado").order_by(Evaluacion.id.desc()).first())
+
+
+def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
+    """Evaluación unificada (tarjeta + detalle). El detalle médico COMPLETO (comentarios y adjuntos) solo viaja a quien
+    tiene permiso (`Usuario.puede_ver_informe_medico`) o al evaluador por su liga (`publico=True`); el resto ve estado
+    y conclusión. `acciones` = lo que la interfaz ofrece en este estado (botón principal, secundario y menú «⋯»)."""
+    from .models import CONSENTIMIENTOS, ESTADOS_EVALUACION_U, FORMAS_EVALUACION, TIPOS_EVALUACION_U, conclusiones_de
     from .services import evaluaciones as sev
 
-    restringido = ev.es_medico and not (usuario is not None and usuario.puede_ver_informe_medico())
-    dictamenes = sev.dictamenes_de(ev.tipo)
+    restringido = ev.tipo == "medica" and not publico and not (usuario is not None and usuario.puede_ver_informe_medico())
+    opciones = conclusiones_de(ev.tipo)
+    if ev.forma == "asignada":
+        responsable = ev.evaluador_nombre or "Evaluador"
+    elif ev.forma == "integrada":
+        responsable = ev.proveedor or "Proveedor integrado"
+    elif ev.forma == "liga_otro_sistema":
+        responsable = "Liga de otro sistema"
+    else:
+        responsable = "Registro directo"
     salida = {
         "id": ev.codigo,
+        "codigo": ev.codigo,
         "tipo": ev.tipo,
-        "tipoTexto": TIPOS_EVALUACION.get(ev.tipo, ev.tipo),
-        "nombre": ev.nombre,
+        "tipoTexto": TIPOS_EVALUACION_U.get(ev.tipo, ev.tipo),
+        "nombre": ev.nombre_visible,
+        "nombrePropio": ev.nombre or "",
+        "forma": ev.forma,
+        "formaTexto": FORMAS_EVALUACION.get(ev.forma, ev.forma),
+        "responsable": responsable,
+        "estado": ev.estado,
+        "estadoTexto": ESTADOS_EVALUACION_U.get(ev.estado, ev.estado),
+        "motivoEstado": ev.motivo_estado or "",
+        "consentimiento": ev.consentimiento or "no_requerido",
+        "consentimientoTexto": CONSENTIMIENTOS.get(ev.consentimiento or "no_requerido", ""),
+        "consentimientoEn": iso(ev.consentimiento_en),
+        "ligaConsentimiento": sev.liga_consentimiento(ev) if ev.consentimiento == "pendiente" and not publico else None,
+        "evaluador": {
+            "tipo": ev.evaluador_tipo, "usuarioId": ev.evaluador_usuario_id, "contactoId": ev.evaluador_contacto_id,
+            "nombre": ev.evaluador_nombre or "", "correo": "" if publico else (ev.evaluador_correo or ""),
+            "whatsapp": "" if publico else (ev.evaluador_whatsapp or ""),
+        } if ev.forma == "asignada" else None,
+        "instrucciones": ev.instrucciones or "",
+        "ligaExternaCandidato": ev.liga_externa_candidato or "",
         "pruebaId": ev.prueba_id,
-        "modo": ev.modo,
-        "modoTexto": MODOS_PRUEBA.get(ev.modo, ev.modo),
         "proveedor": ev.proveedor or "",
         "idProveedor": ev.id_proveedor or "",
-        "url": ev.url or "",
-        "estado": ev.estado,
-        "estadoTexto": ESTADOS_EVALUACION.get(ev.estado, ev.estado),
-        "pasoIntegrada": ev.paso_integrada or None,
-        "siguientePaso": sev.siguiente_paso(ev) if ev.estado in ("pendiente", "en_proceso") else None,
-        "motivoFallida": ev.motivo_fallida or "",
-        "dictamen": ev.dictamen or None,
-        "dictamenTexto": dictamenes.get(ev.dictamen, "") if ev.dictamen else "",
-        "dictamenesPosibles": [{"valor": k, "texto": t} for k, t in dictamenes.items()],
-        "revisadaPor": ev.revisada_por or "",
-        "revisadaEn": iso(ev.revisada_en),
-        "requiereConsentimientoExpreso": bool(ev.requiere_consentimiento_expreso),
-        "consentimientoAceptadoEn": iso(ev.consentimiento_aceptado_en),
-        "ligaConsentimiento": f"{settings.app_url}/consentimiento/{ev.consentimiento_token}" if ev.consentimiento_token and not ev.consentimiento_aceptado_en else None,
-        "tieneInforme": bool(ev.archivo),
-        # Psicométricas.mx (2026-09-29): clave del candidato en el proveedor y su liga (si se configuró)
         "claveProveedor": ev.clave_proveedor or None,
-        "urlCandidato": _url_psico(ev.clave_proveedor),
-        "conectadaProveedor": bool(ev.clave_proveedor),
-        "resultadoCargadoPor": ev.resultado_cargado_por or "",
-        "resultadoCargadoEn": iso(ev.resultado_cargado_en),
-        "informeRestringido": restringido,
-        "asignadaPor": ev.asignada_por or "",
-        "creada": iso(ev.creada_en),
-        "historial": list(ev.historial or []),
+        "urlCandidatoProveedor": _url_psico(ev.clave_proveedor),
+        "usaPsicometricas": sev.usa_psicometricas(ev),
+        "pasoIntegrada": ev.paso_integrada or None,
+        "siguientePaso": sev.siguiente_paso(ev) if ev.forma == "integrada" and not ev.clave_proveedor and ev.estado in ("pendiente", "realizada_sin_resultado") else None,
+        "cita": {
+            "fechaHora": iso(ev.cita_fecha_hora), "zona": ev.cita_zona_horaria or "", "modalidad": ev.cita_modalidad or "",
+            "direccion": ev.cita_direccion or "", "ligaVideollamada": ev.cita_liga_videollamada or "",
+            "telefono": ev.cita_telefono or "", "porTeams": bool(ev.teams_evento_id),
+        } if ev.cita_fecha_hora else None,
+        "conclusion": ev.conclusion or None,
+        "conclusionTexto": opciones.get(ev.conclusion, "") if ev.conclusion else "",
+        "conclusionesPosibles": [{"valor": k, "texto": t} for k, t in opciones.items()],
+        "conclusionObligatoria": ev.tipo == "entrevista_humana",
+        "sinConclusion": ev.estado == "con_resultado" and not ev.conclusion,
+        "realizadaPor": ev.realizada_por or "",
+        "realizadaEn": iso(ev.realizada_en),
+        "registradaPor": ev.registrada_por or "",
+        "registradaVia": ev.registrada_via or "",
+        "registradaEn": iso(ev.registrada_en),
+        "resultadoVersion": int(ev.resultado_version or 0),
+        "nuevoResultado": ev.estado == "con_resultado" and ev.registrada_via in ("liga_evaluador", "proveedor") and ev.resultado_visto_en is None,
+        "restringido": restringido,
+        "tieneAdjuntos": bool(ev.adjuntos),
+        "creadoPor": ev.creado_por or "",
+        "creadoEn": iso(ev.creado_en),
+        "actualizadoEn": iso(ev.actualizado_en),
+        "acciones": acciones_evaluacion(ev),
     }
+    if not publico:
+        salida["ligaEvaluador"] = sev.liga_evaluador(ev) if ev.forma == "asignada" else None
     if not restringido:
-        salida.update({
-            "resultadoResumen": ev.resultado_resumen or "",
-            "nombreArchivo": ev.nombre_archivo or "",
-            "notas": ev.notas or "",
-            "comentarioRevision": ev.comentario_revision or "",
-        })
+        salida["comentarios"] = ev.comentarios or ""
+        salida["adjuntos"] = [
+            {"id": a.get("id"), "nombre": a.get("nombre") or "archivo", "mime": a.get("mime") or "", "subidoPor": a.get("subido_por") or "",
+             "subidoVia": a.get("subido_via") or "", "subidoEn": a.get("subido_en")}
+            for a in (ev.adjuntos or [])
+        ]
+    else:
+        salida["comentarios"] = ""
+        salida["adjuntos"] = []
     return salida
+
+
+def sev_siguiente(ev):
+    from .services.evaluaciones import siguiente_paso
+
+    return siguiente_paso(ev)
+
+
+def acciones_evaluacion(ev) -> dict:
+    """Botón principal / secundario / menú «⋯» por estado (especificación, sección 6)."""
+    con_cita = bool(ev.cita_fecha_hora)
+    bloqueo = ev.consentimiento in ("pendiente", "rechazado")
+    principal, secundaria, menu = None, None, []
+    if ev.estado == "pendiente":
+        principal = None if bloqueo else "registrar_resultado"
+        secundaria = None if bloqueo else "marcar_realizada"
+        if ev.consentimiento == "pendiente":
+            menu.append("enviar_consentimiento")
+        if not bloqueo:
+            menu += ["recordatorio", "reenviar_liga"] if ev.forma in ("asignada", "liga_otro_sistema") else []
+            menu.append("modificar")
+            if con_cita:
+                menu.append("reprogramar")
+            menu.append("no_realizada")
+        menu.append("cancelar")
+    elif ev.estado == "realizada_sin_resultado":
+        principal = "registrar_resultado"
+        menu += ["reenviar_liga"] if ev.forma == "asignada" else []
+        menu += ["modificar", "cancelar"]
+    elif ev.estado == "con_resultado":
+        principal, secundaria = "ver_resultado", "complementar"
+        if ev.tipo == "entrevista_humana" and ev.conclusion == "requiere_otra_entrevista":
+            menu.append("programar_otra")
+    elif ev.estado == "no_realizada":
+        principal = "reprogramar"
+        menu.append("cancelar")
+    if ev.forma == "integrada" and ev.estado in ("pendiente", "realizada_sin_resultado") and not bloqueo:
+        if ev.clave_proveedor:
+            menu.insert(0, "sincronizar")
+        elif ev.estado == "pendiente" and (ev.paso_integrada or "asignada") == "asignada":
+            menu.insert(0, "enviar_proveedor")
+        elif sev_siguiente(ev):
+            menu.insert(0, "avanzar_paso")
+    return {"principal": principal, "secundaria": secundaria, "menu": menu}
+
+
+def evento_evaluacion_dict(e) -> dict:
+    from .models import ESTADOS_EVALUACION_U
+
+    etiquetas = {
+        "creada": "Creación", "modificada": "Modificación", "reprogramada": "Reprogramación", "envio": "Envío",
+        "recordatorio": "Recordatorio", "cambio_estado": "Cambio de estado", "consentimiento": "Consentimiento",
+        "resultado_registrado": "Resultado registrado", "resultado_corregido": "Resultado corregido",
+        "resultado_complementado": "Resultado complementado", "adjunto_agregado": "Adjunto agregado", "migrada": "Migración al modelo unificado",
+    }
+    canales = {"sistema": "Sistema", "liga_evaluador": "Liga del evaluador", "liga_candidato": "Liga del candidato", "proveedor": "Proveedor", "migracion": "Migración"}
+    return {
+        "id": e.id, "accion": e.accion, "accionTexto": etiquetas.get(e.accion, e.accion), "actor": e.actor or "",
+        "canal": e.canal, "canalTexto": canales.get(e.canal, e.canal), "fecha": iso(e.fecha),
+        "estadoAnterior": e.estado_anterior or "", "estadoNuevo": e.estado_nuevo or "",
+        "estadoAnteriorTexto": ESTADOS_EVALUACION_U.get(e.estado_anterior, "") if e.estado_anterior else "",
+        "estadoNuevoTexto": ESTADOS_EVALUACION_U.get(e.estado_nuevo, "") if e.estado_nuevo else "",
+        "anteriores": e.anteriores or {}, "detalle": e.detalle or {},
+    }

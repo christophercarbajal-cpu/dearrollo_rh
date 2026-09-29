@@ -106,16 +106,17 @@ export default function Tablero() {
             </Card>
 
             <Card className="p-5">
-              <h3 className="flex items-center gap-2 font-display text-lg font-bold"><ClipboardCheck className="h-5 w-5 text-brand" /> Evaluaciones y verificaciones</h3>
+              <h3 className="flex items-center gap-2 font-display text-lg font-bold"><ClipboardCheck className="h-5 w-5 text-brand" /> Evaluaciones</h3>
               {t.evaluaciones ? (
                 <>
                   <div className="mt-4 grid grid-cols-2 gap-2">
-                    <Dato etiqueta="Pendientes" valor={t.evaluaciones.pendientes + t.evaluaciones.enEsperaConsentimiento} />
-                    <Dato etiqueta="Esperando revisión" valor={t.evaluaciones.resultadoRecibido} tono={t.evaluaciones.resultadoRecibido ? "text-warn" : "text-ink"} />
+                    <Dato etiqueta="Pendientes" valor={t.evaluaciones.pendientes} />
+                    <Dato etiqueta="Resultado pendiente" valor={t.evaluaciones.realizadasSinResultado} tono={t.evaluaciones.realizadasSinResultado ? "text-warn" : "text-ink"} />
                   </div>
                   <p className="mt-3 text-[12px] text-ink-3">
+                    {t.evaluaciones.nuevosResultados ? `${t.evaluaciones.nuevosResultados} resultado(s) nuevo(s) sin abrir · ` : ""}
                     {t.evaluaciones.enEsperaConsentimiento ? `${t.evaluaciones.enEsperaConsentimiento} en espera de consentimiento · ` : ""}
-                    {t.evaluaciones.enProceso} en proceso · {t.evaluaciones.revisadas} revisada{t.evaluaciones.revisadas === 1 ? "" : "s"} (postulaciones activas)
+                    {t.evaluaciones.conResultado} con resultado{t.evaluaciones.noRealizadas ? ` · ${t.evaluaciones.noRealizadas} no realizada(s)` : ""} (postulaciones activas)
                   </p>
                 </>
               ) : <p className="mt-4 text-sm text-ink-3">Módulo no disponible en este servidor.</p>}

@@ -76,16 +76,18 @@ async def webhook_dropbox(request: Request, background: BackgroundTasks):
 # ---------------- Psicométricas.mx ----------------
 
 def _procesar_psicometricas(clave: str, tipo: str, datos: dict) -> None:
-    from ..models import EvaluacionCandidato, registrar
+    from ..models import Evaluacion, registrar
     from ..services import evaluaciones as sev
     from ..services import psicometricas as psi
 
     db = SessionLocal()
     try:
-        evs = db.query(EvaluacionCandidato).filter(EvaluacionCandidato.clave_proveedor == clave).all()
+        # Evaluaciones unificadas (2026-09-29): la clave del proveedor vive en `evaluaciones` (migrada tal cual).
+        evs = db.query(Evaluacion).filter(Evaluacion.clave_proveedor == clave).all()
         for ev in evs:
             if tipo == "termina_practica":
-                sev.mover(ev, ev.estado, "Psicométricas.mx", f"El candidato terminó la práctica de {datos.get('nombre_prueba') or 'la prueba'}.")
+                sev.evento(db, ev, "envio", "Psicométricas.mx", "proveedor",
+                           nota=f"El candidato terminó la práctica de {datos.get('nombre_prueba') or 'la prueba'}.")
                 continue
             try:
                 r = sev.sincronizar_psicometricas(db, ev)

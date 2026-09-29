@@ -80,13 +80,15 @@ with TestClient(app) as client:
     r = client.post("/candidatos", json={"nombre": "Aviso Persona", "telefono": "5512121212", "correo": "aviso@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
     client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
-    r = client.post(f"/candidatos/{P}/entrevista-humana", json={
-        "tipo_entrevistador": "interno", "entrevistador_usuario_id": admin.id, "fecha": "2026-10-01", "hora": "10:00", "modalidad": "Llamada",
+    # Evaluaciones unificadas (2026-09-29): la entrevista humana se asigna con la pantalla única «Agregar evaluación»
+    r = client.post(f"/evaluaciones/postulaciones/{P}", json={
+        "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+        "cita": {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Teléfono"},
         "notificar": {"cliente_correo": False, "cliente_whatsapp": False},
     })
     check(r.status_code == 201 and "advertencias" in r.json(), "el response trae `advertencias`")
     adv = r.json()["advertencias"]
-    check(any(a.startswith("Entrevista asignada, pero el correo falló. Verifica la API Key o el Dominio") for a in adv), f"texto del toast presente ({len(adv)} avisos)")
+    check(any(a.startswith("Evaluación asignada, pero el correo falló. Verifica la API Key o el Dominio") for a in adv), f"texto del toast presente ({len(adv)} avisos)")
 
     # ================= 4. Modo Prueba TOTAL =================
     print("\n--- 4. Modo Prueba total ---")

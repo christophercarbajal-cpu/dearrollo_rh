@@ -382,10 +382,9 @@ def _avisos_evaluaciones(db: Session, p) -> List[str]:
     if not p:
         return []
     try:
-        from ..models import EvaluacionCandidato
         from ..services import evaluaciones as sev
 
-        evs = db.query(EvaluacionCandidato).filter(EvaluacionCandidato.postulacion_id == p.id).all()
+        evs = sev.de_postulacion(db, p)
         return sev.avisos_antes_onboarding(p, evs)
     except Exception:  # noqa: BLE001
         db.rollback()

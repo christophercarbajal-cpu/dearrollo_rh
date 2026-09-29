@@ -51,24 +51,18 @@ import { PerfilProfundoVista } from "@/components/dashboard/perfil-profundo";
 import { Aviso, Dropzone, pesoLegible } from "@/components/dashboard/subida";
 import {
   type Candidato,
-  type EntrevistaHumana,
   type EtapaCandidato,
-  type RecomendacionEntrevistaHumana,
-  type ResultadoEntrevistaHumana,
-  type TipoEntrevistador,
   type Vacante,
 } from "@/lib/data";
 import type { DocExpediente, NuevoIngreso } from "@/lib/phase2";
 import {
   autorizarAlta,
   eliminarCandidato,
-  cancelarEntrevistaHumana,
   cancelarExpediente,
   decidirCandidato,
   enviarPrefiltro,
   fetchCandidato,
   fetchCandidatos,
-  urlPreviewCorreo,
   urlContratoPdf,
   enviarCartaIntencion,
   urlCartaIntencionPdf,
@@ -83,16 +77,11 @@ import {
   type RazonSocial,
   reiniciarPostulacionPrueba,
   type NotificarAccion,
-  marcarEntrevistaHumanaRealizada,
-  modificarEntrevistaHumana,
   moverEtapaCandidato,
   avanzarAEntrevistaHumana,
-  programarEntrevistaHumana,
   reanalizarCvCandidato,
   recordatorioDocumentosCandidato,
-  recordatorioEntrevistaHumana,
   registrarConsentimiento,
-  registrarResultadoEntrevistaHumana,
   solicitarDocumentosCandidato,
   subirArchivoCandidato,
   subirCVs,
@@ -103,32 +92,26 @@ import {
   type CargaCV,
   type Cliente,
   type MensajePrefiltro,
-  type ModalidadEntrevistaHumana,
   type PerfilProfundo,
   nombreEtapa,
-  fetchCliente,
-  fetchIntegracionTeams,
   lineasResultados,
-  type ContactoCliente,
-  type Entrevistador,
-  type ResultadoNotificacion,
 } from "@/lib/api";
 import { usePuedeDecidir, useModoPrueba } from "@/components/sesion";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
 import { ConfirmacionAccion } from "@/components/dashboard/confirmacion-accion";
-import { LineaNotificar, useNotificarAccion } from "@/components/dashboard/linea-notificar";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalIniciarOnboarding } from "@/components/dashboard/onboarding/iniciar-onboarding";
 import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-onboarding";
-import { ModalAgregarEvaluacion, PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-evaluaciones";
-import { ClipboardCheck as IconoEvaluacion, PenLine as IconoFirma } from "lucide-react";
+import { PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-evaluaciones";
+import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
+import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
 import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, type FirmaDocumento } from "@/lib/api";
 import { SwitchModoPrueba } from "@/components/dashboard/switch-modo-prueba";
 import { Toast, type ToastMsg } from "@/components/dashboard/toast";
 import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
-import { ETIQUETA_ZONA, partesLocales, textoCita, textoFecha, textoFechaHora } from "@/lib/fechas";
+import { textoFecha, textoFechaHora } from "@/lib/fechas";
 
 const etapas: EtapaCandidato[] = [
   "Prefiltro",
@@ -208,15 +191,6 @@ function fechaTerminoLocal(fechaIngreso: string, duracion: number, unidad: strin
   }
   return fin.toISOString().slice(0, 10);
 }
-const MODALIDADES_ENTREVISTA_HUMANA: ModalidadEntrevistaHumana[] = ["Presencial", "Videollamada", "Llamada"];
-
-/** Usado tanto por PanelEntrevistaHumana (agenda/resultado) como por PestanaEvaluaciones
- * (vista de solo lectura del mismo resultado) — una sola fuente para el label. */
-const RECOMENDACION_LABEL: Record<RecomendacionEntrevistaHumana, string> = {
-  avanzar: "Avanzar",
-  no_avanzar: "No avanzar",
-  segunda_entrevista: "Segunda entrevista",
-};
 
 /** Clases completas y estáticas por tono de pestaña — Tailwind necesita ver el nombre de la
  * clase literal en el código para generarla; un template literal tipo `text-${tone}` no
@@ -1332,7 +1306,6 @@ function ModalCandidato({
   const [aviso, setAviso] = useState<AvisoEstado>(null);
   const [ocupado, setOcupado] = useState("");
   const [comentario, setComentario] = useState("");
-  const [modalEntrevista, setModalEntrevista] = useState(false);
 
   function resolver<T>(r: { ok: true; data: T } | { ok: false; error: string }, exito: string, reintentar?: () => void) {
     setOcupado("");
@@ -1401,8 +1374,9 @@ function ModalCandidato({
   const [confirmacion, setConfirmacion] = useState<null | "solicitar" | "recordatorio" | "alta">(null);
   // 2026-09-16 (control manual de RH): «Mover a otra etapa» — selector simple + motivo opcional
   const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string }>(null);
-  // Evaluaciones (2026-09-28): «Agregar evaluación o verificación» — nunca mueve la columna del pipeline
-  const [agregarEval, setAgregarEval] = useState(false);
+  // Evaluaciones unificadas (2026-09-29): «Enviar a Entrevista Humana» abre la MISMA pantalla «Agregar evaluación»
+  // precargada con entrevista humana (el botón único vive en el panel de evaluaciones).
+  const [agregarEval, setAgregarEval] = useState<PresetEvaluacion | null>(null);
   const [versionEval, setVersionEval] = useState(0);
   // 2026-09-22: confirmación de «Avanzar a Entrevista Humana» (omite la Entrevista Red Human)
   const [avanceDirecto, setAvanceDirecto] = useState(false);
@@ -1666,8 +1640,9 @@ function ModalCandidato({
             </Card>
           )}
 
-          {c.etapa === "Entrevista Humana" && <PanelEntrevistaHumana c={c} live={live} onCambio={onCambio} />}
-
+          {tab === "resumen" && (
+            <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
+          )}
           {tab === "resumen" && <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} />}
           {tab === "evaluaciones" && <PestanaEvaluaciones c={c} live={live} onCambio={onCambio} versionEval={versionEval} />}
           {tab === "documentos" && <PestanaDocumentos c={c} live={live} onCambio={onCambio} setAviso={setAviso} />}
@@ -1718,8 +1693,7 @@ function ModalCandidato({
             su propio panel de acciones; este footer genérico no aplica ahí. */}
         {puedeDecidir &&
           c.etapa !== "Prefiltro" &&
-          c.etapa !== "Contratación" &&
-          (c.etapa !== "Entrevista Humana" || c.entrevistaHumana?.realizada) && (
+          c.etapa !== "Contratación" && (
           <div className="border-t border-border-soft bg-surface px-4 py-3 sm:px-6 sm:py-4">
             <div className="flex flex-col gap-3">
               <input
@@ -1736,7 +1710,7 @@ function ModalCandidato({
                   <Button
                     size="sm"
                     className="flex-1"
-                    onClick={() => (siguientesEtapas[0] === "Entrevista Humana" ? setModalEntrevista(true) : enviarAEtapa(siguientesEtapas[0]))}
+                    onClick={() => (siguientesEtapas[0] === "Entrevista Humana" ? setAgregarEval({ tipo: "entrevista_humana" }) : enviarAEtapa(siguientesEtapas[0]))}
                     disabled={Boolean(ocupado)}
                   >
                     <ThumbsUp className="h-4 w-4" /> Enviar a {nombreEtapa(siguientesEtapas[0])}
@@ -1756,7 +1730,7 @@ function ModalCandidato({
                     ...siguientesEtapas.slice(1).map((etapa) => ({
                       etiqueta: `Enviar a ${nombreEtapa(etapa)}`,
                       icono: <ThumbsUp />,
-                      onClick: () => (etapa === "Entrevista Humana" ? setModalEntrevista(true) : enviarAEtapa(etapa)),
+                      onClick: () => (etapa === "Entrevista Humana" ? setAgregarEval({ tipo: "entrevista_humana" }) : enviarAEtapa(etapa)),
                       disabled: Boolean(ocupado),
                     })),
                     ...(ETAPAS_AVANCE_DIRECTO.includes(c.etapa)
@@ -1768,11 +1742,7 @@ function ModalCandidato({
                           disabled: Boolean(ocupado),
                         }]
                       : []),
-                    { etiqueta: "Agregar evaluación o verificación", icono: <IconoEvaluacion />, onClick: () => setAgregarEval(true), disabled: Boolean(ocupado) || c.activa === false },
                     { etiqueta: "Mover a otra etapa…", icono: <ArrowRightLeft />, onClick: () => setMoverA({ etapa: "", motivo: "" }), disabled: Boolean(ocupado) },
-                    ...(c.etapa === "Entrevista Humana"
-                      ? [{ etiqueta: "Agendar otra Entrevista Humana", icono: <CalendarClock />, onClick: () => setModalEntrevista(true), disabled: Boolean(ocupado) }]
-                      : []),
                     ...(c.etapa === "Onboarding"
                       ? [
                           { etiqueta: "Solicitar documentos", icono: <Send />, onClick: () => setConfirmacion("solicitar"), disabled: Boolean(ocupado) },
@@ -1882,14 +1852,21 @@ function ModalCandidato({
       )}
       {agregarEval && (
         <ModalAgregarEvaluacion
-          codigo={c.id}
-          puesto={c.puesto}
-          onClose={() => setAgregarEval(false)}
-          onAgregada={(ev) => {
-            setAgregarEval(false);
+          c={c}
+          preset={agregarEval}
+          onClose={() => setAgregarEval(null)}
+          onListo={(r, texto) => {
+            setAgregarEval(null);
             setVersionEval((x) => x + 1);
-            setTab("evaluaciones");
-            setAviso({ tono: "ok", texto: `«${ev.nombre}» agregada: ${ev.estadoTexto}. El candidato sigue en ${nombreEtapa(c.etapa)}.` });
+            setTab("resumen");
+            // un correo/WhatsApp que no salió nunca es silencioso (toast amarillo + detalle)
+            const lineas = lineasResultados(r.resultados);
+            const correoFallo = (r.resultados ?? []).some((x) => x.canal === "correo" && !x.enviado && x.destino);
+            if (r.advertencias?.length || correoFallo) {
+              setToast({ tono: "warn", texto: correoFallo ? "Evaluación asignada, pero el correo falló. Verifica la API Key o el Dominio" : "Evaluación asignada con avisos", detalle: r.advertencias ?? [] });
+            }
+            setAviso({ tono: lineas.some((l) => !l.ok) ? "warn" : "ok", texto: [texto, ...lineas.map((l) => `${l.ok ? "✓" : "✗"} ${l.texto}`)].join(" · ") });
+            if (r.candidato) onCambio(r.candidato);
           }}
         />
       )}
@@ -1983,34 +1960,6 @@ function ModalCandidato({
           />
         )}
       <Toast msg={toast} onClose={() => setToast(null)} />
-      {modalEntrevista && (
-        <ModalProgramarEntrevista
-          c={c}
-          onClose={() => setModalEntrevista(false)}
-          onListo={(actualizado, resultados, advertencias) => {
-            setModalEntrevista(false);
-            // Fase 7A: el resultado por canal ya no es silencioso — se muestra qué salió y qué no (y por qué)
-            const lineas = lineasResultados(resultados);
-            const fallidos = lineas.filter((l) => !l.ok);
-            // 2026-09-18: además un toast amarillo flotante si algún correo/WhatsApp no salió (no se pierde con el scroll)
-            const correoFallo = resultados.some((r) => r.canal === "correo" && !r.enviado && r.destino);
-            if (advertencias?.length || correoFallo) {
-              setToast({
-                tono: "warn",
-                texto: correoFallo ? "Entrevista asignada, pero el correo falló. Verifica la API Key o el Dominio" : "Entrevista asignada con avisos",
-                detalle: advertencias ?? [],
-              });
-            }
-            setAviso({
-              tono: fallidos.length ? "warn" : "ok",
-              texto: lineas.length
-                ? `Entrevista programada. ${lineas.map((l) => `${l.ok ? "✓" : "✗"} ${l.texto}`).join(" · ")}`
-                : "Entrevista programada. No había ningún destinatario activo — revisa la línea «Notificar» o Configuración → Notificaciones.",
-            });
-            onCambio(actualizado);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -2425,7 +2374,6 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
     | { resumen?: string; fortalezas?: string[]; riesgos?: string[]; areas_desarrollo?: string[]; perfil?: PerfilProfundo | null; match_perfil?: number; recomendacion?: string; faltante?: string[] }
     | null
     | undefined;
-  const historialEh = c.entrevistasHumanas ?? [];
 
   return (
     <div className="flex flex-col gap-5">
@@ -2658,50 +2606,8 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
         </div>
       )}
 
-      {/* Historial de Entrevistas Humanas — puede haber varias rondas (ver EntrevistaHumana);
-          agendar, marcar realizada y el recordatorio siguen viviendo exclusivamente en
-          PanelEntrevistaHumana (acción activa sobre la ronda más reciente, no se duplica
-          aquí). Esto es únicamente el historial de solo lectura, más reciente primero. */}
-      {historialEh.length > 0 && (
-        <div>
-          <Eyebrow>Historial de Entrevistas Humanas ({historialEh.length})</Eyebrow>
-          <div className="mt-2 flex flex-col gap-2.5">
-            {historialEh.map((eh, i) => (
-              <Card key={i} className="border-[color:var(--brand-2)]/30 bg-surface-2/40 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-ink">
-                    {eh.entrevistador || "Sin asignar"}
-                    {eh.fecha && (
-                      <span className="ml-2 font-normal text-ink-3">
-                        {textoCita(eh.fecha)}
-                      </span>
-                    )}
-                  </p>
-                  {eh.resultado ? (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge tone={eh.resultado === "aprobado" ? "good" : "bad"} dot>
-                        {eh.resultado === "aprobado" ? "Aprobado" : "No aprobado"}
-                      </Badge>
-                      {eh.recomendacion && <Badge tone="brand">{RECOMENDACION_LABEL[eh.recomendacion]}</Badge>}
-                    </div>
-                  ) : (
-                    <Badge tone="neutral">{eh.realizada ? "Esperando evaluación" : "Programada"}</Badge>
-                  )}
-                </div>
-                <p className="mt-1 text-[11px] text-ink-3">
-                  {eh.modalidad || "Modalidad sin definir"}
-                  {eh.resultado &&
-                    ` · Registrado por ${eh.resultadoCapturadoPor === "entrevistador" ? "el entrevistador" : "RH"}`}
-                </p>
-                {eh.comentario && <p className="mt-2 text-[13px] leading-relaxed text-ink-2">{eh.comentario}</p>}
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ===== Evaluaciones y verificaciones (2026-09-28): no mueven la columna del pipeline ===== */}
-      <PanelEvaluaciones codigo={c.id} puesto={c.puesto} live={Boolean(live) && puedeDecidir} version={versionEval} />
+      {/* ===== Evaluaciones (unificadas, 2026-09-29): las mismas tarjetas que en «Resumen»; «Ver resultado» abre el detalle ===== */}
+      <PanelEvaluaciones c={c} live={Boolean(live) && puedeDecidir} version={versionEval} onCambio={onCambio} titulo="Evaluaciones · resultados" />
     </div>
   );
 }
@@ -3236,990 +3142,6 @@ function CargarCVs({
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   Confirmación genérica (checkbox "Entrevista realizada", etc.)
-   ============================================================ */
-function ModalConfirmar({
-  titulo,
-  texto,
-  onCancelar,
-  onConfirmar,
-  cargando,
-}: {
-  titulo: string;
-  texto: string;
-  onCancelar: () => void;
-  onConfirmar: () => void;
-  cargando?: boolean;
-}) {
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-sm p-5">
-        <h3 className="font-display text-lg font-bold">{titulo}</h3>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">{texto}</p>
-        <div className="mt-5 flex gap-3">
-          <Button variant="outline" className="flex-1" onClick={onCancelar} disabled={cargando}>
-            Cancelar
-          </Button>
-          <Button className="flex-1" onClick={onConfirmar} disabled={cargando}>
-            {cargando ? "Confirmando…" : "Confirmar"}
-          </Button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-/* ============================================================
-   Etapa: Entrevista Humana — datos programados + "Entrevista realizada"
-   ============================================================ */
-function PanelEntrevistaHumana({
-  c,
-  live,
-  onCambio,
-}: {
-  c: Candidato;
-  live: boolean;
-  onCambio: (c: Candidato) => void;
-}) {
-  const modoPrueba = useModoPrueba();
-  const eh = c.entrevistaHumana;
-  const [modalResultado, setModalResultado] = useState(false);
-  const [modalModificar, setModalModificar] = useState(false);
-  const [marcando, setMarcando] = useState(false);
-  const [guardando, setGuardando] = useState(false);
-  const [aviso, setAviso] = useState<AvisoEstado>(null);
-  const [recordando, setRecordando] = useState(false);
-  const [avisoRecordatorio, setAvisoRecordatorio] = useState<AvisoEstado>(null);
-  const [cancelando, setCancelando] = useState(false);
-  // Punto 12: confirmación ligera con la línea "Notificar: … · Editar" antes de cada acción.
-  const [confirmacion, setConfirmacion] = useState<null | "realizada" | "recordatorio" | "cancelar">(null);
-  const ultimoNotificar = useRef<NotificarAccion | undefined>(undefined);
-  const hayCliente = Boolean(c.clienteVacante);
-
-  /** Botón «Cancelar» (Fase D) — no mueve la tarjeta de etapa: RH agenda otra ronda o mueve la
-   * etapa a mano según corresponda. */
-  async function cancelar(notificar?: NotificarAccion) {
-    setCancelando(true);
-    setAviso(null);
-    const r = await cancelarEntrevistaHumana(c.id, notificar);
-    setCancelando(false);
-    if (!r.ok) {
-      setAviso({ tono: "error", texto: r.error });
-      return;
-    }
-    onCambio(r.data);
-  }
-
-  /** Ya no pide resultado (Lote 3, Eje 2): solo confirma que la entrevista ocurrió y dispara el
-   * correo con la liga al entrevistador. `forzarPrueba` (Lote 4): si Modo Prueba está activo y
-   * el candidato ya no está en la etapa de Entrevista Humana, el aviso de error trae un botón
-   * para reintentar saltando ese bloqueo. */
-  async function marcarRealizada(forzarPrueba = false, notificar?: NotificarAccion) {
-    if (notificar) ultimoNotificar.current = notificar;
-    setMarcando(true);
-    setAviso(null);
-    const r = await marcarEntrevistaHumanaRealizada(c.id, forzarPrueba, ultimoNotificar.current);
-    setMarcando(false);
-    if (!r.ok) {
-      setAviso({
-        tono: "error", texto: r.error,
-        reintentar: modoPrueba && !forzarPrueba ? () => marcarRealizada(true) : undefined,
-      });
-      return;
-    }
-    onCambio(r.data.candidato);
-  }
-
-  /** Respaldo manual de RH — captura la primera vez o corrige un resultado ya capturado
-   * (por RH o por el entrevistador vía su liga). */
-  async function guardarResultado(
-    datos: { resultado: ResultadoEntrevistaHumana; recomendacion: RecomendacionEntrevistaHumana; comentario: string; notificar?: NotificarAccion },
-    forzarPrueba = false,
-  ) {
-    setGuardando(true);
-    setAviso(null);
-    const r = await registrarResultadoEntrevistaHumana(c.id, datos, forzarPrueba);
-    setGuardando(false);
-    if (!r.ok) {
-      setAviso({
-        tono: "error", texto: r.error,
-        reintentar: modoPrueba && !forzarPrueba ? () => guardarResultado(datos, true) : undefined,
-      });
-      return;
-    }
-    setModalResultado(false);
-    onCambio(r.data);
-  }
-
-  async function enviarRecordatorio(forzarPrueba = false, notificar?: NotificarAccion) {
-    if (notificar) ultimoNotificar.current = notificar;
-    setRecordando(true);
-    setAvisoRecordatorio(null);
-    const r = await recordatorioEntrevistaHumana(c.id, forzarPrueba, ultimoNotificar.current);
-    setRecordando(false);
-    if (!r.ok) {
-      setAvisoRecordatorio({
-        tono: "error", texto: r.error,
-        reintentar: modoPrueba && !forzarPrueba ? () => enviarRecordatorio(true) : undefined,
-      });
-      return;
-    }
-    const algunoEnviado = r.data.resultados.some((x) => x.enviado);
-    setAvisoRecordatorio({
-      tono: algunoEnviado ? "ok" : "warn",
-      texto: algunoEnviado
-        ? "Recordatorio enviado."
-        : "No se envió nada — revisa la línea «Notificar» o Configuración → Notificaciones para este evento.",
-    });
-    onCambio(r.data.candidato);
-  }
-
-  if (!eh) return null;
-
-  const detalleModalidad =
-    eh.modalidad === "Videollamada"
-      ? eh.liga && `${eh.porTeams ? "Reunión de Teams: " : "Liga: "}${eh.liga}`
-      : eh.modalidad === "Presencial"
-        ? eh.ubicacion && `Ubicación: ${eh.ubicacion}`
-        : eh.modalidad === "Llamada"
-          ? (eh.telefonoContacto || c.telefono) && `Teléfono: ${eh.telefonoContacto || c.telefono}`
-          : "";
-
-  const IconoModalidad = eh.modalidad === "Presencial" ? MapPin : eh.modalidad === "Llamada" ? Phone : Video;
-
-  return (
-    <Card className="border-[color:var(--brand-2)]/30 bg-surface-2/40 p-4">
-      <Eyebrow>Entrevista Humana programada</Eyebrow>
-      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-        <Info
-          icon={UserCheck}
-          v={`Entrevistador(a): ${eh.entrevistador || "sin asignar"}${eh.tipo ? ` (${eh.tipo === "interno" ? "interno" : "externo"})` : ""}`}
-        />
-        <Info
-          icon={CalendarClock}
-          v={textoCita(eh.fecha) || "Sin fecha"}
-        />
-        <Info icon={IconoModalidad} v={`Modalidad: ${eh.modalidad || "sin definir"}`} />
-        {detalleModalidad && <Info icon={Mail} v={detalleModalidad} />}
-      </div>
-      {eh.comentario && <p className="mt-2.5 text-[13px] leading-relaxed text-ink-2">{eh.comentario}</p>}
-
-      {aviso && (
-        <div className="mt-3">
-          <Aviso tono={aviso.tono}>
-            {aviso.texto}
-            {aviso.reintentar && (
-              <Button size="sm" variant="outline" className="mt-2" onClick={aviso.reintentar}>
-                <FlaskConical className="h-3.5 w-3.5" /> Continuar de todos modos (modo prueba)
-              </Button>
-            )}
-          </Aviso>
-        </div>
-      )}
-
-      {avisoRecordatorio && (
-        <div className="mt-3">
-          <Aviso tono={avisoRecordatorio.tono}>
-            {avisoRecordatorio.texto}
-            {avisoRecordatorio.reintentar && (
-              <Button size="sm" variant="outline" className="mt-2" onClick={avisoRecordatorio.reintentar}>
-                <FlaskConical className="h-3.5 w-3.5" /> Continuar de todos modos (modo prueba)
-              </Button>
-            )}
-          </Aviso>
-        </div>
-      )}
-
-      <div className="mt-3.5 flex flex-wrap items-center gap-2">
-        {eh.cancelada ? (
-          <Badge tone="bad" dot>Cancelada</Badge>
-        ) : eh.resultado ? (
-          <>
-            <Badge tone={eh.resultado === "aprobado" ? "good" : "bad"} dot>
-              {eh.resultado === "aprobado" ? "Aprobado" : "No aprobado"}
-            </Badge>
-            {eh.recomendacion && <Badge tone="brand">{RECOMENDACION_LABEL[eh.recomendacion]}</Badge>}
-          </>
-        ) : live ? (
-          <>
-            {/* 2026-09-19 (cambios Raúl): UN solo paso — «Entrevista realizada» abre el único modal
-                (Resultado + Comentarios opcionales + Guardar). Sin confirmaciones intermedias. */}
-            <Button size="sm" onClick={() => setModalResultado(true)} disabled={guardando || marcando}>
-              <CheckCircle2 className="h-4 w-4" /> {guardando ? "Guardando…" : eh.realizada ? "Registrar resultado" : "Entrevista realizada"}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setModalModificar(true)} title="No se realizó: reprogramar fecha, hora o modalidad">
-              <RotateCw className="h-4 w-4" /> No realizada / Reprogramar
-            </Button>
-            <MenuAcciones
-              acciones={[
-                { etiqueta: "Reenviar liga de evaluación al entrevistador", icono: <Send />, onClick: () => setConfirmacion("realizada"), disabled: marcando },
-                { etiqueta: "Enviar recordatorio", icono: <RotateCw />, onClick: () => setConfirmacion("recordatorio"), disabled: recordando },
-                { etiqueta: "Modificar datos", icono: <Pencil />, onClick: () => setModalModificar(true) },
-                { etiqueta: "Cancelar entrevista", icono: <XCircle />, peligrosa: true, onClick: () => setConfirmacion("cancelar"), disabled: cancelando },
-              ]}
-            />
-          </>
-        ) : null}
-      </div>
-
-      {eh.resultado && live && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
-          <span className="text-[11px] text-ink-3">
-            Registrado por {eh.resultadoCapturadoPor === "entrevistador" ? "el entrevistador (liga)" : "RH"}.
-          </span>
-          <button onClick={() => setModalResultado(true)} disabled={guardando} className="text-[11px] font-semibold text-brand hover:underline">
-            Corregir resultado
-          </button>
-        </div>
-      )}
-      {eh.realizada && !eh.resultado && live && (
-        <p className="mt-2 text-[11px] text-ink-3">Esperando la evaluación del entrevistador desde su liga; también puedes registrarla aquí.</p>
-      )}
-
-      {confirmacion === "realizada" && (
-        <ConfirmacionAccion
-          titulo="Reenviar liga de evaluación"
-          texto="Se le manda al entrevistador (correo HTML / WhatsApp) la liga con el expediente y el formulario de evaluación."
-          evento="entrevista_humana_terminada"
-          hayCliente={hayCliente}
-          clienteId={c.clienteIdVacante ?? null}
-          etiquetaConfirmar="Enviar liga"
-          onCancelar={() => setConfirmacion(null)}
-          onConfirmar={async (n) => {
-            setConfirmacion(null);
-            await marcarRealizada(false, n);
-          }}
-        />
-      )}
-      {confirmacion === "recordatorio" && (
-        <ConfirmacionAccion
-          titulo="Enviar recordatorio de la entrevista"
-          evento="recordatorio_entrevista"
-          hayCliente={hayCliente}
-          clienteId={c.clienteIdVacante ?? null}
-          etiquetaConfirmar="Enviar"
-          onCancelar={() => setConfirmacion(null)}
-          onConfirmar={async (n) => {
-            setConfirmacion(null);
-            await enviarRecordatorio(false, n);
-          }}
-        />
-      )}
-      {confirmacion === "cancelar" && (
-        <ConfirmacionAccion
-          titulo="¿Cancelar esta entrevista?"
-          texto="No se mueve la etapa del candidato; después puedes agendar otra ronda."
-          evento="entrevista_cancelada"
-          hayCliente={hayCliente}
-          clienteId={c.clienteIdVacante ?? null}
-          etiquetaConfirmar="Cancelar entrevista"
-          tono="bad"
-          onCancelar={() => setConfirmacion(null)}
-          onConfirmar={async (n) => {
-            setConfirmacion(null);
-            await cancelar(n);
-          }}
-        />
-      )}
-      {modalResultado && (
-        <ModalCerrarEntrevistaHumana
-          hayCliente={hayCliente}
-          clienteId={c.clienteIdVacante ?? null}
-          inicial={
-            eh.resultado
-              ? { resultado: eh.resultado, recomendacion: eh.recomendacion, comentario: eh.comentario }
-              : undefined
-          }
-          onCancelar={() => setModalResultado(false)}
-          onConfirmar={guardarResultado}
-          cargando={guardando}
-        />
-      )}
-
-      {modalModificar && (
-        <ModalModificarEntrevista
-          c={c}
-          eh={eh}
-          onClose={() => setModalModificar(false)}
-          onListo={(datos) => {
-            setModalModificar(false);
-            onCambio(datos);
-          }}
-        />
-      )}
-    </Card>
-  );
-}
-
-/* ============================================================
-   Modal "Marcar entrevista realizada" — Resultado + Recomendación obligatorios
-   ============================================================ */
-function ModalCerrarEntrevistaHumana({
-  inicial,
-  hayCliente = false,
-  clienteId,
-  onCancelar,
-  onConfirmar,
-  cargando,
-}: {
-  hayCliente?: boolean;
-  clienteId?: number | null;
-  /** Presente cuando ya había un resultado capturado — el modal pasa a modo "corregir" y
-   * precarga los valores actuales. */
-  inicial?: {
-    resultado: ResultadoEntrevistaHumana | null;
-    recomendacion: RecomendacionEntrevistaHumana | null;
-    comentario: string;
-  };
-  onCancelar: () => void;
-  onConfirmar: (datos: {
-    resultado: ResultadoEntrevistaHumana;
-    recomendacion: RecomendacionEntrevistaHumana;
-    comentario: string;
-    notificar?: NotificarAccion;
-  }) => void;
-  cargando?: boolean;
-}) {
-  const notificar = useNotificarAccion("recomendacion_final");
-  const [resultado, setResultado] = useState<ResultadoEntrevistaHumana | "">(inicial?.resultado ?? "");
-  const [comentario, setComentario] = useState(inicial?.comentario ?? "");
-  const [segunda, setSegunda] = useState(inicial?.recomendacion === "segunda_entrevista");
-
-  // 2026-09-19 (cambios Raúl): un solo paso. La recomendación se deriva del resultado
-  // (Aprobado → avanzar, Rechazado → no avanzar; «pedir segunda entrevista» es una casilla opcional).
-  const recomendacion: RecomendacionEntrevistaHumana | "" = segunda ? "segunda_entrevista" : resultado === "aprobado" ? "avanzar" : resultado === "no_aprobado" ? "no_avanzar" : "";
-  const listo = !!resultado;
-
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-md p-5">
-        <h3 className="font-display text-lg font-bold">{inicial ? "Corregir resultado" : "Entrevista realizada"}</h3>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
-          {inicial ? "Vas a sobreescribir el resultado ya registrado." : "Registra el resultado y listo: la entrevista queda confirmada y se habilitan los siguientes pasos."}
-        </p>
-
-        <div className="mt-4 flex flex-col gap-4">
-          <div>
-            <span className="text-sm font-medium text-ink-2">Resultado</span>
-            <div className="mt-1.5 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setResultado("aprobado")}
-                className={`h-10 rounded-xl border text-sm font-medium transition ${
-                  resultado === "aprobado" ? "border-good/25 bg-good-soft text-good" : "border-border-soft text-ink-2"
-                }`}
-              >
-                Aprobado
-              </button>
-              <button
-                type="button"
-                onClick={() => setResultado("no_aprobado")}
-                className={`h-10 rounded-xl border text-sm font-medium transition ${
-                  resultado === "no_aprobado" ? "border-bad/25 bg-bad-soft text-bad" : "border-border-soft text-ink-2"
-                }`}
-              >
-                Rechazado
-              </button>
-            </div>
-          </div>
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Comentarios <span className="text-ink-3">(opcional)</span></span>
-            <textarea
-              value={comentario}
-              onChange={(e) => setComentario(e.target.value)}
-              rows={3}
-              placeholder="Lo que quieras dejar registrado de la entrevista…"
-              className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-          </label>
-
-          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-ink-2">
-            <input type="checkbox" checked={segunda} onChange={(e) => setSegunda(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
-            Pedir una segunda entrevista
-          </label>
-        </div>
-
-        <div className="mt-5 flex gap-3">
-          <Button variant="outline" className="flex-1" onClick={onCancelar} disabled={cargando}>
-            Cancelar
-          </Button>
-          <Button
-            className="flex-1"
-            onClick={() =>
-              onConfirmar({
-                resultado: resultado as ResultadoEntrevistaHumana,
-                recomendacion: recomendacion as RecomendacionEntrevistaHumana,
-                comentario,
-                notificar: notificar.value,
-              })
-            }
-            disabled={cargando || !listo}
-          >
-            {cargando ? "Guardando…" : "Confirmar"}
-          </Button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-/* ============================================================
-   Modal "Programar entrevista" (botón «Enviar a Entrevista Humana»)
-   ============================================================ */
-function ModalProgramarEntrevista({
-  c,
-  onClose,
-  onListo,
-}: {
-  c: Candidato;
-  onClose: () => void;
-  onListo: (c: Candidato, resultados: ResultadoNotificacion[], advertencias?: string[]) => void;
-}) {
-  const notificar = useNotificarAccion("entrevista_agendada");
-  const clienteId = c.clienteIdVacante ?? null;
-  const [entrevistadores, setEntrevistadores] = useState<Entrevistador[]>([]);
-  const [contactos, setContactos] = useState<ContactoCliente[] | null>(clienteId ? null : []);
-  const [tipoEntrevistador, setTipoEntrevistador] = useState<TipoEntrevistador>("interno");
-  const [entrevistadorUsuarioId, setEntrevistadorUsuarioId] = useState<number | null>(null);
-  // Fase 7A: externo = contacto del Cliente (id) u «Otro entrevistador» (OTRO → captura manual)
-  const OTRO = "otro";
-  const [contactoSel, setContactoSel] = useState<number | typeof OTRO | "">("");
-  const [entrevistadorNombre, setEntrevistadorNombre] = useState("");
-  const [entrevistadorCorreo, setEntrevistadorCorreo] = useState("");
-  const [entrevistadorWhatsapp, setEntrevistadorWhatsapp] = useState("");
-  const [fecha, setFecha] = useState("");
-  const [hora, setHora] = useState("");
-  const [modalidad, setModalidad] = useState<ModalidadEntrevistaHumana>("Videollamada");
-  const [liga, setLiga] = useState("");
-  const [ubicacion, setUbicacion] = useState("");
-  const [telefonoContacto, setTelefonoContacto] = useState("");
-  const [comentario, setComentario] = useState("");
-  const [error, setError] = useState("");
-  const [enviando, setEnviando] = useState(false);
-  const [preview, setPreview] = useState<null | "entrevistador" | "candidato">(null);
-  // Fase 7B: con Teams conectado en la Cuenta la videollamada se crea sola; «Usar otra liga» = excepción
-  const [teamsConectado, setTeamsConectado] = useState(false);
-  const [otraLiga, setOtraLiga] = useState(false);
-  const porTeams = modalidad === "Videollamada" && teamsConectado && !otraLiga;
-
-  useEffect(() => {
-    fetchEntrevistadores().then((d) => {
-      if (d && d.length) {
-        setEntrevistadores(d);
-        setEntrevistadorUsuarioId(d[0].id);
-      }
-    });
-    fetchIntegracionTeams().then((t) => setTeamsConectado(Boolean(t?.disponible && t?.conectado)));
-  }, []);
-
-  useEffect(() => {
-    if (!clienteId) return;
-    let vivo = true;
-    fetchCliente(clienteId).then((cl) => vivo && setContactos(cl?.listaContactos ?? []));
-    return () => {
-      vivo = false;
-    };
-  }, [clienteId]);
-
-  // sin Cliente en la vacante (o sin contactos) el externo va directo a «Otro entrevistador»
-  useEffect(() => {
-    if (contactos !== null && contactos.length === 0 && contactoSel === "") setContactoSel(OTRO);
-  }, [contactos, contactoSel]);
-
-  const internoSel = entrevistadores.find((u) => u.id === entrevistadorUsuarioId) ?? null;
-  const contactoElegido = typeof contactoSel === "number" ? (contactos ?? []).find((k) => k.id === contactoSel) ?? null : null;
-  const esOtro = contactoSel === OTRO;
-
-  async function programar() {
-    if (!fecha || !hora) {
-      setError("Completa fecha y hora.");
-      return;
-    }
-    if (tipoEntrevistador === "interno" && !entrevistadorUsuarioId) {
-      setError("Selecciona quién entrevista.");
-      return;
-    }
-    if (tipoEntrevistador === "externo" && contactoSel === "") {
-      setError("Elige un contacto del Cliente o «+ Otro entrevistador».");
-      return;
-    }
-    if (tipoEntrevistador === "externo" && esOtro && (!entrevistadorNombre.trim() || !entrevistadorCorreo.trim())) {
-      setError("Indica nombre y correo del entrevistador.");
-      return;
-    }
-    if (modalidad === "Videollamada" && !porTeams && !liga.trim()) {
-      setError("Falta la liga de la videollamada.");
-      return;
-    }
-    if (modalidad === "Presencial" && !ubicacion.trim()) {
-      setError("Falta la ubicación de la entrevista.");
-      return;
-    }
-    setEnviando(true);
-    setError("");
-    const r = await programarEntrevistaHumana(c.id, {
-      tipoEntrevistador,
-      entrevistadorUsuarioId: tipoEntrevistador === "interno" ? entrevistadorUsuarioId : null,
-      entrevistadorContactoId: tipoEntrevistador === "externo" && typeof contactoSel === "number" ? contactoSel : null,
-      usarTeams: porTeams,
-      entrevistadorNombre: tipoEntrevistador === "externo" && esOtro ? entrevistadorNombre : "",
-      entrevistadorCorreo: tipoEntrevistador === "externo" && esOtro ? entrevistadorCorreo : "",
-      entrevistadorWhatsapp: tipoEntrevistador === "externo" && esOtro ? entrevistadorWhatsapp : "",
-      fecha,
-      hora,
-      modalidad,
-      liga: porTeams ? "" : liga,
-      ubicacion,
-      telefonoContacto,
-      comentario,
-      notificar: notificar.value,
-    });
-    setEnviando(false);
-    if (!r.ok) {
-      setError(r.error);
-      return;
-    }
-    onListo(r.data.candidato, r.data.resultados, r.data.advertencias);
-  }
-
-  const inputCls = "h-11 rounded-xl border border-border-soft bg-surface px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
-
-  /** 2026-09-18: nombre del entrevistador según lo capturado (interno del perfil, contacto del Cliente u «Otro»). */
-  const nombreEntrevistadorActual =
-    tipoEntrevistador === "interno"
-      ? entrevistadores.find((e) => e.id === entrevistadorUsuarioId)?.nombre ?? ""
-      : typeof contactoSel === "number"
-        ? contactos?.find((k) => k.id === contactoSel)?.nombreCompleto ?? ""
-        : entrevistadorNombre;
-  /** Vista previa con el contexto REAL del candidato y del formulario; cambia en vivo con los inputs. */
-  const datosPreview = {
-    evento: "agendada" as const,
-    candidato: c.nombre,
-    entrevistador: nombreEntrevistadorActual,
-    vacante: c.puesto || c.vacanteTitulo || "",
-    empresa: c.empresaVisible || "",
-    fecha,
-    hora,
-    modalidad,
-    liga: modalidad === "Videollamada" ? (porTeams ? "" : liga) : "",
-    ubicacion: modalidad === "Presencial" ? ubicacion : "",
-    telefono: modalidad === "Llamada" ? telefonoContacto : "",
-    telefonoCandidato: c.telefono,
-    comentario,
-  };
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-0 backdrop-blur-sm sm:p-4">
-      {/* 2026-09-18: más ancho, cuerpo con scroll propio y footer fijo — los botones nunca se pierden (web y móvil) */}
-      <Card className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none p-0 sm:h-auto sm:max-h-[85vh] sm:max-w-2xl sm:rounded-2xl">
-        <div className="shrink-0 border-b border-border-faint px-5 pt-5 pb-3">
-          <h3 className="font-display text-lg font-bold">Programar entrevista humana</h3>
-          <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
-            Con {c.nombre.split(" ")[0]}. Al guardar, la tarjeta se mueve a Entrevista Humana y se confirma por correo y WhatsApp.
-          </p>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
-        <div className="mt-4 flex flex-col gap-3">
-          <div>
-            <span className="text-sm font-medium text-ink-2">Entrevistador</span>
-            <div className="mt-1.5 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setTipoEntrevistador("interno")}
-                className={`h-10 rounded-xl border text-sm font-medium transition ${
-                  tipoEntrevistador === "interno" ? "border-brand/25 bg-brand-soft text-brand" : "border-border-soft text-ink-2"
-                }`}
-              >
-                Interno
-              </button>
-              <button
-                type="button"
-                onClick={() => setTipoEntrevistador("externo")}
-                className={`h-10 rounded-xl border text-sm font-medium transition ${
-                  tipoEntrevistador === "externo" ? "border-brand/25 bg-brand-soft text-brand" : "border-border-soft text-ink-2"
-                }`}
-              >
-                Externo
-              </button>
-            </div>
-          </div>
-
-          {tipoEntrevistador === "interno" ? (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Entrevistador interno</span>
-              <select value={entrevistadorUsuarioId ?? ""} onChange={(e) => setEntrevistadorUsuarioId(Number(e.target.value))} className={inputCls}>
-                {entrevistadores.length === 0 && <option value="">Sin entrevistadores activos</option>}
-                {entrevistadores.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.nombre}
-                  </option>
-                ))}
-              </select>
-              {/* Fase 7A: correo y WhatsApp vienen del perfil (Configuración → Usuarios); nunca se capturan aquí */}
-              {internoSel && (
-                <span className="text-[12px] leading-relaxed text-ink-3">
-                  Se notificará a {internoSel.correo}
-                  {internoSel.telefono ? ` · WhatsApp ${internoSel.telefono}` : " · sin WhatsApp en su perfil (agrégalo en Configuración → Usuarios)"}
-                </span>
-              )}
-            </label>
-          ) : (
-            <div className="flex flex-col gap-3">
-              <label className="flex flex-col gap-1.5">
-                <span className="text-sm font-medium text-ink-2">Entrevistador externo</span>
-                <select
-                  value={contactoSel}
-                  onChange={(e) => setContactoSel(e.target.value === OTRO ? OTRO : e.target.value === "" ? "" : Number(e.target.value))}
-                  className={inputCls}
-                >
-                  {contactos === null ? (
-                    <option value="">Cargando contactos del Cliente…</option>
-                  ) : (
-                    <>
-                      {contactos.length > 0 && <option value="">Elige un contacto{c.clienteVacante ? ` de ${c.clienteVacante}` : ""}…</option>}
-                      {contactos.map((k) => (
-                        <option key={k.id} value={k.id}>
-                          {k.nombre} {k.apellidos ?? ""}
-                          {k.puesto ? ` — ${k.puesto}` : ""}
-                        </option>
-                      ))}
-                      <option value={OTRO}>+ Otro entrevistador</option>
-                    </>
-                  )}
-                </select>
-                {contactoElegido && (
-                  <span className="text-[12px] leading-relaxed text-ink-3">
-                    Se notificará a {contactoElegido.correo || "(sin correo registrado)"}
-                    {contactoElegido.telefono ? ` · WhatsApp ${contactoElegido.telefono}` : ""}
-                  </span>
-                )}
-                {contactos !== null && contactos.length === 0 && (
-                  <span className="text-[12px] leading-relaxed text-ink-3">
-                    {clienteId ? "El Cliente de la vacante no tiene contactos registrados." : "La vacante no tiene Cliente asociado."} Captura al entrevistador aquí.
-                  </span>
-                )}
-              </label>
-              {esOtro && (
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-ink-2">Nombre</span>
-                    <input value={entrevistadorNombre} onChange={(e) => setEntrevistadorNombre(e.target.value)} placeholder="Nombre completo" className={inputCls} />
-                  </label>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-ink-2">Correo</span>
-                    <input type="email" value={entrevistadorCorreo} onChange={(e) => setEntrevistadorCorreo(e.target.value)} placeholder="correo@empresa.com" className={inputCls} />
-                  </label>
-                  <label className="col-span-2 flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-ink-2">WhatsApp (opcional)</span>
-                    <input value={entrevistadorWhatsapp} onChange={(e) => setEntrevistadorWhatsapp(e.target.value)} placeholder="10 dígitos" className={inputCls} />
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Fecha</span>
-              <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Hora <span className="font-normal text-ink-3">({ETIQUETA_ZONA})</span></span>
-              <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} className={inputCls} />
-            </label>
-          </div>
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Modalidad</span>
-            <select value={modalidad} onChange={(e) => setModalidad(e.target.value as ModalidadEntrevistaHumana)} className={inputCls}>
-              {MODALIDADES_ENTREVISTA_HUMANA.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {modalidad === "Videollamada" && porTeams && (
-            <div className="rounded-xl border border-brand/25 bg-brand-soft/40 px-3.5 py-2.5 text-[13px] leading-relaxed text-ink-2">
-              <span className="font-semibold text-ink">Reunión de Microsoft Teams automática.</span> Al programar se crea la reunión, la liga va en el
-              correo y WhatsApp de confirmación y se manda la invitación de calendario a candidato y entrevistador.
-              <button type="button" onClick={() => setOtraLiga(true)} className="ml-1.5 font-medium text-brand hover:underline">
-                Usar otra liga
-              </button>
-            </div>
-          )}
-          {modalidad === "Videollamada" && !porTeams && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Liga de la videollamada</span>
-              <input value={liga} onChange={(e) => setLiga(e.target.value)} placeholder="https://meet.google.com/…" className={inputCls} />
-              {teamsConectado && otraLiga && (
-                <button type="button" onClick={() => setOtraLiga(false)} className="self-start text-[12px] font-medium text-brand hover:underline">
-                  ← Volver a usar Teams
-                </button>
-              )}
-            </label>
-          )}
-          {modalidad === "Presencial" && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Ubicación / instrucciones</span>
-              <input value={ubicacion} onChange={(e) => setUbicacion(e.target.value)} placeholder="Dirección o cómo llegar" className={inputCls} />
-            </label>
-          )}
-          {modalidad === "Llamada" && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Teléfono de contacto (opcional)</span>
-              <input
-                value={telefonoContacto}
-                onChange={(e) => setTelefonoContacto(e.target.value)}
-                placeholder={c.telefono || "Si lo dejas vacío, se usa el teléfono del candidato"}
-                className={inputCls}
-              />
-            </label>
-          )}
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Comentario (opcional)</span>
-            <textarea
-              value={comentario}
-              onChange={(e) => setComentario(e.target.value)}
-              rows={2}
-              className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-          </label>
-        </div>
-
-        {error && (
-          <div className="mt-3">
-            <Aviso tono="error">{error}</Aviso>
-          </div>
-        )}
-
-        <LineaNotificar className="mt-4" value={notificar.value} onChange={notificar.setValue} hayCliente={Boolean(clienteId)} clienteId={clienteId} />
-        </div>
-
-        {/* Footer sticky: siempre visible */}
-        <div className="shrink-0 border-t border-border-soft bg-surface px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setPreview("entrevistador")} disabled={enviando} title="Previsualiza el HTML exacto que recibirán el entrevistador y el candidato">
-              <Mail className="h-4 w-4" /> Ver cuerpo del correo
-            </Button>
-            <div className="ml-auto flex gap-2">
-              <Button variant="outline" onClick={onClose} disabled={enviando}>
-                Cancelar
-              </Button>
-              <Button onClick={programar} disabled={enviando}>
-                {enviando ? "Programando…" : "Programar entrevista"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {preview && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-0 backdrop-blur-sm sm:p-4" onClick={() => setPreview(null)}>
-          <Card className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none p-0 sm:h-[90vh] sm:max-w-3xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border-soft px-4 py-3">
-              <div className="scroll-x gap-1 rounded-xl border border-border-soft bg-surface-2/60 p-1">
-                {(["entrevistador", "candidato"] as const).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setPreview(k)}
-                    className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition", preview === k ? "bg-brand text-white" : "text-ink-2 hover:text-ink")}
-                  >
-                    {k === "entrevistador" ? "Correo al entrevistador" : "Correo al candidato"}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="hidden text-[11px] text-ink-3 sm:inline">
-                  Correo real para {c.nombre.split(" ")[0]} · {modalidad}{fecha ? ` · ${fecha}${hora ? ` ${hora}` : ""}` : " · sin fecha aún"}
-                </span>
-                <a href={urlPreviewCorreo(preview, datosPreview)} target="_blank" rel="noreferrer" className="text-xs font-semibold text-brand hover:underline">Abrir en pestaña</a>
-                <button onClick={() => setPreview(null)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Cerrar"><X className="h-4 w-4" /></button>
-              </div>
-            </div>
-            {/* key = URL: al cambiar fecha/hora/modalidad/liga en el formulario el iframe se vuelve a cargar con los datos precisos */}
-            <iframe key={urlPreviewCorreo(preview, datosPreview)} title={`Vista previa · ${preview}`} src={urlPreviewCorreo(preview, datosPreview)} className="min-h-0 w-full flex-1 bg-white" />
-          </Card>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-/* ============================================================
-   Modal "Modificar" — Fase D, evento "entrevista_modificada"
-   ============================================================ */
-function ModalModificarEntrevista({
-  c,
-  eh,
-  onClose,
-  onListo,
-}: {
-  c: Candidato;
-  eh: EntrevistaHumana;
-  onClose: () => void;
-  onListo: (c: Candidato) => void;
-}) {
-  // 2026-09-29: se precarga con la hora de la ORGANIZACIÓN (antes tomaba la hora UTC como local y cada
-  // «Modificar» sumaba 6 h a la cita).
-  const inicial = partesLocales(eh.fecha);
-  const [fecha, setFecha] = useState(inicial.fecha);
-  const [hora, setHora] = useState(inicial.hora);
-  const [modalidad, setModalidad] = useState<ModalidadEntrevistaHumana>((eh.modalidad || "Videollamada") as ModalidadEntrevistaHumana);
-  const [liga, setLiga] = useState(eh.liga || "");
-  const [ubicacion, setUbicacion] = useState(eh.ubicacion || "");
-  const [telefonoContacto, setTelefonoContacto] = useState(eh.telefonoContacto || "");
-  const [comentario, setComentario] = useState(eh.comentario || "");
-  const [error, setError] = useState("");
-  const [enviando, setEnviando] = useState(false);
-  const notificar = useNotificarAccion("entrevista_modificada");
-
-  async function guardar() {
-    if (!fecha || !hora) {
-      setError("Completa fecha y hora.");
-      return;
-    }
-    if (modalidad === "Videollamada" && !eh.porTeams && !liga.trim()) {
-      setError("Falta la liga de la videollamada.");
-      return;
-    }
-    if (modalidad === "Presencial" && !ubicacion.trim()) {
-      setError("Falta la ubicación de la entrevista.");
-      return;
-    }
-    setEnviando(true);
-    setError("");
-    const r = await modificarEntrevistaHumana(c.id, { fecha, hora, modalidad, liga, ubicacion, telefonoContacto, comentario, notificar: notificar.value });
-    setEnviando(false);
-    if (!r.ok) {
-      setError(r.error);
-      return;
-    }
-    onListo(r.data);
-  }
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-md p-5">
-        <h3 className="font-display text-lg font-bold">Modificar entrevista</h3>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
-          Con {c.nombre.split(" ")[0]}. Abajo puedes ajustar a quién se avisa solo por esta vez.
-        </p>
-
-        <div className="mt-4 flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Fecha</span>
-              <input
-                type="date"
-                value={fecha}
-                onChange={(e) => setFecha(e.target.value)}
-                className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Hora <span className="font-normal text-ink-3">({ETIQUETA_ZONA})</span></span>
-              <input
-                type="time"
-                value={hora}
-                onChange={(e) => setHora(e.target.value)}
-                className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-            </label>
-          </div>
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Modalidad</span>
-            <select
-              value={modalidad}
-              onChange={(e) => setModalidad(e.target.value as ModalidadEntrevistaHumana)}
-              className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            >
-              {MODALIDADES_ENTREVISTA_HUMANA.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {modalidad === "Videollamada" && eh.porTeams && (
-            <p className="rounded-xl border border-brand/25 bg-brand-soft/40 px-3.5 py-2.5 text-[13px] leading-relaxed text-ink-2">
-              <span className="font-semibold text-ink">Reunión de Microsoft Teams.</span> La liga se conserva y la reunión de calendario se actualiza con la nueva fecha y hora.
-            </p>
-          )}
-          {modalidad === "Videollamada" && !eh.porTeams && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Liga de la videollamada</span>
-              <input
-                value={liga}
-                onChange={(e) => setLiga(e.target.value)}
-                placeholder="https://meet.google.com/…"
-                className="h-11 rounded-xl border border-border-soft bg-surface px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-            </label>
-          )}
-          {modalidad === "Presencial" && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Ubicación / instrucciones</span>
-              <input
-                value={ubicacion}
-                onChange={(e) => setUbicacion(e.target.value)}
-                placeholder="Dirección o cómo llegar"
-                className="h-11 rounded-xl border border-border-soft bg-surface px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-            </label>
-          )}
-          {modalidad === "Llamada" && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-ink-2">Teléfono de contacto (opcional)</span>
-              <input
-                value={telefonoContacto}
-                onChange={(e) => setTelefonoContacto(e.target.value)}
-                placeholder={c.telefono || "Si lo dejas vacío, se usa el teléfono del candidato"}
-                className="h-11 rounded-xl border border-border-soft bg-surface px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-            </label>
-          )}
-
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-ink-2">Comentario (opcional)</span>
-            <textarea
-              value={comentario}
-              onChange={(e) => setComentario(e.target.value)}
-              rows={2}
-              className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-          </label>
-        </div>
-
-        {error && (
-          <div className="mt-3">
-            <Aviso tono="error">{error}</Aviso>
-          </div>
-        )}
-
-        <LineaNotificar className="mt-4" value={notificar.value} onChange={notificar.setValue} hayCliente={Boolean(c.clienteVacante)} clienteId={c.clienteIdVacante ?? null} />
-
-        <div className="mt-5 flex gap-3">
-          <Button variant="outline" className="flex-1" onClick={onClose} disabled={enviando}>
-            Cerrar
-          </Button>
-          <Button className="flex-1" onClick={guardar} disabled={enviando}>
-            {enviando ? "Guardando…" : "Guardar cambios"}
-          </Button>
-        </div>
-      </Card>
     </div>
   );
 }

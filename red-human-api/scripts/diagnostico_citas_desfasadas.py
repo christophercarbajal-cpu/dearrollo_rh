@@ -24,7 +24,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app import fechas  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import Bitacora, EntrevistaHumana, Postulacion  # noqa: E402
+from app.models import Bitacora, EntrevistaHumana, Evaluacion, Postulacion  # noqa: E402
 
 ACCIONES = ("entrevista_humana_programada", "entrevista_humana_modificada")
 
@@ -81,9 +81,19 @@ def main() -> None:
                 actual = ehs
             vigente = ""
             if actual is not None:
-                estado = "cancelada" if actual.cancelada else ("realizada" if actual.realizada else "vigente")
-                sigue = "SÍ" if actual.fecha and _ver(actual.fecha) == f["guardada"] else "no (se cambió después)"
-                vigente = f" · entrevista #{actual.id} {estado} · ¿la base conserva la hora desfasada? {sigue}"
+                # Evaluaciones unificadas (2026-09-29): la cita editable vive en `evaluaciones` (copiada tal cual)
+                ev = db.execute(select(Evaluacion).where(Evaluacion.origen_tabla == "entrevistas_humanas",
+                                                         Evaluacion.origen_id == actual.id)).scalars().first()
+                if ev is not None:
+                    estado = ev.estado
+                    fecha_vigente = ev.cita_fecha_hora
+                    donde = f"evaluación {ev.codigo}"
+                else:
+                    estado = "cancelada" if actual.cancelada else ("realizada" if actual.realizada else "vigente")
+                    fecha_vigente = actual.fecha
+                    donde = f"entrevista #{actual.id}"
+                sigue = "SÍ" if fecha_vigente and _ver(fecha_vigente) == f["guardada"] else "no (se cambió después)"
+                vigente = f" · {donde} {estado} · ¿la base conserva la hora desfasada? {sigue}"
             print(
                 f"⚠ {f['postulacion']} (bitácora #{f['bitacora_id']}, {f['por']}, {f['cuando']})\n"
                 f"    antes: {f['anterior']}  →  guardada: {f['guardada']}  →  probable real: {f['sugerida']}{vigente}"

@@ -131,9 +131,10 @@ with TestClient(app) as client:
     check(asegurar_reglas_entrevistador(db) == 0, "regla apagada a mano por un admin (bitácora) → NO se toca")
 
     ENVIOS.clear()
-    r = client.post(f"/candidatos/{codigos[0]}/entrevista-humana", json={
-        "tipo_entrevistador": "interno", "entrevistador_usuario_id": admin.id, "fecha": "2026-10-01", "hora": "10:00",
-        "modalidad": "Llamada", "telefono_contacto": "5540001111",
+    # Evaluaciones unificadas (2026-09-29): «Agregar evaluación» → entrevista humana asignada con cita
+    r = client.post(f"/evaluaciones/postulaciones/{codigos[0]}", json={
+        "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+        "cita": {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Teléfono", "telefono": "5540001111"},
     })
     check(r.status_code in (200, 201), f"agendar con entrevistador INTERNO → {r.status_code}")
     res = r.json()["resultados"]
@@ -142,9 +143,9 @@ with TestClient(app) as client:
           f"entrevistador interno recibe WhatsApp (perfil) y correo → {[(x['canal'], x['destino']) for x in ent]}")
     check(any(x["destinatario"] == "candidato" and x["enviado"] for x in res), "…y el candidato también")
     ENVIOS.clear()
-    r = client.post(f"/candidatos/{codigos[2]}/entrevista-humana", json={
-        "tipo_entrevistador": "externo", "entrevistador_contacto_id": contacto.id, "fecha": "2026-10-02", "hora": "11:00",
-        "modalidad": "Presencial", "ubicacion": "Oficina",
+    r = client.post(f"/evaluaciones/postulaciones/{codigos[2]}", json={
+        "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "externo", "contacto_id": contacto.id},
+        "cita": {"fecha": "2026-10-02", "hora": "11:00", "modalidad": "Presencial", "direccion": "Oficina"},
     })
     check(r.status_code in (200, 201), f"agendar con entrevistador EXTERNO (contacto del Cliente) → {r.status_code}")
     ent = [x for x in r.json()["resultados"] if x["destinatario"] == "entrevistador"]

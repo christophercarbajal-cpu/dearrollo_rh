@@ -1,11 +1,11 @@
 """
-2026-09-19 — Recordatorio automático de la Entrevista Humana.
+2026-09-19 — Recordatorio automático de citas (Evaluaciones unificadas desde 2026-09-29).
 
-`revisar_recordatorios_entrevista` corre cada 10 min (lifespan, app/main.py): para cada Entrevista Humana
-vigente (no cancelada, sin realizar, postulación activa) cuya fecha cae dentro de las próximas
-`ConfiguracionSistema.recordatorio_entrevista_horas` (default 24; 0 = apagado) y que aún no tiene
-`recordatorio_enviado_en`, dispara el evento `recordatorio_entrevista` (regla de la Cuenta; default
-candidato correo+WhatsApp y entrevistador correo+WhatsApp) con las plantillas HTML corporativas.
+`revisar_recordatorios_entrevista` corre cada 10 min (lifespan, app/main.py): para cada evaluación Pendiente con
+cita (entrevista humana u otro tipo; postulación activa; sin bloqueo de consentimiento) cuya fecha cae dentro de las
+próximas `ConfiguracionSistema.recordatorio_entrevista_horas` (default 24; 0 = apagado) y que aún no tiene
+`recordatorio_enviado_en`, dispara `recordatorio_evaluacion` (regla de la Cuenta; default candidato y evaluador por
+correo + WhatsApp) con las mismas plantillas que el recordatorio manual.
 Idempotente entre workers: reclama `recordatorio_enviado_en` con UPDATE condicional antes de enviar.
 """
 
@@ -13,21 +13,18 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from .. import fechas
 from ..database import SessionLocal
-from ..models import EntrevistaHumana, Postulacion, registrar
-from . import notificaciones
+from ..models import Evaluacion, Postulacion, registrar
+from . import evaluaciones as sev
 from .configuracion import obtener
 
 
-def _utc(dt):
-    return dt.replace(tzinfo=timezone.utc) if dt is not None and dt.tzinfo is None else dt
-
-
-def _reclamar(db: Session, eh: EntrevistaHumana, ahora: datetime) -> bool:
+def _reclamar(db: Session, ev: Evaluacion, ahora: datetime) -> bool:
     filas = (
-        db.query(EntrevistaHumana)
-        .filter(EntrevistaHumana.id == eh.id, EntrevistaHumana.recordatorio_enviado_en.is_(None))
-        .update({EntrevistaHumana.recordatorio_enviado_en: ahora}, synchronize_session=False)
+        db.query(Evaluacion)
+        .filter(Evaluacion.id == ev.id, Evaluacion.recordatorio_enviado_en.is_(None))
+        .update({Evaluacion.recordatorio_enviado_en: ahora}, synchronize_session=False)
     )
     db.commit()
     return filas == 1
@@ -36,12 +33,12 @@ def _reclamar(db: Session, eh: EntrevistaHumana, ahora: datetime) -> bool:
 def pendientes_de_recordatorio(db: Session, ahora: datetime, horas: int):
     limite = ahora + timedelta(hours=horas)
     return (
-        db.query(EntrevistaHumana)
-        .join(Postulacion, Postulacion.id == EntrevistaHumana.postulacion_id)
+        db.query(Evaluacion)
+        .join(Postulacion, Postulacion.id == Evaluacion.postulacion_id)
         .filter(
-            EntrevistaHumana.fecha.isnot(None), EntrevistaHumana.recordatorio_enviado_en.is_(None),
-            EntrevistaHumana.cancelada.is_(False), EntrevistaHumana.realizada.is_(False),
-            Postulacion.activa.is_(True),
+            Evaluacion.cita_fecha_hora.isnot(None), Evaluacion.cita_fecha_hora > ahora, Evaluacion.cita_fecha_hora <= limite,
+            Evaluacion.recordatorio_enviado_en.is_(None), Evaluacion.estado == "pendiente",
+            Evaluacion.consentimiento.notin_(["pendiente", "rechazado"]), Postulacion.activa.is_(True),
         )
         .all()
     )
@@ -55,19 +52,17 @@ async def revisar_recordatorios_entrevista() -> int:
         horas = int(cfg.recordatorio_entrevista_horas or 0)
         if horas <= 0:
             return 0
-        limite = ahora + timedelta(hours=horas)
-        for eh in pendientes_de_recordatorio(db, ahora, horas):
-            fecha = _utc(eh.fecha)
-            if fecha is None or fecha <= ahora or fecha > limite:
+        for ev in pendientes_de_recordatorio(db, ahora, horas):
+            p = db.get(Postulacion, ev.postulacion_id)
+            if p is None or not _reclamar(db, ev, ahora):
                 continue
-            p = eh.postulacion
-            if p is None or not _reclamar(db, eh, ahora):
-                continue
-            db.refresh(eh)
-            resultados = await notificaciones.disparar(db, "recordatorio_entrevista", p, "sistema", eh=eh)
-            registrar(db, "sistema", "recordatorio_entrevista_automatico", "postulacion", p.codigo, {"entrevista_humana": eh.id, "fecha": fecha.isoformat(), "notificaciones": resultados})
+            db.refresh(ev)
+            resultados = await sev.notificar(db, ev, p, "recordatorio_evaluacion", "sistema")
+            sev.evento(db, ev, "recordatorio", "sistema", automatico=True)
+            registrar(db, "sistema", "recordatorio_entrevista_automatico", "postulacion", p.codigo,
+                      {"evaluacion": ev.codigo, "fecha": fechas.iso(ev.cita_fecha_hora), "notificaciones": resultados})
             db.commit()
             enviados += 1
     if enviados:
-        print(f"[recordatorios] {enviados} recordatorio(s) de entrevista enviados.", flush=True)
+        print(f"[recordatorios] {enviados} recordatorio(s) de cita enviados.", flush=True)
     return enviados

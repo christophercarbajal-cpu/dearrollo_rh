@@ -41,7 +41,7 @@ from app.deps import cuenta_actual, usuario_actual  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Bitacora, Candidato, Cuenta, Entrevista, EntrevistaHumana, Evaluacion, EvaluacionCandidato, EventoEvaluacion,
-    Postulacion, Usuario, UsuarioCuenta, Vacante,
+    Postulacion, Usuario, UsuarioCuenta, Vacante, registrar,
 )
 
 OK = 0
@@ -95,36 +95,54 @@ with TestClient(app) as client:
     check(len(posts) >= 4, "hay 4 postulaciones de ejemplo")
     P1, P2, P3, P4 = (p.codigo for p in posts)
 
-    def programar(codigo, hora, modalidad="Videollamada", **extra):
-        r = client.post(f"/candidatos/{codigo}/entrevista-humana", json={
-            "tipo_entrevistador": "externo", "entrevistador_nombre": "Ana Externa", "entrevistador_correo": "ana@externa.mx",
-            "fecha": "2026-10-05", "hora": hora, "modalidad": modalidad, "liga": "https://meet.example/abc" if modalidad == "Videollamada" else "",
-            "comentario": "Trae tu portafolio", **extra,
-        })
-        check(r.status_code == 201, f"programar entrevista en {codigo} ({r.status_code})")
+    # --- ORIGEN: entrevistas humanas tal como las dejaba el modelo anterior (fila + bitácora con sus acciones) ---
+    # Las rutas viejas ya no existen (Evaluaciones unificadas): el dato legado se arma por ORM, DESPUÉS de arrancar
+    # (el guard de arranque exige que no haya legados sin migrar al iniciar la API).
+    import secrets  # noqa: E402
 
-    # --- ORIGEN: entrevistas humanas por la API (bitácora real) ---
-    programar(P1, "07:29")  # queda pendiente, con instrucción
-    r = client.patch(f"/candidatos/{P1}/entrevista-humana", json={"fecha": "2026-10-06", "hora": "09:00", "modalidad": "Videollamada", "liga": "https://meet.example/abc", "comentario": "Trae tu portafolio"})
-    check(r.status_code == 200, "reprogramar P1")
-    programar(P2, "10:00")  # resultado por liga con conflicto Aprobado + No avanzar
-    db.expire_all()
-    eh2 = db.query(EntrevistaHumana).join(Postulacion).filter(Postulacion.codigo == P2).one()
-    r = client.post(f"/entrevista-humana/publica/{eh2.token}", json={"resultado": "aprobado", "recomendacion": "no_avanzar", "comentario": "Buen perfil, sin experiencia en SAP"})
-    check(r.status_code == 200, "el evaluador registra por su liga (Aprobado + No avanzar)")
-    programar(P3, "12:00", modalidad="Llamada")  # cancelada
-    check(client.post(f"/candidatos/{P3}/entrevista-humana/cancelar").status_code == 200, "cancelar P3")
-    programar(P4, "16:30", modalidad="Presencial", ubicacion="Av. Reforma 1")  # realizada, y luego RH captura segunda entrevista
-    check(client.post(f"/candidatos/{P4}/entrevista-humana/realizada", params={"forzar_prueba": True}).status_code == 200, "marcar realizada P4")
-    db.expire_all()
-    eh4 = db.query(EntrevistaHumana).join(Postulacion).filter(Postulacion.codigo == P4).one()
-    eh4_realizada_sin_resultado = not eh4.resultado
-    check(eh4_realizada_sin_resultado, "P4 queda realizada sin resultado")
+    def eh_legado(post, fecha_utc, modalidad="Videollamada", **campos):
+        eh = EntrevistaHumana(
+            candidato_id=post.candidato_id, postulacion_id=post.id, tipo="externo", entrevistador="Ana Externa",
+            correo_externo="ana@externa.mx", fecha=fecha_utc, modalidad=modalidad,
+            liga="https://meet.example/abc" if modalidad == "Videollamada" else "", comentario="Trae tu portafolio",
+            token=secrets.token_urlsafe(24), **campos,
+        )
+        db.add(eh)
+        db.flush()
+        registrar(db, admin.nombre, "entrevista_humana_programada", "postulacion", post.codigo,
+                  {"fecha": fecha_utc.isoformat(), "modalidad": modalidad, "entrevistador": "Ana Externa"})
+        db.commit()
+        return eh
+
+    p1, p2, p3, p4 = posts
+    # P1: pendiente, reprogramada de 07:29 a 09:00 (hora de CDMX)
+    eh1 = eh_legado(p1, datetime(2026, 10, 5, 13, 29, tzinfo=timezone.utc))
+    eh1.fecha = datetime(2026, 10, 6, 15, 0, tzinfo=timezone.utc)
+    registrar(db, admin.nombre, "entrevista_humana_modificada", "postulacion", P1, {"fecha": eh1.fecha.isoformat(), "modalidad": "Videollamada"})
+    db.commit()
+    # P2: el evaluador registró por su liga Aprobado + No avanzar (conflicto)
+    eh2 = eh_legado(p2, datetime(2026, 10, 5, 16, 0, tzinfo=timezone.utc))
+    eh2.realizada, eh2.resultado, eh2.recomendacion = True, "aprobado", "no_avanzar"
+    eh2.comentario, eh2.resultado_capturado_por, eh2.evaluada_en = "Buen perfil, sin experiencia en SAP", "entrevistador", datetime.now(timezone.utc)
+    registrar(db, "entrevistador-externo", "entrevista_humana_evaluada_por_liga", "postulacion", P2,
+              {"resultado": "aprobado", "recomendacion": "no_avanzar", "comentario": eh2.comentario})
+    db.commit()
+    check(True, "el evaluador registró por su liga (Aprobado + No avanzar)")
+    # P3: llamada cancelada
+    eh3 = eh_legado(p3, datetime(2026, 10, 5, 18, 0, tzinfo=timezone.utc), modalidad="Llamada")
+    eh3.cancelada = True
+    registrar(db, admin.nombre, "entrevista_humana_cancelada", "postulacion", P3, {})
+    db.commit()
+    # P4: presencial, marcada realizada sin resultado
+    eh4 = eh_legado(p4, datetime(2026, 10, 5, 22, 30, tzinfo=timezone.utc), modalidad="Presencial", ubicacion="Av. Reforma 1")
+    eh4.realizada = True
+    registrar(db, admin.nombre, "entrevista_humana_marcada_realizada", "postulacion", P4, {})
+    db.commit()
+    check(not eh4.resultado, "P4 queda realizada sin resultado")
 
     # --- ORIGEN: evaluaciones y verificaciones (una por caso) ---
     informe = Path(_dir) / "informe.pdf"
     informe.write_bytes(b"%PDF-1.4 prueba")
-    p1 = posts[0]
     ahora = datetime(2026, 9, 28, 17, 0, tzinfo=timezone.utc)
     evs = [
         EvaluacionCandidato(codigo="EVA-7001", cuenta_id=cuenta.id, postulacion_id=p1.id, tipo="medico", nombre="Médico", modo="manual",

@@ -14,7 +14,7 @@ set -uo pipefail
 APP=/opt/redhuman/app
 CONFIG=/opt/redhuman/config
 RESPALDOS=/opt/redhuman/respaldos
-OFICIAL="IvanOlvera25/redhuman"
+OFICIAL="christophercarbajal-cpu/dearrollo_rh"
 RAMA=main
 FORZAR=0
 

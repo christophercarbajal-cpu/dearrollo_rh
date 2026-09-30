@@ -61,7 +61,7 @@ rama=$(git rev-parse --abbrev-ref HEAD)
 remoto=$(git remote get-url origin 2>/dev/null)
 [ "$rama" = "main" ] && ok "en rama main" || mal "en rama '$rama' — producción debe seguir main"
 case "$remoto" in
-  *IvanOlvera25/redhuman*) ok "origin apunta al repo oficial" ;;
+  *christophercarbajal-cpu/dearrollo_rh*) ok "origin apunta al repo oficial" ;;
   *)                       mal "origin apunta a '$remoto' — no es el repo oficial" ;;
 esac
 [ -z "$(git status --porcelain)" ] && ok "árbol limpio (sin parches a mano)" \

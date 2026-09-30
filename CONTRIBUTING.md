@@ -7,7 +7,7 @@ corresponde a algo que ya falló.
 ## El flujo
 
 ```
-tu fork / tu rama  →  Pull Request a IvanOlvera25/redhuman:main  →  CI verde
+tu fork / tu rama  →  Pull Request a christophercarbajal-cpu/dearrollo_rh:main  →  CI verde
                                                                       ↓
                                           /opt/redhuman/redesplegar.sh en el VPS
 ```
@@ -19,7 +19,7 @@ correr si `origin` apunta a otro lado.
 ### Para colaborar
 
 1. Trabaja en tu fork o en una rama.
-2. Abre un Pull Request hacia `main` de `IvanOlvera25/redhuman`.
+2. Abre un Pull Request hacia `main` de `christophercarbajal-cpu/dearrollo_rh`.
 3. Espera a que el CI pase (corre solo, tarda un par de minutos).
 4. Cuando se apruebe y se integre, quien opere producción ejecuta el despliegue.
 

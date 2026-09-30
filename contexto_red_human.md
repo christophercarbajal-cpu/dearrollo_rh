@@ -6,7 +6,7 @@
 > últimos 8 commits (2026-09-11 → 2026-09-12) y qué contratos cambiaron.
 
 Rama de trabajo: `red-human-v2.0` (el script de despliegue usa `origin/main` del repo oficial
-`IvanOlvera25/redhuman`). Último commit: `ff61558` (2026-09-12). Working tree limpio al generar esto.
+`christophercarbajal-cpu/dearrollo_rh`). Último commit: `ff61558` (2026-09-12). Working tree limpio al generar esto.
 
 ---
 

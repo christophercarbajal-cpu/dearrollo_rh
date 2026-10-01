@@ -281,8 +281,8 @@ def _recalcular_resultado_apto(p: Postulacion) -> str:
     from ..serial import _ultima_entrevista_humana_con_resultado
 
     eh = _ultima_entrevista_humana_con_resultado(p)
-    if eh is not None and eh.conclusion in ("avanzar", "no_avanzar"):
-        p.resultado_apto = eh.conclusion == "avanzar"
+    if eh is not None and eh.conclusion_vigente in ("avanzar", "no_avanzar"):  # la revisión de RH manda
+        p.resultado_apto = eh.conclusion_vigente == "avanzar"
         return "entrevista_humana"
     for e in reversed(p.entrevistas):
         rec = (e.evaluacion or {}).get("recomendacion", "")
@@ -1784,8 +1784,8 @@ async def mover_etapa(
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
     """Avance manual explícito del Kanban — cada botón del panel manda su etapa destino exacta
-    (ver ETAPAS_CANDIDATO). No reemplaza el flujo dedicado de Entrevista Humana
-    (POST /{codigo}/entrevista-humana) — aquí se rechaza a propósito.
+    (ver ETAPAS_CANDIDATO). A Entrevista Humana solo se mueve (sin `manual`) si la postulación ya tiene una
+    entrevista humana agregada: agregarla no mueve la etapa (2026-10-01).
 
     "Entrevista IA" desde Prefiltro es la única "fricción manual" a propósito: fuerza la
     clasificación como apto y dispara el mismo mensaje que usa Zero-Touch para invitar al
@@ -1802,6 +1802,13 @@ async def mover_etapa(
     p = _por_codigo(db, codigo, cuenta.id)
     await aplicar_movimiento(db, p, datos, u, forzar_prueba)
     return postulacion_dict(p, detalle=True)
+
+
+def _tiene_entrevista_humana(db: Session, p: Postulacion) -> bool:
+    from ..models import Evaluacion
+
+    return db.query(Evaluacion.id).filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "entrevista_humana",
+                                          Evaluacion.estado != "cancelada").first() is not None
 
 
 async def aplicar_movimiento(
@@ -1823,8 +1830,9 @@ async def aplicar_movimiento(
     libre = manual or puede_forzar_prueba(db, forzar_prueba)
     if datos.etapa == p.etapa:
         raise HTTPException(409, f"La postulación ya está en {datos.etapa}.")
-    if datos.etapa == "Entrevista Humana" and not manual:
-        raise HTTPException(409, "Para programar la Entrevista Humana usa POST /candidatos/{codigo}/entrevista-humana.")
+    if datos.etapa == "Entrevista Humana" and not manual and not _tiene_entrevista_humana(db, p):
+        # 2026-10-01: agregar la entrevista ya NO mueve la etapa; mover es una decisión aparte de RH.
+        raise HTTPException(409, "Primero agrega la entrevista humana con «Agregar entrevista humana o evaluación»; después envía al candidato a Entrevista Humana.")
     if datos.etapa == "Onboarding":
         if p.etapa != "Contratación" and not libre:
             raise HTTPException(409, "Solo se puede enviar a Onboarding desde la etapa de Contratación.")

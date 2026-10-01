@@ -707,10 +707,10 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         + (f" Comentario: {a['comentario']}" if a.get("comentario") else ""),
         "schema": {
             "type": "function", "name": "mover_etapa_candidato",
-            "description": "Mueve un candidato a otra etapa del pipeline (excepto a Entrevista Humana: usa programar_entrevista_humana).",
+            "description": "Mueve un candidato a otra etapa del pipeline. A Entrevista Humana solo si ya tiene una entrevista humana agregada (programar_entrevista_humana).",
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
-                "etapa": _p("string", "Prefiltro | Entrevista IA | Evaluación | Contratación | Onboarding"),
+                "etapa": _p("string", "Prefiltro | Entrevista IA | Evaluación | Entrevista Humana | Contratación | Onboarding"),
                 "comentario": _p("string", "Comentario opcional"),
             }, "required": ["codigo", "etapa"], "additionalProperties": False},
         },
@@ -749,7 +749,7 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         ),
         "schema": {
             "type": "function", "name": "programar_entrevista_humana",
-            "description": "Agenda una ronda nueva de Entrevista Humana y mueve al candidato a esa etapa.",
+            "description": "Agenda una ronda nueva de Entrevista Humana. No mueve la etapa: para eso usa mover_etapa_candidato.",
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
                 "tipo_entrevistador": _p("string", "interno | externo", enum=["interno", "externo"]),

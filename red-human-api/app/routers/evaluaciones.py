@@ -6,7 +6,10 @@
   referencias u otra. Pantalla única «Agregar evaluación» (POST /postulaciones/{codigo}), formulario único de
   resultado (POST /{codigo}/resultado desde el sistema y POST /publica/{token}/resultado desde la liga del
   evaluador), cinco estados, consentimiento médico como condición, historial en `eventos_evaluacion`.
-* Recibir o guardar un resultado NUNCA mueve la etapa del candidato ni lo envía a Contratación.
+* Recibir, guardar o REVISAR un resultado NUNCA mueve la etapa del candidato ni lo envía a Contratación; agregar una
+  evaluación tampoco (2026-10-01, ni siquiera la entrevista humana).
+* Ligas externas (consentimiento, evaluador/médico, otro sistema, proveedor): existen aunque el envío falle; Abrir /
+  Copiar / Enviar o reenviar (POST /{codigo}/ligas/{clave}/enviar) y el estado de cada envío viaja aparte.
 * Consentimiento médico EXPRESO y POR ESCRITO: liga pública `/consentimiento/{token}` (texto exacto + evidencia).
 * Informe médico COMPLETO (comentarios y adjuntos) solo para quien tiene permiso (`Usuario.puede_ver_informe_medico`).
 """
@@ -165,7 +168,7 @@ def inactivar_prueba(pid: int, db: Session = Depends(get_db), u: Usuario = Depen
 # ======================================================================================================
 # Evaluaciones unificadas — Fase 1 (2026-09-29). Toda evaluación (entrevista humana, médica, psicométrica…) se
 # crea, se sigue y se cierra con el MISMO objeto y el MISMO formulario de resultado (RH y liga del evaluador).
-# Ningún resultado mueve la etapa; solo ASIGNAR una entrevista humana lleva la tarjeta a «Entrevista Humana».
+# Ni agregar ni ningún resultado mueve la etapa (2026-10-01): mover a «Entrevista Humana» es una acción aparte de RH.
 # ======================================================================================================
 
 def _postulacion(db: Session, codigo: str, cuenta_id: int) -> Postulacion:
@@ -212,7 +215,10 @@ def _tocar(p: Postulacion) -> None:
 def listar_evaluaciones(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
     """Tarjetas de «Resumen» (la más reciente arriba)."""
     p = _postulacion(db, codigo, cuenta.id)
-    return [evaluacion_dict(ev, u) for ev in sev.de_postulacion(db, p)]
+    lista = sev.de_postulacion(db, p)
+    if any([sev.asegurar_ligas(ev) for ev in lista]):  # registros viejos sin token: la liga se genera una vez y se reutiliza
+        db.commit()
+    return [evaluacion_dict(ev, u) for ev in lista]
 
 
 class EvaluadorIn(BaseModel):
@@ -242,6 +248,7 @@ class CrearEvaluacionIn(BaseModel):
     instrucciones: str = ""
     liga_externa_candidato: str = ""
     prueba_id: Optional[int] = None  # proveedor integrado (catálogo)
+    proveedor: str = ""  # psicométrica fuera del catálogo integrado (texto libre; nunca dispara una API)
     cita: Optional[CitaIn] = None
     notificar: Optional[NotificarIn] = None
 
@@ -269,8 +276,8 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     - asignada: exige evaluador (interno o externo con correo o WhatsApp); cita opcional.
     - registro_directo: sin evaluador; el frontend manda enseguida el resultado a POST /{codigo}/resultado.
     - liga_otro_sistema: exige la liga que recibe el candidato. integrada: prueba del catálogo con proveedor.
-    Asignar una entrevista humana lleva la tarjeta a «Entrevista Humana» (comportamiento actual) salvo que ya esté
-    más adelante; nada más mueve la etapa."""
+    2026-10-01: agregar (cualquier tipo, también la entrevista humana) NUNCA mueve la etapa; las ligas externas se
+    generan aunque el envío automático falle y el estado de cada envío regresa aparte."""
     p = _postulacion(db, codigo, cuenta.id)
     if not p.activa:
         raise HTTPException(409, "La postulación está cerrada.")
@@ -285,6 +292,8 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
         raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
 
     campos: dict = {"tipo": tipo, "nombre": nombre, "forma": datos.forma, "instrucciones": datos.instrucciones.strip()[:4000]}
+    if tipo == "psicometrica" and datos.forma != "integrada":
+        campos["proveedor"] = datos.proveedor.strip()[:150]
     evaluador: dict = {}
     if datos.forma == "asignada":
         if not datos.evaluador:
@@ -307,21 +316,19 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
         campos.update(await _cita_con_teams(db, p, datos.cita, evaluador))
 
     ev = sev.nueva(p, cuenta.id, u.nombre, u.id, **campos)
+    sev.asegurar_ligas(ev)
     db.add(ev)
     db.flush()
     sev.asignar_codigo(ev)
     sev.evento(db, ev, "creada", u.nombre, a=ev.estado, usuario_id=u.id, tipo=ev.tipo, forma=ev.forma,
-               evaluador=ev.evaluador_nombre, cita=fechas.iso(ev.cita_fecha_hora), consentimiento=ev.consentimiento)
-
-    anterior = p.etapa
-    if tipo == "entrevista_humana" and datos.forma == "asignada" and p.etapa in ("Prefiltro", "Entrevista IA", "Evaluación"):
-        p.etapa = "Entrevista Humana"
+               evaluador=ev.evaluador_nombre, cita=fechas.iso(ev.cita_fecha_hora), consentimiento=ev.consentimiento,
+               proveedor=ev.proveedor)
     resultados: list = []
     if datos.forma != "registro_directo":
         resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
     registrar(db, u.nombre, "evaluacion_creada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "tipo": ev.tipo, "forma": ev.forma, "evaluador": ev.evaluador_nombre,
-               "cita": fechas.iso(ev.cita_fecha_hora), "de": anterior, "a": p.etapa, "correo_rh": u.correo,
+               "cita": fechas.iso(ev.cita_fecha_hora), "etapa": p.etapa, "correo_rh": u.correo,
                "notificaciones": resultados})
     _tocar(p)
     db.commit()
@@ -333,6 +340,7 @@ def detalle(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usu
     """«Ver resultado»: detalle + historial. Abrirla quita la etiqueta «Nuevo resultado». Consultar un resultado
     médico completo queda en bitácora."""
     ev = _ev(db, codigo, cuenta.id)
+    sev.asegurar_ligas(ev)
     if ev.estado == "con_resultado" and ev.resultado_visto_en is None:
         ev.resultado_visto_en = datetime.now(timezone.utc)
     if ev.tipo == "medica" and ev.estado == "con_resultado" and u.puede_ver_informe_medico():
@@ -343,6 +351,7 @@ def detalle(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usu
 
 class ModificarIn(BaseModel):
     nombre: Optional[str] = None
+    proveedor: Optional[str] = None  # solo psicométrica no integrada
     instrucciones: Optional[str] = None
     liga_externa_candidato: Optional[str] = None
     evaluador: Optional[EvaluadorIn] = None
@@ -366,6 +375,8 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
         if ev.tipo == "otra" and not datos.nombre.strip():
             raise HTTPException(400, "Con «Otra» el nombre es obligatorio.")
         anteriores["nombre"], ev.nombre = ev.nombre, datos.nombre.strip()[:200]
+    if datos.proveedor is not None and ev.tipo == "psicometrica" and ev.forma != "integrada" and datos.proveedor.strip() != (ev.proveedor or ""):
+        anteriores["proveedor"], ev.proveedor = ev.proveedor, datos.proveedor.strip()[:150]
     if datos.instrucciones is not None and datos.instrucciones.strip() != (ev.instrucciones or ""):
         anteriores["instrucciones"], ev.instrucciones = ev.instrucciones, datos.instrucciones.strip()[:4000]
     if datos.liga_externa_candidato is not None and ev.forma == "liga_otro_sistema":
@@ -575,8 +586,8 @@ async def reenviar_liga(codigo: str, db: Session = Depends(get_db), u: Usuario =
         bloqueo = sev.bloqueo_consentimiento(ev)
         if bloqueo:
             raise sev.ErrorEvaluacion(409, bloqueo)
-    if ev.estado in ("con_resultado", "cancelada"):
-        raise HTTPException(409, "Esta evaluación ya no espera respuesta.")
+    if ev.estado == "cancelada":  # con resultado sigue: el evaluador puede complementar
+        raise HTTPException(409, "Esta evaluación fue cancelada.")
     audiencias = {"entrevistador"} | ({"candidato"} if ev.forma == "liga_otro_sistema" else set())
     resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias=audiencias)
     registrar(db, u.nombre, "evaluacion_liga_reenviada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
@@ -657,7 +668,7 @@ def _adjunto(ev: Evaluacion, aid: str) -> dict:
 
 
 @router.get("/{codigo}/adjuntos/{aid}")
-def descargar_adjunto(codigo: str, aid: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+def descargar_adjunto(codigo: str, aid: str, descargar: bool = False, db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
     """Los adjuntos heredan los permisos de la evaluación (médica: solo con permiso de informes médicos)."""
     ev = _ev(db, codigo, cuenta.id)
     if ev.tipo == "medica" and not u.puede_ver_informe_medico():
@@ -668,44 +679,109 @@ def descargar_adjunto(codigo: str, aid: str, db: Session = Depends(get_db), u: U
     if ev.tipo == "medica":
         registrar(db, u.nombre, "informe_medico_consultado", "evaluaciones", ev.codigo, {"adjunto": a.get("nombre"), "correo_rh": u.correo})
         db.commit()
-    return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto")
+    # «Abrir» = inline en el navegador; «Descargar» = ?descargar=true
+    return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto",
+                        content_disposition_type="attachment" if descargar else "inline")
 
 
 @router.post("/{codigo}/consentimiento/enviar")
 async def enviar_liga_consentimiento(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """Manda al candidato la liga del consentimiento expreso de la evaluación médica (WhatsApp y correo con lo que
     tenga). Un canal caído nunca rompe la acción: el resultado de cada envío regresa a RH."""
-    from ..services import plantillas_correo
-    from ..services.correo import enviar_correo
-    from ..services.whatsapp import enviar_mensaje
-
     ev = _ev(db, codigo, cuenta.id)
     with _negocio():
         p = sev.postulacion_de(db, ev)
-    if ev.consentimiento != "pendiente" or not ev.consentimiento_token:
+    if ev.consentimiento != "pendiente":
         raise HTTPException(409, "Esta evaluación no está en espera de consentimiento.")
-    liga = sev.liga_consentimiento(ev)
-    empresa = nombre_empresa_candidato(p.vacante) if p.vacante else cuenta.nombre_visible
-    texto = (f"Hola {p.nombre}. Para continuar con tu proceso en {empresa} necesitamos tu consentimiento por escrito para la evaluación "
-             f"médica. Léelo y, si estás de acuerdo, acéptalo aquí: {liga}")
-    resultados = []
-    if p.telefono:
-        try:
-            r = await enviar_mensaje(p.telefono, texto)
-        except Exception as ex:  # noqa: BLE001
-            r = {"enviado": False, "detalle": str(ex)[:200]}
-        resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
-    if p.correo:
-        try:
-            asunto, html = plantillas_correo.html_aviso("Consentimiento para tu evaluación médica", texto.replace(liga, "").strip(), empresa, [], ("Leer y responder", liga))
-            r = await enviar_correo(p.correo, asunto, html)
-        except Exception as ex:  # noqa: BLE001
-            r = {"enviado": False, "detalle": str(ex)[:200]}
-        resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
-    sev.evento(db, ev, "envio", u.nombre, usuario_id=u.id, que="liga_consentimiento", envios=resultados)
-    registrar(db, u.nombre, "consentimiento_medico_solicitado", "postulacion", p.codigo, {"evaluacion": ev.codigo, "envios": resultados, "correo_rh": u.correo})
+    resultados = await _enviar_liga_candidato(db, ev, p, u, "consentimiento", cuenta)
     db.commit()
-    return {"liga": liga, "resultados": resultados, "advertencias": notificaciones.advertencias_de(resultados)}
+    return {"liga": sev.liga_consentimiento(ev), "resultados": resultados, "advertencias": notificaciones.advertencias_de(resultados),
+            "evaluacion": evaluacion_dict(ev, u)}
+
+
+async def _enviar_liga_candidato(db: Session, ev: Evaluacion, p: Postulacion, u: Usuario, clave: str, cuenta: Cuenta) -> list:
+    """Consentimiento, liga de otro sistema o liga del proveedor → candidato (WhatsApp y correo con lo que tenga)."""
+    empresa = nombre_empresa_candidato(p.vacante) if p.vacante else cuenta.nombre_visible
+    if clave == "consentimiento":
+        sev.asegurar_ligas(ev)
+        liga = sev.liga_consentimiento(ev)
+        asunto = "Consentimiento para tu evaluación médica"
+        texto = (f"Hola {p.nombre}. Para continuar con tu proceso en {empresa} necesitamos tu consentimiento por escrito para la "
+                 "evaluación médica. Léelo y, si estás de acuerdo, acéptalo aquí:")
+        accion_bitacora = "consentimiento_medico_solicitado"
+    else:
+        liga = ev.liga_externa_candidato if clave == "otro_sistema" else sev._url_proveedor(ev)
+        if not liga:
+            raise HTTPException(409, "Esta evaluación no tiene liga para el candidato.")
+        asunto = f"Tu evaluación: {ev.nombre_visible}"
+        texto = f"Hola {p.nombre}. Como parte de tu proceso en {empresa}, realiza tu evaluación «{ev.nombre_visible}» aquí:"
+        accion_bitacora = "evaluacion_liga_candidato_enviada"
+    resultados = await sev.enviar_liga_a_candidato(db, ev, p, u.nombre, clave, asunto, texto, liga, usuario_id=u.id)
+    registrar(db, u.nombre, accion_bitacora, "postulacion", p.codigo, {"evaluacion": ev.codigo, "liga": clave, "envios": resultados, "correo_rh": u.correo})
+    return resultados
+
+
+@router.post("/{codigo}/ligas/{clave}/enviar")
+async def enviar_liga(codigo: str, clave: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Enviar o reenviar» de CUALQUIER liga externa (consentimiento | evaluador | otro_sistema | proveedor). La liga ya
+    existe (se genera al crear y se reutiliza); un envío fallido no la invalida ni bloquea Abrir/Copiar: el resultado de
+    cada canal regresa a RH y queda en el historial de la evaluación."""
+    if clave not in sev.CLAVES_LIGA:
+        raise HTTPException(400, f"Liga inválida. Usa una de: {', '.join(sev.CLAVES_LIGA)}.")
+    ev = _ev(db, codigo, cuenta.id)
+    with _negocio():
+        p = sev.postulacion_de(db, ev)
+    if ev.estado == "cancelada":
+        raise HTTPException(409, "Esta evaluación fue cancelada.")
+    vigentes = {x["clave"]: x for x in sev.ligas_de(db, ev)}
+    if clave not in vigentes:
+        raise HTTPException(409, "Esa liga no aplica a esta evaluación en este momento.")
+    if not vigentes[clave]["puedeEnviar"]:
+        raise HTTPException(409, vigentes[clave]["motivoNoEnvio"] or "No hay a quién enviarla.")
+    if clave == "evaluador":
+        resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"})
+        registrar(db, u.nombre, "evaluacion_liga_reenviada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
+    else:
+        resultados = await _enviar_liga_candidato(db, ev, p, u, clave, cuenta)
+    db.commit()
+    return _respuesta(db, ev, u, None, resultados)
+
+
+@router.post("/{codigo}/confirmar-inicio")
+def confirmar_inicio(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Psicométrica → «En curso» / socioeconómica → «En proceso». Solo con confirmación (esta acción de RH o el
+    proveedor al iniciar). No cambia la etapa."""
+    ev = _ev(db, codigo, cuenta.id)
+    with _negocio():
+        p = sev.postulacion_de(db, ev)
+        sev.confirmar_inicio(db, ev, u.nombre, usuario_id=u.id)
+    registrar(db, u.nombre, "evaluacion_inicio_confirmado", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo})
+    db.commit()
+    return _respuesta(db, ev, u)
+
+
+class RevisarIn(BaseModel):
+    conclusion: str
+    comentario: str = ""
+
+
+@router.post("/{codigo}/revisar")
+def revisar(codigo: str, datos: RevisarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Marcar como revisada»: conclusión de RH + comentario, con usuario y fecha. Recibir un resultado nunca la marca
+    revisada; revisarla NUNCA mueve la etapa ni avisa al candidato (HITL)."""
+    ev = _ev(db, codigo, cuenta.id)
+    with _negocio():
+        p = sev.postulacion_de(db, ev)
+    if ev.tipo == "medica" and not u.puede_ver_informe_medico():
+        raise HTTPException(403, "Revisar el resultado médico requiere el permiso de informes médicos.")
+    with _negocio():
+        sev.revisar(db, ev, actor=u.nombre, usuario_id=u.id, conclusion=datos.conclusion, comentario=datos.comentario)
+    _recalcular_indicador(p)
+    registrar(db, u.nombre, "evaluacion_revisada", "postulacion", p.codigo,
+              {"evaluacion": ev.codigo, "conclusion_rh": ev.conclusion_rh, "etapa": p.etapa, "correo_rh": u.correo})
+    _tocar(p)
+    db.commit()
+    return _respuesta(db, ev, u, p)
 
 
 # ---------------- Pública: liga del evaluador (sin cuenta; el token es la credencial) ----------------
@@ -783,7 +859,7 @@ async def resultado_publico(
     ev = _por_token(db, token)
     with _negocio():
         p = sev.postulacion_de(db, ev)
-    actor = ev.evaluador_nombre or "Evaluador vía liga"
+    actor = ev.evaluador_nombre or ("Médico vía liga" if ev.tipo == "medica" else "Evaluador vía liga")
     adjuntos = await _adjuntos_subidos(ev, archivos, actor, "liga_evaluador")
     with _negocio():
         accion = sev.registrar_resultado(db, ev, actor=actor, canal="liga_evaluador", conclusion=conclusion, comentarios=comentarios,
@@ -799,10 +875,11 @@ async def resultado_publico(
 
 
 @router.get("/publica/{token}/adjuntos/{aid}")
-def adjunto_publico(token: str, aid: str, db: Session = Depends(get_db)):
+def adjunto_publico(token: str, aid: str, descargar: bool = False, db: Session = Depends(get_db)):
     ev = _por_token(db, token)
     a = _adjunto(ev, aid)
-    return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto")
+    return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto",
+                        content_disposition_type="attachment" if descargar else "inline")
 
 
 @router.get("/publica/{token}/archivo/{archivo_id}")

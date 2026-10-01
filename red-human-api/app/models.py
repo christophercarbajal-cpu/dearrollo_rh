@@ -2147,7 +2147,17 @@ CANALES_EVALUACION = ("sistema", "liga_evaluador", "liga_candidato", "proveedor"
 ACCIONES_EVENTO_EVALUACION = (
     "creada", "modificada", "reprogramada", "envio", "recordatorio", "cambio_estado", "consentimiento",
     "resultado_registrado", "resultado_corregido", "resultado_complementado", "adjunto_agregado", "migrada",
+    "inicio_confirmado", "revisada", "revision_reiniciada",
 )
+# Seguimiento VISIBLE por tipo (2026-10-01). No son estados nuevos: se DERIVAN de los cinco estados + `enviada_en`
+# (envío confirmado de la liga a quien la realiza), `iniciada_en` (confirmación de inicio) y `revisada_en` (revisión
+# de RH) — `services.evaluaciones.seguimiento`. «En curso»/«En proceso» solo con confirmación de inicio.
+SEGUIMIENTO_EVALUACION = {
+    "psicometrica": {"pendiente": "Pendiente", "enviada": "Enviada", "en_curso": "En curso",
+                     "resultado_recibido": "Resultado recibido", "revisada": "Revisada"},
+    "socioeconomica": {"pendiente": "Pendiente", "en_proceso": "En proceso",
+                       "resultado_recibido": "Resultado recibido", "revisada": "Revisada"},
+}
 BASE_CODIGO_EVALUACION = 50000  # códigos nuevos EVA-5xxxx; los EVA-7xxx migrados conservan el suyo
 
 
@@ -2224,6 +2234,16 @@ class Evaluacion(Base):
     resultado_version: Mapped[int] = mapped_column(Integer, default=0)  # «Este resultado cambió mientras lo editabas»
     resultado_visto_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)  # etiqueta «Nuevo resultado»
     recordatorio_enviado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # --- seguimiento (2026-10-01): primer envío CONFIRMADO de la liga a quien realiza la evaluación y confirmación de
+    # inicio (proveedor «iniciada» o RH). Sin confirmación nunca se muestra «En curso» / «En proceso». ---
+    enviada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    iniciada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # --- revisión de RH (2026-10-01): recibir un resultado NO lo revisa; revisarlo NO mueve la etapa ---
+    revisada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    revisada_por: Mapped[str] = mapped_column(String(150), default="")
+    revisada_por_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    conclusion_rh: Mapped[str] = mapped_column(String(30), default="")  # conclusiones_de(tipo)
+    comentario_rh: Mapped[str] = mapped_column(Text, default="")
     # --- trazabilidad ---
     creado_por: Mapped[str] = mapped_column(String(150), default="")
     creado_por_usuario_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -2240,6 +2260,11 @@ class Evaluacion(Base):
     @property
     def nuevo_resultado(self) -> bool:
         return self.registrada_via == "liga_evaluador" and self.resultado_visto_en is None
+
+    @property
+    def conclusion_vigente(self) -> str:
+        """La conclusión de RH al revisar manda sobre la del evaluador."""
+        return self.conclusion_rh or self.conclusion or ""
 
 
 class EventoEvaluacion(Base):

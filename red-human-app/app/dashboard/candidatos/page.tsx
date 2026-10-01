@@ -44,6 +44,7 @@ import {
   RefreshCw,
   Trash2,
   ArrowRightLeft,
+  ClipboardCheck,
 } from "lucide-react";
 import { Card, Badge, Button, Avatar, Eyebrow, Progress } from "@/components/ui";
 import { PageHeader, EstadoBadge, ScoreRing } from "@/components/dashboard/parts";
@@ -132,8 +133,9 @@ const etapaColor: Record<EtapaCandidato, string> = {
 
 /** Zero-touch: la IA ya avanzó sola al candidato hasta aquí; esto es solo el siguiente
  * checkpoint humano al que RH puede mandarlo con un botón explícito (no "cualquier etapa
- * futura" — cada etapa tiene un único destino manual). "Entrevista Humana" abre el modal de
- * agenda (no hace PATCH directo); el resto va por PATCH /candidatos/{codigo}/etapa. Prefiltro,
+ * futura" — cada etapa tiene un único destino manual). Hacia "Entrevista Humana" el botón principal es «Agregar
+ * entrevista humana o evaluación» (2026-10-01: agregar NO mueve la etapa) y «Enviar a Entrevista Humana» queda en
+ * «…» como movimiento aparte; el resto va por PATCH /candidatos/{codigo}/etapa. Prefiltro,
  * Entrevista IA y Onboarding no tienen destino manual aquí — Prefiltro solo descarta (la IA
  * dispara Entrevista IA sola), Entrevista IA solo descarta, y a Onboarding solo se llega con
  * el botón "Enviar a Onboarding" de la propia etapa Contratación. */
@@ -157,6 +159,7 @@ const ETAPAS_YA_CONTRATADO: EtapaCandidato[] = ["Contratación", "Onboarding"];
 /** 2026-09-22 — «Avanzar a Entrevista Humana» (omitir la Entrevista Red Human). Solo tiene sentido
  * mientras el candidato está en Prefiltro o en la propia Entrevista Red Human. */
 const ETAPAS_AVANCE_DIRECTO: EtapaCandidato[] = ["Prefiltro", "Entrevista IA"];
+const TITULO_AGREGAR_EVALUACION = "Agregar entrevista humana o evaluación";
 const TEXTO_AVANCE_DIRECTO = "Este candidato avanzará a Entrevista Humana y se omitirá la Entrevista Red Human";
 
 const TIPOS_CONTRATACION = ["Tiempo indeterminado", "Tiempo determinado", "Por obra o proyecto", "Honorarios"];
@@ -1374,8 +1377,8 @@ function ModalCandidato({
   const [confirmacion, setConfirmacion] = useState<null | "solicitar" | "recordatorio" | "alta">(null);
   // 2026-09-16 (control manual de RH): «Mover a otra etapa» — selector simple + motivo opcional
   const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string }>(null);
-  // Evaluaciones unificadas (2026-09-29): «Enviar a Entrevista Humana» abre la MISMA pantalla «Agregar evaluación»
-  // precargada con entrevista humana (el botón único vive en el panel de evaluaciones).
+  // Evaluaciones unificadas: «Agregar entrevista humana o evaluación» (2026-10-01, antes «Enviar a Entrevista Humana»)
+  // abre la MISMA pantalla «Agregar evaluación» precargada con entrevista humana; agregar NO cambia la etapa.
   const [agregarEval, setAgregarEval] = useState<PresetEvaluacion | null>(null);
   const [versionEval, setVersionEval] = useState(0);
   // 2026-09-22: confirmación de «Avanzar a Entrevista Humana» (omite la Entrevista Red Human)
@@ -1706,16 +1709,16 @@ function ModalCandidato({
               {/* Regla de UI (2026-09-16): UNA acción principal = la siguiente esperada; todo lo demás en «…»
                   («Mover a otra etapa» abre un selector simple sin bloqueos de secuencia). */}
               <div className="flex items-center gap-2">
-                {siguientesEtapas[0] && (
-                  <Button
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => (siguientesEtapas[0] === "Entrevista Humana" ? setAgregarEval({ tipo: "entrevista_humana" }) : enviarAEtapa(siguientesEtapas[0]))}
-                    disabled={Boolean(ocupado)}
-                  >
+                {siguientesEtapas[0] && (siguientesEtapas[0] === "Entrevista Humana" ? (
+                  // 2026-10-01: abrir/agregar una evaluación NO cambia la etapa (mover es aparte, en «…»)
+                  <Button size="sm" className="flex-1" onClick={() => setAgregarEval({ tipo: "entrevista_humana", titulo: TITULO_AGREGAR_EVALUACION })} disabled={Boolean(ocupado)}>
+                    <ClipboardCheck className="h-4 w-4" /> {TITULO_AGREGAR_EVALUACION}
+                  </Button>
+                ) : (
+                  <Button size="sm" className="flex-1" onClick={() => enviarAEtapa(siguientesEtapas[0])} disabled={Boolean(ocupado)}>
                     <ThumbsUp className="h-4 w-4" /> Enviar a {nombreEtapa(siguientesEtapas[0])}
                   </Button>
-                )}
+                ))}
                 {c.expedienteId != null && c.etapa !== "Onboarding" && (
                   <a
                     href="/dashboard/onboarding"
@@ -1727,10 +1730,11 @@ function ModalCandidato({
                 <MenuAcciones
                   etiqueta="Más acciones"
                   acciones={[
-                    ...siguientesEtapas.slice(1).map((etapa) => ({
+                    // «Enviar a Entrevista Humana» es el movimiento explícito (la API exige que ya haya una entrevista agregada)
+                    ...siguientesEtapas.filter((etapa, i) => i > 0 || etapa === "Entrevista Humana").map((etapa) => ({
                       etiqueta: `Enviar a ${nombreEtapa(etapa)}`,
                       icono: <ThumbsUp />,
-                      onClick: () => (etapa === "Entrevista Humana" ? setAgregarEval({ tipo: "entrevista_humana" }) : enviarAEtapa(etapa)),
+                      onClick: () => enviarAEtapa(etapa),
                       disabled: Boolean(ocupado),
                     })),
                     ...(ETAPAS_AVANCE_DIRECTO.includes(c.etapa)

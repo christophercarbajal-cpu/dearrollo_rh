@@ -131,7 +131,9 @@ with TestClient(app) as client:
     check(E1["codigo"].startswith("EVA-5") and E1["estado"] == "pendiente" and E1["cita"]["fechaHora"] == "2026-10-05T13:29:00Z",
           "código EVA-5xxxx, Pendiente, cita 07:29 de CDMX guardada como 13:29Z")
     check(E1["cita"]["direccion"] == "Av. Reforma 1" and E1["instrucciones"] == "Trae tu portafolio", "dirección e instrucciones en campos separados")
-    check(etapa() == "Entrevista Humana", "asignar una entrevista humana lleva la tarjeta a «Entrevista Humana» (comportamiento actual)")
+    check(etapa() == "Entrevista IA", "agregar la entrevista humana NO mueve la etapa (2026-10-01)")
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
+    check(r.status_code == 200 and etapa() == "Entrevista Humana", "mover a «Entrevista Humana» es una acción aparte de RH (ya hay entrevista agregada)")
     check(db.query(ClienteContacto).filter_by(cliente_id=cliente.id, correo="ana@externa.mx").count() == 1, "«+ Nuevo evaluador» quedó como contacto reutilizable del Cliente")
     destinos = {(c, d) for c, d, _ in ENVIOS}
     check({("whatsapp", persona.telefono), ("correo", "cand@correo.mx"), ("whatsapp", "3399990000"), ("correo", "ana@externa.mx")} <= destinos,
@@ -174,8 +176,9 @@ with TestClient(app) as client:
     check(ev1.realizada_por == "Ana Externa" and ev1.registrada_via == "liga_evaluador" and len(ev1.adjuntos) == 2, "autor precargado con el evaluador; captura vía liga; PDF + Word adjuntos")
     lista = client.get(f"/evaluaciones/postulaciones/{P}").json()
     tarjeta = next(x for x in lista if x["codigo"] == E1["codigo"])
-    check(tarjeta["nuevoResultado"] and tarjeta["conclusionTexto"] == "Avanzar" and tarjeta["acciones"]["principal"] == "ver_resultado",
-          "tarjeta: «Nuevo resultado», una sola etiqueta de conclusión, botón «Ver resultado»")
+    check(tarjeta["nuevoResultado"] and tarjeta["conclusionTexto"] == "Avanzar" and tarjeta["acciones"]["principal"] == "marcar_revisada"
+          and tarjeta["acciones"]["secundaria"] == "ver_resultado" and tarjeta["revision"] is None,
+          "tarjeta: «Nuevo resultado», una sola etiqueta de conclusión, «Marcar como revisada» + «Ver resultado» (recibir ≠ revisar)")
     det = client.get(f"/evaluaciones/{E1['codigo']}").json()
     check(not det["evaluacion"]["nuevoResultado"] and [e["accion"] for e in det["eventos"]][:1] == ["creada"], "abrir el detalle quita «Nuevo resultado»; historial con la creación")
     r = client.get(f"/evaluaciones/{E1['codigo']}/adjuntos/{det['evaluacion']['adjuntos'][0]['id']}")

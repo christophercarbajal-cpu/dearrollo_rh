@@ -1112,9 +1112,10 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
     elif ev.forma == "integrada":
         responsable = ev.proveedor or "Proveedor integrado"
     elif ev.forma == "liga_otro_sistema":
-        responsable = "Liga de otro sistema"
+        responsable = ev.proveedor or "Liga de otro sistema"
     else:
         responsable = "Registro directo"
+    seg_clave, seg_texto = sev.seguimiento(ev)
     salida = {
         "id": ev.codigo,
         "codigo": ev.codigo,
@@ -1127,6 +1128,11 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         "responsable": responsable,
         "estado": ev.estado,
         "estadoTexto": ESTADOS_EVALUACION_U.get(ev.estado, ev.estado),
+        # seguimiento visible por tipo (psicométrica / socioeconómica / «Revisada»); el estado base no cambia
+        "seguimiento": seg_clave,
+        "seguimientoTexto": seg_texto,
+        "enviadaEn": iso(ev.enviada_en),
+        "iniciadaEn": iso(ev.iniciada_en),
         "motivoEstado": ev.motivo_estado or "",
         "consentimiento": ev.consentimiento or "no_requerido",
         "consentimientoTexto": CONSENTIMIENTOS.get(ev.consentimiento or "no_requerido", ""),
@@ -1169,10 +1175,20 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         "creadoPor": ev.creado_por or "",
         "creadoEn": iso(ev.creado_en),
         "actualizadoEn": iso(ev.actualizado_en),
-        "acciones": acciones_evaluacion(ev),
+        "acciones": acciones_evaluacion(ev, restringido),
     }
     if not publico:
-        salida["ligaEvaluador"] = sev.liga_evaluador(ev) if ev.forma == "asignada" else None
+        salida["ligaEvaluador"] = sev.liga_evaluador(ev) if sev.liga_evaluador_disponible(ev) else None
+        # revisión de RH (recibir un resultado nunca la marca; revisarla nunca mueve la etapa)
+        salida["revision"] = {
+            "revisadaEn": iso(ev.revisada_en), "revisadaPor": ev.revisada_por or "", "conclusion": ev.conclusion_rh or None,
+            "conclusionTexto": opciones.get(ev.conclusion_rh, "") if ev.conclusion_rh else "",
+            "comentario": "" if restringido else (ev.comentario_rh or ""),
+        } if ev.revisada_en else None
+        from sqlalchemy.orm import object_session
+
+        db = object_session(ev)
+        salida["ligas"] = sev.ligas_de(db, ev) if db is not None else []
     if not restringido:
         salida["comentarios"] = ev.comentarios or ""
         salida["adjuntos"] = [
@@ -1192,18 +1208,23 @@ def sev_siguiente(ev):
     return siguiente_paso(ev)
 
 
-def acciones_evaluacion(ev) -> dict:
-    """Botón principal / secundario / menú «⋯» por estado (especificación, sección 6)."""
+def acciones_evaluacion(ev, restringido: bool = False) -> dict:
+    """Botón principal / secundario / menú «⋯» por estado (especificación, sección 6). Las ligas externas (enviar,
+    reenviar, copiar, abrir) viven aparte en `ligas`. «Registrar resultado / Adjuntar reporte» se ofrece aunque la
+    evaluación esté asignada a un evaluador externo: ambos escriben el MISMO registro."""
+    from .services.evaluaciones import puede_confirmar_inicio
+
     con_cita = bool(ev.cita_fecha_hora)
     bloqueo = ev.consentimiento in ("pendiente", "rechazado")
     principal, secundaria, menu = None, None, []
     if ev.estado == "pendiente":
         principal = None if bloqueo else "registrar_resultado"
-        secundaria = None if bloqueo else "marcar_realizada"
-        if ev.consentimiento == "pendiente":
-            menu.append("enviar_consentimiento")
+        inicio = puede_confirmar_inicio(ev)
+        secundaria = None if bloqueo else ("confirmar_inicio" if inicio else "marcar_realizada")
         if not bloqueo:
-            menu += ["recordatorio", "reenviar_liga"] if ev.forma in ("asignada", "liga_otro_sistema") else []
+            menu += ["recordatorio"] if ev.forma in ("asignada", "liga_otro_sistema") else []
+            if inicio:
+                menu.append("marcar_realizada")
             menu.append("modificar")
             if con_cita:
                 menu.append("reprogramar")
@@ -1211,14 +1232,22 @@ def acciones_evaluacion(ev) -> dict:
         menu.append("cancelar")
     elif ev.estado == "realizada_sin_resultado":
         principal = "registrar_resultado"
-        menu += ["reenviar_liga"] if ev.forma == "asignada" else []
         menu += ["modificar", "cancelar"]
     elif ev.estado == "con_resultado":
-        principal, secundaria = "ver_resultado", "complementar"
-        if ev.tipo == "entrevista_humana" and ev.conclusion == "requiere_otra_entrevista":
+        if restringido:
+            principal = "ver_resultado"
+        elif not ev.revisada_en:
+            principal, secundaria = "marcar_revisada", "ver_resultado"
+            menu.append("complementar")
+        else:
+            principal, secundaria = "ver_resultado", "complementar"
+            menu.append("cambiar_revision")
+        if ev.tipo == "entrevista_humana" and ev.conclusion_vigente == "requiere_otra_entrevista":
             menu.append("programar_otra")
     elif ev.estado == "no_realizada":
         principal = "reprogramar"
+        if not bloqueo:
+            menu.append("registrar_resultado")
         menu.append("cancelar")
     if ev.forma == "integrada" and ev.estado in ("pendiente", "realizada_sin_resultado") and not bloqueo:
         if ev.clave_proveedor:
@@ -1238,6 +1267,7 @@ def evento_evaluacion_dict(e) -> dict:
         "recordatorio": "Recordatorio", "cambio_estado": "Cambio de estado", "consentimiento": "Consentimiento",
         "resultado_registrado": "Resultado registrado", "resultado_corregido": "Resultado corregido",
         "resultado_complementado": "Resultado complementado", "adjunto_agregado": "Adjunto agregado", "migrada": "Migración al modelo unificado",
+        "inicio_confirmado": "Inicio confirmado", "revisada": "Revisada por RH", "revision_reiniciada": "Revisión reiniciada (resultado nuevo)",
     }
     canales = {"sistema": "Sistema", "liga_evaluador": "Liga del evaluador", "liga_candidato": "Liga del candidato", "proveedor": "Proveedor", "migracion": "Migración"}
     return {

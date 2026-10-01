@@ -3088,7 +3088,17 @@ export type ModalidadCita = "Presencial" | "Videollamada" | "Teléfono";
 export const MODALIDADES_CITA: ModalidadCita[] = ["Presencial", "Videollamada", "Teléfono"];
 export type AccionEvaluacion =
   | "registrar_resultado" | "marcar_realizada" | "ver_resultado" | "complementar" | "reprogramar" | "recordatorio" | "reenviar_liga"
-  | "modificar" | "no_realizada" | "cancelar" | "enviar_consentimiento" | "programar_otra" | "enviar_proveedor" | "sincronizar" | "avanzar_paso";
+  | "modificar" | "no_realizada" | "cancelar" | "enviar_consentimiento" | "programar_otra" | "enviar_proveedor" | "sincronizar" | "avanzar_paso"
+  | "confirmar_inicio" | "marcar_revisada" | "cambiar_revision";
+
+/** Liga externa de una evaluación (2026-10-01): existe aunque su envío falle; Abrir / Copiar / Enviar o reenviar, y el
+ * último envío viaja aparte. */
+export type ClaveLiga = "consentimiento" | "evaluador" | "otro_sistema" | "proveedor";
+export interface EnvioLiga { canal: string; destino: string; enviado: boolean; detalle: string }
+export interface LigaEvaluacion {
+  clave: ClaveLiga; titulo: string; url: string; para: string; puedeEnviar: boolean; motivoNoEnvio: string;
+  ultimoEnvio: { fecha: string | null; por: string; enviado: boolean; envios: EnvioLiga[] } | null;
+}
 
 export interface AdjuntoEvaluacion { id: string; nombre: string; mime: string; subidoPor: string; subidoVia: string; subidoEn: string | null }
 export interface CitaEvaluacion {
@@ -3098,6 +3108,9 @@ export interface Evaluacion {
   id: string; codigo: string; tipo: TipoEvaluacion; tipoTexto: string; nombre: string; nombrePropio: string;
   forma: FormaEvaluacion; formaTexto: string; responsable: string;
   estado: EstadoEvaluacion; estadoTexto: string; motivoEstado: string;
+  /** Seguimiento visible por tipo (psicométrica: Pendiente/Enviada/En curso/Resultado recibido/Revisada; socioeconómica:
+   * Pendiente/En proceso/Resultado recibido/Revisada; resto: el estado + «Revisada»). */
+  seguimiento: string; seguimientoTexto: string; enviadaEn: string | null; iniciadaEn: string | null;
   consentimiento: CondicionConsentimiento; consentimientoTexto: string; consentimientoEn: string | null; ligaConsentimiento: string | null;
   evaluador: { tipo: "interno" | "externo" | ""; usuarioId: number | null; contactoId: number | null; nombre: string; correo: string; whatsapp: string } | null;
   instrucciones: string; ligaExternaCandidato: string; pruebaId: number | null; proveedor: string; idProveedor: string;
@@ -3109,6 +3122,8 @@ export interface Evaluacion {
   resultadoVersion: number; nuevoResultado: boolean; restringido: boolean; tieneAdjuntos: boolean;
   creadoPor: string; creadoEn: string | null; actualizadoEn: string | null;
   ligaEvaluador?: string | null;
+  ligas?: LigaEvaluacion[];
+  revision?: { revisadaEn: string | null; revisadaPor: string; conclusion: string | null; conclusionTexto: string; comentario: string } | null;
   acciones: { principal: AccionEvaluacion | null; secundaria: AccionEvaluacion | null; menu: AccionEvaluacion[] };
 }
 export interface EventoEvaluacion {
@@ -3151,13 +3166,13 @@ export function crearEvaluacion(
   codigoPostulacion: string,
   datos: {
     tipo: TipoEvaluacion; nombre?: string; forma: FormaEvaluacion; evaluador?: EvaluadorEntrada | null; instrucciones?: string;
-    ligaExternaCandidato?: string; pruebaId?: number | null; cita?: CitaEntrada | null; notificar?: NotificarAccion;
+    ligaExternaCandidato?: string; pruebaId?: number | null; proveedor?: string; cita?: CitaEntrada | null; notificar?: NotificarAccion;
   },
 ) {
   return post<RespuestaEvaluacion>(`/evaluaciones/postulaciones/${codigoPostulacion}`, {
     tipo: datos.tipo, nombre: datos.nombre ?? "", forma: datos.forma, evaluador: evaluadorSnake(datos.evaluador),
     instrucciones: datos.instrucciones ?? "", liga_externa_candidato: datos.ligaExternaCandidato ?? "", prueba_id: datos.pruebaId ?? null,
-    cita: citaSnake(datos.cita), notificar: notificarSnake(datos.notificar),
+    proveedor: datos.proveedor ?? "", cita: citaSnake(datos.cita), notificar: notificarSnake(datos.notificar),
   });
 }
 export function fetchEvaluacion(codigo: string) {
@@ -3165,10 +3180,10 @@ export function fetchEvaluacion(codigo: string) {
 }
 export function modificarEvaluacion(
   codigo: string,
-  datos: { nombre?: string; instrucciones?: string; ligaExternaCandidato?: string; evaluador?: EvaluadorEntrada | null; cita?: CitaEntrada | null; quitarCita?: boolean; notificar?: NotificarAccion },
+  datos: { nombre?: string; proveedor?: string; instrucciones?: string; ligaExternaCandidato?: string; evaluador?: EvaluadorEntrada | null; cita?: CitaEntrada | null; quitarCita?: boolean; notificar?: NotificarAccion },
 ) {
   return patch<RespuestaEvaluacion>(`/evaluaciones/${codigo}`, {
-    nombre: datos.nombre, instrucciones: datos.instrucciones, liga_externa_candidato: datos.ligaExternaCandidato,
+    nombre: datos.nombre, proveedor: datos.proveedor, instrucciones: datos.instrucciones, liga_externa_candidato: datos.ligaExternaCandidato,
     evaluador: evaluadorSnake(datos.evaluador), cita: citaSnake(datos.cita), quitar_cita: datos.quitarCita ?? false, notificar: notificarSnake(datos.notificar),
   });
 }
@@ -3205,8 +3220,21 @@ export function sincronizarEvaluacion(codigo: string) {
 export function enviarLigaConsentimientoMedico(codigo: string) {
   return post<{ liga: string; resultados: ResultadoNotificacion[]; advertencias?: string[] }>(`/evaluaciones/${codigo}/consentimiento/enviar`, {});
 }
-export function urlAdjuntoEvaluacion(codigo: string, adjuntoId: string) {
-  return urlArchivo(`/evaluaciones/${codigo}/adjuntos/${adjuntoId}`);
+/** «Enviar o reenviar» de cualquier liga externa; la liga no cambia aunque el envío falle. */
+export function enviarLigaEvaluacion(codigo: string, clave: ClaveLiga) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/ligas/${clave}/enviar`, {});
+}
+/** Psicométrica → «En curso» / socioeconómica → «En proceso» (solo con confirmación de inicio). */
+export function confirmarInicioEvaluacion(codigo: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/confirmar-inicio`, {});
+}
+/** «Marcar como revisada»: conclusión de RH + comentario. No mueve la etapa. */
+export function revisarEvaluacion(codigo: string, conclusion: string, comentario: string) {
+  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/revisar`, { conclusion, comentario });
+}
+/** Abrir en el navegador (inline) o descargar (`descargar`). */
+export function urlAdjuntoEvaluacion(codigo: string, adjuntoId: string, descargar = false) {
+  return urlArchivo(`/evaluaciones/${codigo}/adjuntos/${adjuntoId}${descargar ? "?descargar=true" : ""}`);
 }
 
 /* Liga del evaluador (sin sesión; el token es la credencial) — la usa la MISMA pantalla de resultado. */

@@ -5,7 +5,10 @@
    QUIÉN (cómo se realizará / evaluador); todo lo demás viene precargado u opcional y solo se muestran los campos de
    la opción elegida. Orden fijo: Tipo → ¿Cómo se realizará? → Evaluador → Programar cita → Más opciones.
    El botón final corresponde a la acción: «Guardar resultado» (registrar ahora), «Programar entrevista» (entrevista
-   humana con cita) o «Agregar evaluación». Crear/guardar NUNCA manda al candidato a Contratación. */
+   humana con cita) o «Agregar evaluación». Crear/guardar NUNCA cambia la etapa (2026-10-01: tampoco la entrevista
+   humana) ni manda al candidato a Contratación. Las ligas externas quedan en la tarjeta (Abrir / Copiar / Enviar)
+   aunque el envío automático falle. Psicométrica: nombre de prueba o batería + proveedor y tres vías (liga de otro
+   sistema, asignar a una persona, registrar ahora); socioeconómica: evaluador + cita opcional. */
 
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, ChevronDown, ClipboardCheck, Eye, Loader2 } from "lucide-react";
@@ -46,6 +49,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   const teams = useTeamsConectado();
   const [tipo, setTipo] = useState<TipoEvaluacion>(preset?.tipo ?? "entrevista_humana");
   const [nombre, setNombre] = useState("");
+  const [proveedor, setProveedor] = useState("");
   const [forma, setForma] = useState<FormaEvaluacion>("asignada");
   const [evaluador, setEvaluador] = useState<EstadoEvaluador>(preset?.evaluador ?? evaluadorVacio);
   const [conCita, setConCita] = useState((preset?.tipo ?? "entrevista_humana") === "entrevista_humana");
@@ -67,15 +71,14 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   }, [c.puesto]);
 
   const hayIntegradas = (pruebas?.length ?? 0) > 0 && tipo !== "entrevista_humana";
-  const formas = useMemo(
-    () => [
-      { valor: "asignada" as const, texto: "Asignar a una persona", ayuda: "Recibe su liga para registrar el resultado" },
-      { valor: "registro_directo" as const, texto: "Registrar resultado ahora", ayuda: "Ya se hizo; lo capturas tú" },
-      { valor: "liga_otro_sistema" as const, texto: "Enviar liga de otro sistema", ayuda: "El candidato la realiza fuera" },
-      ...(hayIntegradas ? [{ valor: "integrada" as const, texto: "Usar proveedor integrado", ayuda: "Psicométricas.mx u otro conectado" }] : []),
-    ],
-    [hayIntegradas],
-  );
+  const formas = useMemo(() => {
+    const asignada = { valor: "asignada" as const, texto: "Asignar a una persona", ayuda: "Recibe su liga para registrar el resultado" };
+    const directo = { valor: "registro_directo" as const, texto: "Registrar resultado ahora", ayuda: "Ya se hizo; lo capturas tú (carga manual)" };
+    const otro = { valor: "liga_otro_sistema" as const, texto: "Enviar liga de otro sistema", ayuda: "El candidato la realiza fuera (externo)" };
+    const integrada = hayIntegradas ? [{ valor: "integrada" as const, texto: "Usar proveedor integrado", ayuda: "Psicométricas.mx u otro conectado" }] : [];
+    // psicométrica: primero la liga del otro sistema (lo más común), luego asignar y registrar ahora
+    return tipo === "psicometrica" ? [otro, asignada, directo, ...integrada] : [asignada, directo, otro, ...integrada];
+  }, [hayIntegradas, tipo]);
 
   function elegirTipo(t: TipoEvaluacion) {
     setTipo(t);
@@ -113,7 +116,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   async function crear(): Promise<RespuestaEvaluacion | { error: string }> {
     if (creada) return creada;
     const r = await crearEvaluacion(c.id, {
-      tipo, nombre: nombre.trim(), forma,
+      tipo, nombre: nombre.trim(), forma, proveedor: tipo === "psicometrica" && forma !== "integrada" ? proveedor.trim() : "",
       evaluador: forma === "asignada" ? evaluadorEntrada(evaluador) : null,
       instrucciones: instrucciones.trim(), ligaExternaCandidato: forma === "liga_otro_sistema" ? ligaExterna.trim() : "",
       pruebaId: forma === "integrada" ? pruebaId : null,
@@ -135,8 +138,8 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     if ("error" in r) return setError(r.error);
     const ev = r.evaluacion;
     const texto = ev.consentimiento === "pendiente"
-      ? `«${ev.nombre}» agregada. En espera de consentimiento: mándale al candidato la liga desde «⋯» de la tarjeta. La liga del evaluador sale cuando lo otorgue.`
-      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}.`;
+      ? `«${ev.nombre}» agregada. En espera de consentimiento: la liga de consentimiento quedó en la tarjeta (Abrir / Copiar / Enviar). La liga del médico se habilita cuando lo otorgue.`
+      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}. El candidato sigue en su etapa.${(ev.ligas?.length ?? 0) > 0 ? " Las ligas quedaron en la tarjeta (Abrir / Copiar / Enviar)." : ""}`;
     onListo(r, texto);
   }
 
@@ -184,9 +187,19 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
               <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej. Prueba de manejo" className={inputEv} />
             </Campo>
           )}
+          {tipo === "psicometrica" && forma !== "integrada" && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Campo etiqueta="Nombre de prueba o batería">
+                <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej. Cleaver + Terman" className={inputEv} />
+              </Campo>
+              <Campo etiqueta="Proveedor">
+                <input value={proveedor} onChange={(e) => setProveedor(e.target.value)} placeholder="Ej. Evaluatest, consultora…" className={inputEv} />
+              </Campo>
+            </div>
+          )}
           {tipo === "medica" && (
             <p className="mt-3 rounded-xl border border-warn/30 bg-warn-soft/50 px-3.5 py-2.5 text-[12px] leading-relaxed text-warn">
-              La evaluación médica requiere el consentimiento expreso y por escrito del candidato. Mientras no lo otorgue no se envía la liga al evaluador ni se puede guardar un resultado.
+              La evaluación médica requiere el consentimiento expreso y por escrito del candidato. Primero se genera la liga de consentimiento; cuando lo otorgue se habilita la «Liga del médico» para registrar el resultado y adjuntar el dictamen. Sin consentimiento tampoco se puede capturar el resultado desde la ficha.
             </p>
           )}
         </section>
@@ -227,7 +240,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
               <input type="checkbox" role="switch" checked={conCita} onChange={(e) => setConCita(e.target.checked)} className="h-5 w-9 cursor-pointer accent-[var(--brand)]" />
             </label>
             {conCita && <div className="mt-3"><CamposCita valor={cita} onChange={setCita} teams={teams} /></div>}
-            {!conCita && <p className="mt-1 text-[12px] text-ink-3">Sin cita. {forma === "asignada" ? "Solo se notifica al evaluador." : ""}</p>}
+            {!conCita && <p className="mt-1 text-[12px] text-ink-3">Sin cita (opcional). {forma === "asignada" ? "Solo se notifica al evaluador." : ""}</p>}
           </section>
         )}
 
@@ -284,7 +297,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
             </Button>
           </div>
         )}
-        {medicaDirecta && <p className="text-[12px] text-ink-3">Se agrega en espera de consentimiento; cuando el candidato lo otorgue podrás registrar el resultado con «Registrar resultado».</p>}
+        {medicaDirecta && <p className="text-[12px] text-ink-3">Se agrega en espera de consentimiento; cuando el candidato lo otorgue podrás registrar el resultado con «Registrar resultado / Adjuntar reporte» o compartir la «Liga del médico».</p>}
       </div>
 
       {preview && (

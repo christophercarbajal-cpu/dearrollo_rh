@@ -68,7 +68,7 @@ with TestClient(app) as client:
     ficha = client.get(f"/candidatos/{P1}").json()
     check(ficha["etapa"] == "Prefiltro" and ficha["resultadoApto"] is None, "candidato en Prefiltro, sin evaluación")
     r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 409 and "entrevista-humana" in r.json()["detail"], "sin la bandera, mover a Entrevista Humana sigue exigiendo el flujo de agendado")
+    check(r.status_code == 409 and "Agregar entrevista humana" in r.json()["detail"], "sin la bandera ni entrevista agregada, mover a Entrevista Humana se rechaza")
     r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista Humana", "omitir_entrevista_ia": True})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista Humana", f"“Avanzar a Entrevista Humana” mueve la etapa directo ({r.status_code})")
     hist = r.json()["historial"]

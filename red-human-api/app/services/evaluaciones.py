@@ -25,6 +25,7 @@ from ..models import (
     FORMAS_EVALUACION,
     MODALIDADES_CITA,
     PASOS_INTEGRADA,
+    SEGUIMIENTO_EVALUACION,
     TIPO_DESDE_LEGADO,
     TIPOS_CON_CONSENTIMIENTO,
     TIPOS_EVALUACION_U,
@@ -98,6 +99,209 @@ def liga_evaluador(ev: Evaluacion) -> str:
 
 def liga_consentimiento(ev: Evaluacion) -> str:
     return f"{settings.app_url}/consentimiento/{ev.consentimiento_token}" if ev.consentimiento_token else ""
+
+
+# ------------------------------------------------------------ ligas externas (2026-10-01)
+# Toda liga externa (consentimiento, evaluador/médico, otro sistema, proveedor) EXISTE aunque su envío automático
+# falle: se genera al crear la evaluación (o la primera vez que se pide, si es un registro viejo) y se REUTILIZA.
+# La interfaz siempre ofrece Abrir / Copiar / Enviar o reenviar, y el estado del último envío viaja aparte.
+
+CLAVES_LIGA = ("consentimiento", "evaluador", "otro_sistema", "proveedor")
+
+
+def asegurar_ligas(ev: Evaluacion) -> bool:
+    """Genera los tokens que falten (nunca reemplaza uno existente). Regresa True si generó alguno."""
+    cambio = False
+    if not ev.token_evaluador:
+        ev.token_evaluador = secrets.token_urlsafe(24)
+        cambio = True
+    if ev.consentimiento == "pendiente" and not ev.consentimiento_token:
+        ev.consentimiento_token = secrets.token_urlsafe(24)
+        cambio = True
+    return cambio
+
+
+def liga_evaluador_disponible(ev: Evaluacion) -> bool:
+    """Liga para capturar el resultado: la del evaluador asignado y, en la médica, la «Liga del médico» (cualquier
+    forma salvo proveedor integrado). Nunca mientras el consentimiento esté pendiente o rechazado."""
+    if ev.estado == "cancelada" or bloqueo_consentimiento(ev):
+        return False
+    return ev.forma == "asignada" or (ev.tipo == "medica" and ev.forma != "integrada")
+
+
+def _url_proveedor(ev: Evaluacion) -> str:
+    from . import psicometricas as psi
+
+    return (psi.url_candidato(ev.clave_proveedor) or "") if ev.clave_proveedor else ""
+
+
+def _filas_envio(e: EventoEvaluacion, clave: str) -> list:
+    """Filas de un evento «envio» que corresponden a esa liga (los eventos viejos no traen `liga`: se deducen)."""
+    d = e.detalle or {}
+    filas = [f for f in (d.get("envios") or []) if isinstance(f, dict)]
+    if d.get("liga"):
+        return filas if d.get("liga") == clave else []
+    if clave == "consentimiento":
+        return filas if d.get("que") == "liga_consentimiento" else []
+    if not d.get("evento"):
+        return []
+    if clave == "evaluador":
+        return [f for f in filas if f.get("destinatario") == "entrevistador"]
+    if clave == "otro_sistema":
+        return [f for f in filas if f.get("destinatario") == "candidato"]
+    return []
+
+
+def ultimo_envio(eventos: List[EventoEvaluacion], clave: str) -> Optional[dict]:
+    for e in reversed(eventos):
+        if e.accion != "envio":
+            continue
+        filas = _filas_envio(e, clave)
+        if filas:
+            return {
+                "fecha": fechas.iso(e.fecha), "por": e.actor or "", "enviado": any(f.get("enviado") for f in filas),
+                "envios": [{"canal": f.get("canal") or "", "destino": f.get("destino") or "", "enviado": bool(f.get("enviado")),
+                            "detalle": str(f.get("detalle") or "")[:200]} for f in filas],
+            }
+    return None
+
+
+def ligas_de(db: Session, ev: Evaluacion) -> List[dict]:
+    """Ligas externas vigentes de la evaluación con su último envío (nunca bloquea Abrir/Copiar)."""
+    if ev.estado == "cancelada":
+        return []
+    p = db.get(Postulacion, ev.postulacion_id)
+    contacto_candidato = bool(p and (p.telefono or p.correo))
+    eventos = [e for e in eventos_de(db, ev) if e.accion == "envio"]
+    salida = []
+
+    def agregar(clave, titulo, url, para, puede, motivo=""):
+        salida.append({"clave": clave, "titulo": titulo, "url": url, "para": para, "puedeEnviar": puede,
+                       "motivoNoEnvio": "" if puede else motivo, "ultimoEnvio": ultimo_envio(eventos, clave)})
+
+    if ev.consentimiento == "pendiente" and ev.consentimiento_token:
+        agregar("consentimiento", "Liga de consentimiento del candidato", liga_consentimiento(ev), "Candidato",
+                contacto_candidato, "El candidato no tiene teléfono ni correo registrados.")
+    if liga_evaluador_disponible(ev):
+        con_contacto = ev.forma == "asignada" and bool(ev.evaluador_correo or ev.evaluador_whatsapp)
+        agregar("evaluador", "Liga del médico" if ev.tipo == "medica" else "Liga del evaluador", liga_evaluador(ev),
+                ev.evaluador_nombre or ("Médico" if ev.tipo == "medica" else "Evaluador"), con_contacto,
+                "Sin evaluador asignado con correo o WhatsApp: copia la liga y compártela tú.")
+    if ev.forma == "liga_otro_sistema" and ev.liga_externa_candidato and not bloqueo_consentimiento(ev):
+        agregar("otro_sistema", "Liga del otro sistema (candidato)", ev.liga_externa_candidato, "Candidato",
+                contacto_candidato, "El candidato no tiene teléfono ni correo registrados.")
+    url_prov = _url_proveedor(ev)
+    if ev.forma == "integrada" and url_prov and not bloqueo_consentimiento(ev):
+        agregar("proveedor", f"Liga de {ev.proveedor or 'proveedor'} (candidato)", url_prov, "Candidato",
+                contacto_candidato, "El candidato no tiene teléfono ni correo registrados.")
+    return salida
+
+
+async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, actor: str, clave: str, asunto: str,
+                                  texto: str, liga: str, usuario_id: Optional[int] = None) -> List[dict]:
+    """Manda una liga al candidato por WhatsApp y correo (lo que tenga). Un canal caído nunca rompe la acción: cada
+    resultado regresa a RH y queda en el historial (también los fallidos)."""
+    from ..serial import nombre_empresa_candidato
+    from . import plantillas_correo
+    from .correo import enviar_correo
+    from .whatsapp import enviar_mensaje
+
+    empresa = nombre_empresa_candidato(p.vacante) if p.vacante else ""
+    resultados = []
+    if p.telefono:
+        try:
+            r = await enviar_mensaje(p.telefono, f"{texto} {liga}")
+        except Exception as ex:  # noqa: BLE001
+            r = {"enviado": False, "detalle": str(ex)[:200]}
+        resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+    if p.correo:
+        try:
+            asunto_, html = plantillas_correo.html_aviso(asunto, texto, empresa, [], ("Abrir", liga))
+            r = await enviar_correo(p.correo, asunto_, html)
+        except Exception as ex:  # noqa: BLE001
+            r = {"enviado": False, "detalle": str(ex)[:200]}
+        resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+    if not resultados:
+        resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": "El candidato no tiene teléfono ni correo registrados."})
+    que = "liga_consentimiento" if clave == "consentimiento" else f"liga_{clave}"
+    evento(db, ev, "envio", actor, usuario_id=usuario_id, que=que, liga=clave, envios=resultados)
+    if clave in ("otro_sistema", "proveedor"):
+        marcar_enviada(ev, resultados)
+    return resultados
+
+
+def marcar_enviada(ev: Evaluacion, resultados: List[dict], destinatario: Optional[str] = None) -> None:
+    """Primer envío CONFIRMADO de la liga a quien realiza la evaluación (seguimiento «Enviada»)."""
+    if ev.enviada_en:
+        return
+    if any(r.get("enviado") and (destinatario is None or r.get("destinatario") == destinatario) for r in resultados or []):
+        ev.enviada_en = datetime.now(timezone.utc)
+
+
+def seguimiento(ev: Evaluacion) -> tuple:
+    """(clave, texto) del seguimiento visible. Psicométrica: Pendiente / Enviada / En curso / Resultado recibido /
+    Revisada. Socioeconómica: Pendiente / En proceso / Resultado recibido / Revisada. Resto: el estado + «Revisada».
+    No realizada y Cancelada se muestran tal cual en todos los tipos."""
+    if ev.estado in ("no_realizada", "cancelada"):
+        return ev.estado, ESTADOS_EVALUACION_U[ev.estado]
+    etiquetas = SEGUIMIENTO_EVALUACION.get(ev.tipo)
+    if ev.estado == "con_resultado":
+        if ev.revisada_en:
+            return "revisada", "Revisada"
+        return ("resultado_recibido", "Resultado recibido") if etiquetas else (ev.estado, ESTADOS_EVALUACION_U[ev.estado])
+    if not etiquetas:
+        return ev.estado, ESTADOS_EVALUACION_U.get(ev.estado, ev.estado)
+    iniciada = bool(ev.iniciada_en) or ev.estado == "realizada_sin_resultado" or ev.paso_integrada in ("iniciada", "completada")
+    if ev.tipo == "psicometrica":
+        if iniciada:
+            return "en_curso", etiquetas["en_curso"]
+        if ev.enviada_en or ev.clave_proveedor or ev.paso_integrada == "enviada":
+            return "enviada", etiquetas["enviada"]
+        return "pendiente", etiquetas["pendiente"]
+    return ("en_proceso", etiquetas["en_proceso"]) if iniciada else ("pendiente", etiquetas["pendiente"])
+
+
+def puede_confirmar_inicio(ev: Evaluacion) -> bool:
+    return (ev.tipo in SEGUIMIENTO_EVALUACION and ev.estado == "pendiente" and not ev.iniciada_en
+            and ev.paso_integrada not in ("iniciada", "completada") and not bloqueo_consentimiento(ev))
+
+
+def confirmar_inicio(db: Session, ev: Evaluacion, actor: str, canal: str = "sistema", usuario_id: Optional[int] = None) -> None:
+    """Confirmación de inicio (RH, evaluador o proveedor): psicométrica → «En curso», socioeconómica → «En proceso».
+    No cambia el estado base ni la etapa."""
+    if ev.iniciada_en:
+        return
+    if not puede_confirmar_inicio(ev):
+        raise ErrorEvaluacion(409, "Solo se confirma el inicio de una evaluación psicométrica o socioeconómica pendiente.")
+    ev.iniciada_en = datetime.now(timezone.utc)
+    evento(db, ev, "inicio_confirmado", actor, canal, usuario_id=usuario_id)
+
+
+def revisar(db: Session, ev: Evaluacion, *, actor: str, usuario_id: Optional[int], conclusion: str, comentario: str) -> None:
+    """«Marcar como revisada»: conclusión de RH (obligatoria) + comentario, con quién y cuándo. Recibir un resultado
+    nunca la marca; revisarla NUNCA mueve la etapa ni avisa al candidato."""
+    if ev.estado != "con_resultado":
+        raise ErrorEvaluacion(409, "Solo se revisa una evaluación con resultado recibido.")
+    conclusion = (conclusion or "").strip()
+    opciones = conclusiones_de(ev.tipo)
+    if conclusion not in opciones:
+        raise ErrorEvaluacion(400, f"Elige la conclusión de RH: {', '.join(opciones.values())}.")
+    anteriores = {"conclusion_rh": ev.conclusion_rh, "comentario_rh": ev.comentario_rh, "revisada_por": ev.revisada_por,
+                  "revisada_en": fechas.iso(ev.revisada_en)} if ev.revisada_en else {}
+    ev.conclusion_rh, ev.comentario_rh = conclusion, (comentario or "").strip()[:4000]
+    ev.revisada_por, ev.revisada_por_usuario_id, ev.revisada_en = (actor or "")[:150], usuario_id, datetime.now(timezone.utc)
+    ev.resultado_visto_en = ev.resultado_visto_en or ev.revisada_en
+    evento(db, ev, "revisada", actor, usuario_id=usuario_id, anteriores=anteriores, conclusion_rh=conclusion, comentario=ev.comentario_rh)
+
+
+def _reiniciar_revision(db: Session, ev: Evaluacion, actor: str, canal: str) -> None:
+    """Un resultado nuevo, corregido o complementado vuelve a requerir revisión (la anterior queda en el historial)."""
+    if not ev.revisada_en:
+        return
+    anteriores = {"conclusion_rh": ev.conclusion_rh, "comentario_rh": ev.comentario_rh, "revisada_por": ev.revisada_por,
+                  "revisada_en": fechas.iso(ev.revisada_en)}
+    ev.revisada_en, ev.revisada_por, ev.revisada_por_usuario_id, ev.conclusion_rh, ev.comentario_rh = None, "", None, "", ""
+    evento(db, ev, "revision_reiniciada", actor, canal, anteriores=anteriores)
 
 
 # ------------------------------------------------------------ historial y estados
@@ -307,6 +511,7 @@ def registrar_resultado(
         ev.registrada_por_usuario_id = usuario_id
     ev.realizada_en = ev.realizada_en or ahora
     ev.resultado_version = int(ev.resultado_version or 0) + 1
+    _reiniciar_revision(db, ev, actor, canal)  # recibir/corregir un resultado nunca lo deja «revisado»
     # «Nuevo resultado» hasta que RH lo abre, cuando llega de afuera (liga del evaluador / proveedor)
     ev.resultado_visto_en = ahora if canal == "sistema" else None
     anterior = ev.estado
@@ -411,9 +616,12 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         )
     except Exception as ex:  # noqa: BLE001 — un aviso caído nunca rompe la acción de RH
         resultados = [{"destinatario": "sistema", "canal": "", "destino": "", "enviado": False, "detalle": f"No se pudo avisar: {ex}"[:300]}]
-    if any(r.get("enviado") for r in resultados):
+    if resultados:
+        # también los fallidos: el estado del envío se muestra junto a cada liga (nunca en silencio)
         evento(db, ev, "envio", actor, "sistema", evento=evento_,
                envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
+        if evento_ in ("evaluacion_asignada", "evaluacion_reprogramada", "recordatorio_evaluacion"):
+            marcar_enviada(ev, resultados, "entrevistador" if ev.forma == "asignada" else "candidato" if ev.forma == "liga_otro_sistema" else "-")
     return resultados
 
 
@@ -469,6 +677,10 @@ def aplicar_paso(db: Session, ev: Evaluacion, paso: str, actor: str, origen: str
     """Paso del modo integrado. «completada» → Realizada · Resultado pendiente; el resultado entra con
     `registrar_resultado` (canal proveedor). Los pasos intermedios solo quedan en el historial."""
     ev.paso_integrada = paso
+    if paso == "enviada" and not ev.enviada_en:
+        ev.enviada_en = datetime.now(timezone.utc)
+    if paso in ("iniciada", "completada") and not ev.iniciada_en:
+        ev.iniciada_en = datetime.now(timezone.utc)  # confirmación de inicio del proveedor
     if paso == "completada" and ev.estado == "pendiente":
         cambiar_estado(db, ev, "realizada_sin_resultado", actor, "proveedor" if origen != "simulado" else "sistema", f"Proveedor ({origen}): completada")
     else:
@@ -556,9 +768,11 @@ def avisos_antes_onboarding(p: Postulacion, evaluaciones: List[Evaluacion]) -> L
             avisos.append(f"Sugerida por la vacante y no asignada: {s.get('nombre') or TIPOS_EVALUACION_U.get(tipo, '')}.")
     for e in vivas:
         if e.estado != "con_resultado":
-            avisos.append(f"{e.nombre_visible}: {ESTADOS_EVALUACION_U.get(e.estado, e.estado)}.")
-        elif e.conclusion in ("desfavorable", "no_apto", "no_avanzar"):
-            avisos.append(f"{e.nombre_visible}: {conclusiones_de(e.tipo).get(e.conclusion, e.conclusion)}.")
+            avisos.append(f"{e.nombre_visible}: {seguimiento(e)[1]}.")
+        elif e.conclusion_vigente in ("desfavorable", "no_apto", "no_avanzar"):
+            avisos.append(f"{e.nombre_visible}: {conclusiones_de(e.tipo).get(e.conclusion_vigente, e.conclusion_vigente)}.")
+        elif not e.revisada_en:
+            avisos.append(f"{e.nombre_visible}: resultado recibido sin revisar por RH.")
     return avisos
 
 

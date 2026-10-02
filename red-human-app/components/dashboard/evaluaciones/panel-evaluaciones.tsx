@@ -3,7 +3,8 @@
 /* Evaluaciones del candidato — tarjetas compactas (Evaluaciones unificadas — Fase 1, 2026-09-29, especificación
    sección 6). Una evaluación = una tarjeta: tipo y nombre · responsable · seguimiento · conclusión (UNA etiqueta) ·
    cita · condiciones (consentimiento, «Nuevo resultado») · botón de siguiente acción + menú «⋯». Un solo botón
-   «Agregar evaluación». Registrar o revisar un resultado NUNCA mueve al candidato de etapa ni lo envía a Contratación.
+   «Agregar evaluación». Registrar o revisar un resultado NUNCA mueve al candidato de etapa ni lo envía a Contratación;
+   solo CREAR una entrevista humana lo pasa a «Filtro humano» (2026-10-01, pipeline de 5 columnas).
    2026-10-01: cada liga externa (consentimiento, evaluador/médico, otro sistema, proveedor) se ve en la tarjeta con
    Abrir / Copiar / Enviar o reenviar y el estado de su último envío APARTE (un envío fallido no bloquea nada); con
    resultado, la tarjeta muestra resultado, observaciones y reporte (abrir/descargar) y «Marcar como revisada». */
@@ -187,7 +188,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <Eyebrow>{titulo}</Eyebrow>
-          <p className="mt-1 text-[12px] text-ink-3">Entrevista humana, médica, psicométrica, socioeconómica, técnica, referencias u otra. Ningún resultado mueve la etapa.</p>
+          <p className="mt-1 text-[12px] text-ink-3">Entrevista humana, médica, psicométrica, socioeconómica, técnica o práctica, referencias laborales u otra. Solo la entrevista humana mueve a Filtro humano; los resultados no cambian la columna.</p>
         </div>
         {live && c.activa !== false && (
           <Button size="sm" onClick={() => setAgregar({})}><ClipboardCheck className="h-4 w-4" /> Agregar evaluación</Button>

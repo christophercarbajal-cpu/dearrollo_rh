@@ -1,6 +1,6 @@
 """Verificación de Evaluaciones — ligas externas, captura unificada, seguimiento por tipo y revisión de RH (2026-10-01).
 
-1) Agregar una evaluación (también la entrevista humana) NUNCA cambia la etapa; mover a «Entrevista Humana» es aparte.
+1) Agregar una evaluación NO cambia la etapa, salvo crear una entrevista humana: mueve a «Filtro humano» (2026-10-01).
 2) Ligas externas (consentimiento, evaluador/médico, otro sistema): existen aunque el envío automático FALLE, se
    reutilizan, el estado del envío viaja aparte (también el fallido) y «Enviar o reenviar» funciona por liga.
 3) Captura manual de RH sobre una evaluación asignada a un externo = MISMO registro que la liga (autor y fecha).
@@ -101,7 +101,7 @@ with TestClient(app) as client:
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
     p = persona.postulaciones_activas[-1]
     P = p.codigo
-    p.etapa = "Evaluación"
+    p.etapa = "Entrevista IA"  # Filtro Red Human (la columna «Evaluación» se retiró el 2026-10-01)
     db.commit()
 
     def etapa():
@@ -114,16 +114,18 @@ with TestClient(app) as client:
     def liga(t, clave):
         return next((x for x in t["ligas"] if x["clave"] == clave), None)
 
-    # ---------------- 1. Agregar no mueve la etapa ----------------
-    print("\n--- 1. Agregar evaluación no cambia la etapa ---")
+    # ---------------- 1. Solo la entrevista humana mueve (a Filtro humano) ----------------
+    print("\n--- 1. Agregar evaluación: solo la entrevista humana mueve a Filtro humano ---")
     r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 409 and "Agregar entrevista humana o evaluación" in r.json()["detail"],
-          "sin entrevista humana agregada no se envía a «Entrevista Humana» (salvo movimiento manual)")
+    check(r.status_code == 409 and "Agregar evaluación" in r.json()["detail"],
+          "sin entrevista humana agregada no se envía a «Filtro humano» (salvo movimiento manual)")
+    r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "registro_directo"})
+    check(r.status_code == 201 and etapa() == "Entrevista IA", "agregar otra evaluación (técnica) NO cambia la columna")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={
         "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "externo", "nombre": "Leo Externo", "correo": "leo@externo.mx"},
         "cita": {"fecha": "2026-10-20", "hora": "10:00", "modalidad": "Presencial", "direccion": "Av. Juárez 10"},
     })
-    check(r.status_code == 201 and etapa() == "Evaluación", "agregar una entrevista humana con cita deja al candidato en su etapa")
+    check(r.status_code == 201 and etapa() == "Entrevista Humana", "agregar una entrevista humana con cita mueve al candidato a Filtro humano")
     EH = r.json()["evaluacion"]["codigo"]
 
     # ---------------- 2. Ligas externas ----------------
@@ -249,7 +251,7 @@ with TestClient(app) as client:
     check(r.json()["evaluacion"]["seguimientoTexto"] == "Resultado recibido", "→ Resultado recibido")
     r = client.post(f"/evaluaciones/{PS['codigo']}/revisar", json={"conclusion": "con_observaciones"})
     check(r.json()["evaluacion"]["seguimientoTexto"] == "Revisada", "→ Revisada")
-    check(etapa() == "Evaluación", "ninguna evaluación, resultado ni revisión movió la etapa")
+    check(etapa() == "Entrevista Humana", "ninguna otra evaluación, resultado ni revisión movió la etapa")
 
     # ---------------- 6. Socioeconómica con cita ----------------
     print("\n--- 6. Socioeconómica con cita ---")
@@ -261,9 +263,9 @@ with TestClient(app) as client:
           "socioeconómica con evaluador interno, cita con dirección y liga de captura")
     check(SC["acciones"]["secundaria"] == "confirmar_inicio", "acción para confirmar el inicio (En proceso)")
 
-    # ---------------- 1b. Mover aparte ----------------
+    # ---------------- 1b. Sin doble movimiento ----------------
     r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 200 and etapa() == "Entrevista Humana", "con la entrevista ya agregada, RH envía al candidato a «Entrevista Humana» por separado")
+    check(r.status_code == 409 and etapa() == "Entrevista Humana", "ya en Filtro humano: el movimiento no se repite")
     check(tarjeta(EH)["estado"] == "pendiente", "mover la etapa no altera la evaluación")
     db.close()
 

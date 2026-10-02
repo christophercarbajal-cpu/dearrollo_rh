@@ -131,9 +131,10 @@ with TestClient(app) as client:
     check(E1["codigo"].startswith("EVA-5") and E1["estado"] == "pendiente" and E1["cita"]["fechaHora"] == "2026-10-05T13:29:00Z",
           "código EVA-5xxxx, Pendiente, cita 07:29 de CDMX guardada como 13:29Z")
     check(E1["cita"]["direccion"] == "Av. Reforma 1" and E1["instrucciones"] == "Trae tu portafolio", "dirección e instrucciones en campos separados")
-    check(etapa() == "Entrevista IA", "agregar la entrevista humana NO mueve la etapa (2026-10-01)")
+    check(etapa() == "Entrevista Humana", "crear la entrevista humana mueve a Filtro humano (pipeline de 5 columnas, 2026-10-01)")
+    check(r.json().get("movidaAFiltroHumano") is True, "la respuesta avisa que el candidato pasó a Filtro humano")
     r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 200 and etapa() == "Entrevista Humana", "mover a «Entrevista Humana» es una acción aparte de RH (ya hay entrevista agregada)")
+    check(r.status_code == 409, "ya está en Filtro humano: no se mueve dos veces")
     check(db.query(ClienteContacto).filter_by(cliente_id=cliente.id, correo="ana@externa.mx").count() == 1, "«+ Nuevo evaluador» quedó como contacto reutilizable del Cliente")
     destinos = {(c, d) for c, d, _ in ENVIOS}
     check({("whatsapp", persona.telefono), ("correo", "cand@correo.mx"), ("whatsapp", "3399990000"), ("correo", "ana@externa.mx")} <= destinos,

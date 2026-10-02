@@ -5,8 +5,9 @@
    QUIÉN (cómo se realizará / evaluador); todo lo demás viene precargado u opcional y solo se muestran los campos de
    la opción elegida. Orden fijo: Tipo → ¿Cómo se realizará? → Evaluador → Programar cita → Más opciones.
    El botón final corresponde a la acción: «Guardar resultado» (registrar ahora), «Programar entrevista» (entrevista
-   humana con cita) o «Agregar evaluación». Crear/guardar NUNCA cambia la etapa (2026-10-01: tampoco la entrevista
-   humana) ni manda al candidato a Contratación. Las ligas externas quedan en la tarjeta (Abrir / Copiar / Enviar)
+   humana con cita) o «Agregar evaluación». Es el ÚNICO botón para agregar (2026-10-01, pipeline de 5 columnas): crear
+   una ENTREVISTA HUMANA mueve al candidato a «Filtro humano» si estaba en Prefiltro o Filtro Red Human; cualquier
+   otra evaluación (o sus resultados) no cambia la columna y nada manda al candidato a Contratación. Las ligas externas quedan en la tarjeta (Abrir / Copiar / Enviar)
    aunque el envío automático falle. Psicométrica: nombre de prueba o batería + proveedor y tres vías (liga de otro
    sistema, asignar a una persona, registrar ahora); socioeconómica: evaluador + cita opcional. */
 
@@ -139,7 +140,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     const ev = r.evaluacion;
     const texto = ev.consentimiento === "pendiente"
       ? `«${ev.nombre}» agregada. En espera de consentimiento: la liga de consentimiento quedó en la tarjeta (Abrir / Copiar / Enviar). La liga del médico se habilita cuando lo otorgue.`
-      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}. El candidato sigue en su etapa.${(ev.ligas?.length ?? 0) > 0 ? " Las ligas quedaron en la tarjeta (Abrir / Copiar / Enviar)." : ""}`;
+      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}. ${r.movidaAFiltroHumano ? "El candidato pasó a Filtro humano." : "El candidato sigue en su columna."}${(ev.ligas?.length ?? 0) > 0 ? " Las ligas quedaron en la tarjeta (Abrir / Copiar / Enviar)." : ""}`;
     onListo(r, texto);
   }
 
@@ -150,7 +151,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     const r = await crear();
     if ("error" in r) return { ok: false as const, error: r.error };
     const res = await registrarResultadoEvaluacion(r.evaluacion.codigo, { ...d, version: r.evaluacion.resultadoVersion, modo: "registrar" });
-    if (res.ok) onListo({ ...r, evaluacion: res.data.evaluacion, candidato: res.data.candidato ?? r.candidato }, `Resultado de «${res.data.evaluacion.nombre}» guardado.`);
+    if (res.ok) onListo({ ...r, evaluacion: res.data.evaluacion, candidato: res.data.candidato ?? r.candidato }, `Resultado de «${res.data.evaluacion.nombre}» guardado.${r.movidaAFiltroHumano ? " El candidato pasó a Filtro humano." : ""}`);
     return res;
   }
 
@@ -163,7 +164,10 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   };
 
   return (
-    <ModalMarco titulo={preset?.titulo ?? "Agregar evaluación"} subtitulo={`${c.nombre} · ${c.puesto || "sin vacante"}. Ningún resultado mueve al candidato de etapa.`} onClose={onClose}>
+    <ModalMarco titulo={preset?.titulo ?? "Agregar evaluación"} subtitulo={`${c.nombre} · ${c.puesto || "sin vacante"}. ${
+      tipo === "entrevista_humana" && (c.etapa === "Prefiltro" || c.etapa === "Entrevista IA")
+        ? "Al agregar la entrevista humana el candidato pasa a Filtro humano."
+        : "Esta evaluación no cambia la columna del candidato; RH decide el avance."}`} onClose={onClose}>
       <div className="flex flex-col gap-5">
         <section>
           <h3 className="text-sm font-semibold text-ink">1 · Tipo</h3>

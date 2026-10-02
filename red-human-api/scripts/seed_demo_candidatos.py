@@ -233,7 +233,7 @@ def sembrar_demo(db) -> None:
         codigo=f"{PREFIJO}C-03", nombre="Renata Isabel Cordero", telefono="5555550003",
         wa_nombre="Renata Cordero", wa_id=numero_e164("5555550003"),
         ubicacion="Monterrey, NL", experiencia="8 meses en un puesto similar", fuente="Formulario",
-        estado="cumple", etapa="Evaluación", score=0, prefiltro_completo=True,
+        estado="cumple", etapa="Entrevista IA", score=0, prefiltro_completo=True,
         vacante_id=v.id, consentimiento=True, consentimiento_fecha=_hace(days=3),
         creado_en=_hace(days=3),
     )

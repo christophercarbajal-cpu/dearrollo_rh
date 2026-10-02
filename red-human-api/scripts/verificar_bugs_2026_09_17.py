@@ -137,7 +137,7 @@ with TestClient(app) as client:
     check(bool(r.json()["evaluacion"]) and r.json()["evaluacion"].get("recomendacion"), "la evaluación quedó guardada (recomendación + match)")
     db.expire_all()
     p1 = db.query(Postulacion).get(p1.id)
-    check(p1.etapa == "Evaluación", "la postulación pasó a Evaluación")
+    check(p1.etapa == "Entrevista IA", "la postulación se queda en Filtro Red Human con su resultado integral")
     r = client.get(f"/candidatos/{P1}")
     ficha = r.json()
     check(ficha["entrevistaStatus"]["estado"] == "evaluada" and ficha["evaluacionIntegral"] is True, "la ficha muestra la Entrevista Red Human evaluada y la Evaluación integral")

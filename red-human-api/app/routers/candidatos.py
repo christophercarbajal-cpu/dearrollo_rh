@@ -31,6 +31,8 @@ from ..models import (
     TIPO_CONTRATACION_DETERMINADO, UNIDADES_DURACION, calcular_fecha_termino,
     DOCUMENTOS_BASE,
     ETAPAS_CANDIDATO,
+    nombre_etapa,
+    normalizar_etapa,
     Archivo,
     Candidato,
     Colaborador,
@@ -357,7 +359,7 @@ def listar(
         v = _vacante(db, vacante, cuenta.id)
         q = q.filter(Postulacion.vacante_id == v.id)
     if etapa:
-        q = q.filter(Postulacion.etapa == etapa)
+        q = q.filter(Postulacion.etapa == normalizar_etapa(etapa))  # acepta «Filtro humano» y la retirada «Evaluación»
     if estado:
         q = q.filter(Postulacion.estado == estado)
     if fuente:
@@ -410,7 +412,12 @@ def listar(
         .group_by(Mensaje.postulacion_id)
         .all()
     ) if postulaciones else {}
-    return [postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0)) for p in postulaciones]
+    # 2026-10-01: evaluaciones de todas las tarjetas en UNA consulta (resultado integral de cada tarjeta).
+    evaluaciones_por_p: dict = {p.id: [] for p in postulaciones}
+    if postulaciones:
+        for ev in db.query(Evaluacion).filter(Evaluacion.postulacion_id.in_(list(evaluaciones_por_p))).order_by(Evaluacion.id):
+            evaluaciones_por_p[ev.postulacion_id].append(ev)
+    return [postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0), evaluaciones=evaluaciones_por_p[p.id]) for p in postulaciones]
 
 
 @router.post("/prueba/eliminar")
@@ -1623,7 +1630,16 @@ async def decision(
         db.flush()
 
     recomendacion_ia = {"estado": p.estado, "score": p.score, "etapa": p.etapa, "expediente_cancelado": expediente_cancelado}
-    p.etapa = "Prefiltro"
+    # 2026-10-01 (pipeline de 5 columnas): no existe columna de descartados — la postulación se QUEDA en su columna
+    # con la etiqueta «No cumple» (estado no_cumple), su motivo y su historial; el filtro «Mostrar cerradas» / chip
+    # «No cumple» la muestran u ocultan. Antes regresaba a Prefiltro.
+    sello = datetime.now(timezone.utc)
+    p.historial = list(p.historial or []) + [{
+        "evento": "descartado", "usuario": u.nombre, "fecha": sello.isoformat(), "etapa": p.etapa,
+        "motivo": datos.comentario.strip()[:500],
+        "texto": f"No cumple — descartado por {u.nombre} en {nombre_etapa(p.etapa)} — {_fecha_hora_mx(sello)}"
+                 + (f": {datos.comentario.strip()[:300]}" if datos.comentario.strip() else ""),
+    }]
     p.estado = "no_cumple"
     p.cerrar("descartado")  # queda como historial; si la persona reaplica se abre una nueva (decisión 2026-09-11)
     _actualizar_ultima_actividad(p)
@@ -1697,7 +1713,6 @@ def _actividades_pendientes(p: Postulacion, desde: str, hasta: str) -> List[str]
     hechas = {
         "Prefiltro": bool(p.prefiltro_completo),
         "Entrevista IA": any(e.estado == "evaluada" for e in p.entrevistas),
-        "Evaluación": bool(p.resultado_apto is not None or any(e.estado == "evaluada" for e in p.entrevistas)),
         "Entrevista Humana": _entrevista_humana_realizada(p),
         "Contratación": bool(p.expediente and p.expediente.progreso == 100),
     }
@@ -1815,6 +1830,7 @@ async def aplicar_movimiento(
     db: Session, p: Postulacion, datos: EtapaIn, u: Usuario, forzar_prueba: bool = False, desde_iniciar: bool = False,
 ) -> Postulacion:
     """Núcleo del movimiento de etapa (hace commit). `desde_iniciar` = lo llama «Iniciar Onboarding»."""
+    datos.etapa = normalizar_etapa(datos.etapa)  # 2026-10-01: «Evaluación» (retirada) → Entrevista IA
     if datos.etapa not in ETAPAS_CANDIDATO:
         raise HTTPException(400, f"Etapa inválida. Usa una de: {', '.join(ETAPAS_CANDIDATO)}")
     prueba_total = modo_prueba_activo(db)
@@ -1828,11 +1844,12 @@ async def aplicar_movimiento(
     omitiendo_ia = bool(datos.omitir_entrevista_ia) and datos.etapa == "Entrevista Humana"
     manual = datos.manual or omitiendo_ia
     libre = manual or puede_forzar_prueba(db, forzar_prueba)
-    if datos.etapa == p.etapa:
-        raise HTTPException(409, f"La postulación ya está en {datos.etapa}.")
+    if datos.etapa == p.etapa and p.activa:  # 2026-10-01: una descartada se queda en su columna y se reabre ahí mismo
+        raise HTTPException(409, f"La postulación ya está en {nombre_etapa(datos.etapa)}.")
     if datos.etapa == "Entrevista Humana" and not manual and not _tiene_entrevista_humana(db, p):
-        # 2026-10-01: agregar la entrevista ya NO mueve la etapa; mover es una decisión aparte de RH.
-        raise HTTPException(409, "Primero agrega la entrevista humana con «Agregar entrevista humana o evaluación»; después envía al candidato a Entrevista Humana.")
+        # 2026-10-01 (pipeline de 5 columnas): agregar una entrevista humana mueve sola a Filtro humano
+        # (mover_por_entrevista_humana); aquí solo llega quien no tiene ninguna.
+        raise HTTPException(409, "Para pasar a Filtro humano agrega una entrevista humana con «Agregar evaluación»: el candidato se mueve solo.")
     if datos.etapa == "Onboarding":
         if p.etapa != "Contratación" and not libre:
             raise HTTPException(409, "Solo se puede enviar a Onboarding desde la etapa de Contratación.")
@@ -1926,6 +1943,38 @@ async def aplicar_movimiento(
             registrar(db, "sistema", "onboarding_tareas_no_generadas", "postulacion", p.codigo, {"error": str(ex)[:200]})
     db.commit()
     return p
+
+
+def mover_por_entrevista_humana(db: Session, p: Postulacion, u: Usuario, codigo_evaluacion: str) -> bool:
+    """2026-10-01 (pipeline de 5 columnas): CREAR una entrevista humana mueve la postulación a «Entrevista Humana»
+    (Filtro humano) si está en una columna previa (Prefiltro / Filtro Red Human). Nunca retrocede a quien ya está en
+    Filtro humano, Contratación u Onboarding y nunca reabre una postulación cerrada. Cualquier otra evaluación, o
+    recibir sus resultados, NO mueve: RH decide el avance. Lo que se salta queda como «Omitida» con motivo y se
+    AGREGA una nota al historial. No hace commit. Regresa True si movió."""
+    if not p.activa or p.etapa not in ("Prefiltro", "Entrevista IA"):
+        return False
+    anterior = p.etapa
+    sello = datetime.now(timezone.utc)
+    motivo = f"Se agregó la entrevista humana {codigo_evaluacion}"
+    omitidas = _actividades_pendientes(p, anterior, "Entrevista Humana")
+    if omitidas:
+        p.actividades_omitidas = list(p.actividades_omitidas or []) + [
+            {"actividad": e, "etapa": e, "usuario": u.nombre, "fecha": sello.isoformat(), "motivo": motivo, "hacia": "Entrevista Humana"}
+            for e in omitidas
+        ]
+    p.etapa = "Entrevista Humana"
+    p.historial = list(p.historial or []) + [{
+        "evento": "movida_por_entrevista_humana", "usuario": u.nombre, "fecha": sello.isoformat(),
+        "desde": anterior, "hacia": "Entrevista Humana",
+        "texto": f"Movido a Filtro humano al agregar una entrevista humana ({codigo_evaluacion}) por {u.nombre} — {_fecha_hora_mx(sello)}",
+    }]
+    if p.candidato and p.candidato.postulacion_conversacion_id is None:
+        fijar_conversacion(p)
+    _actualizar_ultima_actividad(p)
+    registrar(db, u.nombre, "etapa_movida", "postulacion", p.codigo,
+              {"candidato": p.candidato.codigo if p.candidato else None, "de": anterior, "a": "Entrevista Humana",
+               "por_entrevista_humana": codigo_evaluacion, "omitidas": omitidas, "correo_rh": u.correo})
+    return True
 
 
 # ------------------------------------------------------------

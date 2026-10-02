@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .migraciones import crear_tablas_base, crear_tablas_conocimiento, crear_tablas_modulos_rh, candidatos_sin_postulacion, relajar_not_null, sincronizar, evaluaciones_sin_migrar
-from .migraciones import asegurar_reglas_entrevistador
+from .migraciones import asegurar_reglas_entrevistador, migrar_pipeline_cinco_columnas
 from .routers import agente, auth, candidatos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
 from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
@@ -92,6 +92,13 @@ async def lifespan(app: FastAPI):
                     f"[evaluaciones] {sin_migrar} entrevista(s)/evaluación(es) del modelo anterior sin migrar. "
                     "Corre `python scripts/migrar_evaluaciones_unificadas.py --forzar` (desde red-human-api/) y vuelve a arrancar."
                 )
+        # 2026-10-01: Kanban de cinco columnas. Migración determinista e idempotente (sin borrar nada); la
+        # excepción «ya tenía entrevista humana → Filtro humano» se aplica una sola vez (ver migraciones).
+        pipeline = migrar_pipeline_cinco_columnas(db)
+        db.commit()
+        if pipeline["postulaciones"] or pipeline["candidatos_legado"]:
+            print(f"[pipeline] 5 columnas: {pipeline['evaluacion_a_filtro_red_human']} a Filtro Red Human, "
+                  f"{pipeline['a_filtro_humano']} a Filtro humano", flush=True)
 
     # 2026-09-14: en el log de arranque queda qué variables de Anam ve ESTE proceso (presencia, no
     # valores). Si la sala "cae a texto" en producción, aquí se ve si es configuración o Anam.

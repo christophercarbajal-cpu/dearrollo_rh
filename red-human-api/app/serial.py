@@ -349,11 +349,14 @@ def _postulacion_resumen_dict(p: Postulacion) -> dict:
     }
 
 
-def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional[int] = None) -> dict:
+def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional[int] = None, evaluaciones=None) -> dict:
     """La tarjeta del Kanban (decisión P4: una por Postulación). `id` es el código P-####
     — es lo que el frontend manda a /candidatos/{codigo}/...; los datos de persona vienen
     aplanados (nombre, teléfono…) por compatibilidad y también en `candidato`.
-    `n_mensajes`: conteo ya calculado por el listado (evita cargar el chat completo por tarjeta)."""
+    `n_mensajes`: conteo ya calculado por el listado (evita cargar el chat completo por tarjeta).
+    `evaluaciones`: las de esta postulación ya cargadas por el listado (resultado integral sin N+1)."""
+    from .services import evaluacion_integral
+
     c = p.candidato
     v = p.vacante
     exp = p.expediente
@@ -391,6 +394,9 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "activa": p.activa,
         "motivoCierre": p.motivo_cierre,
         "cerradaEn": iso(p.cerrada_en),
+        # 2026-10-01: «No cumple» se queda en su columna; el motivo de RH viaja a la tarjeta.
+        "motivoDescarte": next((h.get("motivo") or "" for h in reversed(p.historial or []) if h.get("evento") == "descartado"), "")
+        if p.motivo_cierre == "descartado" else "",
         "esPrueba": c.es_prueba or p.es_prueba,
         "totalPostulaciones": total_postulaciones,
         "yaAplicoAntes": total_postulaciones > 1,
@@ -431,6 +437,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         # --- Fase C ---
         "ultimaActividadEn": iso(p.ultima_actividad_en),
         "resultadoApto": p.resultado_apto,
+        # 2026-10-01: «Evaluación integral» ya no es columna sino RESULTADO acumulado (tarjeta y ficha).
+        "resultadoIntegral": evaluacion_integral.calcular(p, evaluaciones),
         "clienteVacante": v.cliente.nombre if v and v.cliente else None,
         "clienteIdVacante": v.cliente_id if v else None,  # Fase 7A: para elegir contactos/entrevistador externo
         # --- Persona (maestro) ---

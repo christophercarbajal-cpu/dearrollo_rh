@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useState } from "react";
-import { fetchPipeline, nombreEtapa } from "@/lib/api";
+import { ETAPAS_PIPELINE, fetchPipeline, nombreEtapa } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
 
 /** 2026-09-20 (B4): candidatos ACTIVOS por etapa — misma fuente que el Kanban y los contadores de cada
  * vacante (`Postulacion.etapa`, `services/conteos.por_etapa`). Cada renglón lleva al Kanban filtrado. */
-const ETAPAS = ["Prefiltro", "Entrevista IA", "Evaluación", "Entrevista Humana", "Contratación", "Onboarding"];
+const ETAPAS = ETAPAS_PIPELINE;
 
 export function EmbudoEtapas() {
   const [porEtapa, setPorEtapa] = useState<Record<string, number> | null>(null);

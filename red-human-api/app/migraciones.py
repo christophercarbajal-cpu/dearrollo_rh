@@ -210,7 +210,7 @@ def migrar_postulaciones(db) -> dict:
     Decisión 2026-09-11: los candidatos SIN vacante también reciben su postulación (sin
     vacante) para seguir visibles en Prefiltro. Idempotente: se puede correr N veces.
     NO hace commit — el llamador decide (script → commit; seed → mismo commit de la semilla)."""
-    from .models import Candidato, Entrevista, EntrevistaHumana, Expediente, Mensaje, Postulacion
+    from .models import Candidato, Entrevista, EntrevistaHumana, Expediente, Mensaje, Postulacion, normalizar_etapa
 
     conteo = {"postulaciones": 0, "mensajes": 0, "entrevistas": 0, "entrevistas_humanas": 0, "expedientes": 0}
     candidatos = db.query(Candidato).order_by(Candidato.id).all()
@@ -226,7 +226,7 @@ def migrar_postulaciones(db) -> dict:
                 cuenta_id=c.cuenta_id,
                 origen="migracion",
                 es_prueba=bool(c.es_prueba),
-                etapa=c.etapa or "Prefiltro",
+                etapa=normalizar_etapa(c.etapa or "Prefiltro"),
                 estado=c.estado or "pendiente",
                 score=c.score or 0,
                 evidencia=c.evidencia or "",
@@ -274,6 +274,79 @@ def migrar_postulaciones(db) -> dict:
     db.flush()
     db.expire_all()
     return conteo
+
+
+MARCA_PIPELINE_CINCO_COLUMNAS = "pipeline_cinco_columnas_migrado"
+
+
+def migrar_pipeline_cinco_columnas(db, aplicar: bool = True) -> dict:
+    """2026-10-01: el Kanban pasa de seis a CINCO columnas (Prefiltro → Filtro Red Human → Filtro humano →
+    Contratación → Onboarding; ver models.ETAPAS_CANDIDATO). Mapeo base: Prefiltro → Prefiltro, Entrevista IA →
+    Entrevista IA (Filtro Red Human), Evaluación → Entrevista IA, Entrevista Humana → Entrevista Humana (Filtro
+    humano), Contratación y Onboarding intactas. Excepción: una postulación en una etapa PREVIA (Prefiltro,
+    Entrevista IA o Evaluación) que ya tenga una entrevista humana creada (no cancelada) pasa a Entrevista Humana.
+    Nunca retrocede a nadie que esté en Contratación u Onboarding.
+
+    Solo cambia `Postulacion.etapa` (y la columna LEGADO `Candidato.etapa`): expedientes, evaluaciones, chats,
+    entrevistas e historiales se conservan; cada movimiento AGREGA una nota a `Postulacion.historial` y queda en
+    bitácora. Los contadores se recalculan solos (services/conteos.py lee `Postulacion.etapa`).
+
+    Corre en el arranque y es idempotente. La excepción de la entrevista humana se aplica UNA sola vez (marca en
+    bitácora) para no deshacer después un movimiento manual de RH; el mapeo de la etapa retirada siempre se aplica.
+    `aplicar=False` solo cuenta (diagnóstico). NO hace commit."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    from sqlalchemy import inspect as _inspect
+
+    from .models import ETAPAS_LEGADO, Bitacora, Candidato, Evaluacion, Postulacion, nombre_etapa, registrar
+
+    tablas = set(_inspect(db.get_bind()).get_table_names())
+    hay_evaluaciones = "evaluaciones" in tablas
+    ya_marcada = db.query(Bitacora.id).filter(Bitacora.accion == MARCA_PIPELINE_CINCO_COLUMNAS).first() is not None
+    aplicar_excepcion = hay_evaluaciones and not ya_marcada
+
+    con_entrevista: set = set()
+    if aplicar_excepcion:
+        con_entrevista = {
+            pid for (pid,) in db.query(Evaluacion.postulacion_id)
+            .filter(Evaluacion.tipo == "entrevista_humana", Evaluacion.estado != "cancelada").distinct()
+        }
+    previas = ("Prefiltro", "Entrevista IA", *ETAPAS_LEGADO)
+    candidatas = db.query(Postulacion).filter(Postulacion.etapa.in_(previas)).all()
+    resumen = {"evaluacion_a_filtro_red_human": 0, "a_filtro_humano": 0, "postulaciones": [], "candidatos_legado": 0,
+               "excepcion_aplicada": aplicar_excepcion}
+    sello = _dt.now(_tz.utc)
+    for p in candidatas:
+        if p.id in con_entrevista:
+            destino, regla = "Entrevista Humana", "ya tenía una entrevista humana creada"
+        elif p.etapa in ETAPAS_LEGADO:
+            destino, regla = ETAPAS_LEGADO[p.etapa], "mapeo base"
+        else:
+            continue
+        if destino == p.etapa:
+            continue
+        resumen["a_filtro_humano" if destino == "Entrevista Humana" else "evaluacion_a_filtro_red_human"] += 1
+        resumen["postulaciones"].append({"codigo": p.codigo, "de": p.etapa, "a": destino})
+        if not aplicar:
+            continue
+        anterior = p.etapa
+        texto_de = "Evaluación integral" if anterior == "Evaluación" else nombre_etapa(anterior)
+        p.etapa = destino
+        p.historial = list(p.historial or []) + [{
+            "evento": "etapa_migrada", "usuario": "sistema", "fecha": sello.isoformat(), "desde": anterior, "hacia": destino,
+            "texto": f"Pipeline de 5 columnas: {texto_de} → {nombre_etapa(destino)} ({regla}).",
+        }]
+        registrar(db, "sistema", "etapa_migrada_pipeline", "postulacion", p.codigo, {"de": anterior, "a": destino, "regla": regla})
+    if aplicar:
+        resumen["candidatos_legado"] = (
+            db.query(Candidato).filter(Candidato.etapa.in_(list(ETAPAS_LEGADO)))
+            .update({Candidato.etapa: "Entrevista IA"}, synchronize_session=False)
+        )
+        if aplicar_excepcion:
+            registrar(db, "sistema", MARCA_PIPELINE_CINCO_COLUMNAS, "sistema", "pipeline",
+                      {k: v for k, v in resumen.items() if k != "postulaciones"} | {"movidas": len(resumen["postulaciones"])})
+        db.flush()
+    return resumen
 
 
 def asegurar_reglas_entrevistador(db) -> int:

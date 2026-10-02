@@ -548,11 +548,10 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
          **({"forzada_por_rh": True} if forzada_por else {})},
     )
 
-    # Zero-Touch: mueve el Kanban a Evaluación — NO toca p.estado, la recomendación de la IA
-    # queda solo como dato para que RH decida a mano ahí, mismo patrón HITL que el resto del
-    # sistema (ver _auto_decision_zero_touch en candidatos.py).
+    # 2026-10-01 (pipeline de 5 columnas): la postulación se QUEDA en Filtro Red Human («Entrevista IA») con su
+    # Evaluación integral calculada; ya no existe la columna «Evaluación». NO toca p.estado: la recomendación de la
+    # IA queda solo como dato y RH decide el avance (HITL, ver _auto_decision_zero_touch en candidatos.py).
     if p and p.etapa == "Entrevista IA":
-        p.etapa = "Evaluación"
         registrar(
             db, "agente-ia", "auto_evaluacion_zero_touch", "postulacion", p.codigo,
             {"candidato": p.candidato.codigo, "entrevista": e.codigo, "recomendacion": ev.recomendacion, "match": ev.match_perfil},

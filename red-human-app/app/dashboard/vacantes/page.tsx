@@ -69,6 +69,8 @@ import {
   guardarVacanteComoPlantilla,
   ENFOQUES_ENTREVISTA,
   nombreEtapa,
+  ordenEtapa,
+  ETAPAS_PIPELINE,
   type BloquePlataforma,
   type CriterioFiltro,
   type VacanteGenerada,
@@ -494,6 +496,7 @@ export default function Vacantes() {
                 <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
                   {Object.entries(v.embudo.etapas)
                     .filter(([, n]) => n > 0)
+                    .sort(([a], [b]) => ordenEtapa(a) - ordenEtapa(b))
                     .map(([etapa, n]) => (
                       <button
                         key={etapa}
@@ -598,6 +601,7 @@ export default function Vacantes() {
                       <div className="mt-1 flex flex-wrap gap-1">
                         {Object.entries(v.embudo.etapas)
                           .filter(([, n]) => n > 0)
+                          .sort(([a], [b]) => ordenEtapa(a) - ordenEtapa(b))
                           .map(([etapa, n]) => (
                             <button
                               key={etapa}
@@ -1695,8 +1699,8 @@ function DetalleVacante({
         )}
 
         {/* Embudo de esta vacante — conecta con el pipeline de candidatos (B4: clic → Kanban filtrado por vacante + etapa) */}
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {["Prefiltro", "Entrevista IA", "Evaluación", "Entrevista Humana", "Contratación", "Onboarding"].map((e) => (
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+          {ETAPAS_PIPELINE.map((e) => (
             <Link
               key={e}
               href={`/dashboard/candidatos?${new URLSearchParams({ vacante: v.id, etapa: e }).toString()}`}

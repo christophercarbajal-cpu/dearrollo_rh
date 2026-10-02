@@ -701,9 +701,19 @@ export function crearVacante(
   return post<Vacante>("/vacantes", datos);
 }
 
-/** "Entrevista IA" es el valor interno/base de la etapa; en la interfaz se muestra como
- * «Entrevista Red Human» (Parte 3, decisión visual — sin migración de datos). */
-export const ETIQUETA_ETAPA: Record<string, string> = { "Entrevista IA": "Entrevista Red Human", Evaluación: "Evaluación integral" };
+/** Pipeline de cinco columnas (2026-10-01). Los valores internos no se renombran («Entrevista IA», «Entrevista
+ * Humana»); en la interfaz se muestran como «Filtro Red Human» y «Filtro humano». «Evaluación» ya no es columna. */
+export const ETAPAS_PIPELINE = ["Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding"] as const;
+export const ETIQUETA_ETAPA: Record<string, string> = {
+  "Entrevista IA": "Filtro Red Human",
+  "Entrevista Humana": "Filtro humano",
+  Evaluación: "Filtro Red Human",  // etapa retirada: la migración la lleva a Filtro Red Human
+};
+/** Posición de una etapa en el pipeline (para ordenar conteos que llegan como objeto). */
+export function ordenEtapa(etapa: string): number {
+  const i = (ETAPAS_PIPELINE as readonly string[]).indexOf(etapa);
+  return i < 0 ? ETAPAS_PIPELINE.length : i;
+}
 export function nombreEtapa(etapa: string): string {
   return ETIQUETA_ETAPA[etapa] ?? etapa;
 }
@@ -3077,8 +3087,8 @@ export const TIPOS_EVALUACION: { valor: TipoEvaluacion; texto: string }[] = [
   { valor: "medica", texto: "Médica" },
   { valor: "psicometrica", texto: "Psicométrica" },
   { valor: "socioeconomica", texto: "Socioeconómica" },
-  { valor: "tecnica", texto: "Técnica o caso práctico" },
-  { valor: "referencias", texto: "Referencias" },
+  { valor: "tecnica", texto: "Técnica o práctica" },
+  { valor: "referencias", texto: "Referencias laborales" },
   { valor: "otra", texto: "Otra" },
 ];
 export type FormaEvaluacion = "asignada" | "registro_directo" | "liga_otro_sistema" | "integrada";
@@ -3133,6 +3143,8 @@ export interface EventoEvaluacion {
 }
 export interface RespuestaEvaluacion {
   evaluacion: Evaluacion; resultados?: ResultadoNotificacion[]; advertencias?: string[]; candidato?: Candidato; avisoTeams?: string | null; sincronizacion?: string;
+  /** 2026-10-01: crear una entrevista humana movió al candidato a Filtro humano. */
+  movidaAFiltroHumano?: boolean;
 }
 export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
 export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean }

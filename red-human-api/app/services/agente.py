@@ -371,7 +371,7 @@ TOOLS_LECTURA: Dict[str, dict] = {
             {
                 "nombre": _p("string", "Texto libre sobre el nombre del candidato"),
                 "vacante": _p("string", "Código de vacante (VAC-####)"),
-                "etapa": _p("string", "Prefiltro | Entrevista IA | Evaluación | Entrevista Humana | Contratación | Onboarding"),
+                "etapa": _p("string", "Prefiltro | Entrevista IA (Filtro Red Human) | Entrevista Humana (Filtro humano) | Contratación | Onboarding"),
                 "estado": _p("string", "cumple | revision | no_cumple | pendiente"),
                 "fuente": _p("string", "Formulario | WhatsApp | OCC | LinkedIn | Indeed | RH"),
                 "cliente_id": _p("integer", "Filtra por Cliente de la vacante"),
@@ -710,7 +710,7 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
             "description": "Mueve un candidato a otra etapa del pipeline. A Entrevista Humana solo si ya tiene una entrevista humana agregada (programar_entrevista_humana).",
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
-                "etapa": _p("string", "Prefiltro | Entrevista IA | Evaluación | Entrevista Humana | Contratación | Onboarding"),
+                "etapa": _p("string", "Prefiltro | Entrevista IA (Filtro Red Human) | Entrevista Humana (Filtro humano) | Contratación | Onboarding"),
                 "comentario": _p("string", "Comentario opcional"),
             }, "required": ["codigo", "etapa"], "additionalProperties": False},
         },
@@ -749,7 +749,7 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         ),
         "schema": {
             "type": "function", "name": "programar_entrevista_humana",
-            "description": "Agenda una ronda nueva de Entrevista Humana. No mueve la etapa: para eso usa mover_etapa_candidato.",
+            "description": "Agenda una ronda nueva de Entrevista Humana. Si el candidato está en Prefiltro o Entrevista IA, lo mueve solo a Entrevista Humana (Filtro humano).",
             "parameters": {"type": "object", "properties": {
                 "codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)"),
                 "tipo_entrevistador": _p("string", "interno | externo", enum=["interno", "externo"]),

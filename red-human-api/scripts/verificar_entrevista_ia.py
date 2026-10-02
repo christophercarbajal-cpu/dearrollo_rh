@@ -151,7 +151,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["cierre"] == "herramienta", "finalizar es idempotente y no pisa el cierre verificado")
     db.expire_all()
     p = db.query(Postulacion).filter_by(codigo=P).one()
-    check(p.etapa == "Evaluación", "la postulación pasó a Evaluación (Zero-Touch)")
+    check(p.etapa == "Entrevista IA", "la postulación se queda en Filtro Red Human (ya no existe la columna Evaluación)")
 
     # ============ PUNTO 5 — perfil profundo ============
     ev = r.json()["evaluacion"]

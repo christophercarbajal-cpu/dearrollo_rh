@@ -95,6 +95,7 @@ import {
   type MensajePrefiltro,
   type PerfilProfundo,
   nombreEtapa,
+  ETAPAS_PIPELINE,
   lineasResultados,
 } from "@/lib/api";
 import { usePuedeDecidir, useModoPrueba } from "@/components/sesion";
@@ -105,6 +106,7 @@ import { ModalIniciarOnboarding } from "@/components/dashboard/onboarding/inicia
 import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-onboarding";
 import { PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-evaluaciones";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
+import { BadgeIntegral, PanelResultadoIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
 import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, type FirmaDocumento } from "@/lib/api";
@@ -114,18 +116,12 @@ import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
 import { textoFecha, textoFechaHora } from "@/lib/fechas";
 
-const etapas: EtapaCandidato[] = [
-  "Prefiltro",
-  "Entrevista IA",
-  "Evaluación",
-  "Entrevista Humana",
-  "Contratación",
-  "Onboarding",
-];
+/** 2026-10-01: CINCO columnas — Prefiltro → Filtro Red Human → Filtro humano → Contratación → Onboarding
+ * (nombres visibles vía `nombreEtapa`). «Evaluación integral» ya no es columna: es un resultado en tarjeta y ficha. */
+const etapas: EtapaCandidato[] = [...ETAPAS_PIPELINE];
 const etapaColor: Record<EtapaCandidato, string> = {
   Prefiltro: "var(--ink-3)",
   "Entrevista IA": "var(--brand)",
-  Evaluación: "var(--human)",
   "Entrevista Humana": "var(--brand-2)",
   Contratación: "var(--warn)",
   Onboarding: "var(--good)",
@@ -133,14 +129,11 @@ const etapaColor: Record<EtapaCandidato, string> = {
 
 /** Zero-touch: la IA ya avanzó sola al candidato hasta aquí; esto es solo el siguiente
  * checkpoint humano al que RH puede mandarlo con un botón explícito (no "cualquier etapa
- * futura" — cada etapa tiene un único destino manual). Hacia "Entrevista Humana" el botón principal es «Agregar
- * entrevista humana o evaluación» (2026-10-01: agregar NO mueve la etapa) y «Enviar a Entrevista Humana» queda en
- * «…» como movimiento aparte; el resto va por PATCH /candidatos/{codigo}/etapa. Prefiltro,
- * Entrevista IA y Onboarding no tienen destino manual aquí — Prefiltro solo descarta (la IA
- * dispara Entrevista IA sola), Entrevista IA solo descarta, y a Onboarding solo se llega con
- * el botón "Enviar a Onboarding" de la propia etapa Contratación. */
+ * futura" — cada etapa tiene un único destino manual). 2026-10-01 (pipeline de 5 columnas): a «Filtro humano» se
+ * llega AGREGANDO una entrevista humana con el botón único «Agregar evaluación» (acción principal en Filtro Red
+ * Human); el resto va por PATCH /candidatos/{codigo}/etapa. Prefiltro tiene su propio panel (la IA dispara Filtro
+ * Red Human sola) y a Onboarding solo se llega con «Enviar a Onboarding» desde Contratación. */
 const SIGUIENTE_ETAPA_MANUAL: Partial<Record<EtapaCandidato, EtapaCandidato[]>> = {
-  Evaluación: ["Entrevista Humana"],
   "Entrevista Humana": ["Contratación"],
 };
 
@@ -156,11 +149,10 @@ const FILTROS_ESTADO: { key: FiltroEstado; label: string }[] = [
 
 const ETAPAS_YA_CONTRATADO: EtapaCandidato[] = ["Contratación", "Onboarding"];
 
-/** 2026-09-22 — «Avanzar a Entrevista Humana» (omitir la Entrevista Red Human). Solo tiene sentido
- * mientras el candidato está en Prefiltro o en la propia Entrevista Red Human. */
+/** 2026-09-22 — «Avanzar a Filtro humano» (omitir la Entrevista Red Human sin agendar entrevista). Solo tiene
+ * sentido mientras el candidato está en Prefiltro o en Filtro Red Human. */
 const ETAPAS_AVANCE_DIRECTO: EtapaCandidato[] = ["Prefiltro", "Entrevista IA"];
-const TITULO_AGREGAR_EVALUACION = "Agregar entrevista humana o evaluación";
-const TEXTO_AVANCE_DIRECTO = "Este candidato avanzará a Entrevista Humana y se omitirá la Entrevista Red Human";
+const TEXTO_AVANCE_DIRECTO = "Este candidato avanzará a Filtro humano y se omitirá la Entrevista Red Human";
 
 const TIPOS_CONTRATACION = ["Tiempo indeterminado", "Tiempo determinado", "Por obra o proyecto", "Honorarios"];
 // 2026-09-20 (B3): formato de la trazabilidad de documentos
@@ -293,7 +285,9 @@ function CandidatosContenido() {
     const vParam = searchParams.get("vacante");
     if (vParam) setFiltroVacante(vParam);
 
-    const eParam = searchParams.get("etapa");
+    // 2026-10-01: una liga vieja con ?etapa=Evaluación (columna retirada) abre Filtro Red Human
+    const eCrudo = searchParams.get("etapa");
+    const eParam = eCrudo === "Evaluación" ? "Entrevista IA" : eCrudo;
     if (eParam && etapas.includes(eParam as EtapaCandidato)) {
       setColumnaResaltada(eParam);
       setTimeout(() => {
@@ -839,7 +833,7 @@ function CandidatosContenido() {
 
       {/* VISTA 1: PIPELINE (Kanban) */}
       {!cargando && vista === "pipeline" && (
-        <div className={cn("mt-6 grid gap-4", columnaResaltada ? "grid-cols-1 sm:max-w-md" : "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6")}>
+        <div className={cn("mt-6 grid gap-4", columnaResaltada ? "grid-cols-1 sm:max-w-md" : "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5")}>
           {etapas.filter((etapa) => !columnaResaltada || etapa === columnaResaltada).map((etapa) => {
             const cols = datosFiltrados.filter((c) => c.etapa === etapa);
             const esResaltada = columnaResaltada === etapa;
@@ -875,14 +869,14 @@ function CandidatosContenido() {
                     const esDup = duplicadosSet.has(c.id);
                     return (
                       /* 2026-09-22: el menú «…» va FUERA del botón de la tarjeta (no se anidan botones);
-                         solo aparece donde tiene sentido avanzar directo a Entrevista Humana. */
+                         solo aparece donde tiene sentido avanzar directo a Filtro humano. */
                       <div key={c.id} className="relative">
                       {puedeDecidir && ETAPAS_AVANCE_DIRECTO.includes(c.etapa) && c.activa !== false && (
                         <div className="absolute right-1.5 top-1.5 z-10">
                           <MenuAcciones
                             etiqueta={`Acciones de ${c.nombre}`}
                             acciones={[{
-                              etiqueta: "Avanzar a Entrevista Humana",
+                              etiqueta: "Avanzar a Filtro humano",
                               icono: <CalendarClock />,
                               title: TEXTO_AVANCE_DIRECTO,
                               onClick: () => setAvanceKanban(c),
@@ -914,7 +908,15 @@ function CandidatosContenido() {
                                   🔄 Ya aplicó antes
                                 </span>
                               )}
-                              {c.activa === false && (
+                              {c.activa === false && c.motivoCierre === "descartado" ? (
+                                /* 2026-10-01: sin columna de descartados — se queda en su columna con «No cumple» y su motivo */
+                                <span
+                                  title={`No cumple — descartado por RH${c.motivoDescarte ? `: ${c.motivoDescarte}` : ""}. El historial se conserva.`}
+                                  className="shrink-0 rounded bg-bad-soft px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-bad"
+                                >
+                                  No cumple
+                                </span>
+                              ) : c.activa === false && (
                                 <span
                                   title={`Postulación cerrada (${c.motivoCierre || "sin motivo"}) — queda como historial de la persona`}
                                   className="shrink-0 rounded bg-ink-3/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3"
@@ -935,6 +937,9 @@ function CandidatosContenido() {
                               {c.puesto || "Sin vacante"}
                               {c.clienteVacante ? ` · ${c.clienteVacante}` : ""}
                             </p>
+                            {c.activa === false && c.motivoCierre === "descartado" && c.motivoDescarte && (
+                              <p className="truncate text-[11px] text-bad" title={c.motivoDescarte}>Motivo: {c.motivoDescarte}</p>
+                            )}
                             <div className="mt-1 flex items-center gap-1.5">
                               <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-brand">
                                 Score CV: {c.score}%
@@ -943,20 +948,11 @@ function CandidatosContenido() {
                           </div>
                         </div>
 
-                        {/* Estado y Apto (Fase C) */}
-                        <div className="mt-3 flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
+                        {/* Estado del prefiltro + Evaluación integral (2026-10-01: resultado acumulado, ya no columna) */}
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <EstadoBadge estado={c.estado} />
-                            {c.resultadoApto === true && (
-                              <span className="rounded-md bg-good-soft px-1.5 py-0.5 text-[10px] font-bold text-good">
-                                Apto
-                              </span>
-                            )}
-                            {c.resultadoApto === false && (
-                              <span className="rounded-md bg-bad-soft px-1.5 py-0.5 text-[10px] font-bold text-bad">
-                                No apto
-                              </span>
-                            )}
+                            <BadgeIntegral r={c.resultadoIntegral} />
                           </div>
                           <span className="flex items-center gap-1 font-mono text-[10px] text-ink-3">
                             {c.fuente === "WhatsApp" ? (
@@ -1033,7 +1029,7 @@ function CandidatosContenido() {
                 <th className="px-4 py-3 text-left">Vacante</th>
                 <th className="px-4 py-3 text-left">Cliente</th>
                 <th className="px-4 py-3 text-left">Etapa</th>
-                <th className="px-4 py-3 text-left">Resultado Apto</th>
+                <th className="px-4 py-3 text-left">Evaluación integral</th>
                 <th className="px-4 py-3 text-left">Score CV</th>
                 <th className="px-4 py-3 text-left">Fuente</th>
                 <th className="px-4 py-3 text-left">Última Actividad</th>
@@ -1109,19 +1105,7 @@ function CandidatosContenido() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {c.resultadoApto === true && (
-                        <Badge tone="good" dot>
-                          Apto
-                        </Badge>
-                      )}
-                      {c.resultadoApto === false && (
-                        <Badge tone="bad" dot>
-                          No apto
-                        </Badge>
-                      )}
-                      {c.resultadoApto == null && (
-                        <span className="text-xs text-ink-3">Sin evaluar</span>
-                      )}
+                      {c.resultadoIntegral ? <BadgeIntegral r={c.resultadoIntegral} compacto /> : <span className="text-xs text-ink-3">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs font-semibold text-ink">
@@ -1184,11 +1168,11 @@ function CandidatosContenido() {
         />
       )}
 
-      {/* 2026-09-22: confirmación de «Avanzar a Entrevista Humana» desde la tarjeta del Kanban */}
+      {/* 2026-09-22: confirmación de «Avanzar a Filtro humano» desde la tarjeta del Kanban */}
       {avanceKanban && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !avanzando && setAvanceKanban(null)}>
           <div className="w-full max-w-md rounded-3xl border border-border-soft bg-bg p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-display text-lg font-bold">Avanzar a Entrevista Humana</h3>
+            <h3 className="font-display text-lg font-bold">Avanzar a Filtro humano</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-2">{TEXTO_AVANCE_DIRECTO}.</p>
             <p className="mt-2 text-xs text-ink-3">
               {avanceKanban.nombre} · queda registrado en el historial del expediente; lo ya generado se conserva.
@@ -1377,11 +1361,11 @@ function ModalCandidato({
   const [confirmacion, setConfirmacion] = useState<null | "solicitar" | "recordatorio" | "alta">(null);
   // 2026-09-16 (control manual de RH): «Mover a otra etapa» — selector simple + motivo opcional
   const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string }>(null);
-  // Evaluaciones unificadas: «Agregar entrevista humana o evaluación» (2026-10-01, antes «Enviar a Entrevista Humana»)
-  // abre la MISMA pantalla «Agregar evaluación» precargada con entrevista humana; agregar NO cambia la etapa.
+  // Evaluaciones unificadas: botón ÚNICO «Agregar evaluación» (2026-10-01). Crear una entrevista humana mueve a
+  // Filtro humano desde Prefiltro / Filtro Red Human; cualquier otra evaluación no cambia la columna.
   const [agregarEval, setAgregarEval] = useState<PresetEvaluacion | null>(null);
   const [versionEval, setVersionEval] = useState(0);
-  // 2026-09-22: confirmación de «Avanzar a Entrevista Humana» (omite la Entrevista Red Human)
+  // 2026-09-22: confirmación de «Avanzar a Filtro humano» (omite la Entrevista Red Human)
   const [avanceDirecto, setAvanceDirecto] = useState(false);
   async function confirmarAvanceDirecto() {
     if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
@@ -1391,7 +1375,7 @@ function ModalCandidato({
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     setAvanceDirecto(false);
     onCambio(r.data);
-    setAviso({ tono: "ok", texto: "Candidato en Entrevista Humana. La Entrevista Red Human quedó registrada como omitida manualmente." });
+    setAviso({ tono: "ok", texto: "Candidato en Filtro humano. La Entrevista Red Human quedó registrada como omitida manualmente." });
   }
   async function moverManual() {
     if (!moverA?.etapa) return;
@@ -1643,6 +1627,7 @@ function ModalCandidato({
             </Card>
           )}
 
+          {(tab === "resumen" || tab === "evaluaciones") && <PanelResultadoIntegral r={c.resultadoIntegral} />}
           {tab === "resumen" && (
             <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
           )}
@@ -1692,8 +1677,8 @@ function ModalCandidato({
           </div>
         )}
 
-        {/* Footer Fijo con HITL y Acciones — Prefiltro, Entrevista Humana y Contratación tienen
-            su propio panel de acciones; este footer genérico no aplica ahí. */}
+        {/* Footer Fijo con HITL y Acciones — Prefiltro y Contratación tienen su propio panel de acciones; este footer
+            genérico no aplica ahí. */}
         {puedeDecidir &&
           c.etapa !== "Prefiltro" &&
           c.etapa !== "Contratación" && (
@@ -1709,16 +1694,16 @@ function ModalCandidato({
               {/* Regla de UI (2026-09-16): UNA acción principal = la siguiente esperada; todo lo demás en «…»
                   («Mover a otra etapa» abre un selector simple sin bloqueos de secuencia). */}
               <div className="flex items-center gap-2">
-                {siguientesEtapas[0] && (siguientesEtapas[0] === "Entrevista Humana" ? (
-                  // 2026-10-01: abrir/agregar una evaluación NO cambia la etapa (mover es aparte, en «…»)
-                  <Button size="sm" className="flex-1" onClick={() => setAgregarEval({ tipo: "entrevista_humana", titulo: TITULO_AGREGAR_EVALUACION })} disabled={Boolean(ocupado)}>
-                    <ClipboardCheck className="h-4 w-4" /> {TITULO_AGREGAR_EVALUACION}
+                {c.etapa === "Entrevista IA" ? (
+                  // 2026-10-01: botón ÚNICO «Agregar evaluación»; elegir «Entrevista humana» mueve solo a Filtro humano
+                  <Button size="sm" className="flex-1" onClick={() => setAgregarEval({ tipo: "entrevista_humana" })} disabled={Boolean(ocupado) || c.activa === false}>
+                    <ClipboardCheck className="h-4 w-4" /> Agregar evaluación
                   </Button>
-                ) : (
+                ) : siguientesEtapas[0] && (
                   <Button size="sm" className="flex-1" onClick={() => enviarAEtapa(siguientesEtapas[0])} disabled={Boolean(ocupado)}>
                     <ThumbsUp className="h-4 w-4" /> Enviar a {nombreEtapa(siguientesEtapas[0])}
                   </Button>
-                ))}
+                )}
                 {c.expedienteId != null && c.etapa !== "Onboarding" && (
                   <a
                     href="/dashboard/onboarding"
@@ -1730,8 +1715,7 @@ function ModalCandidato({
                 <MenuAcciones
                   etiqueta="Más acciones"
                   acciones={[
-                    // «Enviar a Entrevista Humana» es el movimiento explícito (la API exige que ya haya una entrevista agregada)
-                    ...siguientesEtapas.filter((etapa, i) => i > 0 || etapa === "Entrevista Humana").map((etapa) => ({
+                    ...siguientesEtapas.slice(c.etapa === "Entrevista IA" ? 0 : 1).map((etapa) => ({
                       etiqueta: `Enviar a ${nombreEtapa(etapa)}`,
                       icono: <ThumbsUp />,
                       onClick: () => enviarAEtapa(etapa),
@@ -1739,7 +1723,7 @@ function ModalCandidato({
                     })),
                     ...(ETAPAS_AVANCE_DIRECTO.includes(c.etapa)
                       ? [{
-                          etiqueta: "Avanzar a Entrevista Humana",
+                          etiqueta: "Avanzar a Filtro humano",
                           icono: <CalendarClock />,
                           title: TEXTO_AVANCE_DIRECTO,
                           onClick: () => setAvanceDirecto(true),
@@ -1840,7 +1824,7 @@ function ModalCandidato({
       {avanceDirecto && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => ocupado !== "avance-directo" && setAvanceDirecto(false)}>
           <div className="w-full max-w-md rounded-3xl border border-border-soft bg-bg p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-display text-lg font-bold">Avanzar a Entrevista Humana</h3>
+            <h3 className="font-display text-lg font-bold">Avanzar a Filtro humano</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-2">{TEXTO_AVANCE_DIRECTO}.</p>
             <p className="mt-2 text-xs text-ink-3">
               Queda registrado en el historial del expediente ({c.nombre}); lo que ya se generó (chat, análisis de CV, entrevista parcial) se conserva.
@@ -1889,8 +1873,8 @@ function ModalCandidato({
                   className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
                 >
                   <option value="">Elige…</option>
-                  {(["Prefiltro", "Entrevista IA", "Evaluación", "Entrevista Humana", "Contratación", "Onboarding"] as EtapaCandidato[])
-                    .filter((e) => e !== c.etapa)
+                  {etapas
+                    .filter((e) => e !== c.etapa || c.activa === false)
                     .map((e) => (
                       <option key={e} value={e}>{nombreEtapa(e)}</option>
                     ))}

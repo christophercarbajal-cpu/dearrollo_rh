@@ -186,7 +186,7 @@ with TestClient(app) as client:
     r = client.post("/candidatos", json={"nombre": "Lalo Lejano", "telefono": "5511112222", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P3 = r.json()["id"]
     p3 = db.query(Postulacion).filter_by(codigo=P3).one()
-    p3.etapa = "Evaluación"
+    p3.etapa = "Entrevista IA"  # etapa avanzada (Filtro Red Human)
     p3.candidato.postulacion_conversacion_id = p3.id
     p3.candidato.wa_id = "5215511112222"
     p3.ultima_actividad_en = datetime.now(timezone.utc) - timedelta(days=6)

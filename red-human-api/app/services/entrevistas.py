@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from ..models import Entrevista, Postulacion, registrar
+from ..models import ETAPAS_LEGADO, Entrevista, Postulacion, registrar
 from . import ia
 from .avatar import avatar_activo
 
@@ -41,8 +41,8 @@ def reabrir_entrevista(db: Session, e: Entrevista, actor: str, motivo: str = "",
     e.iniciada_en = None
     e.finalizada_en = None
     e.estado = "programada"
-    if p and p.etapa == "Evaluación":
-        p.etapa = "Entrevista IA"
+    if p and p.etapa in ETAPAS_LEGADO:  # 2026-10-01: la columna «Evaluación» ya no existe
+        p.etapa = ETAPAS_LEGADO[p.etapa]
     registrar(
         db, actor, "entrevista_reabierta", "entrevista", e.codigo,
         {"postulacion": p.codigo if p else None, "motivo": (motivo or "").strip()[:300], "intento_archivado": intento["estado"], **(extra or {})},

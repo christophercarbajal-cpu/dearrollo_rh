@@ -6,13 +6,43 @@
 export type EstadoPrefiltro = "cumple" | "revision" | "no_cumple" | "pendiente";
 export type FuenteCandidato = "Formulario" | "WhatsApp" | "OCC" | "LinkedIn" | "Indeed" | "RH";
 
+/** Pipeline de CINCO columnas (2026-10-01): valores internos; en la interfaz se muestran con `nombreEtapa()`
+ * → Prefiltro · Filtro Red Human · Filtro humano · Contratación · Onboarding. «Evaluación» (Evaluación integral)
+ * dejó de ser columna: ahora es un resultado acumulado (`resultadoIntegral`). */
 export type EtapaCandidato =
   | "Prefiltro"
   | "Entrevista IA"
-  | "Evaluación"
   | "Entrevista Humana"
   | "Contratación"
   | "Onboarding";
+
+/** 2026-10-01: Evaluación integral como RESULTADO (services/evaluacion_integral.py). */
+export type EstadoIntegral = "apto" | "con_observaciones" | "no_apto" | "pendiente";
+export interface ValidacionIntegral {
+  clave: string;
+  nombre: string;
+  obligatoria: boolean;
+  fuente: "red_human" | "persona";
+  tipo?: string;
+  estado: "aprobada" | "observaciones" | "no_apto" | "pendiente";
+  resultado: string;
+  detalle: string;
+  score: number | null;
+  /** «Revisado por: Red Human» · «Revisado por: [nombre]» · «Pendiente de revisión» */
+  revisadoPor: string;
+  codigo: string | null;
+}
+export interface ResultadoIntegral {
+  estado: EstadoIntegral;
+  texto: string;
+  /** Score de lo que ya está calificado; null si nada lo está (un pendiente nunca vale cero). */
+  score: number | null;
+  scoreParcial: boolean;
+  motivo: string;
+  completadas: number;
+  total: number;
+  validaciones: ValidacionIntegral[];
+}
 
 export interface RespuestaPrefiltro {
   criterio?: string;
@@ -81,6 +111,9 @@ export interface Candidato {
   activa?: boolean;
   motivoCierre?: string | null;
   cerradaEn?: string | null;
+  /** 2026-10-01: motivo que capturó RH al descartar (la tarjeta se queda en su columna con «No cumple»). */
+  motivoDescarte?: string;
+  resultadoIntegral?: ResultadoIntegral;
   /** true si el WhatsApp de esta persona está conversando sobre ESTA postulación. */
   enConversacion?: boolean;
   candidato?: {

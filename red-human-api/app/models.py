@@ -30,19 +30,38 @@ def slugificar(texto: str) -> str:
 # guardados en `Vacante.plataformas` se conservan tal cual (ver routers.vacantes._unir_plataformas).
 PLATAFORMAS = ["Portal", "WhatsApp", "Google Empleos", "Jooble", "Talent.com"]
 
-# Kanban de Candidato.etapa — flujo confirmado con el cliente (documento + audio, 2026-08-29):
-# Prefiltro -> Entrevista IA -> Evaluación -> Entrevista Humana -> Contratación -> Onboarding.
-# "Entrevista IA" cubre TANTO la videollamada mock que agenda el agente (Zero-Touch,
-# ver candidatos._procesar_turno_agenda) COMO la entrevista con avatar del módulo 3.10
-# (ver entrevistas.py): ambas las conduce la IA. "Entrevista Humana" es la única etapa
-# nueva que RH mueve a mano sin automatización detrás.
-ETAPAS_CANDIDATO = ["Prefiltro", "Entrevista IA", "Evaluación", "Entrevista Humana", "Contratación", "Onboarding"]
+# Kanban de Candidato.etapa — flujo confirmado con el cliente (documento + audio, 2026-08-29), reducido a CINCO
+# columnas el 2026-10-01: Prefiltro -> Filtro Red Human -> Filtro humano -> Contratación -> Onboarding.
+# Los valores ALMACENADOS no se renombran ("Entrevista IA" / "Entrevista Humana"); la interfaz los muestra con
+# ETIQUETA_ETAPA. "Entrevista IA" cubre TANTO la videollamada que agenda el agente (Zero-Touch, ver
+# candidatos._procesar_turno_agenda) COMO la entrevista con avatar (ver entrevistas.py). La columna «Evaluación»
+# (Evaluación integral) se eliminó: ahora es un RESULTADO acumulado (services/evaluacion_integral.py) visible en la
+# tarjeta y en la ficha; sus postulaciones se migran con migraciones.migrar_pipeline_cinco_columnas.
+ETAPAS_CANDIDATO = ["Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding"]
+ETIQUETA_ETAPA = {"Entrevista IA": "Filtro Red Human", "Entrevista Humana": "Filtro humano"}
+# Etapas retiradas → a dónde se mapean (migración y compatibilidad de clientes viejos que aún las manden).
+ETAPAS_LEGADO = {"Evaluación": "Entrevista IA"}
+
+
+def nombre_etapa(etapa: str) -> str:
+    """Nombre visible de una etapa (WhatsApp, correos, bitácora legible)."""
+    return ETIQUETA_ETAPA.get(etapa, etapa)
+
+
+def normalizar_etapa(etapa: str) -> str:
+    """Acepta el valor interno, el nombre visible o una etapa retirada y regresa el valor interno."""
+    e = (etapa or "").strip()
+    for interno, visible in ETIQUETA_ETAPA.items():
+        if e.lower() == visible.lower():
+            return interno
+    return ETAPAS_LEGADO.get(e, e)
+
 
 # 2026-09-15 (memoria de 5 días): en estas etapas la conversación de WhatsApp conserva su contexto
 # hasta CONTEXTO_WHATSAPP_HORAS sin actividad — un "sí quiero reagendar" al día 3 debe caer en la
 # postulación en curso, nunca en el menú de vacantes. Solo el Prefiltro sigue con la ventana corta
 # del Modo Prueba (ConfiguracionSistema.modo_prueba_ventana_min).
-ETAPAS_CONTEXTO_LARGO = ("Entrevista IA", "Evaluación", "Entrevista Humana", "Contratación", "Onboarding")
+ETAPAS_CONTEXTO_LARGO = ("Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")
 CONTEXTO_WHATSAPP_HORAS = 120
 
 
@@ -1981,8 +2000,8 @@ class TareaOnboarding(Base):
 # (Asignada → Enviada → Iniciada → Completada → Resultado recibido). HITL: la IA no revisa ni dictamina nada.
 TIPOS_EVALUACION = {
     "psicometrica": "Psicométrica",
-    "tecnica": "Técnica o caso práctico",
-    "referencias": "Referencias",
+    "tecnica": "Técnica o práctica",
+    "referencias": "Referencias laborales",
     "medico": "Médico",
     "socioeconomico": "Socioeconómico",
     "otra": "Otra",
@@ -2099,8 +2118,8 @@ TIPOS_EVALUACION_U = {
     "medica": "Médica",
     "psicometrica": "Psicométrica",
     "socioeconomica": "Socioeconómica",
-    "tecnica": "Técnica o caso práctico",
-    "referencias": "Referencias",
+    "tecnica": "Técnica o práctica",
+    "referencias": "Referencias laborales",
     "otra": "Otra",
 }
 TIPO_DESDE_LEGADO = {"medico": "medica", "socioeconomico": "socioeconomica"}  # el resto conserva su clave

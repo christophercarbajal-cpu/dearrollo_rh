@@ -79,7 +79,7 @@ ETAPA_EXCEL = {  # hoja Candidatos y columnas de la hoja Vacantes → valor inte
     "prefiltro": "Prefiltro",
     "entrevista red human": "Entrevista IA",
     "entrevista rh": "Entrevista IA",
-    "evaluacion": "Evaluación",
+    "evaluacion": "Entrevista IA",  # 2026-10-01: la columna Evaluación integral se retiró → Filtro Red Human
     "entrevista humana": "Entrevista Humana",
     "contratacion": "Contratación",
     "onboarding": "Onboarding",
@@ -225,7 +225,9 @@ def validar_excel(x: dict) -> dict:
             errores.append(f"{c['id candidato']}: resultado desconocido «{c.get('resultado de ejemplo')}»")
         esperado[c["id vacante"]][etapa] += 1
     for vid, v in vacs.items():
-        declarado = {ETAPA_EXCEL[norm(col)]: int(v.get(norm(col)) or 0) for col in COLUMNAS_ETAPA}
+        declarado: dict = defaultdict(int)  # dos columnas del Excel pueden caer en la misma etapa (Evaluación)
+        for col in COLUMNAS_ETAPA:
+            declarado[ETAPA_EXCEL[norm(col)]] += int(v.get(norm(col)) or 0)
         if sum(declarado.values()) != int(v.get("candidatos") or 0):
             errores.append(f"{vid}: la suma por etapa no da el total de candidatos")
         if {e: n for e, n in declarado.items() if n} != dict(esperado[vid]):

@@ -144,7 +144,7 @@ with TestClient(app) as client:
     r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista Humana", "manual": True, "comentario": "el cliente ya la entrevistó"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista Humana", "manual=true: RH mueve a Entrevista Humana sin agendar")
     om = r.json()["actividadesOmitidas"]
-    check([o["actividad"] for o in om] == ["Prefiltro", "Entrevista IA", "Evaluación"] and all(o["usuario"] == admin.nombre and o["fecha"] and o["motivo"] == "el cliente ya la entrevistó" for o in om),
+    check([o["actividad"] for o in om] == ["Prefiltro", "Entrevista IA"] and all(o["usuario"] == admin.nombre and o["fecha"] and o["motivo"] == "el cliente ya la entrevistó" for o in om),
           f"lo saltado quedó como «Omitida manualmente» con usuario, fecha y motivo: {[o['actividad'] for o in om]}")
     # Onboarding v2 (2026-09-28): a Onboarding solo se entra con «Iniciar Onboarding»; el salto manual directo
     # queda bloqueado salvo con Modo Prueba activo (ahí sigue abriendo el expediente sin bloquear).

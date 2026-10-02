@@ -7,7 +7,8 @@
   resultado (POST /{codigo}/resultado desde el sistema y POST /publica/{token}/resultado desde la liga del
   evaluador), cinco estados, consentimiento médico como condición, historial en `eventos_evaluacion`.
 * Recibir, guardar o REVISAR un resultado NUNCA mueve la etapa del candidato ni lo envía a Contratación; agregar una
-  evaluación tampoco (2026-10-01, ni siquiera la entrevista humana).
+  evaluación tampoco, SALVO crear una entrevista humana: mueve a «Entrevista Humana» (Filtro humano) desde
+  Prefiltro / Filtro Red Human (2026-10-01, pipeline de 5 columnas; `candidatos.mover_por_entrevista_humana`).
 * Ligas externas (consentimiento, evaluador/médico, otro sistema, proveedor): existen aunque el envío falle; Abrir /
   Copiar / Enviar o reenviar (POST /{codigo}/ligas/{clave}/enviar) y el estado de cada envío viaja aparte.
 * Consentimiento médico EXPRESO y POR ESCRITO: liga pública `/consentimiento/{token}` (texto exacto + evidencia).
@@ -168,7 +169,7 @@ def inactivar_prueba(pid: int, db: Session = Depends(get_db), u: Usuario = Depen
 # ======================================================================================================
 # Evaluaciones unificadas — Fase 1 (2026-09-29). Toda evaluación (entrevista humana, médica, psicométrica…) se
 # crea, se sigue y se cierra con el MISMO objeto y el MISMO formulario de resultado (RH y liga del evaluador).
-# Ni agregar ni ningún resultado mueve la etapa (2026-10-01): mover a «Entrevista Humana» es una acción aparte de RH.
+# Ningún resultado mueve la etapa. Agregar solo mueve con la entrevista humana (→ Filtro humano, 2026-10-01).
 # ======================================================================================================
 
 def _postulacion(db: Session, codigo: str, cuenta_id: int) -> Postulacion:
@@ -276,8 +277,9 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     - asignada: exige evaluador (interno o externo con correo o WhatsApp); cita opcional.
     - registro_directo: sin evaluador; el frontend manda enseguida el resultado a POST /{codigo}/resultado.
     - liga_otro_sistema: exige la liga que recibe el candidato. integrada: prueba del catálogo con proveedor.
-    2026-10-01: agregar (cualquier tipo, también la entrevista humana) NUNCA mueve la etapa; las ligas externas se
-    generan aunque el envío automático falle y el estado de cada envío regresa aparte."""
+    2026-10-01 (pipeline de 5 columnas): crear una ENTREVISTA HUMANA mueve al candidato a Filtro humano si está en
+    Prefiltro o Filtro Red Human; cualquier otro tipo NO mueve la etapa. Las ligas externas se generan aunque el envío
+    automático falle y el estado de cada envío regresa aparte."""
     p = _postulacion(db, codigo, cuenta.id)
     if not p.activa:
         raise HTTPException(409, "La postulación está cerrada.")
@@ -323,16 +325,21 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     sev.evento(db, ev, "creada", u.nombre, a=ev.estado, usuario_id=u.id, tipo=ev.tipo, forma=ev.forma,
                evaluador=ev.evaluador_nombre, cita=fechas.iso(ev.cita_fecha_hora), consentimiento=ev.consentimiento,
                proveedor=ev.proveedor)
+    movida = False
+    if ev.tipo == "entrevista_humana":
+        from .candidatos import mover_por_entrevista_humana
+
+        movida = mover_por_entrevista_humana(db, p, u, ev.codigo)
     resultados: list = []
     if datos.forma != "registro_directo":
         resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
     registrar(db, u.nombre, "evaluacion_creada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "tipo": ev.tipo, "forma": ev.forma, "evaluador": ev.evaluador_nombre,
-               "cita": fechas.iso(ev.cita_fecha_hora), "etapa": p.etapa, "correo_rh": u.correo,
-               "notificaciones": resultados})
+               "cita": fechas.iso(ev.cita_fecha_hora), "etapa": p.etapa, "movida_a_filtro_humano": movida,
+               "correo_rh": u.correo, "notificaciones": resultados})
     _tocar(p)
     db.commit()
-    return _respuesta(db, ev, u, p, resultados)
+    return _respuesta(db, ev, u, p, resultados, movidaAFiltroHumano=movida)
 
 
 @router.get("/{codigo}")

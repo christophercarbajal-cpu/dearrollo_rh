@@ -65,7 +65,7 @@ def sembrar(db: Session) -> None:
                   evidencia="Cumple escolaridad, disponibilidad de horario y experiencia en manejo de efectivo.",
                   vacante_id=vac["VAC-1042"].id, consentimiento=True, prefiltro_completo=True, creado_en=_hace(hours=2)),
         Candidato(codigo="C-8802", nombre="Jorge Alberto Ramírez", telefono="5522223333", ubicacion="CDMX",
-                  experiencia="5 años en call center", fuente="LinkedIn", estado="cumple", etapa="Evaluación", score=88,
+                  experiencia="5 años en call center", fuente="LinkedIn", estado="cumple", etapa="Entrevista IA", score=88,
                   evidencia="Supera meta de experiencia; buen manejo de objeciones en el prefiltro por voz.",
                   vacante_id=vac["VAC-1041"].id, consentimiento=True, prefiltro_completo=True, creado_en=_hace(hours=4)),
         Candidato(codigo="C-8803", nombre="Ana Sofía Herrera", telefono="8133334444", ubicacion="Monterrey",

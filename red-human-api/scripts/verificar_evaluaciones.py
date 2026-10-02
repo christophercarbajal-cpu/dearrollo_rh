@@ -103,7 +103,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Carla Méndez", "telefono": "5512121212", "correo": "carla@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista IA", "manual": True})
 
     def crear(post, **cuerpo):
         return client.post(f"/evaluaciones/postulaciones/{post}", json=cuerpo)
@@ -120,8 +120,8 @@ with TestClient(app) as client:
     for tipo in ("tecnica", "referencias", "socioeconomica"):
         tipos[tipo] = crear(P, tipo=tipo, forma="registro_directo").json()["evaluacion"]
     tipos["otra"] = crear(P, tipo="otra", nombre="Prueba de manejo", forma="registro_directo").json()["evaluacion"]
-    check([tipos[t]["tipoTexto"] for t in tipos] == ["Técnica o caso práctico", "Referencias", "Socioeconómica", "Otra"], "tipos del menú (en femenino: Socioeconómica)")
-    check(client.get(f"/candidatos/{P}").json()["etapa"] == "Evaluación", "agregar evaluaciones NO mueve la columna del pipeline")
+    check([tipos[t]["tipoTexto"] for t in tipos] == ["Técnica o práctica", "Referencias laborales", "Socioeconómica", "Otra"], "tipos del menú (en femenino: Socioeconómica)")
+    check(client.get(f"/candidatos/{P}").json()["etapa"] == "Entrevista IA", "agregar evaluaciones (no entrevista humana) NO mueve la columna del pipeline")
 
     print("\n--- 3. Consentimiento general (LFPDPPP) ---")
     r = client.post("/candidatos", json={"nombre": "Sin Consentimiento", "telefono": "5534343434", "vacante": vac["id"], "consentimiento": False, "fuente": "RH"})
@@ -217,7 +217,7 @@ with TestClient(app) as client:
     check(client.post(f"/evaluaciones/{REF}/realizada").status_code == 409, "una cancelada ya no se mueve")
     eventos = client.get(f"/evaluaciones/{REF}").json()["eventos"]
     check(len(eventos) >= 2 and eventos[-1]["estadoNuevo"] == "cancelada", "cada cambio queda en el historial de la evaluación")
-    check(client.get(f"/candidatos/{P}").json()["etapa"] == "Evaluación", "nada de lo anterior movió el pipeline")
+    check(client.get(f"/candidatos/{P}").json()["etapa"] == "Entrevista IA", "nada de lo anterior movió el pipeline")
 
     print("\n--- 9. Vacante: sugerencias y «Avisar antes de Onboarding» ---")
     r = client.patch(f"/vacantes/{vac['id']}", json={

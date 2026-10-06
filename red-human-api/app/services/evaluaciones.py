@@ -204,13 +204,15 @@ async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, a
     from ..serial import nombre_empresa_candidato
     from . import plantillas_correo
     from .correo import enviar_correo
+    from .mensajeria import de_cuenta
     from .whatsapp import enviar_mensaje
 
     empresa = nombre_empresa_candidato(p.vacante) if p.vacante else ""
     resultados = []
     if p.telefono:
         try:
-            r = await enviar_mensaje(p.telefono, f"{texto} {liga}")
+            with de_cuenta(p.cuenta_id):
+                r = await enviar_mensaje(p.telefono, f"{texto} {liga}")
         except Exception as ex:  # noqa: BLE001
             r = {"enviado": False, "detalle": str(ex)[:200]}
         resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})

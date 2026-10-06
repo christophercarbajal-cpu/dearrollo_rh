@@ -29,6 +29,7 @@ from ..services import notificaciones
 from ..services.pdf import pdf_carta_intencion, pdf_contrato
 from ..services import plantillas_correo
 from ..services.correo import enviar_correo
+from ..services.mensajeria import de_cuenta
 from ..services.whatsapp import enviar_mensaje
 from ..services.notificaciones import TZ_MEXICO, NotificarIn, override_de
 from ..services.configuracion import modo_prueba_activo, puede_forzar_prueba
@@ -926,7 +927,8 @@ async def enviar_carta_intencion(
             f"Hola {c.nombre.split(' ')[0]}, {d['empresa']} te comparte tu carta de intención para el puesto de {d['puesto']} "
             f"({d['sueldo']}, ingreso el {d['fecha_ingreso']}). La puedes descargar desde tu expediente: {liga}"
         )
-        envio = await enviar_mensaje(c.telefono, texto)
+        with de_cuenta(p.cuenta_id if p else None):
+            envio = await enviar_mensaje(c.telefono, texto)
         if p:
             from .candidatos import guardar_mensaje  # import local: candidatos ↔ contratacion
 

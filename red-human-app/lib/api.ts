@@ -264,6 +264,9 @@ export interface DatosCuenta {
   correoComunicacion: string;
   whatsappComunicacion: string;
   whatsappExclusivo?: boolean;
+  /** 2026-10-06: canal con candidatos (WhatsApp, Telegram o ambos) y si el bot de Telegram está configurado. */
+  canalMensajeria?: CanalMensajeria;
+  telegramDisponible?: boolean;
   /** 2026-09-17: portal por Cuenta. */
   slug?: string;
   portalUrl?: string;
@@ -302,8 +305,17 @@ export type CamposCuenta = {
   whatsapp_comunicacion?: string;
   /** 2026-09-17: número de WhatsApp dedicado a esta Cuenta (Premium); por defecto el número es compartido. */
   whatsapp_exclusivo?: boolean;
+  /** 2026-10-06: canal activo con candidatos; lo evalúan TODOS los envíos (prefiltro, recordatorios, documentos…). */
+  canal_mensajeria?: CanalMensajeria;
   estado?: "Activa" | "Inactiva";
 };
+
+export type CanalMensajeria = "whatsapp" | "telegram" | "ambos";
+export const CANALES_MENSAJERIA: { valor: CanalMensajeria; texto: string }[] = [
+  { valor: "whatsapp", texto: "WhatsApp" },
+  { valor: "telegram", texto: "Telegram" },
+  { valor: "ambos", texto: "WhatsApp y Telegram" },
+];
 
 export function fetchCuentaActual() {
   return get<FichaCuenta>("/cuentas/actual");
@@ -1200,6 +1212,8 @@ export function postular(datos: {
     nuevo: boolean;
     cv: { procesado: boolean; avisos: string[] };
     clasificacion: { estado: string; score: number; evidencia: string } | null;
+    /** 2026-10-06: deep link «Continuar en Telegram» si la Cuenta atiende por Telegram (vacío si no). */
+    telegram?: string;
   }>("/candidatos/postular", form);
 }
 

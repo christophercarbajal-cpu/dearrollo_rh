@@ -2975,7 +2975,7 @@ function PestanaWhatsApp({
                   {esIA ? "Agente Red Human (Luna)" : (c.nombre || "Candidato")}
                 </span>
                 <span className={cn("font-mono", esIA ? "text-ink-3" : "text-brand-ink/70")}>
-                  {m.canal === "whatsapp" ? "WhatsApp" : "Simulador"}
+                  {m.canal === "whatsapp" ? "WhatsApp" : m.canal === "telegram" ? "Telegram" : "Simulador"}
                 </span>
               </div>
               <p className="whitespace-pre-wrap">{m.texto}</p>

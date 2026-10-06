@@ -247,7 +247,19 @@ def _salida(p) -> dict:
 
 @router.get("/postulaciones/{codigo}")
 def seguimiento(codigo: str, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
-    return sproc.resumen(_postulacion(db, codigo, cuenta.id))
+    p = _postulacion(db, codigo, cuenta.id)
+    salida = sproc.resumen(p)
+    # Canal Telegram (2026-10-06): deep links de la postulación y de cada paso, solo si la Cuenta atiende por Telegram
+    from ..services.canal_proceso import ligas_telegram
+    from ..services.mensajeria import canal_de_cuenta
+
+    salida["telegram"] = {"disponible": False, "liga": "", "pasos": {}}
+    if salida.get("tieneProceso") and canal_de_cuenta(db, cuenta.id) in ("telegram", "ambos"):
+        nuevo = not p.telegram_token
+        salida["telegram"] = ligas_telegram(p)
+        if nuevo and p.telegram_token:
+            db.commit()
+    return salida
 
 
 class MotivoIn(BaseModel):

@@ -146,6 +146,8 @@ export interface SeguimientoProceso {
   siguienteAccion?: SiguienteAccionProceso;
   alertas?: { paso: string; texto: string; fechaLimite: string | null }[];
   etapas?: EtapaSeguimiento[];
+  /** Canal Telegram (2026-10-06): deep links de la postulación y de cada paso (solo si la Cuenta atiende por Telegram). */
+  telegram?: { disponible: boolean; liga: string; pasos: Record<string, string> };
 }
 
 export interface RespuestaPrefiltro {

@@ -93,6 +93,8 @@ import {
   type RolUsuario,
   type UsuarioRH,
   urlArchivo,
+  CANALES_MENSAJERIA,
+  type CanalMensajeria,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { textoFecha } from "@/lib/fechas";
@@ -321,7 +323,7 @@ function fechaCorta(iso: string) {
 /* 1. Cuentas (Punto 9)                                                */
 /* ================================================================== */
 
-type FormCuentaState = { nombre: string; nombreComercial: string; razonSocial: string; contactoNombre: string; correo: string; whatsapp: string; whatsappExclusivo: boolean; estado: "Activa" | "Inactiva" };
+type FormCuentaState = { nombre: string; nombreComercial: string; razonSocial: string; contactoNombre: string; correo: string; whatsapp: string; whatsappExclusivo: boolean; canal: CanalMensajeria; telegramDisponible: boolean; estado: "Activa" | "Inactiva" };
 
 const cuentaAForm = (c?: DatosCuenta | null): FormCuentaState => ({
   nombre: c?.nombre ?? "",
@@ -331,6 +333,8 @@ const cuentaAForm = (c?: DatosCuenta | null): FormCuentaState => ({
   correo: c?.correoComunicacion ?? "",
   whatsapp: c?.whatsappComunicacion ?? "",
   whatsappExclusivo: Boolean(c?.whatsappExclusivo),
+  canal: c?.canalMensajeria ?? "whatsapp",
+  telegramDisponible: Boolean(c?.telegramDisponible),
   estado: c?.estado === "Inactiva" ? "Inactiva" : "Activa",
 });
 
@@ -342,6 +346,7 @@ const formACampos = (f: FormCuentaState): CamposCuenta & { nombre: string } => (
   correo_comunicacion: f.correo,
   whatsapp_comunicacion: f.whatsapp,
   whatsapp_exclusivo: f.whatsappExclusivo,
+  canal_mensajeria: f.canal,
   estado: f.estado,
 });
 
@@ -355,6 +360,19 @@ function CamposCuentaForm({ f, set }: { f: FormCuentaState; set: (k: keyof FormC
       <Entrada label="Teléfono / WhatsApp" value={f.whatsapp} onChange={(v) => set("whatsapp", v)} placeholder="52 55 1234 5678" />
       <Entrada label="Nombre de contacto" value={f.contactoNombre} onChange={(v) => set("contactoNombre", v)} placeholder="Ej. Ana García" />
       <Selector label="Estatus" value={f.estado} onChange={(v) => set("estado", v)} opciones={["Activa", "Inactiva"]} />
+      {/* 2026-10-06: canal con candidatos. Lo evalúan todos los envíos (prefiltro, recordatorios, solicitudes de documentos,
+          avisos de evaluaciones) y el alcance de cada webhook. Sin bot configurado en el servidor, todo sale por WhatsApp. */}
+      <div className="flex flex-col gap-1.5 sm:col-span-2">
+        <Selector label="Canal con candidatos" value={f.canal} onChange={(v) => set("canal", v)} opciones={CANALES_MENSAJERIA} />
+        <span className="text-[12px] text-ink-3">
+          {f.canal === "ambos"
+            ? "Se le responde a cada candidato por el canal por el que escribió al último."
+            : f.canal === "telegram"
+              ? "Los candidatos conversan con el bot de Telegram; comparten su número una vez y el proceso sigue igual."
+              : "Los candidatos conversan por WhatsApp."}
+          {f.canal !== "whatsapp" && !f.telegramDisponible && " El bot de Telegram aún no está configurado en el servidor: mientras tanto todo sale por WhatsApp."}
+        </span>
+      </div>
       {/* 2026-09-17 (WhatsApp multi-tenant): por defecto el número maestro de WhatsApp atiende a TODAS las
           Cuentas (el candidato elige la vacante y su postulación queda en la Cuenta correcta). Premium:
           un número propio conectado en Meta se reserva para esta Cuenta. */}

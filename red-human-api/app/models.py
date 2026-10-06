@@ -5,7 +5,7 @@ import unicodedata
 from datetime import timedelta, date, datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import JSON, Boolean, Date, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, Date, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from .database import Base
@@ -277,7 +277,7 @@ class Candidato(Base):
 NIVELES_RECORDATORIO = {1: "ligero", 2: "intermedio", 3: "definitivo"}
 
 # Cómo nació la postulación — alimenta "por fuente" en /metricas.
-ORIGENES_POSTULACION = ["formulario", "whatsapp", "rh_directo", "cv_masivo", "reinicio_prueba", "migracion"]
+ORIGENES_POSTULACION = ["formulario", "whatsapp", "telegram", "rh_directo", "cv_masivo", "reinicio_prueba", "migracion"]
 # Por qué se cerró (activa=False). "" mientras sigue en curso.
 MOTIVOS_CIERRE = ["descartado", "contratado", "reinicio_prueba", "prueba_expirada", "sin_interes", "vacante_eliminada", "eliminado"]
 
@@ -328,6 +328,9 @@ class Postulacion(Base):
     # Decisiones de RH sobre los pasos ({paso_id: {omitida|cancelada: {por, motivo, autorizado_por, fecha}}}). El
     # ESTADO de cada paso se DERIVA de los registros reales (services/proceso.py).
     proceso_estado: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Telegram (2026-10-06): token del deep link `t.me/<bot>?start=p_<token>[_<paso>]` (16 hex). Nace perezoso y se
+    # reutiliza; el chat que lo abre debe haber compartido el MISMO teléfono de la postulación.
+    telegram_token: Mapped[Optional[str]] = mapped_column(String(32), index=True, nullable=True)
     # Cuándo entró a su etapa actual (plazos de los pasos). La escribe el listener de `etapa`; NULL = creado_en.
     etapa_desde: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Fase C: resultado vigente ("el más reciente gana"), ver candidatos._recalcular_resultado_apto.
@@ -1008,6 +1011,9 @@ class Cuenta(Base):
     # en `whatsapp_comunicacion` para ESTA Cuenta: los mensajes que lleguen a ese número solo ven sus
     # vacantes y sus personas (ruteo dedicado, comportamiento anterior).
     whatsapp_exclusivo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 2026-10-06: canal de mensajería con candidatos (`CANALES_MENSAJERIA`): whatsapp | telegram | ambos. Lo leen el
+    # alcance de cada webhook y la fachada de envío (`services/mensajeria.py`) para TODO envío automático o manual.
+    canal_mensajeria: Mapped[str] = mapped_column(String(12), default="whatsapp")
     estado: Mapped[str] = mapped_column(String(20), default="Activa")  # Activa | Inactiva | Eliminada
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
@@ -1656,6 +1662,7 @@ TABLAS_MODULOS_RH = (
     "firmas_documentos",  # Dropbox Sign (2026-09-29)
     "evaluaciones", "eventos_evaluacion",  # Evaluaciones unificadas — Fase 1 (2026-09-29)
     "plantillas_proceso",  # Proceso configurable (2026-10-06)
+    "chats_telegram", "updates_telegram",  # Canal Telegram (2026-10-06)
 )
 
 # --- Desempeño ---
@@ -2448,3 +2455,43 @@ def _al_cambiar_etapa(p: "Postulacion", nueva, anterior, _iniciador) -> None:
 from sqlalchemy import event as _event  # noqa: E402
 
 _event.listen(Postulacion.etapa, "set", _al_cambiar_etapa)
+
+
+# ============================================================
+# Canal Telegram (2026-10-06)
+# ============================================================
+#
+# Telegram es SOLO un canal de entrega/recepción detrás de la misma fachada que WhatsApp (`services/whatsapp.py` →
+# `services/telegram.py`). La plataforma sigue identificando a la persona por TELÉFONO a 10 dígitos: el chat_id solo
+# existe en `chats_telegram` (el bot no puede escribirle a un número, solo a un chat que compartió su contacto).
+
+CANALES_MENSAJERIA = {"whatsapp": "WhatsApp", "telegram": "Telegram", "ambos": "WhatsApp y Telegram"}
+
+
+def normalizar_canal_mensajeria(valor: Optional[str]) -> str:
+    v = (valor or "").strip().lower()
+    return v if v in CANALES_MENSAJERIA else "whatsapp"
+
+
+class ChatTelegram(Base):
+    """chat_id ↔ teléfono (10 dígitos) verificado con el botón nativo «Compartir mi número». `inicio_pendiente` guarda
+    el payload de `/start` mientras se espera el contacto (persistente: sobrevive reinicios y réplicas)."""
+
+    __tablename__ = "chats_telegram"
+
+    chat_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    telefono: Mapped[str] = mapped_column(String(20), default="", index=True)
+    nombre: Mapped[str] = mapped_column(String(200), default="")
+    inicio_pendiente: Mapped[str] = mapped_column(String(80), default="")
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+    ultimo_entrante_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+
+
+class UpdateTelegram(Base):
+    """Deduplicación PERSISTENTE de `update_id` (Telegram reintenta si no contestamos a tiempo)."""
+
+    __tablename__ = "updates_telegram"
+
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    recibido_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, index=True)

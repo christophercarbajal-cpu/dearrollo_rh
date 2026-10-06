@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import REGLAS_NOTIFICACION_DEFAULT, ClienteContacto, EntrevistaHumana, Mensaje, NotificacionEnviada, Postulacion, ReglaNotificacion, Usuario
 from .correo import enviar_correo
+from .mensajeria import de_cuenta
 from .whatsapp import enviar_mensaje, enviar_plantilla_documentos, enviar_plantilla_entrevista
 from . import plantillas_correo
 from ..serial import nombre_empresa_candidato
@@ -527,14 +528,20 @@ async def _enviar_y_registrar(
             canal=canal, destino=destino or "", enviado=False, detalle=detalle,
         ))
         return {**base, "enviado": False, "detalle": detalle}
+    # 2026-10-06: el canal de la Cuenta (WhatsApp / Telegram / ambos) aplica al CANDIDATO; a RH, Cliente y
+    # entrevistadores se les escribe por WhatsApp salvo que ellos mismos hayan vinculado Telegram como candidatos.
+    cuenta_canal = cuenta_id if destinatario_tipo == "candidato" else None
     try:
         if canal == "whatsapp" and plantilla_valores is not None:
-            envio = await enviar_plantilla_documentos(destino, plantilla_valores, contenido, nivel=int(plantilla_valores.get("nivel") or 1))
+            with de_cuenta(cuenta_canal):
+                envio = await enviar_plantilla_documentos(destino, plantilla_valores, contenido, nivel=int(plantilla_valores.get("nivel") or 1))
         elif canal == "whatsapp" and plantilla_entrevista is not None and settings.whatsapp_provider == "meta" and (settings.meta_plantilla_entrevista or "").strip():
             # plantilla de Meta «alerta_entrevista_asignada» (6 parámetros); si Meta la rechaza cae a texto
-            envio = await enviar_plantilla_entrevista(destino, plantilla_entrevista, contenido)
+            with de_cuenta(cuenta_canal):
+                envio = await enviar_plantilla_entrevista(destino, plantilla_entrevista, contenido)
         elif canal == "whatsapp":
-            envio = await enviar_mensaje(destino, contenido)
+            with de_cuenta(cuenta_canal):
+                envio = await enviar_mensaje(destino, contenido)
         else:
             asunto, html = contenido
             envio = await enviar_correo(destino, asunto, html)

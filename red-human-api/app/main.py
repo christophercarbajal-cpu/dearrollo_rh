@@ -18,7 +18,7 @@ from .config import settings
 from .database import Base, SessionLocal, engine
 from .migraciones import crear_tablas_base, crear_tablas_conocimiento, crear_tablas_modulos_rh, candidatos_sin_postulacion, relajar_not_null, sincronizar, evaluaciones_sin_migrar
 from .migraciones import asegurar_reglas_entrevistador, migrar_pipeline_cinco_columnas
-from .routers import agente, auth, candidatos, procesos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
+from .routers import agente, auth, candidatos, procesos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, webhooks_telegram, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
 from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
 from .services import modulos_rh, rag
@@ -216,6 +216,7 @@ app.include_router(onboarding.router)  # 2026-09-28: Onboarding v2 (plantillas y
 app.include_router(evaluaciones.router)  # 2026-09-28: evaluaciones y verificaciones del candidato
 app.include_router(firmas.router)  # 2026-09-29: firma electrónica incrustada (Dropbox Sign)
 app.include_router(webhooks_proveedores.router)  # 2026-09-29: /api/webhooks/dropbox y /api/webhooks/psicometricas
+app.include_router(webhooks_telegram.router)  # 2026-10-06: /api/webhooks/telegram (canal Telegram)
 app.include_router(procesos.router)  # 2026-10-06: proceso configurable y seguimiento de candidatos
 
 
@@ -226,6 +227,7 @@ def salud():
         "ia_configurada": ia_activa(),
         "whatsapp_configurado": whatsapp_activo(),
         "whatsapp_proveedor": whatsapp_proveedor(),
+        "telegram_configurado": bool(settings.telegram_bot_token.strip()),
         "whatsapp_webhook_firmado": bool(settings.meta_app_secret) if settings.whatsapp_provider == "meta" else None,
         "avatar_configurado": avatar_activo(),
         "modelo": settings.openai_model,

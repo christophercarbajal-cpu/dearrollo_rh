@@ -31,6 +31,12 @@ WhatsApp multi-tenant (2026-09-17) — UN número maestro para varias Cuentas:
   la persona misma se mueve a esa Cuenta; si ya tiene procesos en otra Cuenta, se crea/reutiliza su
   fila en la Cuenta destino. El candidato nunca nota el número compartido: toda identidad de empresa
   sale de la vacante (`serial.nombre_empresa_candidato`).
+
+Telegram (2026-10-06): `procesar_entrante(db, msg)` es el procesamiento COMÚN. El webhook de WhatsApp le pasa lo que
+normaliza `parsear_webhook`; el de Telegram (`routers/webhooks_telegram.py`) lo que normaliza `telegram.parsear_update`
+con `msg["canal"]="telegram"`, dentro de `mensajeria.en_conversacion` (las respuestas a esa persona salen por Telegram).
+El alcance de cada canal respeta `Cuenta.canal_mensajeria` (`mensajeria.alcance_canal`). Con proceso configurable, lo
+que se le contesta al candidato lo decide el proceso de su postulación (`services/canal_proceso.py`).
 """
 
 import json
@@ -50,6 +56,7 @@ from ..deps import cuenta_actual, usuario_actual
 from ..models import CONTEXTO_WHATSAPP_HORAS, ETAPAS_CONTEXTO_LARGO, Bitacora, Candidato, Cuenta, Postulacion, Usuario, Vacante, registrar
 from ..serial import nombre_empresa_candidato
 from ..services.configuracion import modo_prueba_activo, ventana_modo_prueba_min
+from ..services.mensajeria import alcance_canal, canal_conversacion, en_conversacion
 from ..services.whatsapp import descargar_media, enviar_mensaje, enviar_lista_interactiva, parsear_webhook
 from .candidatos import (
     _actualizar_ultima_actividad,
@@ -100,6 +107,11 @@ def _normalizar_telefono(wa_id: str) -> str:
     if digitos.startswith("52") and len(digitos) == 12:
         return digitos[2:]  # quitar 52
     return digitos[-10:] if len(digitos) > 10 else digitos
+
+
+def _origen() -> str:
+    """Origen de la postulación / fuente de la persona según el canal del mensaje entrante."""
+    return "telegram" if canal_conversacion() == "telegram" else "whatsapp"
 
 
 def _ids(alcance) -> List[int]:
@@ -238,11 +250,12 @@ def _buscar_o_crear_candidato(db: Session, wa_id: str, nombre: str, cuenta_id: i
             existente.wa_nombre = nombre
         return existente
 
+    fuente = "Telegram" if _origen() == "telegram" else "WhatsApp"
     c = _crear_candidato(
-        db, cuenta_id, nombre or "Candidato WhatsApp", "WhatsApp", prueba,
+        db, cuenta_id, nombre or f"Candidato {fuente}", fuente, prueba,
         telefono=tel, wa_id=wa_id, wa_nombre=nombre,
     )
-    registrar(db, "sistema", "candidato_ingresado", "candidato", c.codigo, {"fuente": "WhatsApp", "wa_id": wa_id, "es_prueba": prueba})
+    registrar(db, "sistema", "candidato_ingresado", "candidato", c.codigo, {"fuente": fuente, "wa_id": wa_id, "es_prueba": prueba})
     return c
 
 
@@ -351,7 +364,7 @@ async def _resolver_postulacion(
     if vac and not any(p.vacante_id == vac.id for p in activas):
         # la postulación nace en la Cuenta de la vacante, con la fila de la persona de ESA Cuenta
         persona = _persona_para_cuenta(db, c, personas, vac.cuenta_id, prueba)
-        p, _nueva = postulacion_para_vacante(db, persona, vac, vac.cuenta_id, "whatsapp", es_prueba=prueba)
+        p, _nueva = postulacion_para_vacante(db, persona, vac, vac.cuenta_id, _origen(), es_prueba=prueba)
         fijar_conversacion(p)
         return p, "postulacion_nueva_por_seleccion"
     if conv:
@@ -362,7 +375,7 @@ async def _resolver_postulacion(
 
     # 4. Sin nada activo → postulación nueva sin vacante (en la Cuenta ancla); el flujo de abajo manda
     # el menú y, al elegir, `_amarrar_a_cuenta` la deja en la Cuenta de la vacante.
-    p = crear_postulacion(db, c, None, c.cuenta_id, "whatsapp", es_prueba=prueba)
+    p = crear_postulacion(db, c, None, c.cuenta_id, _origen(), es_prueba=prueba)
     fijar_conversacion(p)
     return p, "postulacion_nueva"
 
@@ -430,7 +443,7 @@ async def _recibir_documento_whatsapp(db: Session, p: Postulacion, msg: dict, te
     guardar_mensaje(db, p, "user", f"[📎 {etiqueta}]" + (f" {msg.get('texto')}" if msg.get("texto") else ""), "whatsapp", wa_id=msg.get("wa_id", ""))
     db.flush()
 
-    descarga = await descargar_media(media.get("id", ""))
+    descarga = await descargar_media(media.get("id", ""))  # Telegram deduce el formato de la ruta de getFile
     if not descarga.get("ok"):
         registrar(db, "sistema", "documento_whatsapp_error", "postulacion", p.codigo, {"media": media, "error": descarga.get("detalle", "")})
         aviso = "Recibí tu archivo pero no pude descargarlo 😕 ¿Me lo puedes reenviar? Si sigue fallando, súbelo desde la liga que te compartimos."
@@ -472,15 +485,19 @@ async def _recibir_documento_whatsapp(db: Session, p: Postulacion, msg: dict, te
     return {"documento": doc.tipo, "estado": estado, "pendientes": pendientes, "whatsapp": envio}
 
 
-def _alcance_whatsapp(db: Session, numero_receptor: str) -> Tuple[List[Cuenta], str]:
+def _alcance_whatsapp(db: Session, numero_receptor: str, canal: str = "whatsapp") -> Tuple[List[Cuenta], str]:
     """(Cuentas activas que atiende este mensaje, modo) — ver docstring del módulo (multi-tenant).
 
     - `dedicado`: el número receptor está reservado por UNA Cuenta (`whatsapp_exclusivo` + número
       igual a `whatsapp_comunicacion`) → solo esa Cuenta. Opción Premium / comportamiento anterior.
-    - `compartido`: cualquier otro caso → todas las Cuentas activas (número maestro)."""
+    - `compartido`: cualquier otro caso → todas las Cuentas activas (número maestro).
+    Canal (2026-10-06): solo las Cuentas cuyo `canal_mensajeria` acepta ese canal (lista vacía = nadie lo atiende)."""
     activas = db.query(Cuenta).filter(Cuenta.estado == "Activa").order_by(Cuenta.id).all()
     if not activas:
         raise HTTPException(500, "El webhook de WhatsApp no tiene ninguna Cuenta activa a la que asignar el mensaje.")
+    activas = alcance_canal(activas, canal)
+    if not activas:
+        return [], "sin_canal"
     receptor = _normalizar_telefono(numero_receptor) if numero_receptor else ""
     if receptor:
         dedicadas = [
@@ -628,7 +645,12 @@ async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
     if not msg:
         print("[webhook-post] Webhook procesado sin mensaje de candidato (estado de entrega o evento ignorado).")
         return {"ok": True, "ignorado": True}
+    with en_conversacion("whatsapp", msg["telefono"]):  # la respuesta a esta persona sale por WhatsApp
+        return await procesar_entrante(db, msg)
 
+
+async def procesar_entrante(db: Session, msg: dict) -> dict:
+    """Procesamiento COMÚN de un mensaje entrante ya normalizado (WhatsApp o Telegram, ver docstring del módulo)."""
     telefono = msg["telefono"]
     texto = msg["texto"].strip()
     nombre_wa = msg.get("nombre", "")
@@ -636,7 +658,10 @@ async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
 
     print(f"[agente] Procesando mensaje de {nombre_wa} ({telefono}): '{texto}' (id_sel='{id_seleccionado}')")
 
-    alcance, modo_numero = _alcance_whatsapp(db, msg.get("numero_receptor", ""))
+    alcance, modo_numero = _alcance_whatsapp(db, msg.get("numero_receptor", ""), msg.get("canal") or "whatsapp")
+    if not alcance:
+        print(f"[agente] Ninguna Cuenta activa atiende el canal {msg.get('canal') or 'whatsapp'}; mensaje ignorado.")
+        return {"ok": True, "ignorado": True, "motivo": "canal_sin_cuentas"}
     alcance_ids = [x.id for x in alcance]
     prueba = modo_prueba_activo(db)
 

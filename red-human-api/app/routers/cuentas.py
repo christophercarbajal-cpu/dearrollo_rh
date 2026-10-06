@@ -20,7 +20,7 @@ from ..config import settings
 from ..database import get_db
 from ..seed import slug_cuenta_unico
 from ..deps import cuenta_actual, usuario_actual, usuario_admin
-from ..models import ROLES, Cliente, Cuenta, Usuario, UsuarioCuenta, registrar
+from ..models import CANALES_MENSAJERIA, normalizar_canal_mensajeria, ROLES, Cliente, Cuenta, Usuario, UsuarioCuenta, registrar
 from .auth import CORREO_RE, crear_usuario_basico
 
 router = APIRouter(prefix="/cuentas", tags=["cuentas"])
@@ -41,6 +41,9 @@ def _cuenta_dict(cu: Cuenta, actual_id: Optional[int] = None) -> dict:
         "correoComunicacion": cu.correo_comunicacion,
         "whatsappComunicacion": cu.whatsapp_comunicacion,
         "whatsappExclusivo": bool(cu.whatsapp_exclusivo),  # 2026-09-17: número dedicado (Premium)
+        # 2026-10-06: canal con candidatos (whatsapp | telegram | ambos) y si el bot de Telegram está configurado
+        "canalMensajeria": normalizar_canal_mensajeria(cu.canal_mensajeria),
+        "telegramDisponible": bool((settings.telegram_bot_token or "").strip()),
         "slug": cu.slug or "",
         "portalUrl": f"{settings.app_url}/portal?cuenta={cu.slug}" if cu.slug else f"{settings.app_url}/portal",  # 2026-09-17
         "estado": cu.estado,
@@ -182,6 +185,7 @@ class CrearCuentaIn(BaseModel):
     correo_comunicacion: str = ""
     whatsapp_comunicacion: str = ""
     whatsapp_exclusivo: bool = False
+    canal_mensajeria: str = "whatsapp"
     estado: str = "Activa"
 
 
@@ -208,6 +212,7 @@ def crear(
         correo_comunicacion=correo,
         whatsapp_comunicacion=datos.whatsapp_comunicacion.strip(),
         whatsapp_exclusivo=bool(datos.whatsapp_exclusivo),
+        canal_mensajeria=_canal_valido(datos.canal_mensajeria),
         estado=datos.estado,
     )
     db.add(nueva)
@@ -234,7 +239,15 @@ class ActualizarCuentaIn(BaseModel):
     correo_comunicacion: Optional[str] = None
     whatsapp_comunicacion: Optional[str] = None
     whatsapp_exclusivo: Optional[bool] = None
+    canal_mensajeria: Optional[str] = None
     estado: Optional[str] = None
+
+
+def _canal_valido(valor: str) -> str:
+    v = (valor or "").strip().lower()
+    if v not in CANALES_MENSAJERIA:
+        raise HTTPException(400, "Canal inválido. Usa 'whatsapp', 'telegram' o 'ambos'.")
+    return v
 
 
 def _aplicar_actualizacion(db: Session, cu: Cuenta, datos: ActualizarCuentaIn, admin: Usuario) -> dict:
@@ -249,6 +262,8 @@ def _aplicar_actualizacion(db: Session, cu: Cuenta, datos: ActualizarCuentaIn, a
         raise HTTPException(400, "El nombre comercial no puede quedar vacío.")
     if payload.get("correo_comunicacion") and not CORREO_RE.match(payload["correo_comunicacion"].strip()):
         raise HTTPException(400, "El correo no tiene un formato válido.")
+    if "canal_mensajeria" in payload:
+        payload["canal_mensajeria"] = _canal_valido(payload["canal_mensajeria"])
     for campo, valor in payload.items():
         setattr(cu, campo, valor.strip() if isinstance(valor, str) else valor)
     registrar(db, admin.nombre, "cuenta_actualizada", "cuenta", str(cu.id), {"campos": list(payload)})

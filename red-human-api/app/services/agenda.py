@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models import Mensaje, NotificacionEnviada, Postulacion, registrar
+from .mensajeria import de_cuenta
 from .whatsapp import enviar_mensaje
 
 MINUTOS_TOLERANCIA_NOSHOW = 15
@@ -107,7 +108,8 @@ async def revisar_videollamadas_noshow() -> int:
             envio = {"enviado": False, "proveedor": "demo", "detalle": "sin teléfono"}
             if p.telefono:
                 try:
-                    envio = await enviar_mensaje(p.telefono, MENSAJE_RESCATE)
+                    with de_cuenta(p.cuenta_id):
+                        envio = await enviar_mensaje(p.telefono, MENSAJE_RESCATE)
                 except Exception as e:  # que WhatsApp falle no debe tumbar el job
                     print(f"[noshow-whatsapp-error] {p.codigo}: {e}")
                     envio = {"enviado": False, "proveedor": "error", "detalle": str(e)}

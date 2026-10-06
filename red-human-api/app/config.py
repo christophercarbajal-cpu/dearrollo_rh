@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     # {{6}} liga al expediente. Si Meta la rechaza (no aprobada, nombre distinto) sale texto libre.
     meta_plantilla_entrevista: str = "alerta_entrevista_asignada"
 
+    # --- Telegram (2026-10-06): canal adicional por Cuenta (`Cuenta.canal_mensajeria`) ---
+    # TELEGRAM_BOT_TOKEN solo vive aquí (servidor). Vacío = Telegram no disponible: las Cuentas que lo elijan
+    # siguen saliendo por WhatsApp. TELEGRAM_WEBHOOK_SECRET opcional (sin él se deriva del token);
+    # TELEGRAM_BOT_USERNAME = usuario público del bot, solo para armar las ligas t.me/<bot>?start=…
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_bot_username: str = ""
+
     # --- Gateway propio (alternativa sin costo por mensaje) ---
     waha_url: str = "http://localhost:3001"
     waha_api_key: str = ""

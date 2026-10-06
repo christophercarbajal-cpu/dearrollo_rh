@@ -72,13 +72,18 @@ print("\n--- 0. Regla de oro: ninguna tabla nueva de personas ---")
 nuevas = set(TABLAS_MODULOS_RH)
 check(nuevas == {"ciclos_desempeno", "evaluaciones_desempeno", "mediciones_clima", "respuestas_clima", "participaciones_clima", "plantillas_clima", "plantillas_desempeno", "acciones_desempeno",
                    "plantillas_onboarding", "tareas_onboarding", "pruebas_psicometricas", "evaluaciones_candidato", "firmas_documentos",
-                   "evaluaciones", "eventos_evaluacion", "plantillas_proceso"},
-      "solo 16 tablas nuevas (Clima v2, Desempeño v2, Onboarding v2, Evaluaciones, Firmas, Evaluaciones unificadas y Procesos), ninguna de personas")
+                   "evaluaciones", "eventos_evaluacion", "plantillas_proceso", "chats_telegram", "updates_telegram"},
+      "solo 18 tablas nuevas (Clima v2, Desempeño v2, Onboarding v2, Evaluaciones, Firmas, Evaluaciones unificadas, Procesos y canal Telegram), ninguna de personas")
 for nombre in sorted(nuevas):
     columnas = set(Base.metadata.tables[nombre].columns.keys())
     # una tabla de personas tendría datos de contacto propios; `nombre`/`titulo` describen al ciclo o a
     # la medición, no a un individuo. `externo_*` de clima es un dato DE LA RESPUESTA (no un padrón).
     contacto = {c for c in columnas if c in ("correo", "telefono", "wa_id", "curp", "rfc")}
+    if nombre == "chats_telegram":
+        # Canal Telegram (2026-10-06): NO es un padrón — es el mapa chat_id ↔ teléfono que exige la Bot API (un bot no
+        # puede escribirle a un número). La persona sigue siendo `Candidato`; aquí solo vive el teléfono como llave.
+        check(contacto == {"telefono"} and "correo" not in columnas, "chats_telegram: solo la llave chat ↔ teléfono (sin padrón de personas)")
+        continue
     check(not contacto, f"{nombre}: sin datos de contacto propios (no es un padrón de personas)")
     if "colaborador_id" in columnas:
         check(True, f"{nombre}: la persona se referencia con colaborador_id (roster maestro)")

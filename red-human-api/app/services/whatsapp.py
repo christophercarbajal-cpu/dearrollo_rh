@@ -16,6 +16,10 @@ Ventana de 24 horas (solo Meta): a un candidato que NO nos ha escrito en las
 últimas 24 h no se le puede mandar texto libre; Meta lo rechaza con el error
 131047. Para esos casos se usa una plantilla aprobada (`META_PLANTILLA_AVISO`),
 y `enviar_mensaje` cae a ella automáticamente cuando existe.
+
+Telegram (2026-10-06): esta es la FACHADA única de mensajería. Cada envío pregunta a `services/mensajeria.resolver`
+(canal de la Cuenta — `cuenta_id` opcional — y canal de la conversación en curso) y, si toca Telegram, delega en
+`services/telegram.py`. Telegram no tiene plantillas ni ventana de 24 h: las plantillas salen como su texto.
 """
 
 import hashlib
@@ -26,11 +30,19 @@ from typing import List, Optional
 import httpx
 
 from ..config import settings
+from . import telegram
 
 GRAPH_URL = "https://graph.facebook.com"
 
 # Meta rechaza texto libre fuera de la ventana de 24 h con estos códigos.
 CODIGOS_FUERA_DE_VENTANA = {131047, 131026, 132000}
+
+
+def _por_telegram(telefono: str, cuenta_id: Optional[int] = None) -> bool:
+    """¿Este envío sale por Telegram? (canal de la conversación / de la Cuenta, ver services/mensajeria.py)."""
+    from .mensajeria import resolver
+
+    return resolver(telefono, cuenta_id) == "telegram"
 
 
 def whatsapp_activo() -> bool:
@@ -146,8 +158,15 @@ async def enviar_plantilla(
     plantilla: str,
     parametros: Optional[List[str]] = None,
     idioma: Optional[str] = None,
+    cuenta_id: Optional[int] = None,
+    texto: str = "",
 ) -> dict:
-    """Manda una plantilla aprobada (único formato válido fuera de la ventana de 24 h)."""
+    """Manda una plantilla aprobada (único formato válido fuera de la ventana de 24 h). Por Telegram sale `texto` (o los
+    parámetros unidos): no existen plantillas."""
+    if _por_telegram(telefono, cuenta_id):
+        resultado = await telegram.enviar_texto(telefono, texto or " ".join(str(x) for x in (parametros or [])))
+        resultado["formato"] = "texto"
+        return resultado
     componentes = []
     if parametros:
         componentes.append({
@@ -179,11 +198,13 @@ def plantilla_documentos_por_nivel(nivel: int) -> str:
     return (especifica or settings.meta_plantilla_documentos or "").strip()
 
 
-async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallback: str, nivel: int = 1) -> dict:
+async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallback: str, nivel: int = 1, cuenta_id: Optional[int] = None) -> dict:
     """Solicitud/recordatorio de documentos (2026-09-15): primero la plantilla aprobada
     META_PLANTILLA_DOCUMENTOS (sirve también fuera de la ventana de 24 h), con sus variables en el
     orden de META_PLANTILLA_DOCUMENTOS_PARAMS; si no está configurada o Meta la rechaza, se manda
     el texto libre de siempre (que a su vez cae a META_PLANTILLA_AVISO fuera de ventana)."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_texto(telefono, texto_fallback)
     plantilla = plantilla_documentos_por_nivel(nivel)
     if settings.whatsapp_provider == "meta" and plantilla:
         claves = [k.strip().lower() for k in (settings.meta_plantilla_documentos_params or "").split(",") if k.strip()]
@@ -199,12 +220,14 @@ async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallba
     return await enviar_mensaje(telefono, texto_fallback)
 
 
-async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], texto_fallback: str) -> dict:
+async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], texto_fallback: str, cuenta_id: Optional[int] = None) -> dict:
     """Aviso al entrevistador de una Entrevista Humana asignada (2026-09-18): plantilla
     META_PLANTILLA_ENTREVISTA («alerta_entrevista_asignada») con EXACTAMENTE 6 parámetros posicionales
     [entrevistador, candidato, vacante, fecha, hora, liga al expediente]. Sirve fuera de la ventana de 24 h
     (el entrevistador casi nunca le ha escrito al número). Si no está configurada o Meta la rechaza, texto
     libre (que a su vez cae a META_PLANTILLA_AVISO)."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_texto(telefono, texto_fallback)
     plantilla = (settings.meta_plantilla_entrevista or "").strip()
     if settings.whatsapp_provider == "meta" and plantilla:
         if len(parametros) != 6:
@@ -230,10 +253,15 @@ _EXT_POR_MIME = {
 }
 
 
-async def descargar_media(media_id: str) -> dict:
+async def descargar_media(media_id: str, mime: str = "") -> dict:
     """Descarga un medio recibido por el webhook (2026-09-15): Graph `GET /{media_id}` regresa la URL
     temporal + mime; la URL se lee con el mismo Bearer. Regresa {ok, contenido, mime, filename,
-    detalle} y nunca lanza — el webhook le explica al candidato si algo falla."""
+    detalle} y nunca lanza — el webhook le explica al candidato si algo falla. Si el mensaje entrante llegó por
+    Telegram, `media_id` es el file_id y se descarga con getFile."""
+    from .mensajeria import canal_conversacion
+
+    if canal_conversacion() == "telegram":
+        return await telegram.descargar_archivo(media_id, mime)
     if not media_id:
         return {"ok": False, "detalle": "sin media_id"}
     if settings.whatsapp_provider != "meta" or not settings.meta_whatsapp_token:
@@ -261,12 +289,12 @@ async def descargar_media(media_id: str) -> dict:
     return {"ok": True, "contenido": binario.content, "mime": mime, "extension": ext, "filename": f"whatsapp_{media_id}.{ext}", "tamano": len(binario.content)}
 
 
-async def enviar_texto_sin_plantilla(telefono: str, texto: str) -> dict:
+async def enviar_texto_sin_plantilla(telefono: str, texto: str, cuenta_id: Optional[int] = None) -> dict:
     """Texto libre (type text) SIN respaldo de plantilla (2026-09-18, aviso de curso a colaboradores): si Meta
     lo rechaza por la ventana de 24 h se deja un warning en el log y se regresa {enviado: False,
     fuera_de_ventana: True}; nunca lanza. Con otro proveedor se comporta como enviar_mensaje."""
-    if settings.whatsapp_provider != "meta":
-        return await enviar_mensaje(telefono, texto)
+    if settings.whatsapp_provider != "meta" or _por_telegram(telefono, cuenta_id):
+        return await enviar_mensaje(telefono, texto, cuenta_id=cuenta_id)
     resultado = await _meta_post({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -281,8 +309,10 @@ async def enviar_texto_sin_plantilla(telefono: str, texto: str) -> dict:
     return resultado
 
 
-async def enviar_mensaje(telefono: str, texto: str) -> dict:
+async def enviar_mensaje(telefono: str, texto: str, cuenta_id: Optional[int] = None) -> dict:
     """Envía un mensaje de texto. Regresa {enviado, proveedor, detalle}."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_texto(telefono, texto)
     if settings.whatsapp_provider == "meta":
         resultado = await _meta_post({
             "messaging_product": "whatsapp",
@@ -466,8 +496,9 @@ async def enviar_lista_interactiva(
     boton: str,
     opciones: list,
     secciones: Optional[list] = None,
+    cuenta_id: Optional[int] = None,
 ) -> dict:
-    """Mensaje interactivo tipo lista (Meta Cloud API).
+    """Mensaje interactivo tipo lista (Meta Cloud API; en Telegram, botones en línea).
 
     opciones: [{"id": "VAC-1042", "titulo": "Cajero(a)", "descripcion": "Guadalajara · $9,500"}]
     El candidato elige y Meta responde con un list_reply; `parsear_webhook` ya extrae
@@ -479,6 +510,8 @@ async def enviar_lista_interactiva(
     `secciones` (2026-09-17, número compartido): [{"titulo": "Grupo CARBE", "opciones": [...]}] agrupa
     las filas por empresa; si se manda, `opciones` se ignora.
     """
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_lista(telefono, encabezado, cuerpo, opciones, secciones)
     if proveedor() != "meta":
         return _resultado(False, "Las listas interactivas solo existen en Meta Cloud API")
     if secciones:
@@ -525,3 +558,41 @@ async def enviar_lista_interactiva(
             },
         }
     )
+
+
+async def enviar_con_boton(telefono: str, texto: str, boton: str, url: str, cuenta_id: Optional[int] = None) -> dict:
+    """Texto con UNA liga de acción (p. ej. «Subir documentos»). Telegram: botón en línea; WhatsApp: la liga escrita."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_boton(telefono, texto, boton, url=url)
+    return await enviar_mensaje(telefono, f"{texto}\n\n👉 {boton}: {url}" if url else texto, cuenta_id=cuenta_id)
+
+
+async def enviar_documento(
+    telefono: str, contenido: bytes, filename: str, caption: str = "", mime: str = "application/pdf", cuenta_id: Optional[int] = None,
+) -> dict:
+    """Manda un archivo (PDF/imagen). Telegram: sendDocument; Meta: sube el medio y lo manda como documento. Nunca
+    lanza; con otro proveedor regresa no enviado."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_documento(telefono, contenido, filename, caption, mime)
+    if settings.whatsapp_provider != "meta" or not (settings.meta_whatsapp_token and settings.meta_phone_number_id):
+        return _resultado(False, "El envío de archivos por WhatsApp solo está disponible con WHATSAPP_PROVIDER=meta")
+    try:
+        async with httpx.AsyncClient(timeout=60) as cli:
+            r = await cli.post(
+                f"{GRAPH_URL}/{settings.meta_api_version}/{settings.meta_phone_number_id}/media",
+                headers={"Authorization": f"Bearer {settings.meta_whatsapp_token}"},
+                data={"messaging_product": "whatsapp", "type": mime},
+                files={"file": (filename, contenido, mime)},
+            )
+    except Exception as e:  # red caída: no romper el flujo de RH
+        return _resultado(False, f"error de red: {e}")
+    if r.status_code >= 300:
+        err = _meta_error(r)
+        return _resultado(False, f"{err['codigo']}: {err['mensaje']}")
+    media_id = (r.json() or {}).get("id", "")
+    resultado = await _meta_post({
+        "messaging_product": "whatsapp", "recipient_type": "individual", "to": numero_e164(telefono), "type": "document",
+        "document": {"id": media_id, "filename": filename, **({"caption": caption[:1024]} if caption else {})},
+    })
+    resultado["formato"] = "documento"
+    return resultado

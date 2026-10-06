@@ -57,6 +57,7 @@ from ..services import notificaciones
 from ..services import proceso as sproc
 from ..services.configuracion import modo_prueba_activo, permite_duplicados, puede_forzar_prueba
 from ..services.notificaciones import TZ_MEXICO, NotificarIn, override_de
+from ..services.mensajeria import canal_registro, de_cuenta
 from ..services.whatsapp import enviar_mensaje, enviar_plantilla
 from ..services import teams as teams_srv
 
@@ -173,7 +174,7 @@ def guardar_mensaje(
     postulación; los salientes (rol "assistant") nunca la mueven — ver fijar_conversacion."""
     envio = envio or {}
     m = Mensaje(
-        candidato_id=p.candidato_id, postulacion_id=p.id, rol=rol, texto=texto, canal=canal,
+        candidato_id=p.candidato_id, postulacion_id=p.id, rol=rol, texto=texto, canal=canal_registro(canal),
         enviado=envio.get("enviado", False), wa_id=envio.get("wa_id", "") or wa_id,
     )
     db.add(m)
@@ -187,7 +188,8 @@ async def _enviar_whatsapp(p: Postulacion, texto: str, canal: str = "whatsapp") 
     if canal != "whatsapp" or not p.telefono:
         return {"enviado": False, "proveedor": "demo"}
     try:
-        return await enviar_mensaje(p.telefono, texto)
+        with de_cuenta(p.cuenta_id):
+            return await enviar_mensaje(p.telefono, texto)
     except Exception as e:
         print(f"[whatsapp-send-error] {p.codigo}: {e}")
         return {"enviado": False, "proveedor": "error", "detalle": str(e)}
@@ -752,7 +754,11 @@ async def _disparar_plantilla_inicio(db: Session, p: Postulacion) -> dict:
     if not p.telefono:
         return {"enviado": False, "detalle": "El candidato no dejó WhatsApp."}
     primer_nombre = (p.nombre or "").split(" ")[0] or "candidato(a)"
-    envio = await enviar_plantilla(p.telefono, PLANTILLA_INICIO_ENTREVISTA, [primer_nombre])
+    with de_cuenta(p.cuenta_id):
+        envio = await enviar_plantilla(
+            p.telefono, PLANTILLA_INICIO_ENTREVISTA, [primer_nombre],
+            texto=f"Hola {primer_nombre}, ¡gracias por tu interés! Empecemos con tu proceso.",
+        )
     texto_mensaje = (
         f"[Plantilla de WhatsApp «{PLANTILLA_INICIO_ENTREVISTA}»] Hola {primer_nombre}, ¡gracias por tu interés! Empecemos con tu proceso."
         if envio.get("enviado")
@@ -849,9 +855,16 @@ async def postular(
     # para no volver a "romper el hielo" en una que ya está en curso. Se manda DESPUÉS del commit:
     # si el candidato responde muy rápido, el webhook corre en otra transacción que ya ve este
     # registro y la conversación queda fijada en esta postulación.
-    if nueva_postulacion:
+    # Telegram (2026-10-06): el bot no puede escribir primero. Si la Cuenta atiende por Telegram, el portal muestra
+    # «Continuar en Telegram» (deep link a ESTA postulación); con «solo Telegram» no se intenta la plantilla de WhatsApp.
+    from ..services import telegram as tg
+    from ..services.mensajeria import canal_de_cuenta
+
+    canal_cuenta = canal_de_cuenta(db, p.cuenta_id) if tg.activo() else "whatsapp"
+    liga_telegram = tg.liga_postulacion(p) if canal_cuenta in ("telegram", "ambos") else ""
+    if nueva_postulacion and canal_cuenta != "telegram":
         await _disparar_plantilla_inicio(db, p)
-        db.commit()
+    db.commit()
 
     return {
         "ok": True,
@@ -861,6 +874,7 @@ async def postular(
         "nuevo": nuevo_candidato,
         "postulacionNueva": nueva_postulacion,
         "cv": {"procesado": resultado_cv.get("ok", False), "avisos": resultado_cv.get("avisos", [])},
+        "telegram": liga_telegram,
     }
 
 
@@ -1313,6 +1327,12 @@ async def _procesar_turno_post_completo(db: Session, p: Postulacion, texto: str,
         )
     else:
         respuesta = "¡Gracias! Ya tengo tu información. Estoy procesando tu perfil y en breve te contactamos con los siguientes pasos. 😊"
+        # Proceso configurable (2026-10-06): lo que sigue lo dice el proceso de la postulación (sin resultados internos)
+        from ..services.canal_proceso import seguimiento
+
+        guia = seguimiento(db, p) if canal == "whatsapp" else None
+        if guia:
+            respuesta = guia["texto"] + (f"\n\n👉 {guia['boton']}: {guia['url']}" if guia.get("url") else "")
     envio = await _enviar_whatsapp(p, respuesta, canal)
     guardar_mensaje(db, p, "assistant", respuesta, canal, envio)
     db.commit()
@@ -1690,7 +1710,7 @@ def actividad_agente(db: Session = Depends(get_db), _: Usuario = Depends(usuario
     )
     prefiltrando = 0
     for p in filas:
-        ultimo = max((m.creado_en for m in p.mensajes if m.canal == "whatsapp"), default=None)
+        ultimo = max((m.creado_en for m in p.mensajes if m.canal in ("whatsapp", "telegram")), default=None)
         if ultimo is not None:
             if ultimo.tzinfo is None:
                 ultimo = ultimo.replace(tzinfo=timezone.utc)

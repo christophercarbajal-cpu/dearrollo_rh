@@ -23,6 +23,7 @@ from ..services import ia
 from ..services.avatar import AvatarError, avatar_activo, crear_sesion_avatar, probar_avatar
 from ..services.configuracion import modo_prueba_activo
 from ..services.entrevistas import crear_entrevista_para_candidato, reabrir_entrevista
+from ..services.mensajeria import de_cuenta
 from ..services.whatsapp import enviar_mensaje
 from .candidatos import _crear_candidato, guardar_mensaje, nombre_ficha, postulacion_para_vacante
 from .candidatos import _por_codigo as _postulacion_por_codigo
@@ -164,7 +165,8 @@ async def agendar(
             f"¡Hola {p.nombre.split(' ')[0]}! 👋 Tu entrevista para {v.titulo if v else 'la vacante'} está lista. "
             f"Entra cuando gustes desde tu celular o computadora: {liga} — dura unos 10 minutos."
         )
-        envio = await enviar_mensaje(p.telefono, texto)
+        with de_cuenta(p.cuenta_id):
+            envio = await enviar_mensaje(p.telefono, texto)
         guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
     db.commit()
     return {"liga": liga, "ia": con_ia, "whatsapp": envio, **entrevista_dict(e)}
@@ -565,7 +567,8 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
         )
         if p.telefono:
             try:
-                envio = await enviar_mensaje(p.telefono, texto)
+                with de_cuenta(p.cuenta_id):
+                    envio = await enviar_mensaje(p.telefono, texto)
             except Exception as ex:  # que WhatsApp falle no debe tumbar el cierre de la entrevista
                 print(f"[whatsapp-send-error] finalizar -> {e.codigo}: {ex}")
                 envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}

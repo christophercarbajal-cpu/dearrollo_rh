@@ -7,7 +7,7 @@
    precargada, las tarjetas de evaluación, el chat, el CV o el expediente. El estado lo calcula la API. */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Play, RotateCcw, SkipForward, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, RotateCcw, SkipForward, Zap } from "lucide-react";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
@@ -105,6 +105,16 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     setAviso({ tono: "ok", texto: `«${decision.paso.nombre}» quedó ${decision.tipo === "omitir" ? "omitido" : "cancelado"}.` });
   }
 
+  /** Telegram (2026-10-06): RH comparte la liga; el candidato entra al chat (o directo a ese paso) desde su número. */
+  async function copiarLigaTelegram(liga: string, paso?: PasoSeguimiento) {
+    try {
+      await navigator.clipboard.writeText(liga);
+      setAviso({ tono: "ok", texto: `Liga de Telegram copiada${paso ? ` (paso «${paso.nombre}»)` : ""}. Solo funciona desde el Telegram con el número del candidato.` });
+    } catch {
+      setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
+    }
+  }
+
   async function reactivar(paso: PasoSeguimiento) {
     const r = await reactivarPasoProceso(c.id, paso.id);
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
@@ -117,6 +127,14 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
   const obligatorioPendiente = (seg.etapas ?? []).find((e) => e.actual)?.faltantes.length;
   const requiereAutorizacion = decision && (decision.tipo === "avanzar" || decision.paso?.obligatorio);
+  const tg = seg.telegram?.disponible ? seg.telegram : null;
+  const accionesCabecera = [
+    ...(seg.siguienteEtapa && obligatorioPendiente ? [{
+      etiqueta: `Avanzar a ${seg.siguienteEtapaTexto} omitiendo obligatorios…`, icono: <SkipForward />,
+      onClick: () => setDecision({ tipo: "avanzar", motivo: "" }),
+    }] : []),
+    ...(tg?.liga ? [{ etiqueta: "Copiar liga de Telegram", icono: <Link2 />, onClick: () => copiarLigaTelegram(tg.liga) }] : []),
+  ];
 
   return (
     <div className="flex flex-col gap-4">
@@ -144,12 +162,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                   <Play className="h-4 w-4" /> {sig.texto}
                 </Button>
               ) : null}
-              {seg.siguienteEtapa && obligatorioPendiente ? (
-                <MenuAcciones acciones={[{
-                  etiqueta: `Avanzar a ${seg.siguienteEtapaTexto} omitiendo obligatorios…`, icono: <SkipForward />,
-                  onClick: () => setDecision({ tipo: "avanzar", motivo: "" }),
-                }]} />
-              ) : null}
+              {accionesCabecera.length > 0 && <MenuAcciones acciones={accionesCabecera} />}
             </div>
           )}
         </div>
@@ -233,6 +246,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                     )}
                     {live && (p.estado === "pendiente" || p.estado === "en_curso") && !p.heredado && (
                       <MenuAcciones acciones={[
+                        ...(tg?.pasos[p.id] ? [{ etiqueta: "Copiar liga de Telegram de este paso", icono: <Link2 />, onClick: () => copiarLigaTelegram(tg.pasos[p.id], p) }] : []),
                         { etiqueta: "Omitir paso…", icono: <SkipForward />, onClick: () => setDecision({ tipo: "omitir", paso: p, motivo: "" }) },
                         { etiqueta: "Cancelar paso…", icono: <Ban />, peligrosa: true, onClick: () => setDecision({ tipo: "cancelar", paso: p, motivo: "" }) },
                       ]} />

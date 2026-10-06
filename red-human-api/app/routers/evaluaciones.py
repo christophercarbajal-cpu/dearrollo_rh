@@ -34,6 +34,7 @@ from ..models import (
     FORMAS_EVALUACION,
     MODOS_PRUEBA,
     TEXTO_CONSENTIMIENTO_MEDICO,
+    TIPOS_EVALUACION_U,
     Archivo,
     Cuenta,
     Evaluacion,
@@ -44,6 +45,7 @@ from ..models import (
 )
 from ..serial import evaluacion_dict, evento_evaluacion_dict, nombre_empresa_candidato, prueba_psicometrica_dict
 from ..services import archivos as fs
+from ..services import proceso as sproc
 from ..services import evaluaciones as sev
 from ..services import notificaciones
 from ..services.modulos_rh import requiere_modulos_rh
@@ -252,6 +254,23 @@ class CrearEvaluacionIn(BaseModel):
     proveedor: str = ""  # psicométrica fuera del catálogo integrado (texto libre; nunca dispara una API)
     cita: Optional[CitaIn] = None
     notificar: Optional[NotificarIn] = None
+    # Proceso configurable (2026-10-06): paso del proceso que cumple esta evaluación («Iniciar» en el seguimiento). Vacío
+    # = se liga sola al primer paso de ese tipo que aún no tenga evaluación; sin paso, queda fuera del proceso.
+    paso_id: str = ""
+
+
+def _guion_entrevista_humana(p: Postulacion, paso: Optional[dict]) -> dict:
+    """Cada tipo de entrevista humana genera su guion (general, técnica, con jefe directo, valores). Nunca bloquea."""
+    from ..models import TIPOS_ENTREVISTA_HUMANA
+    from ..services import ia
+
+    tipo = (paso or {}).get("tipo_entrevista") or "general"
+    v = p.vacante
+    try:
+        g, con_ia = ia.guion_entrevista_humana(tipo, v.titulo if v else "la vacante", (v.requisitos if v else "") or "", p.experiencia or "")
+    except Exception:  # noqa: BLE001
+        return {}
+    return {**g.model_dump(), "tipo": tipo, "tipoTexto": TIPOS_ENTREVISTA_HUMANA.get(tipo, tipo), "ia": con_ia}
 
 
 async def _cita_con_teams(db: Session, p: Postulacion, cita: CitaIn, evaluador: dict) -> dict:
@@ -287,13 +306,22 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
         tipo = sev.normalizar_tipo(datos.tipo)
     if datos.forma not in FORMAS_EVALUACION:
         raise HTTPException(400, f"Forma inválida. Usa una de: {', '.join(FORMAS_EVALUACION)}.")
+    try:
+        paso = sproc.paso_para_evaluacion(p, tipo, datos.paso_id.strip())
+    except sproc.ErrorProceso as e:
+        raise HTTPException(e.status, e.mensaje)
     nombre = datos.nombre.strip()[:200]
+    if not nombre and paso and paso["nombre"] != TIPOS_EVALUACION_U.get(tipo):
+        nombre = paso["nombre"][:200]  # el nombre que le dio el proceso («Entrevista con jefe directo», …)
     if tipo == "otra" and not nombre:
         raise HTTPException(400, "Con «Otra» captura el nombre de la evaluación.")
     if tipo != "entrevista_humana" and not p.consentimiento:
         raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
 
-    campos: dict = {"tipo": tipo, "nombre": nombre, "forma": datos.forma, "instrucciones": datos.instrucciones.strip()[:4000]}
+    campos: dict = {"tipo": tipo, "nombre": nombre, "forma": datos.forma, "instrucciones": datos.instrucciones.strip()[:4000],
+                    "paso_id": paso["id"] if paso else ""}
+    if tipo == "entrevista_humana":
+        campos["guion"] = _guion_entrevista_humana(p, paso)
     if tipo == "psicometrica" and datos.forma != "integrada":
         campos["proveedor"] = datos.proveedor.strip()[:150]
     evaluador: dict = {}
@@ -336,10 +364,14 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     registrar(db, u.nombre, "evaluacion_creada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "tipo": ev.tipo, "forma": ev.forma, "evaluador": ev.evaluador_nombre,
                "cita": fechas.iso(ev.cita_fecha_hora), "etapa": p.etapa, "movida_a_filtro_humano": movida,
-               "correo_rh": u.correo, "notificaciones": resultados})
+               "paso_proceso": ev.paso_id, "correo_rh": u.correo, "notificaciones": resultados})
     _tocar(p)
     db.commit()
-    return _respuesta(db, ev, u, p, resultados, movidaAFiltroHumano=movida)
+    aviso_proceso = ""
+    if ev.tipo == "entrevista_humana" and not movida and p.activa and p.etapa in ("Prefiltro", "Entrevista IA") and sproc.tiene_proceso(p):
+        aviso_proceso = ("El candidato sigue en su columna: el proceso tiene pasos obligatorios sin cumplir antes de Filtro humano "
+                         "(complétalos u omítelos con autorización desde «Seguimiento»).")
+    return _respuesta(db, ev, u, p, resultados, movidaAFiltroHumano=movida, avisoProceso=aviso_proceso)
 
 
 @router.get("/{codigo}")
@@ -552,6 +584,7 @@ async def registrar_resultado(
               {"evaluacion": ev.codigo, "conclusion": ev.conclusion, "adjuntos": len(adjuntos), "realizada_por": ev.realizada_por, "correo_rh": u.correo})
     _tocar(p)
     db.commit()
+    await sproc.avanzar_seguro(db, p)  # interruptor de avance automático de la etapa (solo si está encendido)
     return _respuesta(db, ev, u, p)
 
 
@@ -773,7 +806,7 @@ class RevisarIn(BaseModel):
 
 
 @router.post("/{codigo}/revisar")
-def revisar(codigo: str, datos: RevisarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+async def revisar(codigo: str, datos: RevisarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """«Marcar como revisada»: conclusión de RH + comentario, con usuario y fecha. Recibir un resultado nunca la marca
     revisada; revisarla NUNCA mueve la etapa ni avisa al candidato (HITL)."""
     ev = _ev(db, codigo, cuenta.id)
@@ -788,6 +821,8 @@ def revisar(codigo: str, datos: RevisarIn, db: Session = Depends(get_db), u: Usu
               {"evaluacion": ev.codigo, "conclusion_rh": ev.conclusion_rh, "etapa": p.etapa, "correo_rh": u.correo})
     _tocar(p)
     db.commit()
+    # Revisar nunca mueve por sí mismo; solo el interruptor de avance automático del proceso (si RH lo encendió).
+    await sproc.avanzar_seguro(db, p)
     return _respuesta(db, ev, u, p)
 
 
@@ -878,6 +913,7 @@ async def resultado_publico(
                "ip": (request.client.host if request.client else "")[:64]})
     _tocar(p)
     db.commit()
+    await sproc.avanzar_seguro(db, p)
     return {"ok": True, "accion": accion, "evaluacion": evaluacion_dict(ev, publico=True)}
 
 

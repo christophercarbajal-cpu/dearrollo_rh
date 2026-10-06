@@ -507,6 +507,12 @@ export function ModalVerResultado({ codigo, live, onClose, onComplementar, onRev
             </section>
           )}
           {e.instrucciones && <Dato etiqueta="Instrucciones"><span className="whitespace-pre-line">{e.instrucciones}</span></Dato>}
+          {(e.guion?.preguntas?.length ?? 0) > 0 && (
+            <Dato etiqueta={`Guion de la entrevista${e.guion?.tipoTexto ? ` · ${e.guion.tipoTexto}` : ""}`}>
+              {e.guion?.enfoque && <span className="block text-ink-3">{e.guion.enfoque}</span>}
+              <ol className="mt-1 list-decimal pl-5">{e.guion!.preguntas!.map((q, i) => <li key={i}>{q}</li>)}</ol>
+            </Dato>
+          )}
           {e.ligaExternaCandidato && <Dato etiqueta="Liga de otro sistema"><a className="break-all text-brand hover:underline" href={e.ligaExternaCandidato} target="_blank" rel="noreferrer">{e.ligaExternaCandidato}</a></Dato>}
           {e.consentimiento !== "no_requerido" && (
             <Dato etiqueta="Consentimiento">{e.consentimiento === "otorgado" ? `Otorgado${e.consentimientoEn ? ` el ${textoFechaHora(e.consentimientoEn)}` : ""}` : e.consentimientoTexto}</Dato>

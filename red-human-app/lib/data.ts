@@ -44,6 +44,110 @@ export interface ResultadoIntegral {
   validaciones: ValidacionIntegral[];
 }
 
+/* ---- Proceso configurable (2026-10-06): configuración (plantilla de la Cuenta → vacante → postulación) ---- */
+export interface ReglaPaso { tipo: "ninguna" | "calificacion" | "dictamen" | "validacion"; minimo?: number; aceptados?: string[] }
+export interface ResponsablePaso { tipo: "red_human" | "rh" | "usuario" | "externo" | "candidato"; usuario_id?: number | null; nombre?: string }
+export interface PasoProceso {
+  id: string;
+  tipo: string;
+  nombre: string;
+  etapa: EtapaCandidato;
+  obligatorio: boolean;
+  depende_de: string[];
+  responsable: ResponsablePaso;
+  regla: ReglaPaso;
+  plazo_dias: number | null;
+  tipo_entrevista?: string;
+  orden?: number;
+  heredado?: boolean;
+}
+export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
+export interface ProcesoConfig {
+  plantilla_id?: number | null;
+  plantilla_nombre?: string;
+  plantilla_version?: number;
+  version?: number;
+  personalizado?: boolean;
+  pasos: PasoProceso[];
+  etapas: EtapasProceso;
+}
+
+/* ---- Proceso configurable y seguimiento (2026-10-06): lo calcula la API (services/proceso.py) ---- */
+export type EstadoPaso = "pendiente" | "en_curso" | "completada" | "omitida" | "cancelada";
+export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
+/** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
+export interface AccionPaso {
+  clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir";
+  texto: string;
+  evaluacion?: string;
+  pestana?: "whatsapp" | "documentos" | "evaluaciones" | "contratacion";
+}
+export interface PasoSeguimiento {
+  id: string;
+  tipo: string;
+  nombre: string;
+  etapa: EtapaCandidato;
+  etapaTexto: string;
+  obligatorio: boolean;
+  dependeDe: string[];
+  reglaTexto: string;
+  tipoEntrevista?: string | null;
+  responsable: string;
+  responsableConfig: { tipo?: string; usuario_id?: number | null; nombre?: string };
+  estado: EstadoPaso;
+  estadoTexto: string;
+  resultado: ResultadoPaso | null;
+  resultadoTexto: string;
+  detalle: string;
+  cumpleRegla: boolean;
+  /** Qué falta exactamente («Falta comprobante de domicilio», «Falta completar: Psicométrica»…). */
+  espera: string;
+  disponible: boolean;
+  revisadoPor: string;
+  evaluacion: string | null;
+  score?: number | null;
+  plazoDias: number | null;
+  fechaLimite: string | null;
+  vencido: boolean;
+  decision?: { por: string; motivo: string; fecha: string; autorizado_por?: string } | null;
+  heredado: boolean;
+  accion: AccionPaso | null;
+}
+export interface EtapaSeguimiento {
+  etapa: EtapaCandidato;
+  texto: string;
+  actual: boolean;
+  avanceAutomatico: boolean;
+  sinPasos: boolean;
+  lista: boolean;
+  faltantes: string[];
+  pasos: PasoSeguimiento[];
+}
+export interface SiguienteAccionProceso {
+  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada";
+  texto: string;
+  detalle?: string;
+  paso?: string;
+  etapa?: EtapaCandidato;
+  accion?: AccionPaso | null;
+}
+export interface SeguimientoProceso {
+  tieneProceso: boolean;
+  vacanteTieneProceso?: boolean;
+  plantilla?: string;
+  personalizado?: boolean;
+  version?: number;
+  desactualizado?: boolean;
+  etapaActual?: EtapaCandidato;
+  etapaTexto?: string;
+  siguienteEtapa?: EtapaCandidato | null;
+  siguienteEtapaTexto?: string | null;
+  listaParaAvanzar?: boolean;
+  siguienteAccion?: SiguienteAccionProceso;
+  alertas?: { paso: string; texto: string; fechaLimite: string | null }[];
+  etapas?: EtapaSeguimiento[];
+}
+
 export interface RespuestaPrefiltro {
   criterio?: string;
   pregunta?: string;
@@ -114,6 +218,9 @@ export interface Candidato {
   /** 2026-10-01: motivo que capturó RH al descartar (la tarjeta se queda en su columna con «No cumple»). */
   motivoDescarte?: string;
   resultadoIntegral?: ResultadoIntegral;
+  /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */
+  proceso?: SeguimientoProceso;
+  tieneProceso?: boolean;
   /** true si el WhatsApp de esta persona está conversando sobre ESTA postulación. */
   enConversacion?: boolean;
   candidato?: {
@@ -317,6 +424,8 @@ export interface Vacante {
   /** Evaluaciones (2026-09-28): sugerencias de la vacante + aviso al enviar a Onboarding (nunca bloquea). */
   evaluacionesSugeridas?: { tipo: string; prueba_id: number | null; nombre: string }[];
   avisarEvaluacionesAntesOnboarding?: boolean;
+  /** Proceso configurable (2026-10-06): copia personalizable del proceso de selección (vacío = sin proceso). */
+  proceso?: ProcesoConfig | Record<string, never>;
   cursoFiltroTitulo?: string | null;
   /** 2026-09-17: Cuenta dueña (portal por Cuenta) y homónimas publicadas en otras Cuentas (detalle). */
   cuentaId?: number | null;

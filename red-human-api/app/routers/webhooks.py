@@ -753,6 +753,9 @@ async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
             db.flush()
         else:
             p.vacante_id = vacante_detectada.id
+            from ..services.proceso import congelar
+
+            congelar(p, vacante_detectada)  # proceso configurable: congela la versión vigente de la vacante elegida
             seleccion_nueva_vacante = True
             db.flush()
     elif not vacante_detectada and p.vacante:

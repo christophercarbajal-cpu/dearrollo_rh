@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
 from ..models import ETAPAS_LEGADO, Entrevista, Postulacion, registrar
+from .proceso import enfoque_entrevista_agente
 from . import ia
 from .avatar import avatar_activo
 
@@ -66,7 +67,7 @@ def crear_entrevista_para_candidato(
         v.titulo if v else "vacante general",
         v.requisitos if v else "",
         p.experiencia or "",
-        enfoque_entrevista=(v.enfoque_entrevista if v else "profesional") or "profesional",
+        enfoque_entrevista=enfoque_entrevista_agente(p, v),
         perfil_ideal=(v.perfil_ideal if v else "") or "",
         responsabilidades=list(v.responsabilidades or []) if v else [],
     )

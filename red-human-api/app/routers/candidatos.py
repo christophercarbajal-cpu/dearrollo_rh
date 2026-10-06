@@ -54,6 +54,7 @@ from ..serial import archivo_dict, expediente_dict, nombre_empresa_candidato, po
 from ..services import archivos as fs
 from ..services import ia
 from ..services import notificaciones
+from ..services import proceso as sproc
 from ..services.configuracion import modo_prueba_activo, permite_duplicados, puede_forzar_prueba
 from ..services.notificaciones import TZ_MEXICO, NotificarIn, override_de
 from ..services.whatsapp import enviar_mensaje, enviar_plantilla
@@ -128,6 +129,8 @@ def crear_postulacion(
     db.add(p)
     db.flush()
     p.codigo = f"P-{8800 + p.id}"
+    # Proceso configurable (2026-10-06): la postulación CONGELA la versión vigente del proceso de su vacante.
+    sproc.congelar(p, vac)
     c.postulaciones.append(p)
     return p
 
@@ -974,6 +977,7 @@ async def asignar(
         raise HTTPException(409, f"Esta persona ya tiene la postulación {otra.codigo} activa para «{vac.titulo}».")
     anterior = p.vacante.codigo if p.vacante else None
     p.vacante_id = vac.id
+    sproc.congelar(p, vac)  # sin proceso previo toma el de la nueva vacante; uno ya congelado se conserva (versionado)
 
     if datos.reevaluar:
         cv = _cv_mas_reciente(p.candidato)
@@ -1100,6 +1104,23 @@ async def _auto_decision_zero_touch(db: Session, p: Postulacion, resultado_prefi
 
     p.estado = "cumple"
     await _asignar_curso_filtro(db, p)
+    if sproc.tiene_proceso(p):
+        # Proceso configurable (2026-10-06): el proceso decide. Con el avance automático del Prefiltro encendido y sus
+        # obligatorios cumplidos, pasa a la siguiente etapa con pasos (si es Filtro Red Human con Entrevista Red Human,
+        # aplicar_movimiento manda la misma invitación a agendar). Si no, se queda en Prefiltro y RH decide.
+        p.prefiltro_completo = True
+        registrar(db, "agente-ia", "auto_apto_zero_touch", "postulacion", p.codigo, {"prefiltro": resultado_prefiltro or "score", "score_cv": p.score, "proceso": True})
+        await sproc.avanzar_seguro(db, p)
+        if p.etapa == "Entrevista IA" and sproc.mueve_entrevista_ia(p):
+            ultimo = next((m for m in reversed(p.mensajes) if m.rol == "assistant"), None)
+            return {"respuesta": _texto_apto(p), "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
+        texto = (
+            f"¡Gracias, {p.nombre.split(' ')[0]}! Completaste el primer filtro de la vacante. El equipo de RH revisará "
+            "tu perfil y te escribirá por aquí con el siguiente paso. 🙌"
+        )
+        envio = await _enviar_whatsapp(p, texto)
+        guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
+        return {"respuesta": texto, "whatsapp": envio}
     # antes la tarjeta solo se movía al agendar la cita, así que una postulación ya clasificada
     # como apta seguía viéndose "atorada" en Prefiltro mientras coordinaba fecha/hora.
     p.etapa = "Entrevista IA"
@@ -1694,6 +1715,9 @@ class EtapaIn(BaseModel):
     # leyenda «Entrevista Red Human omitida manualmente por [usuario] — [fecha y hora]» en el historial.
     # NADA de lo generado antes (chat, entrevista parcial, análisis de CV, score) se borra.
     omitir_entrevista_ia: bool = False
+    # Proceso configurable (2026-10-06): avanzar dejando atrás pasos OBLIGATORIOS sin cumplir. Exige justificación
+    # (`comentario`) y el permiso «Autorizar omisiones»; los pasos quedan «Omitida» con nombre de quien autorizó.
+    omitir_obligatorios: bool = False
 
 
 def _entrevista_humana_realizada(p: Postulacion) -> bool:
@@ -1828,8 +1852,14 @@ def _tiene_entrevista_humana(db: Session, p: Postulacion) -> bool:
 
 async def aplicar_movimiento(
     db: Session, p: Postulacion, datos: EtapaIn, u: Usuario, forzar_prueba: bool = False, desde_iniciar: bool = False,
+    automatico: bool = False,
 ) -> Postulacion:
-    """Núcleo del movimiento de etapa (hace commit). `desde_iniciar` = lo llama «Iniciar Onboarding»."""
+    """Núcleo del movimiento de etapa (hace commit). `desde_iniciar` = lo llama «Iniciar Onboarding». `automatico` = lo
+    llama el interruptor de avance automático del proceso (services/proceso.avanzar_si_corresponde).
+
+    Proceso configurable (2026-10-06): con proceso, avanzar exige que los pasos OBLIGATORIOS de las etapas que se dejan
+    atrás cumplan su condición; si no, 409 con lo que falta, salvo `omitir_obligatorios` + justificación + permiso
+    «Autorizar omisiones». Las etapas sin pasos obligatorios nunca bloquean."""
     datos.etapa = normalizar_etapa(datos.etapa)  # 2026-10-01: «Evaluación» (retirada) → Entrevista IA
     if datos.etapa not in ETAPAS_CANDIDATO:
         raise HTTPException(400, f"Etapa inválida. Usa una de: {', '.join(ETAPAS_CANDIDATO)}")
@@ -1846,7 +1876,14 @@ async def aplicar_movimiento(
     libre = manual or puede_forzar_prueba(db, forzar_prueba)
     if datos.etapa == p.etapa and p.activa:  # 2026-10-01: una descartada se queda en su columna y se reabre ahí mismo
         raise HTTPException(409, f"La postulación ya está en {nombre_etapa(datos.etapa)}.")
-    if datos.etapa == "Entrevista Humana" and not manual and not _tiene_entrevista_humana(db, p):
+    con_proceso = sproc.tiene_proceso(p)
+    omitidos_proceso: List[str] = []
+    if con_proceso and not puede_forzar_prueba(db, forzar_prueba):
+        try:
+            omitidos_proceso = sproc.verificar_avance(db, p, datos.etapa, u, datos.omitir_obligatorios, datos.comentario)
+        except sproc.ErrorProceso as e:
+            raise HTTPException(e.status, e.mensaje)
+    if datos.etapa == "Entrevista Humana" and not manual and not con_proceso and not _tiene_entrevista_humana(db, p):
         # 2026-10-01 (pipeline de 5 columnas): agregar una entrevista humana mueve sola a Filtro humano
         # (mover_por_entrevista_humana); aquí solo llega quien no tiene ninguna.
         raise HTTPException(409, "Para pasar a Filtro humano agrega una entrevista humana con «Agregar evaluación»: el candidato se mueve solo.")
@@ -1857,7 +1894,8 @@ async def aplicar_movimiento(
         raise HTTPException(409, "El candidato ya está en Onboarding; gestiona su expediente desde ese módulo.")
 
     # 2026-09-16 (control manual): lo que se salta queda como «Omitida manualmente» — registro interno.
-    omitidas = _actividades_pendientes(p, p.etapa, datos.etapa) if manual else []
+    # Con proceso, lo que se salta son sus PASOS (verificar_avance los dejó «Omitida» con autorización).
+    omitidas = _actividades_pendientes(p, p.etapa, datos.etapa) if manual and not con_proceso else []
     if omitidas:
         ahora_iso = datetime.now(timezone.utc).isoformat()
         p.actividades_omitidas = list(p.actividades_omitidas or []) + [
@@ -1874,12 +1912,14 @@ async def aplicar_movimiento(
         p.estado = "cumple"
         p.prefiltro_completo = True
         await _asignar_curso_filtro(db, p)
-        # Una falla de WhatsApp/Meta NUNCA bloquea el movimiento: se registra y RH sigue.
-        try:
-            envio = await _avisar_apto_e_iniciar_agenda(db, p)
-        except Exception as ex:  # noqa: BLE001
-            envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)[:200]}
-        registrar(db, u.nombre, "entrevista_ia_forzada", "postulacion", p.codigo, {"whatsapp": envio, "correo_rh": u.correo})
+        # Proceso configurable: la agenda de la Entrevista Red Human solo arranca si el proceso la incluye.
+        if sproc.mueve_entrevista_ia(p):
+            # Una falla de WhatsApp/Meta NUNCA bloquea el movimiento: se registra y RH sigue.
+            try:
+                envio = await _avisar_apto_e_iniciar_agenda(db, p)
+            except Exception as ex:  # noqa: BLE001
+                envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)[:200]}
+            registrar(db, u.nombre, "entrevista_ia_forzada", "postulacion", p.codigo, {"whatsapp": envio, "correo_rh": u.correo})
     if datos.etapa == "Onboarding" and not p.expediente and p.consentimiento:
         _abrir_expediente(db, p, u)  # movimiento manual directo a Onboarding: el expediente nace aquí
 
@@ -1906,6 +1946,14 @@ async def aplicar_movimiento(
             {"texto": nota, "desde": p.etapa, "motivo": datos.comentario.strip()[:300], "correo_rh": u.correo},
         )
 
+    if automatico:
+        sello = datetime.now(timezone.utc)
+        p.historial = list(p.historial or []) + [{
+            "evento": "avance_automatico", "usuario": u.nombre, "fecha": sello.isoformat(), "desde": p.etapa, "hacia": datos.etapa,
+            "texto": f"Avance automático del proceso: {nombre_etapa(p.etapa)} → {nombre_etapa(datos.etapa)} (todos los pasos "
+                     f"obligatorios cumplieron su condición) — {_fecha_hora_mx(sello)}",
+        }]
+
     anterior = p.etapa
     reabierta = not p.activa
     if reabierta:
@@ -1926,7 +1974,7 @@ async def aplicar_movimiento(
         db, u.nombre, "etapa_movida", "postulacion", p.codigo,
         {"candidato": p.candidato.codigo, "de": anterior, "a": datos.etapa, "comentario": datos.comentario, "reabierta": reabierta,
          "manual": manual, "omitidas": omitidas, "omitio_entrevista_ia": omitiendo_ia, "correo_rh": u.correo,
-         "iniciar_onboarding": desde_iniciar},
+         "iniciar_onboarding": desde_iniciar, "automatico": automatico, "pasos_omitidos": omitidos_proceso},
     )
     if datos.etapa == "Onboarding" and not desde_iniciar and p.expediente:
         # Modo Prueba (única vía sin «Iniciar Onboarding»): las tareas nacen igual desde la plantilla, sin avisos.
@@ -1953,10 +2001,12 @@ def mover_por_entrevista_humana(db: Session, p: Postulacion, u: Usuario, codigo_
     AGREGA una nota al historial. No hace commit. Regresa True si movió."""
     if not p.activa or p.etapa not in ("Prefiltro", "Entrevista IA"):
         return False
+    if sproc.tiene_proceso(p) and sproc.faltantes(sproc.estado_pasos(p), p.etapa, "Entrevista Humana"):
+        return False  # proceso configurable: no se dejan atrás pasos obligatorios sin cumplir (RH los omite con autorización)
     anterior = p.etapa
     sello = datetime.now(timezone.utc)
     motivo = f"Se agregó la entrevista humana {codigo_evaluacion}"
-    omitidas = _actividades_pendientes(p, anterior, "Entrevista Humana")
+    omitidas = [] if sproc.tiene_proceso(p) else _actividades_pendientes(p, anterior, "Entrevista Humana")
     if omitidas:
         p.actividades_omitidas = list(p.actividades_omitidas or []) + [
             {"actividad": e, "etapa": e, "usuario": u.nombre, "fecha": sello.isoformat(), "motivo": motivo, "hacia": "Entrevista Humana"}

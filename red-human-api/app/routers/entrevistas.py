@@ -18,6 +18,7 @@ from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import CIERRES_COMPLETOS, CIERRES_ENTREVISTA, Candidato, Cuenta, Entrevista, Usuario, Vacante, registrar
 from ..serial import entrevista_dict, nombre_empresa_candidato
+from ..services.proceso import avanzar_seguro, enfoque_entrevista_agente
 from ..services import ia
 from ..services.avatar import AvatarError, avatar_activo, crear_sesion_avatar, probar_avatar
 from ..services.configuracion import modo_prueba_activo
@@ -291,7 +292,7 @@ def _system_prompt(e: Entrevista) -> str:
         empresa=empresa,
         temas=ia.temas_de_guion(guion),
         enfoque=guion.get("enfoque", ""),
-        enfoque_entrevista=(v.enfoque_entrevista if v else "profesional") or "profesional",
+        enfoque_entrevista=enfoque_entrevista_agente(p, v),
         ubicacion=(v.ubicacion if v else "") or "",
         modalidad=(v.modalidad if v else "") or "",
         sueldo=(v.sueldo if v else "") or "",
@@ -530,7 +531,7 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
         e.transcript or [],
         perfil_ideal=(v.perfil_ideal if v else "") or "",
         temas=temas,
-        enfoque_entrevista=(v.enfoque_entrevista if v else "profesional") or "profesional",
+        enfoque_entrevista=enfoque_entrevista_agente(p, v),
         faltante=faltante,
         analisis_cv=(p.analisis or {}) if p else {},
         cv_datos=(p.candidato.cv_datos or {}) if p and p.candidato else {},
@@ -571,6 +572,9 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
             guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
 
     db.commit()
+    # Proceso configurable (2026-10-06): con el avance automático de Filtro Red Human encendido y sus obligatorios
+    # cumplidos (p. ej. calificación mínima), pasa a la siguiente etapa con pasos. Apagado: RH decide.
+    await avanzar_seguro(db, p)
     return entrevista_dict(e)
 
 

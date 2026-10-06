@@ -8,7 +8,9 @@
      human-in-the-loop tienen que verse en pantalla.
    ============================================================ */
 
-import type { Candidato, Vacante } from "@/lib/data";
+import type {
+  Candidato, EtapaCandidato, EtapasProceso, PasoProceso, ProcesoConfig, ReglaPaso, ResponsablePaso, SeguimientoProceso, Vacante,
+} from "@/lib/data";
 import type { NuevoIngreso, ResumenTableroOnboarding } from "@/lib/phase2";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -98,6 +100,14 @@ function patch<T>(ruta: string, body: unknown) {
   });
 }
 
+function put<T>(ruta: string, body: unknown) {
+  return enviar<T>(ruta, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function subir<T>(ruta: string, form: FormData) {
   return enviar<T>(ruta, { method: "POST", body: form });
 }
@@ -135,6 +145,9 @@ export interface UsuarioRH {
   /** Evaluaciones (2026-09-28): ver informes médicos completos (el Administrador siempre). */
   accesoInformesMedicos?: boolean;
   puedeVerInformeMedico?: boolean;
+  /** Proceso configurable (2026-10-06): autorizar la omisión de pasos obligatorios (el Administrador siempre). */
+  autorizaOmisiones?: boolean;
+  puedeAutorizarOmisiones?: boolean;
   ultimoAcceso: string | null;
   /** Lista de Cuentas activas a las que tiene acceso este usuario.
    * Cuando solo hay una, el frontend no muestra ningún selector (regla Fase A). */
@@ -176,7 +189,7 @@ export function crearUsuario(datos: {
 
 export function actualizarUsuario(
   id: number,
-  cambios: { nombre?: string; puesto?: string; telefono?: string; rol?: RolUsuario; activo?: boolean; password?: string; acceso_informes_medicos?: boolean },
+  cambios: { nombre?: string; puesto?: string; telefono?: string; rol?: RolUsuario; activo?: boolean; password?: string; acceso_informes_medicos?: boolean; autoriza_omisiones?: boolean },
 ) {
   return patch<UsuarioRH>(`/auth/usuarios/${id}`, cambios);
 }
@@ -696,6 +709,8 @@ export function crearVacante(
     plantilla_id?: number | null;
     enfoque_entrevista?: EnfoqueEntrevista;
     texto_bolsa?: string;
+    /** Proceso configurable (2026-10-06): sin mandar = la plantilla predeterminada de la Cuenta. */
+    proceso?: ProcesoEntrada;
   },
 ) {
   return post<Vacante>("/vacantes", datos);
@@ -1055,10 +1070,14 @@ export function avanzarAEntrevistaHumana(codigo: string, motivo = "") {
   });
 }
 
-export function moverEtapaCandidato(codigo: string, etapa: string, comentario = "", forzarPrueba = false, manual = false) {
+export function moverEtapaCandidato(codigo: string, etapa: string, comentario = "", forzarPrueba = false, manual = false, omitirObligatorios = false) {
   // `manual` (2026-09-16): «Mover a otra etapa» — sin bloqueos de secuencia; lo que se salte queda
   // registrado como «Omitida manualmente» (usuario, fecha, motivo = comentario).
-  return patch<Candidato>(`/candidatos/${codigo}/etapa${forzarPrueba ? "?forzar_prueba=true" : ""}`, { etapa, comentario, manual });
+  // `omitirObligatorios` (2026-10-06, proceso configurable): dejar atrás pasos OBLIGATORIOS sin cumplir — exige
+  // justificación (comentario) y el permiso «Autorizar omisiones».
+  return patch<Candidato>(`/candidatos/${codigo}/etapa${forzarPrueba ? "?forzar_prueba=true" : ""}`, {
+    etapa, comentario, manual, omitir_obligatorios: omitirObligatorios,
+  });
 }
 
 /** Un resultado de envío por destinatario/canal (Fase D) — ver `resultados` en las respuestas
@@ -3114,8 +3133,12 @@ export interface AdjuntoEvaluacion { id: string; nombre: string; mime: string; s
 export interface CitaEvaluacion {
   fechaHora: string | null; zona: string; modalidad: ModalidadCita | ""; direccion: string; ligaVideollamada: string; telefono: string; porTeams: boolean;
 }
+/** Guion de apoyo de la entrevista humana según su tipo (proceso configurable, 2026-10-06). */
+export interface GuionEntrevistaHumana { tipo?: string; tipoTexto?: string; enfoque?: string; temas?: string[]; preguntas?: string[] }
 export interface Evaluacion {
   id: string; codigo: string; tipo: TipoEvaluacion; tipoTexto: string; nombre: string; nombrePropio: string;
+  /** Proceso configurable: paso que cumple ("" = fuera del proceso) y guion de la entrevista humana. */
+  pasoId?: string; guion?: GuionEntrevistaHumana;
   forma: FormaEvaluacion; formaTexto: string; responsable: string;
   estado: EstadoEvaluacion; estadoTexto: string; motivoEstado: string;
   /** Seguimiento visible por tipo (psicométrica: Pendiente/Enviada/En curso/Resultado recibido/Revisada; socioeconómica:
@@ -3145,6 +3168,8 @@ export interface RespuestaEvaluacion {
   evaluacion: Evaluacion; resultados?: ResultadoNotificacion[]; advertencias?: string[]; candidato?: Candidato; avisoTeams?: string | null; sincronizacion?: string;
   /** 2026-10-01: crear una entrevista humana movió al candidato a Filtro humano. */
   movidaAFiltroHumano?: boolean;
+  /** Proceso configurable: por qué la entrevista humana no movió al candidato. */
+  avisoProceso?: string;
 }
 export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
 export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean }
@@ -3179,12 +3204,14 @@ export function crearEvaluacion(
   datos: {
     tipo: TipoEvaluacion; nombre?: string; forma: FormaEvaluacion; evaluador?: EvaluadorEntrada | null; instrucciones?: string;
     ligaExternaCandidato?: string; pruebaId?: number | null; proveedor?: string; cita?: CitaEntrada | null; notificar?: NotificarAccion;
+    /** Proceso configurable: paso que cumple esta evaluación («Iniciar» desde el seguimiento). */
+    pasoId?: string;
   },
 ) {
   return post<RespuestaEvaluacion>(`/evaluaciones/postulaciones/${codigoPostulacion}`, {
     tipo: datos.tipo, nombre: datos.nombre ?? "", forma: datos.forma, evaluador: evaluadorSnake(datos.evaluador),
     instrucciones: datos.instrucciones ?? "", liga_externa_candidato: datos.ligaExternaCandidato ?? "", prueba_id: datos.pruebaId ?? null,
-    proveedor: datos.proveedor ?? "", cita: citaSnake(datos.cita), notificar: notificarSnake(datos.notificar),
+    proveedor: datos.proveedor ?? "", cita: citaSnake(datos.cita), notificar: notificarSnake(datos.notificar), paso_id: datos.pasoId ?? "",
   });
 }
 export function fetchEvaluacion(codigo: string) {
@@ -3334,4 +3361,87 @@ export function responderClimaPublica(
     externo_nombre: datos.externoNombre ?? "",
     externo_correo: datos.externoCorreo ?? "",
   });
+}
+
+
+/* ============================================================
+   Proceso configurable y seguimiento de candidatos (2026-10-06)
+   Plantillas de la Cuenta → copia personalizable en la vacante → versión congelada en cada candidato.
+   ============================================================ */
+
+export interface OpcionTipoPaso {
+  valor: string;
+  texto: string;
+  etapa: EtapaCandidato;
+  etapas: EtapaCandidato[];
+  regla: ReglaPaso["tipo"];
+  responsable: ResponsablePaso["tipo"];
+  dictamenes: { valor: string; texto: string }[];
+}
+export interface OpcionesProceso {
+  etapas: { valor: EtapaCandidato; texto: string; permiteAvanceAutomatico: boolean }[];
+  tiposPaso: OpcionTipoPaso[];
+  reglas: { valor: ReglaPaso["tipo"]; texto: string }[];
+  responsables: { valor: ResponsablePaso["tipo"]; texto: string }[];
+  tiposEntrevistaHumana: { valor: string; texto: string }[];
+  enfoquesEntrevistaAgente: { valor: string; texto: string }[];
+  estados: { valor: string; texto: string }[];
+  resultados: { valor: string; texto: string }[];
+  ejemplos: { clave: string; nombre: string; descripcion: string }[];
+}
+export interface PlantillaProceso {
+  id: number;
+  nombre: string;
+  descripcion: string;
+  pasos: PasoProceso[];
+  etapas: EtapasProceso;
+  version: number;
+  predeterminada: boolean;
+  activa: boolean;
+  creadoPor: string;
+  actualizadaPor: string;
+  actualizadaEn: string | null;
+}
+/** Lo que manda el formulario de vacante: copiar una plantilla, personalizar o quitar el proceso. */
+export type ProcesoEntrada = { plantilla_id?: number | null; pasos?: PasoProceso[]; etapas?: EtapasProceso } | { quitar: true };
+
+export function fetchOpcionesProceso() {
+  return get<OpcionesProceso>("/procesos/opciones");
+}
+export function fetchPlantillasProceso(incluirInactivas = false) {
+  return get<PlantillaProceso[]>(`/procesos/plantillas${incluirInactivas ? "?incluir_inactivas=true" : ""}`);
+}
+export function crearPlantillaProceso(datos: { nombre: string; descripcion?: string; pasos: PasoProceso[]; etapas: EtapasProceso; predeterminada?: boolean }) {
+  return post<PlantillaProceso>("/procesos/plantillas", datos);
+}
+export function crearPlantillaProcesoDesdeEjemplo(clave: string) {
+  return post<PlantillaProceso>(`/procesos/plantillas/ejemplo/${clave}`);
+}
+export function editarPlantillaProceso(id: number, cambios: Partial<{ nombre: string; descripcion: string; pasos: PasoProceso[]; etapas: EtapasProceso; predeterminada: boolean }>) {
+  return patch<PlantillaProceso>(`/procesos/plantillas/${id}`, cambios);
+}
+export function desactivarPlantillaProceso(id: number) {
+  return eliminar<{ ok: boolean }>(`/procesos/plantillas/${id}`);
+}
+export function fetchProcesoVacante(codigo: string) {
+  return get<{ proceso: ProcesoConfig | Record<string, never>; candidatosActivos: number; candidatosConVersionAnterior: number }>(`/procesos/vacantes/${codigo}`);
+}
+export function guardarProcesoVacante(codigo: string, datos: ProcesoEntrada) {
+  return put<{ proceso: ProcesoConfig | Record<string, never>; candidatosActivos: number; candidatosConVersionAnterior: number }>(`/procesos/vacantes/${codigo}`, datos);
+}
+export function fetchSeguimiento(codigoPostulacion: string) {
+  return get<SeguimientoProceso>(`/procesos/postulaciones/${codigoPostulacion}`);
+}
+type RespuestaPaso = { proceso: SeguimientoProceso; candidato: Candidato };
+export function omitirPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/omitir`, { motivo });
+}
+export function cancelarPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/cancelar`, { motivo });
+}
+export function reactivarPasoProceso(codigoPostulacion: string, pasoId: string) {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reactivar`);
+}
+export function aplicarProcesoVigente(codigoPostulacion: string) {
+  return post<RespuestaPaso & { aplicado: { version: number; heredados: string[] } }>(`/procesos/postulaciones/${codigoPostulacion}/aplicar-vigente`);
 }

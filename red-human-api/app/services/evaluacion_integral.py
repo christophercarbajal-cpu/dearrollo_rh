@@ -19,6 +19,11 @@ Reglas:
 * Si falta alguna validación → «Pendiente» con el score PARCIAL de lo que ya hay. Un pendiente nunca vale cero:
   sin ninguna calificación el score es None.
 * Sin pendientes ni «No apto»: «Apto con observaciones» si alguna trae observaciones; si no, «Apto».
+
+Proceso configurable (2026-10-06): si la postulación tiene proceso, las validaciones y cuáles son OBLIGATORIAS salen de
+sus pasos (Análisis de CV / Entrevista Red Human / cada evaluación del proceso); un paso omitido o cancelado con
+autorización deja de exigirse y uno OPCIONAL que nadie inició no deja el resultado en «Pendiente». Las evaluaciones
+agregadas fuera del proceso cuentan como no obligatorias. Mismas reglas de resultado.
 """
 
 from typing import Iterable, List, Optional
@@ -111,7 +116,12 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
         db = object_session(p)
         evaluaciones = (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id).order_by(Evaluacion.id).all()
                         if db is not None else [])
+    evaluaciones = list(evaluaciones)
     vivas = sorted((e for e in evaluaciones if e.estado != "cancelada"), key=lambda e: e.id or 0)
+    from . import proceso as sproc
+
+    if sproc.tiene_proceso(p):
+        return _resultado(_validaciones_de_proceso(p, evaluaciones, vivas))
     a = p.analisis or {}
     validaciones: List[dict] = []
 
@@ -145,7 +155,46 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
                 "revisadoPor": PENDIENTE_REVISION, "codigo": None,
             })
 
-    # --- Resultado ---
+    return _resultado(validaciones)
+
+
+def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], vivas: List[Evaluacion]) -> List[dict]:
+    from . import proceso as sproc
+
+    pasos = sproc.estado_pasos(p, evaluaciones, solo_evaluables=True)
+    config = [x for x in p.proceso["pasos"] if any(y["id"] == x["id"] for y in pasos)]
+    asignadas = sproc.asignar_evaluaciones(config, evaluaciones)
+    validaciones: List[dict] = []
+    ligadas: set = set()
+    for x in pasos:
+        if x["estado"] in ("omitida", "cancelada"):
+            continue
+        if x["tipo"] in ("analisis_cv", "entrevista_agente"):
+            score = x["score"] if x["estado"] == "completada" else None
+            if score is None and not x["obligatorio"] and x["estado"] == "pendiente":
+                continue
+            v = _validacion_red_human(x["id"], x["nombre"], score, "" if score is not None else x["espera"])
+            v["obligatoria"] = x["obligatorio"]
+            validaciones.append(v)
+            continue
+        ev = asignadas.get(x["id"])
+        if ev is not None and ev.estado != "cancelada":
+            ligadas.add(ev.id)
+            validaciones.append({**_validacion_evaluacion(ev, x["obligatorio"]), "nombre": x["nombre"]})
+        elif x["obligatorio"]:
+            validaciones.append({
+                "clave": f"paso:{x['id']}", "nombre": x["nombre"], "obligatoria": True, "fuente": "persona", "tipo": x["tipo"],
+                "estado": "pendiente", "resultado": "Sin agregar",
+                "detalle": x["espera"] or "El proceso la pide; inicíala desde «Seguimiento».", "score": None,
+                "revisadoPor": PENDIENTE_REVISION, "codigo": None,
+            })
+    for ev in vivas:
+        if ev.id not in ligadas:
+            validaciones.append(_validacion_evaluacion(ev, False))
+    return validaciones
+
+
+def _resultado(validaciones: List[dict]) -> dict:
     scores = [v["score"] for v in validaciones if v["score"] is not None]
     score = round(sum(scores) / len(scores)) if scores else None
     pendientes = [v for v in validaciones if v["estado"] == "pendiente"]

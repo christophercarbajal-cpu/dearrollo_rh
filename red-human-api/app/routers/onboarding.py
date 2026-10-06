@@ -426,6 +426,13 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
     req = onb.requisitos_inicio(e)
     if not req["completos"] and not prueba:
         raise HTTPException(409, f"Antes de enviar a Onboarding completa: {', '.join(req['faltan'])}.")
+    if p.etapa == "Contratación" and not prueba:
+        # Proceso configurable (2026-10-06): los obligatorios de Contratación deben cumplir su condición antes de iniciar.
+        from ..services import proceso as sproc
+
+        falta = sproc.faltantes(sproc.estado_pasos(p), "Contratación", "Onboarding") if sproc.tiene_proceso(p) else []
+        if falta:
+            raise HTTPException(409, sproc.mensaje_bloqueo(falta, "Onboarding"))
     if not onb.normalizar_documentos(datos.documentos):
         raise HTTPException(400, "Selecciona al menos un documento.")
     if datos.curso_induccion_id and not _curso_titulo(db, datos.curso_induccion_id, cuenta.id):

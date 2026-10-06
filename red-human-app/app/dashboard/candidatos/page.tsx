@@ -45,6 +45,7 @@ import {
   Trash2,
   ArrowRightLeft,
   ClipboardCheck,
+  ListChecks,
 } from "lucide-react";
 import { Card, Badge, Button, Avatar, Eyebrow, Progress } from "@/components/ui";
 import { PageHeader, EstadoBadge, ScoreRing } from "@/components/dashboard/parts";
@@ -107,6 +108,8 @@ import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-
 import { PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-evaluaciones";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
 import { BadgeIntegral, PanelResultadoIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
+import { SeguimientoProceso } from "@/components/dashboard/procesos/seguimiento-proceso";
+import { evaluadorVacio } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
 import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, type FirmaDocumento } from "@/lib/api";
@@ -1232,7 +1235,7 @@ function Pastilla({
   );
 }
 
-type TabCandidato = "resumen" | "evaluaciones" | "documentos" | "whatsapp" | "contratacion";
+type TabCandidato = "seguimiento" | "resumen" | "evaluaciones" | "documentos" | "whatsapp" | "contratacion";
 
 /** `reintentar` (Lote 4): presente solo en avisos de error de acciones que pueden toparse con
  * un bloqueo de estado forzable — el botón "Continuar de todos modos" solo se pinta si además
@@ -1279,14 +1282,16 @@ function ModalCandidato({
     setConfirmarEliminar(false);
     onEliminado?.();
   }
-  const [tab, setTab] = useState<TabCandidato>(() => (c.etapa === "Contratación" ? "contratacion" : "resumen"));
+  // Proceso configurable (2026-10-06): con proceso la ficha abre en «Seguimiento» (etapa actual + siguiente acción)
+  const conProceso = Boolean(c.tieneProceso || c.proceso?.tieneProceso);
+  const [tab, setTab] = useState<TabCandidato>(() => (conProceso ? "seguimiento" : c.etapa === "Contratación" ? "contratacion" : "resumen"));
   // Si el candidato ENTRA a Contratación mientras el modal ya está abierto (p.ej. RH lo mueve
   // de etapa sin cerrar la ficha), salta solo a esa pestaña para que no se pierda entre las
   // demás — sin esto, seguiría en "resumen" hasta que el usuario la buscara a mano.
   const etapaAnterior = useRef(c.etapa);
   useEffect(() => {
     if (c.etapa === "Contratación" && etapaAnterior.current !== "Contratación") {
-      setTab("contratacion");
+      setTab((t) => (t === "seguimiento" ? t : "contratacion"));
     }
     etapaAnterior.current = c.etapa;
   }, [c.etapa]);
@@ -1564,6 +1569,7 @@ function ModalCandidato({
           <div className="scroll-x gap-2 px-4 sm:px-6">
             {(
               [
+                ...(conProceso ? [{ id: "seguimiento", label: "Seguimiento", icon: ListChecks, tone: "brand" }] : []),
                 { id: "resumen", label: "Resumen", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
                 { id: "documentos", label: "CV y documentos", icon: FileText, tone: "brand" },
@@ -1627,6 +1633,21 @@ function ModalCandidato({
             </Card>
           )}
 
+          {tab === "seguimiento" && (
+            <SeguimientoProceso
+              c={c}
+              live={live && puedeDecidir}
+              version={versionEval}
+              onCambio={onCambio}
+              setAviso={setAviso}
+              onAbrir={(p) => setTab(p)}
+              onSolicitarDocumentos={() => setConfirmacion("solicitar")}
+              onIniciarEvaluacion={(p) => setAgregarEval({
+                tipo: p.tipo as PresetEvaluacion["tipo"], pasoId: p.pasoId, titulo: p.titulo,
+                evaluador: p.usuarioId ? { ...evaluadorVacio, usuarioId: p.usuarioId } : undefined,
+              })}
+            />
+          )}
           {(tab === "resumen" || tab === "evaluaciones") && <PanelResultadoIntegral r={c.resultadoIntegral} />}
           {tab === "resumen" && (
             <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
@@ -1846,7 +1867,7 @@ function ModalCandidato({
           onListo={(r, texto) => {
             setAgregarEval(null);
             setVersionEval((x) => x + 1);
-            setTab("resumen");
+            setTab((t) => (t === "seguimiento" ? t : "resumen"));
             // un correo/WhatsApp que no salió nunca es silencioso (toast amarillo + detalle)
             const lineas = lineasResultados(r.resultados);
             const correoFallo = (r.resultados ?? []).some((x) => x.canal === "correo" && !x.enviado && x.destino);

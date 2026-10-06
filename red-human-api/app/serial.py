@@ -95,6 +95,8 @@ def vacante_dict(
         "sueldoPeriodicidad": v.sueldo_periodicidad or "",
         "estado": v.estado,
         "enfoqueEntrevista": v.enfoque_entrevista or "profesional",
+        # Proceso configurable (2026-10-06): COPIA personalizable del proceso (vacío = sin proceso)
+        "proceso": v.proceso or {},
         "candidatos": n_candidatos,
         "nuevos": n_nuevos,
         "publicada": hace(v.creada_en) if v.estado == "Publicada" else "borrador",
@@ -439,6 +441,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "resultadoApto": p.resultado_apto,
         # 2026-10-01: «Evaluación integral» ya no es columna sino RESULTADO acumulado (tarjeta y ficha).
         "resultadoIntegral": evaluacion_integral.calcular(p, evaluaciones),
+        # Proceso configurable (2026-10-06): la ficha abre en «Seguimiento» si la postulación tiene proceso
+        "tieneProceso": bool((p.proceso or {}).get("pasos")),
         "clienteVacante": v.cliente.nombre if v and v.cliente else None,
         "clienteIdVacante": v.cliente_id if v else None,  # Fase 7A: para elegir contactos/entrevistador externo
         # --- Persona (maestro) ---
@@ -448,9 +452,13 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
     if not detalle:
         return base
 
+    from .services import proceso as sproc
+
     return {
         **base,
         **_sintesis_global(p),
+        # Proceso configurable (2026-10-06): vista de seguimiento (etapa actual, siguiente acción y pasos por etapa)
+        "proceso": sproc.resumen(p, evaluaciones),
         "cvDatos": c.cv_datos or {},
         "analisis": p.analisis or {},
         "listaArchivos": [archivo_dict(a) for a in c.archivos],
@@ -1152,6 +1160,8 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
             "whatsapp": "" if publico else (ev.evaluador_whatsapp or ""),
         } if ev.forma == "asignada" else None,
         "instrucciones": ev.instrucciones or "",
+        "pasoId": ev.paso_id or "",  # proceso configurable (2026-10-06)
+        "guion": ev.guion or {},  # guion de la entrevista humana según su tipo
         "ligaExternaCandidato": ev.liga_externa_candidato or "",
         "pruebaId": ev.prueba_id,
         "proveedor": ev.proveedor or "",

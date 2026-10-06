@@ -29,6 +29,9 @@ def usuario_dict(u: Usuario) -> dict:
        # Evaluaciones (2026-09-28): ver informes médicos completos (el Administrador siempre)
        "accesoInformesMedicos": bool(u.acceso_informes_medicos),
        "puedeVerInformeMedico": u.puede_ver_informe_medico(),
+       # Proceso configurable (2026-10-06): autorizar la omisión de pasos obligatorios (el Administrador siempre)
+       "autorizaOmisiones": bool(u.autoriza_omisiones),
+       "puedeAutorizarOmisiones": u.puede_autorizar_omisiones(),
        "ultimoAcceso": u.ultimo_acceso.isoformat() if u.ultimo_acceso else None,
        # Punto 27: lista de Cuentas activas del usuario para el selector multi-cuenta del
        # frontend. Cuando solo hay una, el selector no aparece (regla de negocio Fase A).
@@ -259,6 +262,7 @@ class ActualizarUsuarioIn(BaseModel):
    activo: Optional[bool] = None
    password: Optional[str] = None
    acceso_informes_medicos: Optional[bool] = None  # solo lo cambia un Administrador (este endpoint ya lo exige)
+   autoriza_omisiones: Optional[bool] = None  # proceso configurable: omitir pasos obligatorios con justificación
 
 @router.patch("/usuarios/{usuario_id}")
 def actualizar(
@@ -301,6 +305,9 @@ def actualizar(
    if datos.acceso_informes_medicos is not None:
        u.acceso_informes_medicos = bool(datos.acceso_informes_medicos)
        cambios.append("acceso_informes_medicos")
+   if datos.autoriza_omisiones is not None:
+       u.autoriza_omisiones = bool(datos.autoriza_omisiones)
+       cambios.append("autoriza_omisiones")
    if datos.password:
        motivo = auth.validar_fortaleza(datos.password)
        if motivo:

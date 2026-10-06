@@ -1082,6 +1082,60 @@ def guion_entrevista(
     return resp.output_parsed, True
 
 
+# Proceso configurable (2026-10-06): cada TIPO de entrevista humana genera su propio guion para quien entrevista
+# (models.TIPOS_ENTREVISTA_HUMANA). Es apoyo, no script: la persona entrevistadora decide y registra el resultado.
+ENFOQUE_ENTREVISTA_HUMANA = {
+    "general": "trayectoria, motivación, expectativas del puesto, disponibilidad y condiciones, comunicación y ajuste general",
+    "tecnica": "dominio técnico real del puesto: herramientas, procedimientos, casos prácticos y resolución de problemas del área",
+    "jefe_directo": "cómo trabajaría en el equipo: prioridades, autonomía, seguimiento, manejo de errores, metas y estilo de trabajo con su jefe",
+    "valores": "valores y conducta en el trabajo: ética, colaboración, servicio, responsabilidad, manejo de conflicto y adaptación a la cultura",
+}
+_PREGUNTAS_DEMO_HUMANA = {
+    "general": ["Cuéntame de tu trayectoria y qué te trae a esta vacante.", "¿Qué esperas encontrar en este puesto?",
+                "¿Cómo es tu disponibilidad de horario y traslado?", "¿Qué logro laboral te enorgullece más?",
+                "¿Por qué dejarías tu empleo actual o anterior?"],
+    "tecnica": ["Explícame paso a paso cómo resuelves la tarea principal del puesto.", "¿Qué herramientas dominas y en qué nivel?",
+                "Cuéntame de un problema técnico difícil y cómo lo resolviste.", "¿Cómo verificas que tu trabajo quedó bien?",
+                "Te planteo un caso práctico del área: ¿qué harías primero?"],
+    "jefe_directo": ["¿Cómo organizas tus prioridades en una semana complicada?", "¿Qué tipo de seguimiento esperas de tu jefe?",
+                     "Cuéntame de un error tuyo y qué hiciste después.", "¿Cómo te gusta recibir retroalimentación?",
+                     "¿Qué metas te pondrías para tus primeros tres meses?"],
+    "valores": ["Cuéntame de una vez que tuviste que decir que no a algo que no era correcto.",
+                "¿Cómo resuelves un desacuerdo con un compañero?", "¿Qué significa para ti dar un buen servicio?",
+                "Cuéntame de un cambio en el trabajo que te costó y cómo te adaptaste.", "¿Qué ambiente de trabajo te hace rendir mejor?"],
+}
+
+
+def guion_entrevista_humana(tipo: str, titulo: str, requisitos: str = "", candidato_resumen: str = "") -> Tuple[GuionEntrevista, bool]:
+    """Guion de la entrevista HUMANA según su tipo (general | tecnica | jefe_directo | valores). Sin clave de OpenAI
+    (o si falla) regresa uno de ejemplo del mismo tipo — nunca bloquea la creación de la evaluación."""
+    tipo = tipo if tipo in ENFOQUE_ENTREVISTA_HUMANA else "general"
+    demo = GuionEntrevista(
+        enfoque=f"Entrevista {tipo.replace('_', ' ')} para {titulo}: validar {ENFOQUE_ENTREVISTA_HUMANA[tipo].split(':')[0]}.",
+        temas=[q.rstrip("?.").lstrip("¿") for q in _PREGUNTAS_DEMO_HUMANA[tipo]],
+        preguntas=list(_PREGUNTAS_DEMO_HUMANA[tipo]),
+    )
+    client = _client()
+    if client is None:
+        return demo, False
+    try:
+        resp = client.responses.parse(
+            model=MODEL,
+            instructions=(
+                "Diseñas el guion de apoyo para una ENTREVISTA HUMANA de RH en México (la realiza una persona, no la IA). "
+                "Devuelve 5 a 7 temas y una pregunta abierta y conductual por tema, en español mexicano, cortas y ligadas "
+                f"al puesto. Este tipo de entrevista se enfoca en: {ENFOQUE_ENTREVISTA_HUMANA[tipo]}. "
+                f"PROHIBIDO cualquier tema sobre: {DATOS_SENSIBLES_PROHIBIDOS}."
+            ),
+            input=(f"Puesto: {titulo}\nRequisitos: {requisitos or 'no especificados'}\n"
+                   f"Resumen del candidato: {candidato_resumen or 'sin información previa'}"),
+            text_format=GuionEntrevista,
+        )
+        return resp.output_parsed, True
+    except Exception:  # noqa: BLE001 — el guion es apoyo: nunca bloquea
+        return demo, False
+
+
 def temas_de_guion(guion: dict) -> List[str]:
     """Temas del guion; para guiones previos a Fase 4 (solo `preguntas`) usa las preguntas como temas."""
     g = guion or {}

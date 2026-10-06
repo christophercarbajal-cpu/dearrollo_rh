@@ -39,6 +39,7 @@ import { BotonCargaMasiva } from "@/components/dashboard/carga-masiva";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { SeccionPlantillasClima } from "@/components/dashboard/clima/seccion-plantillas-clima";
 import { SeccionPlantillasOnboarding } from "@/components/dashboard/onboarding/seccion-plantillas-onboarding";
+import { SeccionPlantillasProceso } from "@/components/dashboard/procesos/seccion-plantillas-proceso";
 import { SeccionPruebasPsicometricas } from "@/components/dashboard/evaluaciones/seccion-pruebas-psicometricas";
 import {
   actualizarCliente,
@@ -125,6 +126,7 @@ export default function Configuracion() {
       <SeccionUsuarios />
       <SeccionClientes />
       <SeccionPlantillas />
+      <SeccionPlantillasProceso />
       <SeccionPlantillasClima />
       <SeccionPlantillasOnboarding />
       <SeccionPruebasPsicometricas />
@@ -919,6 +921,7 @@ function FormUsuario({
   const [activo, setActivo] = useState(usuario?.activo ?? true);
   // Evaluaciones (2026-09-28): permiso para ver informes médicos completos (el Administrador siempre lo tiene)
   const [accesoMedico, setAccesoMedico] = useState(Boolean(usuario?.accesoInformesMedicos));
+  const [autorizaOmisiones, setAutorizaOmisiones] = useState(Boolean(usuario?.autorizaOmisiones));
   const [password, setPassword] = useState("");
   const [guardando, setGuardando] = useState(false);
 
@@ -927,7 +930,7 @@ function FormUsuario({
     onError("");
     let r;
     if (usuario) {
-      const cambios: Parameters<typeof actualizarUsuario>[1] = { nombre, puesto, telefono, rol, activo, acceso_informes_medicos: accesoMedico };
+      const cambios: Parameters<typeof actualizarUsuario>[1] = { nombre, puesto, telefono, rol, activo, acceso_informes_medicos: accesoMedico, autoriza_omisiones: autorizaOmisiones };
       if (password) cambios.password = password;
       r = await actualizarUsuario(usuario.id, cambios);
     } else {
@@ -963,6 +966,16 @@ function FormUsuario({
             <label htmlFor={`medico-${usuario.id}`} className="text-sm">
               Puede ver informes médicos completos
               <span className="block text-[11px] text-ink-3">Dato sensible (LFPDPPP). Sin este permiso solo ve el estado y el dictamen. El Administrador siempre lo tiene.</span>
+            </label>
+          </div>
+        )}
+        {usuario && (
+          <div className="flex items-start gap-2 sm:col-span-2">
+            <input type="checkbox" id={`omisiones-${usuario.id}`} checked={rol === "Administrador" || autorizaOmisiones} disabled={rol === "Administrador"}
+              onChange={(e) => setAutorizaOmisiones(e.target.checked)} className="mt-0.5 h-4 w-4 rounded accent-brand" />
+            <label htmlFor={`omisiones-${usuario.id}`} className="text-sm">
+              Puede autorizar omisiones de pasos obligatorios
+              <span className="block text-[11px] text-ink-3">Proceso de selección: omitir un requisito obligatorio exige justificación y este permiso. El Administrador siempre lo tiene.</span>
             </label>
           </div>
         )}

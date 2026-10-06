@@ -76,6 +76,11 @@ class Vacante(Base):
     # aviso al enviar a Onboarding cuando falte alguna o no esté revisada. Solo SUGIERE: nunca bloquea ni asigna sola.
     evaluaciones_sugeridas: Mapped[list] = mapped_column(JSON, default=list)
     avisar_evaluaciones_antes_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Proceso configurable (2026-10-06): COPIA del proceso de selección de esta vacante — de una PlantillaProceso de la
+    # Cuenta (personalizable aquí sin tocar la plantilla) o armado a mano. {plantilla_id, plantilla_nombre,
+    # plantilla_version, version, personalizado, pasos[], etapas{}}. Vacío = vacante sin proceso (flujo de siempre).
+    # Cambiarlo NUNCA toca a las postulaciones existentes: cada una congeló su versión (`Postulacion.proceso`).
+    proceso: Mapped[dict] = mapped_column(JSON, default=dict)
     area: Mapped[str] = mapped_column(String(100), default="")
     empresa: Mapped[str] = mapped_column(String(150), default="Grupo Carbe")
     ubicacion: Mapped[str] = mapped_column(String(150), default="")
@@ -317,6 +322,14 @@ class Postulacion(Base):
     # 2026-09-16 (control manual de RH): actividades que RH saltó al mover de etapa —
     # [{actividad, etapa, usuario, fecha, motivo}] — registro interno, nunca bloquea.
     actividades_omitidas: Mapped[list] = mapped_column(JSON, default=list)
+    # Proceso configurable (2026-10-06): versión CONGELADA del proceso de la vacante al crear la postulación (o al
+    # aplicarlo explícitamente). Cambios posteriores en la plantilla o la vacante no la tocan. Vacío = sin proceso.
+    proceso: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Decisiones de RH sobre los pasos ({paso_id: {omitida|cancelada: {por, motivo, autorizado_por, fecha}}}). El
+    # ESTADO de cada paso se DERIVA de los registros reales (services/proceso.py).
+    proceso_estado: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Cuándo entró a su etapa actual (plazos de los pasos). La escribe el listener de `etapa`; NULL = creado_en.
+    etapa_desde: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Fase C: resultado vigente ("el más reciente gana"), ver candidatos._recalcular_resultado_apto.
     resultado_apto: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     ultima_actividad_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
@@ -1187,6 +1200,9 @@ class Usuario(Base):
     # Evaluaciones (2026-09-28): ver el informe médico COMPLETO (dato sensible). Sin él, solo estado y dictamen.
     # El Administrador lo tiene siempre (`puede_ver_informe_medico`).
     acceso_informes_medicos: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Proceso configurable (2026-10-06): autorizar la omisión de un paso OBLIGATORIO del proceso (con justificación).
+    # El Administrador lo tiene siempre (`puede_autorizar_omisiones`).
+    autoriza_omisiones: Mapped[bool] = mapped_column(Boolean, default=False)
     hash_pass: Mapped[str] = mapped_column(String(255))
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
     debe_cambiar_pass: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1216,6 +1232,9 @@ class Usuario(Base):
 
     def puede_ver_informe_medico(self) -> bool:
         return self.rol == "Administrador" or bool(self.acceso_informes_medicos)
+
+    def puede_autorizar_omisiones(self) -> bool:
+        return self.rol == "Administrador" or bool(self.autoriza_omisiones)
 
     def puede_decidir(self) -> bool:
         """Ya no hay perfil de solo lectura (Fase A): Administrador y Usuario deciden por
@@ -1636,6 +1655,7 @@ TABLAS_MODULOS_RH = (
     "pruebas_psicometricas", "evaluaciones_candidato",  # Evaluaciones y verificaciones (2026-09-28)
     "firmas_documentos",  # Dropbox Sign (2026-09-29)
     "evaluaciones", "eventos_evaluacion",  # Evaluaciones unificadas — Fase 1 (2026-09-29)
+    "plantillas_proceso",  # Proceso configurable (2026-10-06)
 )
 
 # --- Desempeño ---
@@ -2215,6 +2235,10 @@ class Evaluacion(Base):
     evaluador_whatsapp: Mapped[str] = mapped_column(String(30), default="")
     token_evaluador: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga sin cuenta; lo genera Red Human
     instrucciones: Mapped[str] = mapped_column(Text, default="")
+    # Proceso configurable (2026-10-06): paso del proceso que cumple esta evaluación ("" = agregada fuera del proceso)
+    # y guion específico de la entrevista humana según su tipo (`TIPOS_ENTREVISTA_HUMANA`).
+    paso_id: Mapped[str] = mapped_column(String(40), default="")
+    guion: Mapped[dict] = mapped_column(JSON, default=dict)  # {tipo, tipoTexto, enfoque, temas[], preguntas[]}
     # --- liga de otro sistema / proveedor integrado (funciones actuales «Enlace externo» e «Integrada») ---
     liga_externa_candidato: Mapped[str] = mapped_column(String(500), default="")
     prueba_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # PruebaPsicometrica
@@ -2332,3 +2356,95 @@ class FirmaDocumento(Base):
     creado_por: Mapped[str] = mapped_column(String(150), default="")
     creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     firmada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+
+
+# ============================================================
+# Proceso configurable y seguimiento de candidatos (2026-10-06)
+# ============================================================
+# Las CINCO etapas siguen fijas (ETAPAS_CANDIDATO). Un proceso = pasos ubicados en esas etapas, con dependencias
+# EXPLÍCITAS (sin dependencia = en paralelo), responsable, condición de avance (regla de aprobación) y plazo. Vive en
+# tres niveles, siempre por COPIA: PlantillaProceso (Cuenta) → Vacante.proceso (personalizable) → Postulacion.proceso
+# (congelado). El estado de cada paso NO se guarda: se deriva de los registros reales que ya existían (prefiltro,
+# análisis de CV, Entrevista Red Human, Evaluacion, expediente, tareas de Onboarding) en services/proceso.py.
+# Tipos de paso: nombre, etapa y regla por defecto, quién lo resuelve por defecto y en qué etapas puede ir. Los tipos
+# de evaluación son los MISMOS de TIPOS_EVALUACION_U (se ejecutan con «Agregar evaluación»).
+TIPOS_PASO = {
+    "prefiltro_whatsapp": {"nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
+                           "responsable": "red_human", "etapas": ("Prefiltro",)},
+    "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
+                      "etapas": ("Prefiltro",)},
+    "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "calificacion", "responsable": "red_human",
+                    "etapas": ("Prefiltro", "Entrevista IA")},
+    "entrevista_agente": {"nombre": "Entrevista Red Human", "etapa": "Entrevista IA", "regla": "calificacion",
+                          "responsable": "red_human", "etapas": ("Entrevista IA",)},
+    **{tipo: {"nombre": nombre, "etapa": "Entrevista Humana", "regla": "dictamen",
+              "responsable": "usuario" if tipo == "entrevista_humana" else "rh",
+              "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación")}
+       for tipo, nombre in TIPOS_EVALUACION_U.items()},
+    "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion", "responsable": "rh",
+                   "etapas": ("Contratación", "Onboarding")},
+    "condiciones": {"nombre": "Condiciones de contratación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
+                    "etapas": ("Contratación",)},
+    "onboarding": {"nombre": "Tareas de Onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+                   "etapas": ("Onboarding",)},
+    "alta": {"nombre": "Alta como colaborador", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+             "etapas": ("Onboarding",)},
+}
+TIPOS_PASO_EVALUACION = tuple(TIPOS_EVALUACION_U)
+# Condición de avance de un paso: ninguna = basta completarlo; calificacion = score >= mínimo (CV / Entrevista Red
+# Human); dictamen = conclusión dentro de las aceptadas; validacion = una persona lo confirmó (resultado revisado por
+# RH, documentos aprobados, prefiltro «cumple»).
+REGLAS_APROBACION = {"ninguna": "Completar", "calificacion": "Calificación mínima", "dictamen": "Dictamen favorable",
+                     "validacion": "Validación de RH"}
+CALIFICACION_MINIMA_DEFAULT = 70
+DICTAMENES_ACEPTADOS_DEFAULT = {"entrevista_humana": ["avanzar"], "medica": ["apto", "apto_con_restricciones"]}
+DICTAMENES_ACEPTADOS_GENERAL = ["favorable", "con_observaciones"]
+RESPONSABLES_PASO = {"red_human": "Red Human", "rh": "RH (responsable de la vacante)", "usuario": "Usuario de la Cuenta",
+                     "externo": "Externo", "candidato": "Candidato"}
+# Estado y resultado son INDEPENDIENTES: «Completada» + «No favorable» es válido.
+ESTADOS_PASO = {"pendiente": "Pendiente", "en_curso": "En curso", "completada": "Completada", "omitida": "Omitida",
+                "cancelada": "Cancelada"}
+RESULTADOS_PASO = {"favorable": "Favorable", "con_observaciones": "Con observaciones", "no_favorable": "No favorable"}
+# Tipos de entrevista HUMANA: cada uno genera su guion (ia.guion_entrevista_humana). La Entrevista Red Human usa
+# ENFOQUES_ENTREVISTA (solo dos niveles; no agregar más).
+TIPOS_ENTREVISTA_HUMANA = {"general": "General de RH", "tecnica": "Técnica con el área", "jefe_directo": "Con jefe directo",
+                           "valores": "Cultura y valores"}
+# Avance automático: nunca SALE de Contratación (a Onboarding solo con «Iniciar Onboarding») ni de Onboarding.
+ETAPAS_SIN_AVANCE_AUTOMATICO = ("Contratación", "Onboarding")
+
+
+class PlantillaProceso(Base):
+    """Proceso de selección reutilizable de una Cuenta (Configuración → Procesos de selección). Editarla sube
+    `version` y NUNCA toca a las vacantes que ya la copiaron ni a sus candidatos. «Eliminar» = desactivar.
+    `predeterminada` = la que se copia sola a una vacante nueva que no elige otra."""
+
+    __tablename__ = "plantillas_proceso"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    nombre: Mapped[str] = mapped_column(String(200))
+    descripcion: Mapped[str] = mapped_column(Text, default="")
+    pasos: Mapped[list] = mapped_column(JSON, default=list)
+    etapas: Mapped[dict] = mapped_column(JSON, default=dict)  # {etapa: {avance_automatico: bool}}
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    predeterminada: Mapped[bool] = mapped_column(Boolean, default=False)
+    activa: Mapped[bool] = mapped_column(Boolean, default=True)
+    creado_por: Mapped[str] = mapped_column(String(150), default="")
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_por: Mapped[str] = mapped_column(String(150), default="")
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+
+
+def _al_cambiar_etapa(p: "Postulacion", nueva, anterior, _iniciador) -> None:
+    """Toda escritura de `Postulacion.etapa` (movimiento manual, Zero-Touch, entrevista humana, migración…) fija la
+    entrada a la etapa: con ella corren los plazos de los pasos (solo alertan, nunca descartan)."""
+    from sqlalchemy.orm.base import NEVER_SET, NO_VALUE
+
+    if anterior in (NO_VALUE, NEVER_SET) or anterior is None or nueva == anterior:
+        return
+    p.etapa_desde = ahora()
+
+
+from sqlalchemy import event as _event  # noqa: E402
+
+_event.listen(Postulacion.etapa, "set", _al_cambiar_etapa)

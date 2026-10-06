@@ -37,7 +37,8 @@ const CONCLUSIONES: Record<"entrevista_humana" | "medica" | "general", { valor: 
 };
 const conclusionesDe = (t: TipoEvaluacion) => CONCLUSIONES[t === "entrevista_humana" || t === "medica" ? t : "general"];
 
-export type PresetEvaluacion = { tipo?: TipoEvaluacion; evaluador?: EstadoEvaluador; titulo?: string };
+/** `pasoId` (proceso configurable, 2026-10-06): «Iniciar» desde el seguimiento — la evaluación cumple ese paso. */
+export type PresetEvaluacion = { tipo?: TipoEvaluacion; evaluador?: EstadoEvaluador; titulo?: string; pasoId?: string };
 
 export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   c: Candidato;
@@ -123,6 +124,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
       pruebaId: forma === "integrada" ? pruebaId : null,
       cita: citaVisible && conCita ? citaEntrada(cita, teams) : null,
       notificar: forma === "registro_directo" ? undefined : notificar.value,
+      pasoId: preset?.pasoId,
     });
     if (!r.ok) return { error: r.error };
     setCreada(r.data);
@@ -140,7 +142,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     const ev = r.evaluacion;
     const texto = ev.consentimiento === "pendiente"
       ? `«${ev.nombre}» agregada. En espera de consentimiento: la liga de consentimiento quedó en la tarjeta (Abrir / Copiar / Enviar). La liga del médico se habilita cuando lo otorgue.`
-      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}. ${r.movidaAFiltroHumano ? "El candidato pasó a Filtro humano." : "El candidato sigue en su columna."}${(ev.ligas?.length ?? 0) > 0 ? " Las ligas quedaron en la tarjeta (Abrir / Copiar / Enviar)." : ""}`;
+      : `«${ev.nombre}» ${tipo === "entrevista_humana" && ev.cita ? "programada" : "agregada"}. ${r.movidaAFiltroHumano ? "El candidato pasó a Filtro humano." : r.avisoProceso || "El candidato sigue en su columna."}${(ev.ligas?.length ?? 0) > 0 ? " Las ligas quedaron en la tarjeta (Abrir / Copiar / Enviar)." : ""}`;
     onListo(r, texto);
   }
 

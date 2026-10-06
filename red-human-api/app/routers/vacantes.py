@@ -353,6 +353,9 @@ class CrearIn(GenerarIn):
     mostrar_cliente_candidato: bool = True
     plantilla_id: Optional[int] = None  # solo trazabilidad de qué plantilla se usó, si alguna
     enfoque_entrevista: str = "profesional"  # Fase 4 (Punto 6): profesional | profesional_personal
+    # Proceso configurable (2026-10-06): {plantilla_id} copia una plantilla de la Cuenta; {pasos, etapas} la personaliza
+    # para ESTA vacante sin tocar la plantilla; {quitar: true} = sin proceso. Omitido = la plantilla predeterminada.
+    proceso: Optional[dict] = None
 
 
 @router.post("", status_code=201)
@@ -430,6 +433,7 @@ def crear(
         generado, con_ia = _generar(entrada_generador, v.empresa)
         _aplicar_generado(v, generado)
 
+    v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -439,10 +443,24 @@ def crear(
         v.publicada_en = v.creada_en  # misma marca de tiempo que la creación
     registrar(
         db, u.nombre, "vacante_creada", "vacante", v.codigo,
-        {"titulo": v.titulo, "estado": v.estado, "ia": con_ia, "plataformas": v.plataformas},
+        {"titulo": v.titulo, "estado": v.estado, "ia": con_ia, "plataformas": v.plataformas,
+         "proceso": (v.proceso or {}).get("plantilla_nombre") or ("personalizado" if v.proceso else "")},
     )
     db.commit()
     return _salida(db, v)
+
+
+def _proceso_nuevo(db: Session, cuenta_id: int, datos: Optional[dict]) -> dict:
+    """Proceso de una vacante nueva: el que manda el formulario o, si no manda nada, la plantilla predeterminada."""
+    from ..services import proceso as sproc
+
+    try:
+        if datos is None:
+            pl = sproc.predeterminada(db, cuenta_id)
+            return sproc.proceso_desde_plantilla(pl) if pl else {}
+        return sproc.proceso_para_vacante(db, cuenta_id, {}, datos)
+    except sproc.ErrorProceso as e:
+        raise HTTPException(e.status, e.mensaje)
 
 
 @router.get("/slug/{slug}")
@@ -587,6 +605,9 @@ class ActualizarIn(BaseModel):
     # Evaluaciones (2026-09-28): sugerencias [{tipo, prueba_id?, nombre?}] + aviso antes de Onboarding
     evaluaciones_sugeridas: Optional[List[dict]] = None
     avisar_evaluaciones_antes_onboarding: Optional[bool] = None
+    # Proceso configurable (2026-10-06): mismo formato que en la creación. Cambiarlo sube la versión del proceso de la
+    # vacante y NUNCA toca a los candidatos que ya tiene (cada uno conserva la versión con la que entró).
+    proceso: Optional[dict] = None
 
 
 @router.patch("/{codigo}")
@@ -607,6 +628,15 @@ def actualizar(
     if datos.enfoque_entrevista is not None and datos.enfoque_entrevista not in ENFOQUES_ENTREVISTA:
         raise HTTPException(400, f"Enfoque de entrevista inválido. Usa uno de: {', '.join(ENFOQUES_ENTREVISTA)}")
     cambios.pop("empresa", None)  # Punto 1: nunca texto libre; se recalcula abajo
+    if "proceso" in cambios:
+        from ..services import proceso as sproc
+
+        try:
+            cambios["proceso"] = sproc.proceso_para_vacante(db, cuenta.id, v.proceso or {}, cambios["proceso"])
+        except sproc.ErrorProceso as e:
+            raise HTTPException(e.status, e.mensaje)
+        if cambios["proceso"] == (v.proceso or {}):
+            cambios.pop("proceso")
     if "curso_filtro" in cambios:
         codigo_curso = (cambios.pop("curso_filtro") or "").strip()
         if not codigo_curso:

@@ -44,6 +44,9 @@ import {
   type ContenidoVacante,
 } from "@/components/dashboard/vacantes/formulario-contenido";
 import { PageHeader } from "@/components/dashboard/parts";
+import {
+  SeccionProcesoVacante, entradaProceso, procesoInicial, type EstadoProcesoVacante,
+} from "@/components/dashboard/procesos/seccion-proceso-vacante";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { Aviso, BotonCopiar } from "@/components/dashboard/subida";
 import type { Vacante } from "@/lib/data";
@@ -686,6 +689,8 @@ export default function Vacantes() {
    ============================================================ */
 function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => void; onGuardada: () => void }) {
   const [contenido, setContenido] = useState<ContenidoVacante>(() => contenidoDesdeVacante(v));
+  // Proceso configurable (2026-10-06): copia personalizable del proceso de selección de ESTA vacante
+  const [proceso, setProceso] = useState<EstadoProcesoVacante>(() => procesoInicial(v));
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
 
@@ -695,7 +700,7 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
     setGuardando(true);
     setError("");
     // PATCH /vacantes/{codigo}: mismo payload que el alta; el servidor deriva sueldo/ubicación y respeta el resto.
-    const r = await actualizarVacante(v.id, contenidoComoPayload(contenido));
+    const r = await actualizarVacante(v.id, { ...contenidoComoPayload(contenido), proceso: entradaProceso(proceso) });
     setGuardando(false);
     if (!r.ok) return setError(r.error);
     onGuardada();
@@ -714,6 +719,7 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
           clienteId={v.clienteId ?? null}
           mostrarCliente={v.mostrarClienteCandidato ?? true}
         />
+        <SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} />
         {error && <Aviso tono="error" onCerrar={() => setError("")}>{error}</Aviso>}
         <div className="flex items-center gap-3 border-t border-border-faint pt-5">
           <Button variant="outline" className="flex-1" onClick={onClose} disabled={guardando}>
@@ -798,6 +804,8 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
 
   // Punto 11: UN solo formulario de contenido, compartido con Configuración → Plantillas.
   const [contenido, setContenido] = useState<ContenidoVacante>(CONTENIDO_VACIO);
+  // Proceso configurable (2026-10-06): sin tocar, la API copia la plantilla predeterminada de la Cuenta
+  const [proceso, setProceso] = useState<EstadoProcesoVacante>(() => procesoInicial(null));
 
   function elegirPlantilla(p: Plantilla) {
     setPlantillaBase(p);
@@ -858,6 +866,7 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
       colaboradores_ids: colaboradoresIds,
       mostrar_cliente_candidato: mostrarCliente,
       plantilla_id: plantillaBase?.id ?? null,
+      proceso: entradaProceso(proceso),
     });
     setGuardando(false);
     if (!r.ok) {
@@ -1007,6 +1016,8 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
             ) : null
           }
         />
+
+        <SeccionProcesoVacante value={proceso} onChange={setProceso} />
 
         {/* Gestión — DESPUÉS de la Entrevista Red Human (Parte 3, punto 9) */}
         <div className="border-t border-border-faint pt-5">

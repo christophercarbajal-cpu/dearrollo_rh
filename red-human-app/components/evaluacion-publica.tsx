@@ -116,6 +116,16 @@ export function EvaluacionPublicaPagina({ token }: { token: string }) {
                 <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-ink-2">{ev.instrucciones}</p>
               </Card>
             )}
+            {(ev.guion?.preguntas?.length ?? 0) > 0 && (
+              <Card className="mt-3 p-5">
+                <p className="text-sm font-semibold">Guion sugerido{ev.guion?.tipoTexto ? ` · Entrevista ${ev.guion.tipoTexto.toLowerCase()}` : ""}</p>
+                {ev.guion?.enfoque && <p className="mt-1 text-[13px] text-ink-3">{ev.guion.enfoque}</p>}
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-relaxed text-ink-2">
+                  {ev.guion!.preguntas!.map((q, i) => <li key={i}>{q}</li>)}
+                </ol>
+                <p className="mt-2 text-[11px] text-ink-3">Es apoyo, no un guion obligatorio: tú decides y registras el resultado. No preguntes datos sensibles (salud, estado civil, religión…).</p>
+              </Card>
+            )}
 
             {/* ===== EXPEDIENTE (solo lo necesario para esta evaluación) ===== */}
             <div className="mt-6 flex flex-col gap-3">

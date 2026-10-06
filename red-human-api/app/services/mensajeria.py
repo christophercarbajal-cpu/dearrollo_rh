@@ -135,3 +135,35 @@ def alcance_canal(cuentas: list, canal: str) -> list:
     if canal == "telegram":
         return [c for c in cuentas if normalizar_canal_mensajeria(c.canal_mensajeria) in ("telegram", "ambos")]
     return [c for c in cuentas if normalizar_canal_mensajeria(c.canal_mensajeria) != "telegram"]
+
+
+def canales_publicos(vacante) -> dict:
+    """Canal con candidatos de la Cuenta de una vacante, para el portal público (detalle y «Postulación exitosa»):
+
+    - `canalCandidatos`: whatsapp | telegram | ambos (`Cuenta.canal_mensajeria`; sin `TELEGRAM_BOT_TOKEN` o sin
+      `TELEGRAM_BOT_USERNAME` siempre «whatsapp», porque no habría a dónde mandar al candidato);
+    - `telegramBotUsername` (del `.env`) y `telegramLiga` = https://t.me/<bot>?start=vac_<VAC-####>;
+    - `whatsappLiga` = wa.me del número que atiende la Cuenta (el exclusivo Premium o `WHATSAPP_PUBLIC_NUMBER`).
+    Nunca expone tokens: solo el usuario público del bot y el número público."""
+    from urllib.parse import quote
+
+    from ..config import settings
+    from ..models import normalizar_canal_mensajeria
+
+    cuenta = getattr(vacante, "cuenta", None)
+    canal = normalizar_canal_mensajeria(cuenta.canal_mensajeria if cuenta else "")
+    bot = telegram.usuario_bot() if telegram.activo() else ""
+    if not bot:
+        canal = "whatsapp"
+    numero = (cuenta.whatsapp_comunicacion if cuenta and cuenta.whatsapp_exclusivo else "") or settings.whatsapp_public_number
+    numero = "".join(ch for ch in (numero or "") if ch.isdigit())
+    if len(numero) == 10:
+        numero = "52" + numero
+    codigo = getattr(vacante, "codigo", "") or ""
+    texto = quote(f"Hola, me interesa la vacante {codigo}".strip())
+    return {
+        "canalCandidatos": canal,
+        "telegramBotUsername": bot if canal in ("telegram", "ambos") else "",
+        "telegramLiga": telegram.liga_vacante(codigo) if canal in ("telegram", "ambos") else "",
+        "whatsappLiga": f"https://wa.me/{numero}?text={texto}" if numero and canal in ("whatsapp", "ambos") else "",
+    }

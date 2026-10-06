@@ -455,7 +455,14 @@ export interface Vacante {
   nombreEmpresa?: string;
   /** solo presente en /vacantes/slug/{slug}, /vacantes/publicas y /vacantes/{codigo}/vista-previa */
   logoUrl?: string;
+  /** 2026-10-06 (solo en vistas públicas): canal con candidatos de la Cuenta y sus ligas. */
+  canalCandidatos?: CanalCandidatos;
+  telegramBotUsername?: string;
+  telegramLiga?: string;
+  whatsappLiga?: string;
 }
+
+export type CanalCandidatos = "whatsapp" | "telegram" | "ambos";
 
 
 

@@ -1214,6 +1214,12 @@ export function postular(datos: {
     clasificacion: { estado: string; score: number; evidencia: string } | null;
     /** 2026-10-06: deep link «Continuar en Telegram» si la Cuenta atiende por Telegram (vacío si no). */
     telegram?: string;
+    /** 2026-10-06: canal de la Cuenta → «Postulación exitosa» muestra Telegram, WhatsApp o ambos. */
+    canalCandidatos?: "whatsapp" | "telegram" | "ambos";
+    telegramBotUsername?: string;
+    /** https://t.me/<bot>?start=vac_<VAC-####> */
+    telegramLiga?: string;
+    whatsappLiga?: string;
   }>("/candidatos/postular", form);
 }
 

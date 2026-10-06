@@ -281,6 +281,29 @@ with TestClient(app) as client:
     check(telegram.separar_inicio("p_0123456789abcdef_medica") == ("p", "0123456789abcdef", "medica")
           and telegram.separar_inicio("p_xyz") == ("", "", "") and telegram.separar_inicio("vac_VAC-1") == ("vac", "VAC-1", ""),
           "payloads de /start: postulación, paso y vacante; basura → menú")
+    # 2026-10-06: canal de la Cuenta en el portal + /start vac_<VAC> que nunca se queda pasmado
+    d = r.json()
+    check(d.get("canalCandidatos") == "telegram" and d.get("telegramBotUsername") == "RedHumanPruebaBot"
+          and d.get("telegramLiga") == f"https://t.me/RedHumanPruebaBot?start=vac_{VAC}" and not d.get("whatsappLiga"),
+          "/postular trae canalCandidatos + TELEGRAM_BOT_USERNAME + liga vac_<VAC> (sin WhatsApp en «solo Telegram»)")
+    det = client.get(f"/vacantes/slug/{slug}").json() if slug else {}
+    check(det.get("canalCandidatos") == "telegram" and det.get("telegramLiga", "").endswith(f"vac_{VAC}"),
+          "el detalle público de la vacante trae el canal de la Cuenta")
+    publicas = client.get(f"/vacantes/publicas?cuenta_id={cuenta.id}").json()
+    check(publicas and all(v["cuentaId"] == cuenta.id for v in publicas), "/vacantes/publicas?cuenta_id= aísla la bolsa a esa Cuenta")
+    n_post = db.query(Postulacion).count()
+    tg(mensaje(7004, nombre="Dana", text=f"/start vac_{VAC}"))
+    tg(mensaje(7004, nombre="Dana", contact={"phone_number": "5541000004", "user_id": 7004}))
+    db.expire_all()
+    check(db.query(Postulacion).count() == n_post, "vac_<VAC> tras postularse en el portal retoma SU postulación (no duplica)")
+    texto_dana = ultimo(7004)["text"]
+    check(bool(texto_dana.strip()) and "Esta liga" not in texto_dana and "Por ahora no estamos" not in texto_dana,
+          "vac_<VAC> con postulación del portal → el agente sigue el proceso (no se queda pasmado)")
+    check(not any(m.rol == "user" and m.texto.strip().upper() == VAC for m in pd.mensajes),
+          "el código de la vacante nunca entra como respuesta del candidato")
+    tg(mensaje(7004, nombre="Dana", text="/start vac_VAC-9999"))
+    check(any("ya no está disponible" in (e.get("text") or "") for e in enviados(7004)[-3:]),
+          "vac_ de una vacante inexistente → aviso + menú (nunca silencio)")
     telegram.llamar = _llamar_real
     telegram.API_URL = "http://127.0.0.1:9"
     r = asyncio.run(telegram.llamar("getMe"))

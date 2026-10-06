@@ -146,7 +146,7 @@ export default function Portal() {
 
   useEffect(() => {
     const params = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
-    const cuenta = params.get("cuenta") ?? "";
+    const cuenta = params.get("cuenta") ?? params.get("cuenta_id") ?? "";
     setCuentaParam(cuenta);
     setF(filtrosDesdeUrl(params));
     void (async () => {

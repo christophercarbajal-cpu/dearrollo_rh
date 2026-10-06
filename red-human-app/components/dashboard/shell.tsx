@@ -224,7 +224,7 @@ function ContadorAgente() {
 }
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
-  const { usuario } = useSesion();
+  const { usuario, cuentaActualId } = useSesion();
   return (
     <div className="flex min-h-full flex-col gap-5 p-4 lg:h-full lg:gap-6">
       <div className="px-2 pt-1">
@@ -237,9 +237,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <Plus className="h-4 w-4" /> Nueva vacante
       </Button>
 
-      {/* Acceso directo a la bolsa de trabajo pública: se abre en pestaña nueva para no perder el panel. */}
+      {/* Acceso directo a la bolsa de trabajo pública DE LA CUENTA ACTUAL (?cuenta=<id>): pestaña nueva para no perder el panel. */}
       <Link
-        href="/portal"
+        href={cuentaActualId ? `/portal?cuenta=${cuentaActualId}` : "/portal"}
         target="_blank"
         rel="noopener noreferrer"
         className="group flex items-center gap-2.5 rounded-xl border border-border-soft bg-surface-2/60 px-3 py-2.5 text-sm font-medium text-ink-2 transition hover:border-brand/40 hover:bg-brand-soft hover:text-brand"

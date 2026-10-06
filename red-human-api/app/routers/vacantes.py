@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import settings
@@ -21,6 +21,7 @@ from ..models import (
     ENFOQUES_ENTREVISTA, MONEDAS_SUELDO, PERIODICIDADES_SUELDO, PLATAFORMAS, Cliente, Cuenta, Curso, Plantilla, Postulacion,
     Usuario, UsuarioCuenta, Vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
 )
+from ..services.mensajeria import canales_publicos
 from ..serial import nombre_empresa, nombre_empresa_candidato, vacante_dict
 from ..services import ia
 
@@ -88,6 +89,7 @@ def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
         "logoUrl": v.cuenta.logo if v.cuenta else "",
         "cuentaId": v.cuenta_id,
         "cuentaSlug": (v.cuenta.slug if v.cuenta else "") or "",
+        **canales_publicos(v),  # 2026-10-06: canal con candidatos de la Cuenta (WhatsApp / Telegram / ambos)
     }
 
 
@@ -494,7 +496,7 @@ def _cuenta_publica(db: Session, cuenta: str) -> Optional[Cuenta]:
 
 
 @router.get("/publicas")
-def listar_publicas(cuenta: str = "", db: Session = Depends(get_db)):
+def listar_publicas(cuenta: str = "", cuenta_id: str = "", db: Session = Depends(get_db)):
     """Bolsa de trabajo pública (/portal) — solo vacantes Publicadas, sin sesión.
 
     2026-09-17: `?cuenta=<slug|id>` aísla el portal a UNA Cuenta (bolsa propia de cada cliente de
@@ -505,7 +507,11 @@ def listar_publicas(cuenta: str = "", db: Session = Depends(get_db)):
 
     Debe declararse antes de GET /{codigo} para que 'publicas' no se interprete
     como un código de vacante.
+
+    2026-10-06: `?cuenta_id=` es alias de `?cuenta=`. La Cuenta incluye las vacantes de TODOS sus
+    Clientes (cada vacante de Cliente vive en `Vacante.cuenta_id` de la Cuenta que la opera).
     """
+    cuenta = cuenta or cuenta_id
     q = (
         db.query(Vacante)
         .join(Cuenta, Cuenta.id == Vacante.cuenta_id)
@@ -516,14 +522,17 @@ def listar_publicas(cuenta: str = "", db: Session = Depends(get_db)):
         cu = _cuenta_publica(db, cuenta)
         if not cu:
             raise HTTPException(404, "Portal no encontrado.")
-        q = q.filter(Vacante.cuenta_id == cu.id)
+        # La Cuenta principal + las vacantes de sus Clientes (subcuentas), aunque alguna vacante legado
+        # de un Cliente hubiera quedado con otro cuenta_id.
+        clientes = select(Cliente.id).where(Cliente.cuenta_id == cu.id)
+        q = q.filter(or_(Vacante.cuenta_id == cu.id, Vacante.cliente_id.in_(clientes)))
     return [_con_logo(db, _salida(db, v), v) for v in q.all()]
 
 
 @router.get("/publicas/cuenta")
-def cuenta_publica(cuenta: str, db: Session = Depends(get_db)):
+def cuenta_publica(cuenta: str = "", cuenta_id: str = "", db: Session = Depends(get_db)):
     """Encabezado del portal por Cuenta (nombre comercial + logo), sin sesión."""
-    cu = _cuenta_publica(db, cuenta)
+    cu = _cuenta_publica(db, cuenta or cuenta_id) if (cuenta or cuenta_id) else None
     if not cu:
         raise HTTPException(404, "Portal no encontrado.")
     return {"id": cu.id, "slug": cu.slug, "nombre": cu.nombre_comercial or cu.nombre, "logoUrl": cu.logo or ""}

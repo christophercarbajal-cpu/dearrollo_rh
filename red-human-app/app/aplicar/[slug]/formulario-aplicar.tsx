@@ -42,7 +42,7 @@ export default function FormularioAplicar() {
 
   const [step, setStep] = useState(0);
   const [done, setDone] = useState(false);
-  const [ligaTelegram, setLigaTelegram] = useState("");
+  const [canal, setCanal] = useState<CanalExito>({ canal: "whatsapp", telegram: "", whatsapp: "" });
   const [consent, setConsent] = useState(false);
   const [cv, setCv] = useState<File | null>(null);
   const [datos, setDatos] = useState({ nombre: "", correo: "", telefono: "" });
@@ -116,7 +116,14 @@ export default function FormularioAplicar() {
         setError(r.error);
         return;
       }
-      setLigaTelegram(r.data?.telegram ?? "");
+      // Canal de la Cuenta. Telegram usa SOLO la liga p_<token> de ESTA postulación (`telegram` de /postular): el chat
+      // queda amarrado al teléfono del formulario y nunca abre una postulación duplicada. Nunca caer a vac_<VAC>.
+      const d = r.data;
+      setCanal({
+        canal: d?.canalCandidatos ?? (d?.telegram ? "telegram" : "whatsapp"),
+        telegram: d?.telegram ?? "",
+        whatsapp: d?.whatsappLiga ?? "",
+      });
       setDone(true);
     } catch (err) {
       setEnviando(false);
@@ -181,7 +188,7 @@ export default function FormularioAplicar() {
         )}
 
         {done ? (
-          <Exito titulo={titulo} conCv={Boolean(cv)} ligaTelegram={ligaTelegram} />
+          <Exito titulo={titulo} conCv={Boolean(cv)} canal={canal} />
         ) : (
           <Card className="mt-6 overflow-hidden">
             {/* Progreso */}
@@ -402,7 +409,17 @@ function Campo({
   );
 }
 
-function Exito({ titulo, conCv, ligaTelegram }: { titulo: string; conCv: boolean; ligaTelegram: string }) {
+interface CanalExito {
+  canal: "whatsapp" | "telegram" | "ambos";
+  telegram: string;
+  whatsapp: string;
+}
+
+function Exito({ titulo, conCv, canal }: { titulo: string; conCv: boolean; canal: CanalExito }) {
+  // 2026-10-06: el botón lo decide el canal de la Cuenta (Configuración → Cuentas → «Canal con candidatos»).
+  const conTelegram = canal.canal !== "whatsapp" && Boolean(canal.telegram);
+  const conWhatsapp = canal.canal !== "telegram" || !conTelegram;
+  const ambos = conTelegram && conWhatsapp;
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
       <Card className="mt-8 overflow-hidden text-center">
@@ -426,16 +443,16 @@ function Exito({ titulo, conCv, ligaTelegram }: { titulo: string; conCv: boolean
           </div>
         </div>
 
-        {/* Zero-Touch: el siguiente contacto lo dispara el sistema por WhatsApp, no un clic del candidato */}
         <div className="p-6 sm:p-8 flex flex-col items-center gap-5">
-          {/* 2026-10-06: con Telegram el bot no puede escribir primero → el candidato abre el chat con su liga */}
-          {ligaTelegram && (
+          {ambos && <p className="text-sm font-medium text-ink">¿Por dónde prefieres continuar tu proceso?</p>}
+          {/* Telegram: el bot no puede escribir primero → el candidato abre el chat con la liga p_<token> de su postulación */}
+          {conTelegram && (
             <div className="flex w-full max-w-md flex-col items-stretch gap-3 rounded-2xl border border-[#229ED9]/30 bg-[#229ED9]/10 p-5 text-left">
               <p className="text-sm leading-relaxed text-ink">
                 Continúa tu proceso en Telegram: abre el chat, comparte tu número cuando te lo pida y te guiamos paso a paso.
               </p>
               <a
-                href={ligaTelegram}
+                href={canal.telegram}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#229ED9] px-5 text-sm font-semibold text-white"
@@ -444,15 +461,28 @@ function Exito({ titulo, conCv, ligaTelegram }: { titulo: string; conCv: boolean
               </a>
             </div>
           )}
-          {!ligaTelegram && (
-          <div className="flex w-full max-w-md items-start gap-3 rounded-2xl border border-[#25D366]/30 bg-[#25D366]/10 p-5 text-left">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#25D366]/15 text-[#25D366]">
-              <MessageCircle className="h-5 w-5" />
-            </span>
-            <p className="text-sm leading-relaxed text-ink">
-              Nuestro asistente virtual de RH te contactará por WhatsApp en breve para continuar tu proceso.
-            </p>
-          </div>
+          {/* WhatsApp (Zero-Touch): el asistente escribe primero; el botón es opcional si hay número público */}
+          {conWhatsapp && (
+            <div className="flex w-full max-w-md flex-col items-stretch gap-3 rounded-2xl border border-[#25D366]/30 bg-[#25D366]/10 p-5 text-left">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#25D366]/15 text-[#25D366]">
+                  <MessageCircle className="h-5 w-5" />
+                </span>
+                <p className="text-sm leading-relaxed text-ink">
+                  Nuestro asistente virtual de RH te contactará por WhatsApp en breve para continuar tu proceso.
+                </p>
+              </div>
+              {canal.whatsapp && (
+                <a
+                  href={canal.whatsapp}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#25D366] px-5 text-sm font-semibold text-white"
+                >
+                  <MessageCircle className="h-5 w-5" /> Continuar en WhatsApp
+                </a>
+              )}
+            </div>
           )}
 
           <div className="flex items-center justify-center gap-6 text-xs text-ink-3">

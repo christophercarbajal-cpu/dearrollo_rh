@@ -25,7 +25,9 @@ from ..services import canal_proceso, telegram
 from ..services.mensajeria import en_conversacion
 from ..services.whatsapp import enviar_con_boton, enviar_mensaje
 from .candidatos import fijar_conversacion, guardar_mensaje
-from .webhooks import procesar_entrante
+from ..services.configuracion import modo_prueba_activo
+from .candidatos import postulacion_para_vacante
+from .webhooks import _alcance_whatsapp, _persona_para_cuenta, _personas_en_alcance, _vacante_por_codigo, procesar_entrante
 
 router = APIRouter(tags=["webhooks"])
 
@@ -135,7 +137,12 @@ async def _procesar(db: Session, msg: dict) -> dict:
 
 async def _entrante(db: Session, tel: str, msg: dict) -> dict:
     with en_conversacion("telegram", tel):
-        return await procesar_entrante(db, telegram.mensaje_para_agente(msg, tel))
+        r = await procesar_entrante(db, telegram.mensaje_para_agente(msg, tel))
+        if r.get("motivo") == "canal_sin_cuentas":
+            # Ninguna Cuenta activa atiende por Telegram: nunca dejar al candidato sin respuesta.
+            await enviar_mensaje(tel, "Por ahora no estamos recibiendo postulaciones por Telegram. Postúlate desde la "
+                                      "bolsa de trabajo o escríbenos por WhatsApp. 🙂")
+        return r
 
 
 async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
@@ -143,7 +150,7 @@ async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
     tipo, valor, paso = telegram.separar_inicio(payload)
     base = {**msg, "contacto": None, "media": None, "tipo": "text", "texto": "Hola", "id_seleccionado": ""}
     if tipo == "vac":
-        return await _entrante(db, tel, {**base, "tipo": "interactive", "texto": valor, "id_seleccionado": valor})
+        return await _iniciar_vacante(db, tel, valor, msg, base)
     if tipo != "p":
         return await _entrante(db, tel, base)
 
@@ -158,10 +165,17 @@ async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
             await enviar_mensaje(tel, "Esta liga pertenece a otro número de celular. Ábrela desde la cuenta de Telegram con el "
                                       "número que registraste en tu postulación, o escríbele al equipo de RH.")
             return {"ok": True, "accion": "liga_otro_telefono", "postulacion": p.codigo}
+        return await _continuar_postulacion(db, p, tel, paso, msg, base)
+
+
+async def _continuar_postulacion(db: Session, p: Postulacion, tel: str, paso: str, msg: dict, base: dict) -> dict:
+    """La persona abrió una liga de SU postulación: queda como conversación en curso y se retoma donde va (el agente si
+    espera respuesta — prefiltro, aviso de privacidad, agenda — o el seguimiento del proceso configurable)."""
+    with en_conversacion("telegram", tel):
         fijar_conversacion(p)  # abrir la liga es una acción del candidato
         registrar(db, "sistema", "telegram_vinculado", "postulacion", p.codigo, {"chat_id": msg["chat_id"], "paso": paso})
         db.commit()
-        if not paso and p.espera_respuesta:
+        if not paso and (p.espera_respuesta or not p.consentimiento):
             return await procesar_entrante(db, telegram.mensaje_para_agente(base, tel))
         r = canal_proceso.respuesta_paso(db, p, paso) if paso else (
             canal_proceso.seguimiento(db, p) or {"texto": f"¡Listo! Por aquí te avisaremos de tu proceso para *{p.vacante.titulo if p.vacante else 'tu postulación'}*.", "url": ""})
@@ -172,3 +186,43 @@ async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
         guardar_mensaje(db, p, "assistant", r["texto"], "whatsapp", envio)
         db.commit()
         return {"ok": True, "accion": "paso_proceso" if paso else "seguimiento_proceso", "postulacion": p.codigo, "paso": paso, "envio": envio}
+
+
+async def _iniciar_vacante(db: Session, tel: str, codigo: str, msg: dict, base: dict) -> dict:
+    """`/start vac_<VAC-####>` (portal «Continuar en Telegram» o liga compartida). Es una selección EXPLÍCITA del
+    candidato, así que se resuelve aquí antes de entrar al agente:
+
+    - la vacante debe estar Publicada en una Cuenta que atienda Telegram; si no → aviso + menú;
+    - si la persona ya tiene una postulación ACTIVA para esa vacante (p. ej. recién se postuló en el portal) → se retoma
+      esa (consentimiento y proceso ya congelados);
+    - si no → nace la postulación en la Cuenta de la vacante (`postulacion_para_vacante`, congela el proceso
+      configurable) y queda como conversación en curso: el agente manda el aviso de privacidad y espera el «Sí».
+
+    Antes el código entraba como TEXTO del candidato: una conversación a medias lo tomaba como respuesta del prefiltro
+    y el flujo se quedaba pasmado."""
+    with en_conversacion("telegram", tel):
+        alcance, _modo = _alcance_whatsapp(db, "", "telegram")
+        alcance_ids = [x.id for x in alcance]
+        vac = _vacante_por_codigo(db, alcance_ids, codigo) if alcance_ids else None
+        if vac is None:
+            registrar(db, "sistema", "telegram_vacante_no_disponible", "vacante", codigo[:40], {"chat_id": msg["chat_id"]})
+            db.commit()
+            if alcance_ids:
+                await enviar_mensaje(tel, "Esa vacante ya no está disponible por este medio. Te muestro las que tenemos abiertas. 🙂")
+            return await _entrante(db, tel, base)
+
+        prueba = modo_prueba_activo(db)
+        personas = _personas_en_alcance(db, tel, alcance_ids)
+        existente = next((p for per in personas for p in per.postulaciones_activas if p.vacante_id == vac.id), None)
+        if existente:
+            return await _continuar_postulacion(db, existente, tel, "", msg, base)
+        if not personas:
+            # Persona nueva: el agente la crea y abre la postulación con la selección explícita (id de la vacante).
+            return await _entrante(db, tel, {**base, "id_seleccionado": vac.codigo})
+
+        persona = _persona_para_cuenta(db, personas[0], personas, vac.cuenta_id, prueba)
+        p, _nueva = postulacion_para_vacante(db, persona, vac, vac.cuenta_id, "telegram", es_prueba=prueba)
+        fijar_conversacion(p)
+        registrar(db, "sistema", "telegram_vacante_elegida", "postulacion", p.codigo, {"vacante": vac.codigo, "chat_id": msg["chat_id"]})
+        db.commit()
+        return await procesar_entrante(db, telegram.mensaje_para_agente(base, tel))

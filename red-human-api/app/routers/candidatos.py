@@ -57,7 +57,7 @@ from ..services import notificaciones
 from ..services import proceso as sproc
 from ..services.configuracion import modo_prueba_activo, permite_duplicados, puede_forzar_prueba
 from ..services.notificaciones import TZ_MEXICO, NotificarIn, override_de
-from ..services.mensajeria import canal_registro, de_cuenta
+from ..services.mensajeria import canal_registro, canales_publicos, de_cuenta
 from ..services.whatsapp import enviar_mensaje, enviar_plantilla
 from ..services import teams as teams_srv
 
@@ -875,6 +875,9 @@ async def postular(
         "postulacionNueva": nueva_postulacion,
         "cv": {"procesado": resultado_cv.get("ok", False), "avisos": resultado_cv.get("avisos", [])},
         "telegram": liga_telegram,
+        # 2026-10-06: canal de la Cuenta para la pantalla «Postulación exitosa» (botón de Telegram vac_<VAC-####>,
+        # de WhatsApp o ambos).
+        **canales_publicos(vac),
     }
 
 

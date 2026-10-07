@@ -3190,8 +3190,8 @@ export interface RespuestaEvaluacion {
   movidaAFiltroHumano?: boolean;
   /** Proceso configurable: por qué la entrevista humana no movió al candidato. */
   avisoProceso?: string;
-  /** 2026-10-07: Psicométricas.mx — Red Human mandó al candidato la liga (o su clave) por su canal activo. */
-  envioCandidato?: { enviado: boolean; conLiga: boolean; canal?: string; detalle?: string };
+  /** 2026-10-07: Psicométricas.mx — Red Human avisó al candidato (portal + clave) por su canal activo y por correo. */
+  envioCandidato?: { enviado: boolean; conLiga: boolean; canales?: string[]; detalle?: string };
 }
 export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
 export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean }

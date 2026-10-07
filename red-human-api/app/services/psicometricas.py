@@ -3,8 +3,9 @@
 * Base https://admin.psicometricas.mx/api/ · todas las llamadas llevan `Token` y `Password` (form-encoded) por HTTPS.
   Llaves SOLO por entorno (PSICOMETRICAS_TOKEN + PSICOMETRICAS_PASSWORD, o PSICOMETRICAS_USUARIO como Password).
   Sin ellas `configurado()` es False y el modo Integrada sigue simulado a mano (nunca rompe el flujo).
-* `agregaCandidato` (Candidate, Email, Vacancy, Tests «1,2», Lang Mx) → `clave`. Psicométricas manda al candidato
-  su liga por correo; su API NO regresa esa liga (se muestra la clave; `PSICOMETRICAS_URL_CANDIDATO` es opcional).
+* `agregaCandidato` (Candidate, Email, Vacancy, Tests «1,2», Lang Mx) → `clave`. Su API NO regresa liga: el
+  sustentante entra al portal oficial `PSICOMETRICAS_URL_CANDIDATO` (default https://evaluacion.psicometrica.mx/) y
+  escribe su clave. Red Human NO depende del correo del proveedor: notifica él mismo (correo + Telegram/WhatsApp).
 * `consultaCandidato` (Clave) → estatus / fecha_fin; `consultaResultado` (Clave, Prueba, Pdf) → JSON o PDF binario.
 * Su webhook (`termina_prueba` / `termina_practica`) NO trae firma: NUNCA se confía en él solo — se confirma con
   `consultaCandidato` (fecha_fin) antes de guardar nada.
@@ -205,29 +206,40 @@ def resultado_pdf(clave: str) -> Optional[bytes]:
     return r.content if r.content.startswith(b"%PDF") else None
 
 
+PORTAL_SUSTENTANTE = "https://evaluacion.psicometrica.mx/"
+
+
 def url_candidato(clave: str) -> Optional[str]:
-    """Liga DIRECTA del sustentante con su clave (PSICOMETRICAS_URL_CANDIDATO con «{clave}»). Una plantilla sin
-    «{clave}» (liga genérica) o del panel de administración se IGNORA con aviso en el log: nunca se manda al candidato."""
-    plantilla = (settings.psicometricas_url_candidato or "").strip()
-    if not plantilla or not clave:
+    """Portal del sustentante para esa clave: PSICOMETRICAS_URL_CANDIDATO (default el portal oficial) con «{clave}»
+    sustituida si la trae. Una URL del panel de administración se IGNORA con aviso y se usa el portal oficial."""
+    if not clave:
         return None
-    if "{clave}" not in plantilla or not es_liga_candidato(plantilla.replace("{clave}", "X")):
-        print(f"[psicometricas] ⚠️ PSICOMETRICAS_URL_CANDIDATO ignorada («{plantilla}»): debe ser la liga del "
-              "sustentante con {clave} y no la del panel de administración.", flush=True)
-        return None
+    plantilla = (settings.psicometricas_url_candidato or "").strip() or PORTAL_SUSTENTANTE
+    if not es_liga_candidato(plantilla.replace("{clave}", "X")):
+        print(f"[psicometricas] ⚠️ PSICOMETRICAS_URL_CANDIDATO ignorada («{plantilla}»): es del panel de administración "
+              f"o no es https. Se usa el portal oficial {PORTAL_SUSTENTANTE}.", flush=True)
+        plantilla = PORTAL_SUSTENTANTE
     return plantilla.replace("{clave}", clave)
 
 
-def mensaje_candidato(nombre: str, correo: str, clave: str, liga: str = "") -> str:
-    """Texto que Red Human manda al candidato por su canal (Telegram/WhatsApp). Siempre lleva la CLAVE de acceso; la
-    liga solo si es directa del sustentante (la valida `es_liga_candidato`)."""
+def instrucciones(clave: str) -> List[str]:
+    """Pasos del portal (https://evaluacion.psicometrica.mx/login: campo «Clave», aviso de privacidad, «Entrar»)."""
+    return [
+        "Abre la página de evaluación desde tu celular o computadora.",
+        f"En el campo «Clave» escribe tu clave de acceso: {clave}",
+        "Marca la casilla del aviso de privacidad y presiona «Entrar».",
+        "Responde tus pruebas en un lugar tranquilo y con buena conexión; puede pedirte acceso a la cámara para validar tu identidad.",
+    ]
+
+
+def mensaje_candidato(nombre: str, clave: str, liga: str, empresa: str = "", vacante: str = "") -> str:
+    """Texto que Red Human manda por Telegram/WhatsApp: SIEMPRE la URL del portal, la clave y los pasos."""
     saludo = f"Hola {nombre}," if nombre else "Hola,"
-    if liga and es_liga_candidato(liga):
-        return (f"{saludo} aquí tienes la liga de tu evaluación psicométrica:\n{liga}\n\n"
-                f"Si te pide una clave de acceso, escribe: {clave}\n"
-                "Hazla desde un lugar tranquilo, con buena conexión; puede pedirte acceso a la cámara para validar tu identidad.")
-    return (f"{saludo} ya te registramos en tu evaluación psicométrica.\n\n"
-            f"Psicométricas.mx te envió la invitación a {correo or 'tu correo'} con el botón para comenzar "
-            "(si no la ves en 5 minutos, revisa Spam o Promociones; el remitente es Psicométricas.mx).\n"
-            f"Tu clave de acceso es: {clave}\n\n"
-            "Si no te llegó el correo, respóndenos aquí y te ayudamos.")
+    contexto = f" para la vacante {vacante}" if vacante else ""
+    contexto += f" en {empresa}" if empresa else ""
+    pasos = "\n".join(f"{i}. {t}" for i, t in enumerate(instrucciones(clave), 1))
+    return (f"{saludo} se te asignó una evaluación psicométrica{contexto}.\n\n"
+            f"Aquí tienes la liga de tu evaluación:\n{liga}\n\n"
+            f"Tu clave de acceso: {clave}\n\n"
+            f"Cómo empezar:\n{pasos}\n\n"
+            "Si tienes algún problema para entrar, respóndenos por aquí.")

@@ -237,6 +237,50 @@ async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, a
     return resultados
 
 
+async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, actor: str, usuario_id: Optional[int] = None) -> List[dict]:
+    """Psicométricas.mx (2026-10-07): Red Human es el ÚNICO que avisa al candidato — no se depende del correo del
+    proveedor. Manda por su canal de mensajería activo (Telegram/WhatsApp, vía la fachada) y por correo corporativo: la
+    URL del portal del sustentante, la clave de agregaCandidato y los pasos. Nunca lanza; cada resultado queda en el
+    historial y marca «Enviada» con el primer envío confirmado."""
+    from ..serial import nombre_empresa_candidato
+    from . import plantillas_correo
+    from . import psicometricas as psi
+    from .correo import enviar_correo
+    from .mensajeria import de_cuenta
+    from .whatsapp import enviar_con_boton
+
+    clave = ev.clave_proveedor
+    liga = _url_proveedor(ev) or psi.url_candidato(clave) or psi.PORTAL_SUSTENTANTE
+    empresa = nombre_empresa_candidato(p.vacante) if p.vacante else ""
+    vacante = p.vacante.titulo if p.vacante else ""
+    nombre = ((p.nombre or "").split(" ")[0]) if p.nombre and not p.nombre.startswith("Candidato") else ""
+    resultados = []
+    if p.telefono:
+        try:
+            with de_cuenta(p.cuenta_id):
+                r = await enviar_con_boton(p.telefono, psi.mensaje_candidato(nombre, clave, liga, empresa, vacante),
+                                           "Ir a mi evaluación", liga, cuenta_id=p.cuenta_id)
+        except Exception as ex:  # noqa: BLE001
+            r = {"enviado": False, "detalle": str(ex)[:200]}
+        canal = r.get("proveedor") if r.get("proveedor") == "telegram" else "whatsapp"
+        resultados.append({"destinatario": "candidato", "canal": canal, "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+    if p.correo:
+        try:
+            asunto, html = plantillas_correo.html_psicometria({
+                "nombre": nombre, "empresa": empresa, "vacante": vacante, "prueba": ev.nombre_visible,
+                "liga": liga, "clave": clave, "instrucciones": psi.instrucciones(clave),
+            })
+            r = await enviar_correo(p.correo, asunto, html)
+        except Exception as ex:  # noqa: BLE001
+            r = {"enviado": False, "detalle": str(ex)[:200]}
+        resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+    if not resultados:
+        resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": "El candidato no tiene teléfono ni correo registrados."})
+    evento(db, ev, "envio", actor, usuario_id=usuario_id, que="liga_proveedor", liga="proveedor", envios=resultados)
+    marcar_enviada(ev, resultados)
+    return resultados
+
+
 def marcar_enviada(ev: Evaluacion, resultados: List[dict], destinatario: Optional[str] = None) -> None:
     """Primer envío CONFIRMADO de la liga a quien realiza la evaluación (seguimiento «Enviada»)."""
     if ev.enviada_en:

@@ -272,6 +272,54 @@ def html_aviso(titulo: str, parrafo: str, empresa: str = "", filas: Optional[lis
     return titulo, _base(titulo, parrafo[:120], empresa, "", contenido, pie)
 
 
+def html_psicometria(d: dict) -> tuple[str, str]:
+    """Evaluación psicométrica asignada (2026-10-07). Red Human es quien avisa (no el proveedor): portal oficial,
+    clave de acceso destacada y pasos para entrar. d = {nombre, empresa, vacante, prueba, liga, clave, instrucciones[]}."""
+    nombre = (d.get("nombre") or "").strip()
+    empresa = d.get("empresa") or ""
+    clave = d.get("clave") or ""
+    liga = d.get("liga") or ""
+    titulo = f"{nombre}, se te asignó una evaluación psicométrica" if nombre else "Se te asignó una evaluación psicométrica"
+    contexto = "Como parte de tu proceso de selección"
+    if d.get("vacante"):
+        contexto += f" para la vacante <strong style=\"color:{INK};\">{escape(d['vacante'])}</strong>"
+    if empresa:
+        contexto += f" en <strong style=\"color:{INK};\">{escape(empresa)}</strong>"
+    contexto += ", te pedimos responder una evaluación psicométrica en línea. Solo necesitas la liga y tu clave de acceso."
+    caja_clave = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 6px;">'
+        f'<tr><td align="center" style="background:#fafafb;border:1px dashed {ROJO};border-radius:14px;padding:18px 12px;">'
+        f'<div style="font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8a8d91;">Tu clave de acceso</div>'
+        f'<div style="margin-top:6px;font-family:Menlo,Consolas,monospace;font-size:24px;font-weight:700;letter-spacing:.06em;color:{INK};">{escape(clave)}</div>'
+        f'</td></tr></table>'
+    )
+    filas = [("Página de evaluación", f'<a href="{escape(liga)}" target="_blank" style="color:{ROJO};text-decoration:none;">{escape(liga)}</a>')]
+    if d.get("prueba"):
+        filas.append(("Evaluación", escape(d["prueba"])))
+    tabla = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafb;border:1px solid #eceef1;border-radius:14px;padding:6px 18px;margin-top:10px;">'
+        + "".join(_fila(k, v, ultima=(i == len(filas) - 1)) for i, (k, v) in enumerate(filas))
+        + "</table>"
+    )
+    pasos = "".join(
+        f'<li style="margin:0 0 8px;">{escape(t)}</li>' for t in (d.get("instrucciones") or [])
+    )
+    contenido = (
+        f'<p style="margin:0 0 6px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:{ROJO};font-weight:700;">Evaluación asignada</p>'
+        f'<h1 class="titulo" style="margin:4px 0 12px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:24px;line-height:1.25;color:{INK};">{escape(titulo)}</h1>'
+        f'<p style="margin:0 0 4px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:{INK2};">{contexto}</p>'
+        + caja_clave + tabla
+        + _boton("Ir a mi evaluación", liga)
+        + f'<p style="margin:18px 0 8px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:{INK};">Cómo empezar</p>'
+        + f'<ol style="margin:0 0 8px;padding-left:20px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:{INK2};">{pasos}</ol>'
+    )
+    pie = ("Si el botón no abre, copia la página de evaluación en tu navegador y escribe tu clave. "
+           "¿Problemas para entrar? Responde por el mismo medio en que te contactamos. "
+           "Tus resultados son confidenciales y solo los revisa el equipo de Recursos Humanos.")
+    asunto = f"Tu evaluación psicométrica · clave {clave}"
+    return asunto, _base(titulo, f"Tu clave de acceso es {clave}. Entra a {liga}", empresa, "", contenido, pie)
+
+
 # ------------------------------------------------------------
 # Datos de prueba para las vistas previas
 # ------------------------------------------------------------

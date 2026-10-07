@@ -113,11 +113,13 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
     setOcupado("");
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     const env = r.data.envioCandidato;
+    const NOMBRE_CANAL: Record<string, string> = { telegram: "Telegram", whatsapp: "WhatsApp", correo: "correo" };
+    const canales = (env?.canales ?? []).map((c) => NOMBRE_CANAL[c] ?? c).join(" y ");
     const texto = !env
       ? `«${e.nombre}» enviada al proveedor.`
       : env.enviado
-        ? `«${e.nombre}» enviada al proveedor. ${env.conLiga ? "Le mandamos la liga" : "Le mandamos su clave"} al candidato${env.canal ? ` por ${env.canal === "telegram" ? "Telegram" : "WhatsApp"}` : ""}.`
-        : `«${e.nombre}» enviada al proveedor, pero no pudimos escribirle al candidato: ${env.detalle || "sin detalle"}.`;
+        ? `«${e.nombre}» asignada. Le mandamos al candidato la liga de evaluación y su clave por ${canales}.${env.detalle ? ` No salió: ${env.detalle}.` : ""}`
+        : `«${e.nombre}» asignada, pero no pudimos avisarle al candidato: ${env.detalle || "sin detalle"}. Usa «Reenviar» o copia la liga y la clave.`;
     listo(r.data, texto);
   }
 

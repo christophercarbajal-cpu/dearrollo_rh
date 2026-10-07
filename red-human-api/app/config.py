@@ -133,10 +133,11 @@ class Settings(BaseSettings):
     # Su webhook NO trae firma: se protege con un secreto propio en la URL registrada en Psicométricas
     # (…/api/webhooks/psicometricas?secreto=XXXX) y además cada aviso se CONFIRMA consultando su API.
     psicometricas_webhook_secret: str = ""
-    # La API no devuelve la liga del candidato (Psicométricas se la manda por correo con su clave). Si se conoce la
-    # liga DIRECTA del sustentante, se configura con {clave}, p. ej. https://…/{clave}; vacío = se manda la clave + aviso
-    # de revisar el correo. Una plantilla sin {clave} o de admin.psicometricas.mx se ignora (nunca llega al candidato).
-    psicometricas_url_candidato: str = ""
+    # Portal OFICIAL del sustentante (2026-10-07): ahí el candidato escribe su clave (la que regresa agregaCandidato) y
+    # entra a su batería. Red Human es quien le avisa (correo + Telegram/WhatsApp) con esta URL + su clave. Si algún día
+    # el proveedor acepta la clave en la URL, se puede usar «{clave}» (p. ej. https://…/?clave={clave}). Una URL del
+    # panel de administración (admin.*) se ignora: nunca llega al candidato.
+    psicometricas_url_candidato: str = "https://evaluacion.psicometrica.mx/"
 
     cors_origins: str = "http://localhost:3000"
 

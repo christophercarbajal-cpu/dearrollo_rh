@@ -680,31 +680,6 @@ def _activar_psicometria(db: Session, ev: Evaluacion, p) -> str:
     return ev.clave_proveedor
 
 
-async def _mandar_liga_psicometria(db: Session, ev: Evaluacion, p) -> dict:
-    """No depender solo del correo del proveedor: Red Human manda al candidato, por su canal activo (Telegram /
-    WhatsApp, vía la fachada), la liga de acceso si la tenemos; si el proveedor solo dio la clave, le avisa que revise
-    su correo (también spam) con esa clave. Nunca lanza: el resultado queda en bitácora y no bloquea."""
-    from ..services import mensajeria, whatsapp
-    from ..services import psicometricas as psi
-    from .candidatos import nombre_ficha
-
-    if not p.telefono:
-        return {"enviado": False, "conLiga": False, "detalle": "El candidato no tiene teléfono registrado."}
-    liga = sev._url_proveedor(ev)  # solo ligas DIRECTAS del sustentante (nunca admin.psicometricas.mx)
-    texto = psi.mensaje_candidato(nombre_ficha(p), p.correo, ev.clave_proveedor, liga)
-    try:
-        with mensajeria.de_cuenta(p.cuenta_id):
-            if liga:
-                r = await whatsapp.enviar_con_boton(p.telefono, texto, "Comenzar evaluación", liga, cuenta_id=p.cuenta_id)
-            else:
-                r = await whatsapp.enviar_mensaje(p.telefono, texto, cuenta_id=p.cuenta_id)
-    except Exception as ex:  # noqa: BLE001
-        r = {"enviado": False, "detalle": str(ex)}
-    registrar(db, "sistema", "psicometria_liga_enviada", "evaluaciones", ev.codigo,
-              {"con_liga": bool(liga), "enviado": bool(r.get("enviado")), "proveedor": r.get("proveedor"), "detalle": r.get("detalle")})
-    return {"enviado": bool(r.get("enviado")), "conLiga": bool(liga), "canal": r.get("proveedor"), "detalle": r.get("detalle")}
-
-
 @router.post("/{codigo}/enviar")
 async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """Proveedor integrado: manda la evaluación. Psicométricas.mx real si está configurado (agregaCandidato); si no,
@@ -730,9 +705,13 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
     db.commit()
     if not real:
         return _respuesta(db, ev, u)
-    envio = await _mandar_liga_psicometria(db, ev, p)
+    resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id)
+    registrar(db, "sistema", "psicometria_notificada", "evaluaciones", ev.codigo, {"clave_proveedor": ev.clave_proveedor, "envios": resultados})
     db.commit()
-    return _respuesta(db, ev, u, envioCandidato=envio)
+    envio = {"enviado": any(r["enviado"] for r in resultados), "conLiga": True,
+             "canales": [r["canal"] for r in resultados if r["enviado"]],
+             "detalle": "; ".join(f"{r['canal'] or 'sin canal'}: {r['detalle']}" for r in resultados if not r["enviado"])}
+    return _respuesta(db, ev, u, resultados=resultados, envioCandidato=envio)
 
 
 @router.post("/{codigo}/integracion/avanzar")
@@ -825,6 +804,11 @@ async def _enviar_liga_candidato(db: Session, ev: Evaluacion, p: Postulacion, u:
         texto = (f"Hola {p.nombre}. Para continuar con tu proceso en {empresa} necesitamos tu consentimiento por escrito para la "
                  "evaluación médica. Léelo y, si estás de acuerdo, acéptalo aquí:")
         accion_bitacora = "consentimiento_medico_solicitado"
+    elif clave == "proveedor" and sev.usa_psicometricas(ev) and ev.clave_proveedor:
+        # Psicométricas.mx: mismo aviso que al enviar (portal + clave + pasos, por canal activo y correo).
+        resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id)
+        registrar(db, u.nombre, "evaluacion_liga_candidato_enviada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "liga": clave, "envios": resultados, "correo_rh": u.correo})
+        return resultados
     else:
         liga = ev.liga_externa_candidato if clave == "otro_sistema" else sev._url_proveedor(ev)
         if not liga:

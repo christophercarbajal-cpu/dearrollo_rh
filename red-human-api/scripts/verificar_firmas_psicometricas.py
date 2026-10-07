@@ -271,6 +271,22 @@ with TestClient(app) as client:
         return R(200, {"cleaver": {"D": 12, "I": 8}, "terman": {"ci": 105}})
 
     psi.httpx.get = _get
+    # 2026-10-07: Red Human avisa él mismo (correo + canal activo). Se capturan los envíos (sin Resend ni bot reales).
+    import app.services.correo as _correo
+    import app.services.whatsapp as _wa
+    CORREOS, MENSAJES = [], []
+
+    async def _correo_falso(destinatario, asunto, cuerpo_html, adjuntos=None):
+        CORREOS.append((destinatario, asunto, cuerpo_html))
+        return {"enviado": True, "proveedor": "resend", "detalle": "ok"}
+
+    async def _boton_falso(telefono, texto, boton, url, cuenta_id=None):
+        MENSAJES.append((telefono, texto, boton, url))
+        return {"enviado": True, "proveedor": "telegram", "detalle": "ok"}
+
+    orig_correo, orig_boton = _correo.enviar_correo, _wa.enviar_con_boton
+    _correo.enviar_correo, _wa.enviar_con_boton = _correo_falso, _boton_falso
+    settings.psicometricas_url_candidato = "https://evaluacion.psicometrica.mx/"
     ev2 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev2['id']}/enviar", headers=H)
     url, datos = ENVIADO[-1]
@@ -280,10 +296,28 @@ with TestClient(app) as client:
     e = r.json()["evaluacion"]
     check(e["claveProveedor"] == "1-EUPQ-0116-164" and e["estado"] == "pendiente" and e["pasoIntegrada"] == "enviada",
           "guarda la clave y queda Pendiente (paso Enviada)")
-    check(e["urlCandidatoProveedor"] is None, "su API no regresa liga: sin PSICOMETRICAS_URL_CANDIDATO solo se muestra la clave (no se inventa)")
+    PORTAL = "https://evaluacion.psicometrica.mx/"
+    check(type(settings).model_fields["psicometricas_url_candidato"].default == PORTAL, "PSICOMETRICAS_URL_CANDIDATO por defecto = https://evaluacion.psicometrica.mx/")
+    check(e["urlCandidatoProveedor"] == PORTAL, "la liga del candidato es el portal oficial del sustentante")
+    # Telegram (canal activo): portal + clave + pasos, con botón al portal.
+    tel, texto, boton, url_b = MENSAJES[-1]
+    check(tel == "5599887766" and url_b == PORTAL and boton == "Ir a mi evaluación", "Telegram: botón «Ir a mi evaluación» al portal")
+    check(PORTAL in texto and "1-EUPQ-0116-164" in texto and "«Clave»" in texto and "«Entrar»" in texto and "Aquí tienes la liga de tu evaluación" in texto,
+          "Telegram: URL fija + clave + instrucciones para escribir la clave y entrar")
+    # Correo corporativo: asignación + portal + clave destacada + pasos.
+    dest, asunto, html = CORREOS[-1]
+    check(dest == "eva@correo.mx" and "1-EUPQ-0116-164" in asunto, "correo al candidato con la clave en el asunto")
+    check("evaluación psicométrica" in html and PORTAL in html and "Tu clave de acceso" in html and "1-EUPQ-0116-164" in html
+          and "Cómo empezar" in html and "Ir a mi evaluación" in html and "RedHuman" not in html.replace("</span><span", ""),
+          "correo con layout corporativo: asignación, URL fija, clave destacada, pasos y botón")
+    check("admin.psicometricas.mx" not in html and "admin.psicometricas.mx" not in texto, "ni el correo ni Telegram llevan URL de administración")
     env = r.json().get("envioCandidato") or {}
-    check(env.get("conLiga") is False and "enviado" in env, "sin liga del proveedor Red Human igual le escribe al candidato (su clave + revisar spam)")
-    # 2026-10-07: payload limpio y liga interceptada de la respuesta (si el proveedor la regresa).
+    check(env.get("enviado") is True and set(env.get("canales") or []) == {"telegram", "correo"}, "envioCandidato: enviado por Telegram y correo")
+    n_c, n_m = len(CORREOS), len(MENSAJES)
+    r = client.post(f"/evaluaciones/{ev2['id']}/ligas/proveedor/enviar", headers=H)
+    check(r.status_code == 200 and len(CORREOS) == n_c + 1 and len(MENSAJES) == n_m + 1 and "1-EUPQ-0116-164" in MENSAJES[-1][1],
+          "«Reenviar» la liga del proveedor manda el MISMO aviso (portal + clave) por ambos canales")
+    # Payload limpio y ligas: nunca el panel de administración.
     pl = psi.payload_agrega_candidato("  Ana   López ", " Ana@Correo.MX ", "Vacante X", "1, 7")
     check(pl == {"Candidate": "Ana López", "Email": "ana@correo.mx", "Vacancy": "Vacante X", "Tests": "1,7", "Lang": "Mx"},
           "payload de agregaCandidato normalizado (correo en minúsculas sin espacios, nombre limpio, Tests «1,7»)")
@@ -293,33 +327,14 @@ with TestClient(app) as client:
             check(False, f"rechaza {malo}")
         except psi.PsicometricasError as ex:
             check(ex.status == 400, f"rechaza antes de gastar saldo: {malo}")
-    check(psi._buscar_liga({"status": "200", "clave": "X", "data": {"url": "https://psicometricas.mx/e/abc"}}) == "https://psicometricas.mx/e/abc",
-          "intercepta la URL de acceso si viene en la respuesta")
-    check(psi._buscar_liga({"status": "200", "clave": "X", "msg": "Candidato agregado correctamente."}) == "", "sin URL en la respuesta no inventa liga")
-    # 2026-10-07: nunca una liga del panel de administración ni una genérica sin la clave del sustentante.
     check(psi._buscar_liga({"clave": "X", "url": "https://admin.psicometricas.mx/login"}) == "", "una URL de admin.psicometricas.mx en la respuesta se descarta")
     check(not psi.es_liga_candidato("https://admin.psicometricas.mx/") and not psi.es_liga_candidato("http://psicometricas.mx/e/1")
-          and psi.es_liga_candidato("https://psicometricas.mx/e/1"), "es_liga_candidato: solo https y nunca el panel de administración")
-    for plantilla in ("https://admin.psicometricas.mx/{clave}", "https://psicometricas.mx/evaluacion"):
-        settings.psicometricas_url_candidato = plantilla
-        check(psi.url_candidato("1-EUPQ") is None, f"PSICOMETRICAS_URL_CANDIDATO inválida se ignora: {plantilla}")
-    settings.psicometricas_url_candidato = ""
-    m = psi.mensaje_candidato("Eva", "eva@correo.mx", "1-EUPQ-0116-164", "https://admin.psicometricas.mx/")
-    check("admin.psicometricas.mx" not in m and "1-EUPQ-0116-164" in m and "eva@correo.mx" in m and "Spam" in m,
-          "mensaje sin liga válida: clave + correo + revisar Spam, sin URL de administración")
-    m = psi.mensaje_candidato("Eva", "eva@correo.mx", "1-EUPQ-0116-164", "https://psicometricas.mx/e/abc")
-    check("aquí tienes la liga de tu evaluación" in m and "https://psicometricas.mx/e/abc" in m and "1-EUPQ-0116-164" in m,
-          "mensaje con liga directa: liga + clave de acceso")
-    n_antes = len(ENVIADO)
-    psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-500", "url": "https://psicometricas.mx/e/xyz"}))[1]
-    PR2 = client.post("/evaluaciones/pruebas", headers=H, json={"clave": "PSI-KOSTICK", "nombre": "Kostick", "modo": "integrada", "proveedor": "Psicometricas.mx", "id_proveedor": "2"}).json()["id"]
-    ev_l = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json={**NUEVA, "prueba_id": PR2}).json()["evaluacion"]
-    r_l = client.post(f"/evaluaciones/{ev_l['id']}/enviar", headers=H).json()
-    check(len(ENVIADO) == n_antes + 1 and r_l["evaluacion"]["urlCandidatoProveedor"] == "https://psicometricas.mx/e/xyz" and r_l["envioCandidato"]["conLiga"] is True,
-          "con URL en la respuesta: se guarda y se manda al candidato «Aquí tienes la liga de tu evaluación»")
-    psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-164", "msg": "Candidato agregado correctamente."}))[1]
-    settings.psicometricas_url_candidato = "https://evaluacion.ejemplo.mx/acceso/{clave}"
-    check(ev_de(ev2["id"])["urlCandidatoProveedor"] == "https://evaluacion.ejemplo.mx/acceso/1-EUPQ-0116-164", "con la plantilla configurada se arma la liga")
+          and psi.es_liga_candidato(PORTAL), "es_liga_candidato: solo https y nunca el panel de administración")
+    settings.psicometricas_url_candidato = "https://admin.psicometricas.mx/{clave}"
+    check(psi.url_candidato("1-EUPQ") == PORTAL, "una PSICOMETRICAS_URL_CANDIDATO de admin se ignora y se usa el portal oficial")
+    settings.psicometricas_url_candidato = "https://evaluacion.psicometrica.mx/?clave={clave}"
+    check(psi.url_candidato("1-EUPQ") == "https://evaluacion.psicometrica.mx/?clave=1-EUPQ", "con «{clave}» la URL se combina con la clave")
+    settings.psicometricas_url_candidato = PORTAL
     check(client.post(f"/evaluaciones/{ev2['id']}/integracion/avanzar", headers=H).status_code == 409, "conectada al proveedor: ya no se simula a mano")
     # 2026-10-07: en la ruta del candidato, la psicométrica conectada y sin resultado ofrece «Sincronizar resultado»
     seg_pe = client.get(f"/procesos/postulaciones/{PE}", headers=H).json()
@@ -382,6 +397,7 @@ with TestClient(app) as client:
     except psi.PsicometricasError:
         check(True, "el identificador del proveedor debe ser el ID numérico de la prueba (1 = Cleaver…)")
     psi.httpx.post, psi.httpx.get = orig_post, orig_get
+    _correo.enviar_correo, _wa.enviar_con_boton = orig_correo, orig_boton
 
     print("\n--- 6. Sin secretos en el código ---")
     for ruta in ("app/services/dropbox_sign.py", "app/services/psicometricas.py", "app/routers/firmas.py", "app/routers/webhooks_proveedores.py", "app/config.py"):

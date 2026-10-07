@@ -296,6 +296,20 @@ with TestClient(app) as client:
     check(psi._buscar_liga({"status": "200", "clave": "X", "data": {"url": "https://psicometricas.mx/e/abc"}}) == "https://psicometricas.mx/e/abc",
           "intercepta la URL de acceso si viene en la respuesta")
     check(psi._buscar_liga({"status": "200", "clave": "X", "msg": "Candidato agregado correctamente."}) == "", "sin URL en la respuesta no inventa liga")
+    # 2026-10-07: nunca una liga del panel de administración ni una genérica sin la clave del sustentante.
+    check(psi._buscar_liga({"clave": "X", "url": "https://admin.psicometricas.mx/login"}) == "", "una URL de admin.psicometricas.mx en la respuesta se descarta")
+    check(not psi.es_liga_candidato("https://admin.psicometricas.mx/") and not psi.es_liga_candidato("http://psicometricas.mx/e/1")
+          and psi.es_liga_candidato("https://psicometricas.mx/e/1"), "es_liga_candidato: solo https y nunca el panel de administración")
+    for plantilla in ("https://admin.psicometricas.mx/{clave}", "https://psicometricas.mx/evaluacion"):
+        settings.psicometricas_url_candidato = plantilla
+        check(psi.url_candidato("1-EUPQ") is None, f"PSICOMETRICAS_URL_CANDIDATO inválida se ignora: {plantilla}")
+    settings.psicometricas_url_candidato = ""
+    m = psi.mensaje_candidato("Eva", "eva@correo.mx", "1-EUPQ-0116-164", "https://admin.psicometricas.mx/")
+    check("admin.psicometricas.mx" not in m and "1-EUPQ-0116-164" in m and "eva@correo.mx" in m and "Spam" in m,
+          "mensaje sin liga válida: clave + correo + revisar Spam, sin URL de administración")
+    m = psi.mensaje_candidato("Eva", "eva@correo.mx", "1-EUPQ-0116-164", "https://psicometricas.mx/e/abc")
+    check("aquí tienes la liga de tu evaluación" in m and "https://psicometricas.mx/e/abc" in m and "1-EUPQ-0116-164" in m,
+          "mensaje con liga directa: liga + clave de acceso")
     n_antes = len(ENVIADO)
     psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-500", "url": "https://psicometricas.mx/e/xyz"}))[1]
     PR2 = client.post("/evaluaciones/pruebas", headers=H, json={"clave": "PSI-KOSTICK", "nombre": "Kostick", "modo": "integrada", "proveedor": "Psicometricas.mx", "id_proveedor": "2"}).json()["id"]

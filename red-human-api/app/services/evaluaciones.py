@@ -135,7 +135,7 @@ def _url_proveedor(ev: Evaluacion) -> str:
     if not ev.clave_proveedor:
         return ""
     # 2026-10-07: la liga interceptada de la respuesta de agregaCandidato (forma integrada) manda sobre la plantilla.
-    if ev.forma == "integrada" and ev.liga_externa_candidato:
+    if ev.forma == "integrada" and ev.liga_externa_candidato and psi.es_liga_candidato(ev.liga_externa_candidato):
         return ev.liga_externa_candidato
     return psi.url_candidato(ev.clave_proveedor) or ""
 

@@ -134,7 +134,8 @@ class Settings(BaseSettings):
     # (…/api/webhooks/psicometricas?secreto=XXXX) y además cada aviso se CONFIRMA consultando su API.
     psicometricas_webhook_secret: str = ""
     # La API no devuelve la liga del candidato (Psicométricas se la manda por correo con su clave). Si se conoce la
-    # liga de acceso, se puede configurar con {clave}, p. ej. https://…/{clave}; vacío = solo se muestra la clave.
+    # liga DIRECTA del sustentante, se configura con {clave}, p. ej. https://…/{clave}; vacío = se manda la clave + aviso
+    # de revisar el correo. Una plantilla sin {clave} o de admin.psicometricas.mx se ignora (nunca llega al candidato).
     psicometricas_url_candidato: str = ""
 
     cors_origins: str = "http://localhost:3000"

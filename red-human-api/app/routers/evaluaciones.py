@@ -685,18 +685,19 @@ async def _mandar_liga_psicometria(db: Session, ev: Evaluacion, p) -> dict:
     WhatsApp, vía la fachada), la liga de acceso si la tenemos; si el proveedor solo dio la clave, le avisa que revise
     su correo (también spam) con esa clave. Nunca lanza: el resultado queda en bitácora y no bloquea."""
     from ..services import mensajeria, whatsapp
+    from ..services import psicometricas as psi
+    from .candidatos import nombre_ficha
 
     if not p.telefono:
         return {"enviado": False, "conLiga": False, "detalle": "El candidato no tiene teléfono registrado."}
-    liga = sev._url_proveedor(ev)
-    if liga:
-        texto = f"Aquí tienes la liga de tu evaluación: {liga}"
-    else:
-        texto = (f"Te registramos en tu evaluación psicométrica. Psicométricas.mx te enviará el acceso a {p.correo} "
-                 f"(revisa también la carpeta de spam). Tu clave es: {ev.clave_proveedor}")
+    liga = sev._url_proveedor(ev)  # solo ligas DIRECTAS del sustentante (nunca admin.psicometricas.mx)
+    texto = psi.mensaje_candidato(nombre_ficha(p), p.correo, ev.clave_proveedor, liga)
     try:
         with mensajeria.de_cuenta(p.cuenta_id):
-            r = await whatsapp.enviar_mensaje(p.telefono, texto, cuenta_id=p.cuenta_id)
+            if liga:
+                r = await whatsapp.enviar_con_boton(p.telefono, texto, "Comenzar evaluación", liga, cuenta_id=p.cuenta_id)
+            else:
+                r = await whatsapp.enviar_mensaje(p.telefono, texto, cuenta_id=p.cuenta_id)
     except Exception as ex:  # noqa: BLE001
         r = {"enviado": False, "detalle": str(ex)}
     registrar(db, "sistema", "psicometria_liga_enviada", "evaluaciones", ev.codigo,

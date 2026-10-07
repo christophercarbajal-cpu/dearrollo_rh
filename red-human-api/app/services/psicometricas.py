@@ -13,6 +13,7 @@
 import json
 import re
 from typing import List, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -79,7 +80,6 @@ CORREO_VALIDO = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Llaves que, si el proveedor llegara a regresarlas, traen la liga/token de acceso del candidato. Su documentación
 # solo promete `status`, `clave` y `msg`; se revisa todo el JSON por si su respuesta real trae más.
 LLAVES_LIGA = ("url", "liga", "link", "enlace", "url_acceso", "url_candidato", "acceso", "url_prueba", "login")
-LLAVES_TOKEN = ("token_acceso", "token_candidato", "access_token")
 
 
 def _oculto(payload: dict) -> dict:
@@ -100,15 +100,32 @@ def payload_agrega_candidato(nombre: str, correo: str, vacante: str, tests: str,
             "Tests": tests_de(tests), "Lang": lang if lang in ("Mx", "Es") else "Mx"}
 
 
+def es_liga_candidato(url: str) -> bool:
+    """Una liga sirve al CANDIDATO solo si es https y NO es del panel/API de administración (admin.psicometricas.mx o
+    cualquier host «admin.*» / ruta /api): esa pide login de reclutador y el sustentante no puede entrar."""
+    try:
+        u = urlparse((url or "").strip())
+    except ValueError:
+        return False
+    host = (u.hostname or "").lower()
+    if u.scheme != "https" or not host:
+        return False
+    if host.startswith("admin.") or host == settings_host_api() or u.path.lower().startswith("/api"):
+        return False
+    return True
+
+
+def settings_host_api() -> str:
+    return (urlparse(settings.psicometricas_base_url or "").hostname or "").lower()
+
+
 def _buscar_liga(datos) -> str:
     """URL (o token) de acceso del candidato en cualquier nivel de la respuesta; '' si no viene."""
     if isinstance(datos, dict):
         for k, v in datos.items():
             kl = str(k).lower()
             if isinstance(v, str) and v.strip():
-                if kl in LLAVES_LIGA and v.strip().lower().startswith("http"):
-                    return v.strip()
-                if kl in LLAVES_TOKEN:
+                if kl in LLAVES_LIGA and es_liga_candidato(v):
                     return v.strip()
         for v in datos.values():
             liga = _buscar_liga(v)
@@ -120,9 +137,9 @@ def _buscar_liga(datos) -> str:
             if liga:
                 return liga
     elif isinstance(datos, str):
-        m = re.search(r"https?://\S+", datos)
-        if m:
-            return m.group(0).rstrip(".,)")
+        for m in re.findall(r"https://\S+", datos):
+            if es_liga_candidato(m.rstrip(".,)")):
+                return m.rstrip(".,)")
     return ""
 
 
@@ -189,5 +206,28 @@ def resultado_pdf(clave: str) -> Optional[bytes]:
 
 
 def url_candidato(clave: str) -> Optional[str]:
-    plantilla = settings.psicometricas_url_candidato
-    return plantilla.replace("{clave}", clave) if plantilla and clave else None
+    """Liga DIRECTA del sustentante con su clave (PSICOMETRICAS_URL_CANDIDATO con «{clave}»). Una plantilla sin
+    «{clave}» (liga genérica) o del panel de administración se IGNORA con aviso en el log: nunca se manda al candidato."""
+    plantilla = (settings.psicometricas_url_candidato or "").strip()
+    if not plantilla or not clave:
+        return None
+    if "{clave}" not in plantilla or not es_liga_candidato(plantilla.replace("{clave}", "X")):
+        print(f"[psicometricas] ⚠️ PSICOMETRICAS_URL_CANDIDATO ignorada («{plantilla}»): debe ser la liga del "
+              "sustentante con {clave} y no la del panel de administración.", flush=True)
+        return None
+    return plantilla.replace("{clave}", clave)
+
+
+def mensaje_candidato(nombre: str, correo: str, clave: str, liga: str = "") -> str:
+    """Texto que Red Human manda al candidato por su canal (Telegram/WhatsApp). Siempre lleva la CLAVE de acceso; la
+    liga solo si es directa del sustentante (la valida `es_liga_candidato`)."""
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    if liga and es_liga_candidato(liga):
+        return (f"{saludo} aquí tienes la liga de tu evaluación psicométrica:\n{liga}\n\n"
+                f"Si te pide una clave de acceso, escribe: {clave}\n"
+                "Hazla desde un lugar tranquilo, con buena conexión; puede pedirte acceso a la cámara para validar tu identidad.")
+    return (f"{saludo} ya te registramos en tu evaluación psicométrica.\n\n"
+            f"Psicométricas.mx te envió la invitación a {correo or 'tu correo'} con el botón para comenzar "
+            "(si no la ves en 5 minutos, revisa Spam o Promociones; el remitente es Psicométricas.mx).\n"
+            f"Tu clave de acceso es: {clave}\n\n"
+            "Si no te llegó el correo, respóndenos aquí y te ayudamos.")

@@ -1,36 +1,50 @@
 "use client";
 
-/* Ficha del candidato → «Resumen»: la RUTA completa del candidato (2026-10-06), de la solicitud al «Alta como
-   colaborador». Arriba: la etapa actual y la SIGUIENTE acción principal. Abajo: todos los pasos agrupados por etapa con
-   Nombre, Responsable, Estado (+ qué falta / bloqueo), Resultado y la Acción disponible. Lo que está en espera dice
-   exactamente qué falta y nunca frena a las demás actividades en paralelo. Las acciones REUTILIZAN lo que ya existe:
-   «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, el CV, la liga de documentos o el expediente;
-   al terminar, la API recalcula estado, resultado y siguiente acción en esta misma vista. «Agregar actividad» suma un
-   paso SOLO a este candidato (la plantilla y la vacante no cambian). */
+/* Ficha del candidato → «Resumen» minimalista (UX 2026-10-07). La ETAPA la define la ruta (motor de avance del backend:
+   compuerta + avance automático); aquí no hay botones para mover de etapa. Orden fijo:
+     1. Recomendación + UN ÚNICO botón principal = la siguiente acción concreta de la ruta (`siguienteAccion` de la API).
+     2. Resultados clave (un dato, un lugar).
+     3. Avance de la ruta: una línea por actividad con UNA sola etiqueta de estado (`estadoUnificado`); el detalle se
+        despliega y ahí viven las acciones de la actividad: ejecutar, sincronizar, liga de Telegram, Omitir (motivo
+        obligatorio), Cancelar y Reactivar.
+     4. Fortalezas (máx. 3) y Puntos por validar (máx. 3).
+   Las acciones REUTILIZAN lo que ya existe: «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, los
+   documentos o el expediente. Cambiar ruta / agregar actividad / descartar / eliminar viven en el «…» del encabezado. */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, Plus, RefreshCw, RotateCcw, SkipForward, Zap } from "lucide-react";
+import {
+  AlertTriangle, ArrowRight, Ban, CheckCircle2, ChevronDown, Clock, Link2, Play, RefreshCw, RotateCcw, SkipForward, Sparkles, XCircle,
+} from "lucide-react";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
-import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
+import { BadgeIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
 import { useSesion } from "@/components/sesion";
 import {
-  agregarActividadProceso, aplicarProcesoVigente, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
+  agregarActividadProceso, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
   omitirPasoProceso, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
 } from "@/lib/api";
-import type { AccionPaso, Candidato, EstadoPaso, EtapaCandidato, PasoSeguimiento, ResultadoPaso, SeguimientoProceso } from "@/lib/data";
+import type { AccionPaso, Candidato, EstadoUnificado, EtapaCandidato, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
 import { textoDia } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
 
-const TONO_ESTADO: Record<EstadoPaso, "neutral" | "brand" | "good" | "warn"> = {
-  pendiente: "neutral", en_curso: "brand", completada: "good", omitida: "warn", cancelada: "neutral",
+/** Una etiqueta por actividad (los 7 estados visibles). */
+export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human" | "good" | "warn" | "bad"> = {
+  sin_iniciar: "neutral", programada: "human", en_curso: "brand", pendiente_aprobacion: "warn",
+  completada: "good", omitida: "neutral", no_favorable: "bad",
 };
-const TONO_RESULTADO: Record<ResultadoPaso, "good" | "warn" | "bad"> = { favorable: "good", con_observaciones: "warn", no_favorable: "bad" };
 
 export type PresetPaso = { tipo: string; pasoId: string; titulo: string; usuarioId?: number | null };
 type Pestana = NonNullable<AccionPaso["pestana"]>;
 
-export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvaluacion, onAbrir, onSolicitarDocumentos, setAviso }: {
+const TONO_RECOMENDACION: Record<string, { texto: string; icon: typeof CheckCircle2 }> = {
+  "Avanzar a contratación": { texto: "text-good", icon: CheckCircle2 },
+  "Realizar entrevista humana": { texto: "text-warn", icon: Sparkles },
+  "Realizar Entrevista Red Human": { texto: "text-brand", icon: Sparkles },
+  "Reintentar Entrevista Red Human": { texto: "text-warn", icon: RotateCcw },
+  "No avanzar": { texto: "text-bad", icon: XCircle },
+};
+
+export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvaluacion, onAbrir, onSolicitarDocumentos, onAlta, onSeg, setAviso }: {
   c: Candidato;
   live: boolean;
   version: number;
@@ -38,43 +52,34 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   onIniciarEvaluacion: (p: PresetPaso) => void;
   onAbrir: (pestana: Pestana) => void;
   onSolicitarDocumentos: () => void;
+  /** «Alta como colaborador»: abre la confirmación del alta (la misma de siempre). */
+  onAlta?: () => void;
+  /** El encabezado de la ficha usa el seguimiento para su menú «…» (cambiar ruta, liga de Telegram). */
+  onSeg?: (s: Seg) => void;
   setAviso: (a: { tono: "ok" | "error" | "warn"; texto: string } | null) => void;
 }) {
   const puedeAutorizar = Boolean(useSesion().usuario?.puedeAutorizarOmisiones);
-  const [seg, setSeg] = useState<SeguimientoProceso | null>(c.proceso ?? null);
+  const [seg, setSegLocal] = useState<Seg | null>(c.proceso ?? null);
   const [ocupado, setOcupado] = useState("");
-  const [decision, setDecision] = useState<{ tipo: "omitir" | "cancelar" | "avanzar"; paso?: PasoSeguimiento; motivo: string } | null>(null);
-  const [actividad, setActividad] = useState(false);
+  const [abierto, setAbierto] = useState<string | null>(null);
+  const [decision, setDecision] = useState<{ tipo: "omitir" | "cancelar"; paso: PasoSeguimiento; motivo: string } | null>(null);
+
+  function setSeg(s: Seg) {
+    setSegLocal(s);
+    onSeg?.(s);
+  }
 
   useEffect(() => {
     if (c.proceso) setSeg(c.proceso);
     fetchSeguimiento(c.id).then((s) => s && setSeg(s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c, version]);
 
-  if (!seg) return null;
-  if (!seg.tieneProceso) {
-    return seg.vacanteTieneProceso ? (
-      <Card className="p-4 text-sm text-ink-2">
-        Esta postulación entró antes de que la vacante tuviera proceso. {live && (
-          <button className="font-semibold text-brand hover:underline" onClick={aplicarVigente}>Aplicar el proceso de la vacante</button>
-        )}
-      </Card>
-    ) : null;
-  }
-
-  async function aplicarVigente() {
-    setOcupado("vigente");
-    const r = await aplicarProcesoVigente(c.id);
-    setOcupado("");
-    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    setSeg(r.data.proceso);
-    onCambio(r.data.candidato);
-    const h = r.data.aplicado.heredados;
-    setAviso({ tono: "ok", texto: `Proceso actualizado a la versión ${r.data.aplicado.version}.${h.length ? ` Se conservan con su actividad: ${h.join(", ")}.` : ""}` });
-  }
+  if (!seg || !seg.tieneProceso) return <ResumenSinRuta c={c} />;
 
   function ejecutar(paso: PasoSeguimiento | undefined, accion: AccionPaso | null | undefined) {
     if (!accion) return;
+    if (paso?.tipo === "alta" && onAlta) return onAlta();
     if (accion.clave === "iniciar_evaluacion" && paso) {
       const r = paso.responsableConfig;
       return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: r?.tipo === "usuario" ? r.usuario_id : null });
@@ -86,20 +91,18 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (accion.pestana) onAbrir(accion.pestana);
   }
 
-  async function avanzar(etapa: EtapaCandidato, omitir = false, motivo = "") {
+  /** Solo cuando la ruta lo permite (todos los obligatorios de la etapa cumplidos y su avance automático apagado). */
+  async function continuar(etapa: EtapaCandidato) {
     setOcupado("avanzar");
-    const r = await moverEtapaCandidato(c.id, etapa, motivo, false, false, omitir);
+    const r = await moverEtapaCandidato(c.id, etapa);
     setOcupado("");
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    setDecision(null);
     onCambio(r.data);
-    setAviso({ tono: "ok", texto: `Avanzó a ${nombreEtapa(etapa)}.${omitir ? " Los pasos obligatorios pendientes quedaron «Omitida» con tu autorización." : ""}` });
+    setAviso({ tono: "ok", texto: `Continúa en ${nombreEtapa(etapa)}.` });
   }
 
   async function confirmarDecision() {
     if (!decision) return;
-    if (decision.tipo === "avanzar") return avanzar(seg!.siguienteEtapa as EtapaCandidato, true, decision.motivo);
-    if (!decision.paso) return;
     setOcupado("decision");
     const fn = decision.tipo === "omitir" ? omitirPasoProceso : cancelarPasoProceso;
     const r = await fn(c.id, decision.paso.id, decision.motivo);
@@ -107,21 +110,21 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     setSeg(r.data.proceso);
     onCambio(r.data.candidato);
+    const movida = r.data.candidato.etapa !== c.etapa;
     setDecision(null);
-    setAviso({ tono: "ok", texto: `«${decision.paso.nombre}» quedó ${decision.tipo === "omitir" ? "omitido" : "cancelado"}.` });
+    setAviso({ tono: "ok", texto: `«${decision.paso.nombre}» quedó ${decision.tipo === "omitir" ? "omitida" : "cancelada"}.${movida ? ` La ruta continúa en ${nombreEtapa(r.data.candidato.etapa)}.` : ""}` });
   }
 
-  /** Telegram (2026-10-06): RH comparte la liga; el candidato entra al chat (o directo a ese paso) desde su número. */
-  async function copiarLigaTelegram(liga: string, paso?: PasoSeguimiento) {
+  async function copiarLigaTelegram(liga: string, paso: PasoSeguimiento) {
     try {
       await navigator.clipboard.writeText(liga);
-      setAviso({ tono: "ok", texto: `Liga de Telegram copiada${paso ? ` (paso «${paso.nombre}»)` : ""}. Solo funciona desde el Telegram con el número del candidato.` });
+      setAviso({ tono: "ok", texto: `Liga de Telegram de «${paso.nombre}» copiada. Solo funciona desde el Telegram con el número del candidato.` });
     } catch {
       setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
     }
   }
 
-  /** Psicométricas.mx sin webhook (desarrollo): consulta su API, trae JSON + PDF y el paso queda Completado aquí mismo. */
+  /** Psicométricas.mx sin webhook (desarrollo): consulta su API, trae JSON + PDF y la actividad queda Completada. */
   async function sincronizar(paso: PasoSeguimiento) {
     if (!paso.evaluacion) return;
     setOcupado(`sync-${paso.id}`);
@@ -130,10 +133,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     const s = await fetchSeguimiento(c.id);
     if (s) setSeg(s);
-    const estado = r.data.sincronizacion;
-    setAviso(estado === "resultado_recibido"
-      ? { tono: "ok", texto: `Resultado de «${paso.nombre}» recibido (JSON y PDF). El paso quedó Completado.` }
-      : { tono: "warn", texto: `Psicométricas.mx todavía no reporta «${paso.nombre}» como terminada. Vuelve a sincronizar cuando el candidato la conteste.` });
+    setAviso(r.data.sincronizacion === "resultado_recibido"
+      ? { tono: "ok", texto: `Resultado de «${paso.nombre}» recibido (JSON y PDF).` }
+      : { tono: "warn", texto: `Psicométricas.mx todavía no reporta «${paso.nombre}» como terminada.` });
   }
 
   async function reactivar(paso: PasoSeguimiento) {
@@ -146,172 +148,154 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const sig = seg.siguienteAccion;
   const pasos = (seg.etapas ?? []).flatMap((e) => e.pasos);
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
-  const obligatorioPendiente = (seg.etapas ?? []).find((e) => e.actual)?.faltantes.length;
-  const requiereAutorizacion = decision && (decision.tipo === "avanzar" || decision.paso?.obligatorio);
   const tg = seg.telegram?.disponible ? seg.telegram : null;
-  const accionesCabecera = [
-    ...(seg.siguienteEtapa && obligatorioPendiente ? [{
-      etiqueta: `Avanzar a ${seg.siguienteEtapaTexto} omitiendo obligatorios…`, icono: <SkipForward />,
-      onClick: () => setDecision({ tipo: "avanzar", motivo: "" }),
-    }] : []),
-    ...(tg?.liga ? [{ etiqueta: "Copiar liga de Telegram", icono: <Link2 />, onClick: () => copiarLigaTelegram(tg.liga) }] : []),
-    ...(c.activa !== false ? [{ etiqueta: "Agregar actividad a este candidato…", icono: <Plus />, onClick: () => setActividad(true) }] : []),
-  ];
-  const ORIGEN: Record<string, string> = { vacante: "ruta de la vacante", cuenta: "ruta predeterminada de la Cuenta", base: "ruta de respaldo" };
+  const rec = c.recomendacionRedHuman ? TONO_RECOMENDACION[c.recomendacionRedHuman] : null;
+  const RecIcon = rec?.icon ?? Sparkles;
+
+  // UN botón principal: la siguiente acción concreta que define la ruta.
+  let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
+  if (live && sig && c.activa !== false) {
+    if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
+      principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
+    } else if (sig.tipo === "avanzar" && sig.etapa) {
+      principal = { texto: `Continuar a ${nombreEtapa(sig.etapa)}`, onClick: () => continuar(sig.etapa!), icono: <ArrowRight className="h-4 w-4" /> };
+    } else if (sig.tipo === "esperar" && sig.accion && pasoSig?.estadoUnificado === "pendiente_aprobacion") {
+      principal = { texto: `Aprobar: ${pasoSig.nombre}`, onClick: () => ejecutar(pasoSig, sig.accion), icono: <CheckCircle2 className="h-4 w-4" /> };
+    }
+  }
+  const textoEspera = !principal && sig ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Arriba: etapa actual + siguiente acción principal */}
-      <Card className="p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <Eyebrow>Ruta del candidato</Eyebrow>
-            <p className="mt-1 font-display text-lg font-bold">
-              {seg.etapaTexto}
-              {seg.siguienteEtapaTexto && <span className="text-sm font-normal text-ink-3"> · después: {seg.siguienteEtapaTexto}</span>}
-            </p>
-            <p className="text-[11px] text-ink-3">
-              {seg.plantilla || "Proceso propio"}{seg.personalizado ? " (personalizado en la vacante)" : ""} · {ORIGEN[seg.origen ?? "vacante"]} · versión {seg.version}
-            </p>
-          </div>
-          {live && sig && (
-            <div className="flex items-center gap-2">
-              {sig.tipo === "avanzar" && sig.etapa ? (
-                <Button size="sm" onClick={() => avanzar(sig.etapa!)} disabled={Boolean(ocupado) || c.activa === false}>
-                  <ArrowRight className="h-4 w-4" /> {sig.texto}
-                </Button>
-              ) : (sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion ? (
-                <Button size="sm" onClick={() => ejecutar(pasoSig, sig.accion)} disabled={Boolean(ocupado)}>
-                  <Play className="h-4 w-4" /> {sig.texto}
-                </Button>
-              ) : null}
-              {accionesCabecera.length > 0 && <MenuAcciones acciones={accionesCabecera} />}
+    <div className="flex flex-col gap-3">
+      {/* 1. Recomendación + botón principal */}
+      <Card className="p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <RecIcon className={cn("mt-0.5 h-5 w-5 shrink-0", rec?.texto ?? "text-ink-3")} />
+            <div className="min-w-0">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">Recomendación</p>
+              <p className={cn("font-display text-base font-bold leading-tight", rec?.texto ?? "text-ink")}>
+                {c.recomendacionRedHuman || c.resultadoIntegral?.texto || "Sin recomendación todavía"}
+              </p>
+              {(c.recomendacionMotivo || (!c.recomendacionRedHuman && c.resultadoIntegral?.motivo)) && (
+                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{c.recomendacionMotivo || c.resultadoIntegral?.motivo}</p>
+              )}
             </div>
+          </div>
+          {principal && (
+            <Button size="sm" className="shrink-0" onClick={principal.onClick} disabled={Boolean(ocupado)}>
+              {principal.icono} {principal.texto}
+            </Button>
           )}
         </div>
-        {sig && (sig.tipo === "esperar" || sig.tipo === "fin" || sig.tipo === "cerrada" || sig.detalle) && (
-          <p className={cn("mt-3 flex items-start gap-2 rounded-xl px-3 py-2 text-[13px]",
-            sig.tipo === "esperar" ? "bg-warn-soft/50 text-ink-2" : "bg-surface-2 text-ink-2")}>
-            {sig.tipo === "fin" ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-good" /> : <Clock className="mt-0.5 h-4 w-4 shrink-0 text-warn" />}
-            <span>{sig.tipo !== "paso" && sig.tipo !== "avanzar" && sig.tipo !== "abrir" ? <b>{sig.texto}. </b> : null}{sig.detalle}</span>
+        {textoEspera && (
+          <p className={cn("mt-3 flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[12px]", sig?.tipo === "fin" ? "bg-good-soft/50" : "bg-surface-2", "text-ink-2")}>
+            {sig?.tipo === "fin" ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" /> : <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />}
+            <span>{textoEspera}</span>
           </p>
         )}
         {(seg.alertas ?? []).length > 0 && (
-          <ul className="mt-3 flex flex-col gap-1">
-            {seg.alertas!.map((a) => (
-              <li key={a.paso} className="flex items-center gap-2 text-[12px] font-semibold text-bad">
-                <AlertTriangle className="h-3.5 w-3.5" /> {a.texto}{a.fechaLimite ? ` (límite ${textoDia(a.fechaLimite)})` : ""} · solo alerta, no descarta
-              </li>
-            ))}
-          </ul>
-        )}
-        {seg.desactualizado && (
-          <p className="mt-3 text-[12px] text-ink-3">
-            {seg.origen === "vacante" ? "La vacante tiene una versión más nueva del proceso" : "La vacante ahora tiene su propio proceso"}; este candidato conserva su ruta.{" "}
-            {live && <button className="font-semibold text-brand hover:underline" onClick={aplicarVigente} disabled={Boolean(ocupado)}>Aplicar versión vigente</button>}
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-bad">
+            <AlertTriangle className="h-3.5 w-3.5" /> {seg.alertas!.map((a) => `${a.texto}${a.fechaLimite ? ` (${textoDia(a.fechaLimite)})` : ""}`).join(" · ")}
           </p>
         )}
       </Card>
 
-      {/* Todos los pasos, agrupados por etapa */}
-      {(seg.etapas ?? []).map((e) => (
-        <section key={e.etapa} className={cn("rounded-2xl border", e.actual ? "border-brand/40" : "border-border-soft")}>
-          <header className="flex flex-wrap items-center gap-2 border-b border-border-faint px-4 py-2.5">
-            <h4 className="text-sm font-bold">{e.texto}</h4>
-            {e.actual && <Badge tone="brand">Etapa actual</Badge>}
-            {e.avanceAutomatico && <Badge tone="human"><Zap className="mr-1 inline h-3 w-3" />Avance automático</Badge>}
-            {e.sinPasos ? <span className="text-[11px] text-ink-3">Sin pasos · no bloquea</span>
-              : e.lista ? <Badge tone="good">Obligatorios cumplidos</Badge>
-              : <span className="text-[11px] text-warn">Faltan {e.faltantes.length} obligatorio(s)</span>}
-          </header>
-          {e.pasos.length > 0 && (
-            <div className="divide-y divide-border-faint">
-              <div className="hidden px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-3 sm:grid sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_auto] sm:gap-3">
-                <span>Paso</span><span>Responsable</span><span>Estado</span><span>Resultado</span><span>Acción</span>
-              </div>
-              {e.pasos.map((p) => (
-                <div key={p.id} className="grid gap-1.5 px-4 py-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_auto] sm:items-start sm:gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">
-                      {p.nombre}
-                      {p.obligatorio && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3">obligatorio</span>}
-                      {p.heredado && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3">fuera del proceso vigente</span>}
-                      {p.adhoc && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-human">solo este candidato</span>}
-                    </p>
-                    <p className="text-[11px] text-ink-3">
-                      {p.reglaTexto}
-                      {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : " · en paralelo"}
-                      {p.plazoDias != null && ` · plazo ${p.plazoDias} día(s)`}
-                    </p>
-                  </div>
-                  <p className="text-[13px] text-ink-2"><span className="text-[11px] text-ink-3 sm:hidden">Responsable: </span>{p.responsable}</p>
-                  <div className="flex flex-col gap-1">
-                    <span className="flex flex-wrap items-center gap-1">
-                      <Badge tone={TONO_ESTADO[p.estado]}>{p.estadoTexto}</Badge>
-                      {p.vencido && <Badge tone="bad">Plazo vencido</Badge>}
-                    </span>
-                    {p.espera && <span className="text-[11px] font-medium text-warn">{p.espera}</span>}
-                    {p.decision && <span className="text-[11px] text-ink-3">{p.detalle}</span>}
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {p.resultado ? <Badge tone={TONO_RESULTADO[p.resultado]}>{p.resultadoTexto}</Badge>
-                      : <span className="text-[12px] text-ink-3">{p.detalle && !p.decision ? p.detalle : "—"}</span>}
-                    {p.resultado && p.detalle && <span className="text-[11px] text-ink-3">{p.detalle}</span>}
-                    {p.revisadoPor && p.estado === "completada" && (
-                      <span className={cn("text-[11px]", p.revisadoPor.startsWith("Revisado") ? "text-ink-2" : "text-warn")}>{p.revisadoPor}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 sm:justify-end">
-                    {live && p.sincronizable && (
-                      <Button size="sm" variant="outline" onClick={() => sincronizar(p)} disabled={Boolean(ocupado)}>
-                        <RefreshCw className={cn("h-3.5 w-3.5", ocupado === `sync-${p.id}` && "animate-spin")} /> Sincronizar resultado
-                      </Button>
-                    )}
-                    {live && p.accion && (
-                      <Button size="sm" variant={p.accion.clave === "iniciar_evaluacion" || p.accion.clave === "abrir" ? "primary" : "outline"}
-                        onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>
-                        {p.accion.texto}
-                      </Button>
-                    )}
-                    {live && (p.estado === "pendiente" || p.estado === "en_curso") && !p.heredado && (
-                      <MenuAcciones acciones={[
-                        ...(tg?.pasos[p.id] ? [{ etiqueta: "Copiar liga de Telegram de este paso", icono: <Link2 />, onClick: () => copiarLigaTelegram(tg.pasos[p.id], p) }] : []),
-                        { etiqueta: "Omitir paso…", icono: <SkipForward />, onClick: () => setDecision({ tipo: "omitir", paso: p, motivo: "" }) },
-                        { etiqueta: "Cancelar paso…", icono: <Ban />, peligrosa: true, onClick: () => setDecision({ tipo: "cancelar", paso: p, motivo: "" }) },
-                      ]} />
-                    )}
-                    {live && (p.estado === "omitida" || p.estado === "cancelada") && (
-                      <Button size="sm" variant="ghost" onClick={() => reactivar(p)}><RotateCcw className="h-3.5 w-3.5" /> Reactivar</Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
+      {/* 2. Resultados clave */}
+      <ResultadosClave c={c} />
 
-      {actividad && (
-        <ModalActividad
-          c={c}
-          etapaActual={c.etapa}
-          onClose={() => setActividad(false)}
-          onAgregada={(r) => {
-            setActividad(false);
-            setSeg(r.proceso);
-            onCambio(r.candidato);
-            setAviso({ tono: "ok", texto: `«${r.paso.nombre}» se agregó solo a este candidato. La plantilla y la vacante no cambian.` });
-          }}
-        />
-      )}
+      {/* 3. Avance de la ruta */}
+      <Card className="p-0">
+        <div className="flex items-baseline justify-between gap-2 px-4 pt-3 pb-1.5">
+          <Eyebrow>Avance de la ruta</Eyebrow>
+          <span className="truncate text-[11px] text-ink-3">{seg.plantilla || "Ruta propia"} · v{seg.version}</span>
+        </div>
+        <ul className="pb-1">
+          {(seg.etapas ?? []).filter((e) => e.pasos.length > 0).map((e) => (
+            <li key={e.etapa}>
+              <p className={cn("px-4 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wide", e.actual ? "text-brand" : "text-ink-3")}>
+                {e.texto}{e.actual ? " · etapa actual" : ""}
+              </p>
+              <ul>
+                {e.pasos.map((p) => {
+                  const ab = abierto === p.id;
+                  const estadoU = (p.estadoUnificado ?? "sin_iniciar") as EstadoUnificado;
+                  return (
+                    <li key={p.id} className="border-t border-border-faint first:border-t-0">
+                      <button
+                        className="flex w-full items-center gap-2 px-4 py-1.5 text-left hover:bg-surface-2/60"
+                        onClick={() => setAbierto(ab ? null : p.id)}
+                        aria-expanded={ab}
+                      >
+                        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-ink-3 transition-transform", !ab && "-rotate-90")} />
+                        <span className="min-w-0 flex-1 truncate text-[13px]">
+                          {p.nombre}
+                          {p.obligatorio && <span className="ml-1 text-bad" title="Obligatoria">*</span>}
+                        </span>
+                        <Badge tone={TONO_ESTADO_U[estadoU]}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>
+                      </button>
+                      {ab && (
+                        <div className="flex flex-col gap-2 bg-surface-2/40 px-4 py-2.5 pl-10 text-[12px] text-ink-2">
+                          <p>
+                            <b className="text-ink">Responsable:</b> {p.responsable || "—"} · {p.reglaTexto}
+                            {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : " · en paralelo"}
+                            {p.plazoDias != null && ` · plazo ${p.plazoDias} día(s)`}
+                            {p.adhoc && " · solo este candidato"}
+                            {p.heredado && " · fuera de la ruta vigente"}
+                          </p>
+                          {p.espera && <p className="font-medium text-warn">{p.espera}</p>}
+                          {(p.resultadoTexto || p.detalle) && (
+                            <p>{p.resultadoTexto ? <b className="text-ink">{p.resultadoTexto}. </b> : null}{p.detalle}{p.revisadoPor && p.estado === "completada" ? ` · ${p.revisadoPor}` : ""}</p>
+                          )}
+                          {p.vencido && <p className="font-semibold text-bad">Plazo vencido (solo alerta)</p>}
+                          {live && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {p.accion && (
+                                <Button size="sm" variant="outline" onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>
+                                  {p.tipo === "alta" ? "Dar de alta" : p.accion.texto}
+                                </Button>
+                              )}
+                              {p.sincronizable && (
+                                <Button size="sm" variant="outline" onClick={() => sincronizar(p)} disabled={Boolean(ocupado)}>
+                                  <RefreshCw className={cn("h-3.5 w-3.5", ocupado === `sync-${p.id}` && "animate-spin")} /> Sincronizar resultado
+                                </Button>
+                              )}
+                              {tg?.pasos[p.id] && (p.estado === "pendiente" || p.estado === "en_curso") && (
+                                <Button size="sm" variant="ghost" onClick={() => copiarLigaTelegram(tg.pasos[p.id], p)}><Link2 className="h-3.5 w-3.5" /> Liga de Telegram</Button>
+                              )}
+                              {(p.estado === "pendiente" || p.estado === "en_curso") && !p.heredado && (
+                                <>
+                                  <Button size="sm" variant="ghost" onClick={() => setDecision({ tipo: "omitir", paso: p, motivo: "" })}>
+                                    <SkipForward className="h-3.5 w-3.5" /> Omitir actividad
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="text-bad hover:bg-bad-soft" onClick={() => setDecision({ tipo: "cancelar", paso: p, motivo: "" })}>
+                                    <Ban className="h-3.5 w-3.5" /> Cancelar
+                                  </Button>
+                                </>
+                              )}
+                              {(p.estado === "omitida" || p.estado === "cancelada") && (
+                                <Button size="sm" variant="ghost" onClick={() => reactivar(p)}><RotateCcw className="h-3.5 w-3.5" /> Reactivar</Button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      {/* 4. Fortalezas y puntos por validar (máx. 3 cada uno) */}
+      <FortalezasYPuntos c={c} />
 
       {decision && (
         <ModalMarco
-          titulo={decision.tipo === "avanzar" ? `Avanzar a ${seg.siguienteEtapaTexto} omitiendo obligatorios`
-            : `${decision.tipo === "omitir" ? "Omitir" : "Cancelar"} «${decision.paso?.nombre}»`}
-          subtitulo={decision.tipo === "avanzar"
-            ? `Quedarán «Omitida»: ${(seg.etapas ?? []).find((x) => x.actual)?.faltantes.join("; ")}.`
-            : decision.paso?.obligatorio ? "Es un paso obligatorio: requiere justificación y autorización." : "Es un paso opcional."}
+          titulo={`${decision.tipo === "omitir" ? "Omitir" : "Cancelar"} «${decision.paso.nombre}»`}
+          subtitulo={decision.paso.obligatorio ? "Actividad obligatoria: requiere motivo y el permiso «Autorizar omisiones»." : "Escribe el motivo; queda en el historial con tu nombre."}
           onClose={() => setDecision(null)}
         >
           <div className="flex flex-col gap-3">
@@ -319,18 +303,18 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
               className={cn(inputRH, "h-24 py-2")}
               value={decision.motivo}
               onChange={(ev) => setDecision({ ...decision, motivo: ev.target.value })}
-              placeholder="Justificación (queda en el historial y la bitácora con tu nombre)"
+              placeholder="Motivo (obligatorio, mínimo 10 caracteres)"
             />
-            {requiereAutorizacion && !puedeAutorizar && (
+            {decision.paso.obligatorio && !puedeAutorizar && (
               <p className="rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2">
                 No tienes el permiso «Autorizar omisiones». Pídelo a un Administrador (Configuración → Usuarios).
               </p>
             )}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setDecision(null)}>Cancelar</Button>
+              <Button variant="outline" size="sm" onClick={() => setDecision(null)}>Cerrar</Button>
               <Button size="sm" onClick={confirmarDecision}
-                disabled={Boolean(ocupado) || Boolean(requiereAutorizacion && (!puedeAutorizar || decision.motivo.trim().length < 10))}>
-                {ocupado ? "Guardando…" : decision.tipo === "avanzar" ? "Autorizar y avanzar" : decision.tipo === "omitir" ? "Omitir paso" : "Cancelar paso"}
+                disabled={Boolean(ocupado) || decision.motivo.trim().length < 10 || (decision.paso.obligatorio && !puedeAutorizar)}>
+                {ocupado ? "Guardando…" : decision.tipo === "omitir" ? "Omitir actividad" : "Cancelar actividad"}
               </Button>
             </div>
           </div>
@@ -340,13 +324,79 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   );
 }
 
+/** Resultados clave: cada dato UNA vez (prefiltro, CV, entrevista, evaluación integral, expediente). */
+function ResultadosClave({ c }: { c: Candidato }) {
+  const pf = c.prefiltroResumen;
+  const prefiltro = !pf ? "En curso" : pf.resultado === "no_cumple" || pf.incumplidos.length > 0 ? "No cumple" : "Cumple";
+  const items: { k: string; v: React.ReactNode; tono?: string }[] = [
+    { k: "Prefiltro", v: prefiltro, tono: prefiltro === "Cumple" ? "text-good" : prefiltro === "No cumple" ? "text-bad" : "text-ink-3" },
+    ...(c.score != null ? [{ k: "CV", v: `${c.score}/100` }] : []),
+    ...(c.afinidadGlobal != null ? [{ k: "Entrevista Red Human", v: `${c.afinidadGlobal}/100` }] : []),
+    ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-border-soft bg-surface px-4 py-2.5">
+      {items.map((i) => (
+        <span key={i.k} className="text-[12px] text-ink-3">
+          {i.k}: <b className={cn("font-semibold", i.tono ?? "text-ink")}>{i.v}</b>
+        </span>
+      ))}
+      {c.resultadoIntegral && <BadgeIntegral r={c.resultadoIntegral} compacto />}
+    </div>
+  );
+}
+
+function FortalezasYPuntos({ c }: { c: Candidato }) {
+  const f = (c.fortalezasPrincipales ?? []).slice(0, 3);
+  const p = (c.puntosPorValidar ?? []).slice(0, 3);
+  if (!f.length && !p.length) return null;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {f.length > 0 && (
+        <Card className="p-3.5">
+          <Eyebrow>Fortalezas</Eyebrow>
+          <ul className="mt-1.5 space-y-1">
+            {f.map((x, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-[12px] leading-snug text-ink-2">
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" /> <span className="break-words">{x}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+      {p.length > 0 && (
+        <Card className="p-3.5">
+          <Eyebrow>Puntos por validar</Eyebrow>
+          <ul className="mt-1.5 space-y-1">
+            {p.map((x, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-[12px] leading-snug text-ink-2">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" /> <span className="break-words">{x}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** Sin ruta (no debería pasar: toda postulación tiene una): solo resultados, fortalezas y puntos. */
+function ResumenSinRuta({ c }: { c: Candidato }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <ResultadosClave c={c} />
+      <FortalezasYPuntos c={c} />
+    </div>
+  );
+}
+
 /** «Agregar actividad a este candidato»: un paso del catálogo SOLO para esta postulación (entrevista, prueba,
  * documentos…). Por defecto no es obligatorio: no frena el avance salvo que RH lo marque. */
-function ModalActividad({ c, etapaActual, onClose, onAgregada }: {
+export function ModalActividad({ c, etapaActual, onClose, onAgregada }: {
   c: Candidato;
   etapaActual: EtapaCandidato;
   onClose: () => void;
-  onAgregada: (r: { proceso: SeguimientoProceso; candidato: Candidato; paso: { nombre: string } }) => void;
+  onAgregada: (r: { proceso: Seg; candidato: Candidato; paso: { nombre: string } }) => void;
 }) {
   const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
   const [tipo, setTipo] = useState("");

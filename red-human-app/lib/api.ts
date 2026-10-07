@@ -768,8 +768,9 @@ export function restaurarVacante(codigo: string) {
 
 /** CRUD (2026-09-15): baja LÓGICA de la PERSONA (acepta P-#### o C-####): todas sus postulaciones
  * activas se cierran y desaparece del Kanban, búsquedas y deduplicación. Nada se borra físicamente. */
-export function eliminarCandidato(codigo: string) {
-  return eliminar<{ ok: boolean; candidato: string; postulacionesCerradas: string[] }>(`/candidatos/${codigo}`);
+export function eliminarCandidato(codigo: string, motivo = "") {
+  // UX 2026-10-07: el motivo (obligatorio en la ficha) queda en la bitácora
+  return eliminar<{ ok: boolean; candidato: string; postulacionesCerradas: string[] }>(`/candidatos/${codigo}${motivo ? `?motivo=${encodeURIComponent(motivo)}` : ""}`);
 }
 
 /** Cómo verá el candidato esta vacante — funciona aunque siga en Borrador. */

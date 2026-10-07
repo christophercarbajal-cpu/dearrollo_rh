@@ -120,8 +120,12 @@ export interface PasoSeguimiento {
   adhoc?: boolean;
   /** Conectada a Psicométricas.mx y sin resultado: «Sincronizar resultado» consulta su API a mano (2026-10-07). */
   sincronizable?: boolean;
+  /** UX 2026-10-07: UNA etiqueta visible por actividad (derivada en la API). */
+  estadoUnificado?: EstadoUnificado;
+  estadoUnificadoTexto?: string;
   accion: AccionPaso | null;
 }
+export type EstadoUnificado = "sin_iniciar" | "programada" | "en_curso" | "pendiente_aprobacion" | "completada" | "omitida" | "no_favorable";
 export interface EtapaSeguimiento {
   etapa: EtapaCandidato;
   texto: string;
@@ -231,6 +235,8 @@ export interface Candidato {
   /** 2026-10-01: motivo que capturó RH al descartar (la tarjeta se queda en su columna con «No cumple»). */
   motivoDescarte?: string;
   resultadoIntegral?: ResultadoIntegral;
+  /** UX 2026-10-07: siguiente actividad de la ruta (tarjeta del tablero). */
+  siguienteActividad?: { id: string; nombre: string; estado: EstadoUnificado; estadoTexto: string } | null;
   /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */
   proceso?: SeguimientoProceso;
   tieneProceso?: boolean;

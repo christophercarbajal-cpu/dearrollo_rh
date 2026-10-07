@@ -286,7 +286,7 @@ class MotivoIn(BaseModel):
 
 
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/omitir")
-def omitir_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+async def omitir_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
                 cuenta: Cuenta = Depends(cuenta_actual)):
     """Omitir un paso. Obligatorio → justificación + permiso «Autorizar omisiones» (403 sin él)."""
     p = _postulacion(db, codigo, cuenta.id)
@@ -295,11 +295,12 @@ def omitir_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depend
     except sproc.ErrorProceso as e:
         raise _error(e)
     db.commit()
+    await sproc.avanzar_seguro(db, p)  # la etapa la define la ruta: si quedó lista, avanza sola
     return _salida(p)
 
 
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/cancelar")
-def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+async def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
                   cuenta: Cuenta = Depends(cuenta_actual)):
     """Cancelar un paso (ya no se hará). Mismas reglas que omitir; no cancela la evaluación ligada (eso es aparte)."""
     p = _postulacion(db, codigo, cuenta.id)
@@ -308,6 +309,7 @@ def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depe
     except sproc.ErrorProceso as e:
         raise _error(e)
     db.commit()
+    await sproc.avanzar_seguro(db, p)
     return _salida(p)
 
 

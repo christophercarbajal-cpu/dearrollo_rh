@@ -632,6 +632,7 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         # 2026-10-07: conectada a Psicométricas.mx y sin resultado → «Sincronizar resultado» (consulta su API a mano;
         # sirve cuando el webhook del proveedor apunta a otro servidor, p. ej. desarrollo).
         "sincronizable": bool(ev.clave_proveedor) and ev.estado in ("pendiente", "realizada_sin_resultado"),
+        "programada": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None),
     }
 
 
@@ -979,10 +980,52 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "plazoDias": paso.get("plazo_dias"), "fechaLimite": limite.isoformat() if limite else None, "vencido": vencido,
             "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
             "sincronizable": bool(r.get("sincronizable")),
+            **_estado_unificado(r),
             "accion": _accion(paso, r, disponible),
             "_terminado_en": r.get("terminado_en"),
         })
     return salida
+
+
+# Estados VISIBLES unificados (UX 2026-10-07): UNA sola etiqueta por actividad, derivada del estado + resultado +
+# regla. No reemplaza `estado`/`resultado` (la compuerta y la evaluación integral siguen leyéndolos).
+ESTADOS_UNIFICADOS = {
+    "sin_iniciar": "Sin iniciar", "programada": "Programada / Enviada", "en_curso": "En curso",
+    "pendiente_aprobacion": "Pendiente de aprobación", "completada": "Completada", "omitida": "Omitida",
+    "no_favorable": "No favorable",
+}
+
+
+def _estado_unificado(r: dict) -> dict:
+    estado, resultado = r["estado"], r.get("resultado")
+    if estado in ("omitida", "cancelada"):
+        clave = "omitida"
+    elif resultado == "no_favorable":
+        clave = "no_favorable"
+    elif estado == "completada":
+        clave = "completada" if r.get("cumple") else "pendiente_aprobacion"
+    elif estado == "en_curso":
+        clave = "programada" if r.get("programada") else "en_curso"
+    else:
+        clave = "sin_iniciar"
+    return {"estadoUnificado": clave, "estadoUnificadoTexto": ESTADOS_UNIFICADOS[clave]}
+
+
+def siguiente_actividad(p: Postulacion, evaluaciones=None) -> Optional[dict]:
+    """La actividad que sigue en la ruta (tarjeta del tablero): la primera obligatoria sin cumplir de la etapa actual;
+    si no hay, la primera sin cumplir de esa etapa; si la etapa está lista, la primera pendiente de las siguientes."""
+    pasos = [x for x in estado_pasos(p, evaluaciones) if not x["heredado"]]
+    if not pasos:
+        return None
+    pendientes = [x for x in pasos if not _satisfecho(x)]
+    actual = _indice(p.etapa)
+    de_etapa = [x for x in pendientes if x["etapa"] == p.etapa]
+    x = next((y for y in de_etapa if y["obligatorio"]), None) or (de_etapa[0] if de_etapa else None)
+    if x is None:
+        x = next((y for y in pendientes if _indice(y["etapa"]) > actual), None)
+    if x is None:
+        return None
+    return {"id": x["id"], "nombre": x["nombre"], "estado": x["estadoUnificado"], "estadoTexto": x["estadoUnificadoTexto"]}
 
 
 def _texto_regla(regla: dict) -> str:

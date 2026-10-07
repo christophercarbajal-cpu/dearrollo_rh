@@ -346,6 +346,37 @@ with TestClient(app) as client:
             if x["estado"] == "pendiente" and (x["resultado"] or x["cumpleRegla"]):
                 malas.append((pp.codigo, x["nombre"]))
     check(not malas, f"ninguna actividad con resultado aparece «Pendiente» ({len(malas)})")
+
+    # ================= 8. UX 2026-10-07: la etapa la define la ruta =================
+    print("\n--- 8. Motor de avance + estados visibles ---")
+    from app.models import Bitacora
+
+    VALIDOS = {"sin_iniciar", "programada", "en_curso", "pendiente_aprobacion", "completada", "omitida", "no_favorable"}
+    P8 = nueva("Elsa Estados", V_SIN)
+    s8 = seg(P8)
+    check(all(x.get("estadoUnificado") in VALIDOS and x.get("estadoUnificadoTexto") for e in s8["etapas"] for x in e["pasos"]),
+          "cada actividad trae UNA etiqueta visible de los 7 estados unificados")
+    check(paso(s8, "solicitud-web")["estadoUnificado"] == "sin_iniciar", "pendiente sin actividad → «Sin iniciar»")
+    tarjeta = next(x for x in client.get("/candidatos").json() if x["id"] == P8)
+    check(bool(tarjeta.get("siguienteActividad")) and tarjeta["siguienteActividad"]["estado"] in VALIDOS,
+          "la tarjeta del tablero trae la siguiente actividad de la ruta")
+    r = client.post(f"/evaluaciones/postulaciones/{P8}", json={"tipo": "referencias", "forma": "registro_directo"})
+    ev8 = r.json()["evaluacion"]["codigo"]
+    s8 = seg(P8)
+    check(next(x for e in s8["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev8)["estadoUnificado"] == "programada",
+          "evaluación asignada sin confirmación de inicio → «Programada / Enviada»")
+    for e in s8["etapas"]:
+        if e["etapa"] == "Prefiltro":
+            for x in e["pasos"]:
+                if x["obligatorio"] and x["estado"] in ("pendiente", "en_curso"):
+                    rr = client.post(f"/procesos/postulaciones/{P8}/pasos/{x['id']}/omitir", json={"motivo": "Prueba: ya se validó por otro medio"})
+                    check(rr.status_code == 200, f"omitir «{x['nombre']}» con motivo")
+    check(post(P8).etapa == "Entrevista IA", "omitir lo obligatorio de la etapa → la RUTA avanza sola (sin mover a mano)")
+    r = client.delete(f"/candidatos/{P8}", params={"motivo": "Registro duplicado de prueba"})
+    db.expire_all()
+    b = db.query(Bitacora).filter(Bitacora.accion == "candidato_eliminado").order_by(Bitacora.id.desc()).first()
+    check(r.status_code == 200 and b is not None and b.detalle.get("motivo") == "Registro duplicado de prueba",
+          "eliminar candidato guarda el motivo en la bitácora")
     db.close()
 
 print(f"\n🎉 {OK} comprobaciones OK — rutas de proceso")

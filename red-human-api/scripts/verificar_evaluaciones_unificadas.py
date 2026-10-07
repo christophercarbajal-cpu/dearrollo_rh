@@ -115,6 +115,11 @@ with TestClient(app) as client:
     def omitir_previos(codigo):
         """2026-10-06: toda postulación tiene ruta. Esta verificación es de evaluaciones, no de la ruta: RH omite (con
         permiso) los obligatorios de Prefiltro y Filtro Red Human y apaga el avance automático de su copia."""
+        # Primero se apaga el avance automático de su copia (desde 2026-10-07 omitir corre el avance de la ruta)
+        db.expire_all()
+        pp = db.query(Postulacion).filter_by(codigo=codigo).one()
+        pp.proceso = {**pp.proceso, "etapas": {e: {"avance_automatico": False} for e in pp.proceso.get("etapas", {})}}
+        db.commit()
         seg = client.get(f"/procesos/postulaciones/{codigo}").json()
         for e in seg.get("etapas", []):
             if e["etapa"] in ("Prefiltro", "Entrevista IA"):
@@ -123,9 +128,6 @@ with TestClient(app) as client:
                         client.post(f"/procesos/postulaciones/{codigo}/pasos/{x['id']}/omitir",
                                     json={"motivo": "Prueba: fuera del alcance de esta verificación"})
         db.expire_all()
-        pp = db.query(Postulacion).filter_by(codigo=codigo).one()
-        pp.proceso = {**pp.proceso, "etapas": {e: {"avance_automatico": False} for e in pp.proceso.get("etapas", {})}}
-        db.commit()
 
     omitir_previos(P)
 

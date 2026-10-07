@@ -9,7 +9,6 @@ import {
   MessageCircle,
   Video,
   ShieldCheck,
-  ThumbsUp,
   ThumbsDown,
   FileText,
   FileCheck2,
@@ -43,8 +42,11 @@ import {
   XCircle,
   RefreshCw,
   Trash2,
-  ArrowRightLeft,
   ClipboardCheck,
+  Route,
+  Plus,
+  Link2,
+  Upload,
 } from "lucide-react";
 import { Card, Badge, Button, Avatar, Eyebrow, Progress } from "@/components/ui";
 import { PageHeader, EstadoBadge, ScoreRing } from "@/components/dashboard/parts";
@@ -79,7 +81,7 @@ import {
   reiniciarPostulacionPrueba,
   type NotificarAccion,
   moverEtapaCandidato,
-  avanzarAEntrevistaHumana,
+  aplicarProcesoVigente,
   reanalizarCvCandidato,
   recordatorioDocumentosCandidato,
   registrarConsentimiento,
@@ -107,13 +109,14 @@ import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-
 import { PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-evaluaciones";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
 import { BadgeIntegral, PanelResultadoIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
-import { SeguimientoProceso } from "@/components/dashboard/procesos/seguimiento-proceso";
-import { useSesion } from "@/components/sesion";
+import { ModalActividad, SeguimientoProceso } from "@/components/dashboard/procesos/seguimiento-proceso";
+import { ModalMarco } from "@/components/dashboard/modulos-rh";
+import type { AccionMenu } from "@/components/dashboard/menu-acciones";
+import type { SeguimientoProceso as SeguimientoProcesoData } from "@/lib/data";
 import { evaluadorVacio } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
 import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, type FirmaDocumento } from "@/lib/api";
-import { SwitchModoPrueba } from "@/components/dashboard/switch-modo-prueba";
 import { Toast, type ToastMsg } from "@/components/dashboard/toast";
 import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
@@ -130,15 +133,8 @@ const etapaColor: Record<EtapaCandidato, string> = {
   Onboarding: "var(--good)",
 };
 
-/** Zero-touch: la IA ya avanzó sola al candidato hasta aquí; esto es solo el siguiente
- * checkpoint humano al que RH puede mandarlo con un botón explícito (no "cualquier etapa
- * futura" — cada etapa tiene un único destino manual). 2026-10-01 (pipeline de 5 columnas): a «Filtro humano» se
- * llega AGREGANDO una entrevista humana con el botón único «Agregar evaluación» (acción principal en Filtro Red
- * Human); el resto va por PATCH /candidatos/{codigo}/etapa. Prefiltro tiene su propio panel (la IA dispara Filtro
- * Red Human sola) y a Onboarding solo se llega con «Enviar a Onboarding» desde Contratación. */
-const SIGUIENTE_ETAPA_MANUAL: Partial<Record<EtapaCandidato, EtapaCandidato[]>> = {
-  "Entrevista Humana": ["Contratación"],
-};
+/* UX 2026-10-07: la etapa la define la RUTA (compuerta + avance automático del backend). La interfaz ya no ofrece
+   mover de etapa a mano; la siguiente acción concreta vive en el botón principal del Resumen. */
 
 type FiltroEstado = "todos" | "en_proceso" | "aptos" | "contratados" | "descartados";
 
@@ -151,11 +147,6 @@ const FILTROS_ESTADO: { key: FiltroEstado; label: string }[] = [
 ];
 
 const ETAPAS_YA_CONTRATADO: EtapaCandidato[] = ["Contratación", "Onboarding"];
-
-/** 2026-09-22 — «Avanzar a Filtro humano» (omitir la Entrevista Red Human sin agendar entrevista). Solo tiene
- * sentido mientras el candidato está en Prefiltro o en Filtro Red Human. */
-const ETAPAS_AVANCE_DIRECTO: EtapaCandidato[] = ["Prefiltro", "Entrevista IA"];
-const TEXTO_AVANCE_DIRECTO = "Este candidato avanzará a Filtro humano y se omitirá la Entrevista Red Human";
 
 const TIPOS_CONTRATACION = ["Tiempo indeterminado", "Tiempo determinado", "Por obra o proyecto", "Honorarios"];
 // 2026-09-20 (B3): formato de la trazabilidad de documentos
@@ -246,8 +237,8 @@ function CandidatosContenido() {
 
   const [sel, setSel] = useState<Candidato | null>(null);
   // 2026-09-22: «Avanzar a Entrevista Humana» desde la tarjeta del Kanban (misma confirmación que la ficha)
-  const [avanceKanban, setAvanceKanban] = useState<Candidato | null>(null);
-  const [avanzando, setAvanzando] = useState(false);
+  // UX 2026-10-07: el tablero no mueve candidatos (sin arrastre); un intento solo muestra este aviso.
+  const [avisoTablero, setAvisoTablero] = useState<ToastMsg>(null);
   useAnunciarContextoAgente(
     sel ? { pantalla: "candidato", entidad: { tipo: "candidato", codigo: sel.id } } : { pantalla: "candidatos" },
   );
@@ -869,145 +860,40 @@ function CandidatosContenido() {
 
                 <div className="flex flex-col gap-2.5">
                   {cols.map((c) => {
-                    const esDup = duplicadosSet.has(c.id);
+                    const sigAct = c.siguienteActividad;
                     return (
-                      /* 2026-09-22: el menú «…» va FUERA del botón de la tarjeta (no se anidan botones);
-                         solo aparece donde tiene sentido avanzar directo a Filtro humano. */
-                      <div key={c.id} className="relative">
-                      {puedeDecidir && ETAPAS_AVANCE_DIRECTO.includes(c.etapa) && c.activa !== false && (
-                        <div className="absolute right-1.5 top-1.5 z-10">
-                          <MenuAcciones
-                            etiqueta={`Acciones de ${c.nombre}`}
-                            acciones={[{
-                              etiqueta: "Avanzar a Filtro humano",
-                              icono: <CalendarClock />,
-                              title: TEXTO_AVANCE_DIRECTO,
-                              onClick: () => setAvanceKanban(c),
-                            }]}
-                          />
-                        </div>
-                      )}
+                      /* UX 2026-10-07: tarjeta limpia y clickeable completa — Nombre (2 líneas), Puesto, Siguiente
+                         actividad y UN resultado relevante. Sin arrastre: la etapa la define la ruta. */
                       <button
+                        key={c.id}
                         onClick={() => abrir(c)}
-                        className="card-hover group w-full rounded-xl border border-border-soft bg-surface p-3.5 text-left transition-all hover:border-brand/40 hover:shadow-md"
+                        draggable
+                        onDragStart={(e) => {
+                          e.preventDefault();
+                          setAvisoTablero({ tono: "warn", texto: "La etapa la define la ruta. Abre la ficha para continuar." });
+                        }}
+                        className="card-hover group w-full rounded-xl border border-border-soft bg-surface px-3 py-2.5 text-left transition-all hover:border-brand/40 hover:shadow-md"
                       >
-                        <div className="flex items-center gap-3">
-                          <div className="relative">
-                            <ScoreRing score={c.score} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="truncate text-sm font-semibold group-hover:text-brand">{c.nombre}</p>
-                              {c.esPrueba && (
-                                <span className="shrink-0 rounded bg-brand-soft px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-brand">
-                                  Prueba
-                                </span>
-                              )}
-                              {c.yaAplicoAntes && (
-                                <span
-                                  title={`Este candidato tiene ${c.totalPostulaciones} postulaciones`}
-                                  className="shrink-0 rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-blue-600"
-                                >
-                                  🔄 Ya aplicó antes
-                                </span>
-                              )}
-                              {c.activa === false && c.motivoCierre === "descartado" ? (
-                                /* 2026-10-01: sin columna de descartados — se queda en su columna con «No cumple» y su motivo */
-                                <span
-                                  title={`No cumple — descartado por RH${c.motivoDescarte ? `: ${c.motivoDescarte}` : ""}. El historial se conserva.`}
-                                  className="shrink-0 rounded bg-bad-soft px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-bad"
-                                >
-                                  No cumple
-                                </span>
-                              ) : c.activa === false && (
-                                <span
-                                  title={`Postulación cerrada (${c.motivoCierre || "sin motivo"}) — queda como historial de la persona`}
-                                  className="shrink-0 rounded bg-ink-3/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3"
-                                >
-                                  Cerrada
-                                </span>
-                              )}
-                              {esDup && (
-                                <span
-                                  title="Posible candidato duplicado (coincide teléfono o correo)"
-                                  className="shrink-0 rounded bg-warn-soft px-1.5 py-0.5 font-mono text-[9px] font-bold text-warn"
-                                >
-                                  Duplicado
-                                </span>
-                              )}
-                            </div>
-                            <p className="truncate text-xs text-ink-3">
-                              {c.puesto || "Sin vacante"}
-                              {c.clienteVacante ? ` · ${c.clienteVacante}` : ""}
-                            </p>
-                            {c.activa === false && c.motivoCierre === "descartado" && c.motivoDescarte && (
-                              <p className="truncate text-[11px] text-bad" title={c.motivoDescarte}>Motivo: {c.motivoDescarte}</p>
-                            )}
-                            <div className="mt-1 flex items-center gap-1.5">
-                              <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-brand">
-                                Score CV: {c.score}%
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Estado del prefiltro + Evaluación integral (2026-10-01: resultado acumulado, ya no columna) */}
-                        <div className="mt-3 flex items-center justify-between gap-2">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <EstadoBadge estado={c.estado} />
-                            <BadgeIntegral r={c.resultadoIntegral} />
-                          </div>
-                          <span className="flex items-center gap-1 font-mono text-[10px] text-ink-3">
-                            {c.fuente === "WhatsApp" ? (
-                              <span className="inline-flex items-center gap-1 font-semibold text-good">
-                                <MessageCircle className="h-3 w-3" /> WhatsApp
-                              </span>
-                            ) : (
-                              c.fuente
-                            )}
-                          </span>
-                        </div>
-
-                        {/* Señales */}
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          {(c.archivos ?? 0) > 0 && (
-                            <Pastilla icon={FileText} tono="neutral">
-                              {c.archivos} CV/doc
-                            </Pastilla>
-                          )}
-                          {(c.mensajes ?? 0) > 0 && (
-                            <Pastilla icon={MessageCircle} tono="good">
-                              {c.mensajes} msgs
-                            </Pastilla>
-                          )}
-                          {c.entrevistaEstado === "evaluada" && (
-                            <Pastilla icon={Video}>match {c.entrevistaMatch ?? "—"}</Pastilla>
-                          )}
-                          {c.expedienteId != null && (
-                            <Pastilla icon={UserCheck} tono="good">
-                              expediente {c.expedienteProgreso ?? 0}%
-                            </Pastilla>
-                          )}
-                          {c.consentimiento === false && (
-                            <Pastilla icon={AlertTriangle} tono="warn">
-                              sin consentimiento
-                            </Pastilla>
-                          )}
-                        </div>
-
-                        {/* Fecha última actividad / aplicación */}
-                        {(c.ultimaActividadEn || c.aplicado) && (
-                          <div className="mt-2.5 flex items-center gap-1 border-t border-border-faint pt-2 text-[10px] text-ink-3">
-                            <Clock className="h-3 w-3" />
-                            <span>
-                              {c.ultimaActividadEn
-                                ? `Actividad ${fechaCorta(c.ultimaActividadEn)}`
-                                : `Aplicó ${fechaCorta(c.aplicado)}`}
-                            </span>
-                          </div>
+                        <p className="line-clamp-2 text-sm font-semibold leading-snug group-hover:text-brand">
+                          {c.nombre}
+                          {c.esPrueba && <span className="ml-1 align-middle font-mono text-[9px] font-bold uppercase text-brand">· prueba</span>}
+                        </p>
+                        <p className="truncate text-xs text-ink-3">{c.puesto || "Sin vacante"}</p>
+                        {sigAct && (
+                          <p className="mt-1.5 truncate text-[11px] text-ink-2" title={`${sigAct.nombre} · ${sigAct.estadoTexto}`}>
+                            <span className="text-ink-3">Sigue:</span> {sigAct.nombre}
+                          </p>
                         )}
+                        <div className="mt-1.5">
+                          {c.activa === false ? (
+                            <span title={c.motivoDescarte || c.motivoCierre || ""} className="rounded bg-bad-soft px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase text-bad">
+                              {c.motivoCierre === "descartado" ? "No cumple" : "Cerrada"}
+                            </span>
+                          ) : c.resultadoIntegral ? (
+                            <BadgeIntegral r={c.resultadoIntegral} compacto />
+                          ) : null}
+                        </div>
                       </button>
-                      </div>
                     );
                   })}
                   {cols.length === 0 && (
@@ -1171,36 +1057,7 @@ function CandidatosContenido() {
         />
       )}
 
-      {/* 2026-09-22: confirmación de «Avanzar a Filtro humano» desde la tarjeta del Kanban */}
-      {avanceKanban && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !avanzando && setAvanceKanban(null)}>
-          <div className="w-full max-w-md rounded-3xl border border-border-soft bg-bg p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-display text-lg font-bold">Avanzar a Filtro humano</h3>
-            <p className="mt-2 text-sm leading-relaxed text-ink-2">{TEXTO_AVANCE_DIRECTO}.</p>
-            <p className="mt-2 text-xs text-ink-3">
-              {avanceKanban.nombre} · queda registrado en el historial del expediente; lo ya generado se conserva.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setAvanceKanban(null)} disabled={avanzando}>Cancelar</Button>
-              <Button
-                size="sm"
-                disabled={avanzando}
-                onClick={async () => {
-                  setAvanzando(true);
-                  const r = await avanzarAEntrevistaHumana(avanceKanban.id);
-                  setAvanzando(false);
-                  if (!r.ok) return;
-                  setAvanceKanban(null);
-                  if (sel?.id === r.data.id) setSel(r.data);
-                  recargar();
-                }}
-              >
-                {avanzando ? "Avanzando…" : "Avanzar"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Toast msg={avisoTablero} onClose={() => setAvisoTablero(null)} />
     </div>
   );
 }
@@ -1213,29 +1070,7 @@ export default function Candidatos() {
   );
 }
 
-function Pastilla({
-  icon: Icon,
-  children,
-  tono = "neutral",
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  children: React.ReactNode;
-  tono?: "neutral" | "good" | "warn";
-}) {
-  const tonos = {
-    neutral: "bg-surface-2 text-ink-3",
-    good: "bg-good-soft text-good",
-    warn: "bg-warn-soft text-warn",
-  };
-  return (
-    <span className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px]", tonos[tono])}>
-      <Icon className="h-3 w-3" />
-      {children}
-    </span>
-  );
-}
-
-type TabCandidato = "seguimiento" | "resumen" | "evaluaciones" | "documentos" | "whatsapp" | "contratacion";
+type TabCandidato = "seguimiento" | "resumen" | "evaluaciones" | "documentos" | "whatsapp" | "contratacion" | "historial";
 
 /** `reintentar` (Lote 4): presente solo en avisos de error de acciones que pueden toparse con
  * un bloqueo de estado forzable — el botón "Continuar de todos modos" solo se pinta si además
@@ -1273,10 +1108,11 @@ function ModalCandidato({
   const [confirmarEliminar, setConfirmarEliminar] = useState(false);
   const [eliminando, setEliminando] = useState(false);
   const [errorEliminar, setErrorEliminar] = useState("");
+  const [motivoEliminar, setMotivoEliminar] = useState("");
   async function eliminarPersona() {
     setEliminando(true);
     setErrorEliminar("");
-    const r = await eliminarCandidato(c.id);
+    const r = await eliminarCandidato(c.id, motivoEliminar.trim());
     setEliminando(false);
     if (!r.ok) return setErrorEliminar(r.error);
     setConfirmarEliminar(false);
@@ -1298,7 +1134,6 @@ function ModalCandidato({
   }, [c.etapa]);
   const [aviso, setAviso] = useState<AvisoEstado>(null);
   const [ocupado, setOcupado] = useState("");
-  const [comentario, setComentario] = useState("");
 
   function resolver<T>(r: { ok: true; data: T } | { ok: false; error: string }, exito: string, reintentar?: () => void) {
     setOcupado("");
@@ -1317,7 +1152,7 @@ function ModalCandidato({
 
   function descartar() {
     if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
-    setConfirmarDescartar({ motivo: comentario });
+    setConfirmarDescartar({ motivo: "" });
   }
 
   async function descartarConfirmado() {
@@ -1326,25 +1161,7 @@ function ModalCandidato({
     const r = await decidirCandidato(c.id, "descartar", confirmarDescartar.motivo.trim());
     const data = resolver(r, "Candidato descartado.");
     if (data) {
-      setComentario("");
       setConfirmarDescartar(null);
-      onCambio(data);
-    }
-  }
-
-  /** Botón explícito de avance — PATCH /candidatos/{codigo}/etapa con el destino exacto.
-   * `forzarPrueba` (Lote 4): si el primer intento falla y Modo Prueba está activo, el aviso de
-   * error trae un botón "Continuar de todos modos" que reintenta con el flag en true. */
-  async function enviarAEtapa(etapa: EtapaCandidato, forzarPrueba = false) {
-    if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
-    setOcupado(etapa);
-    const r = await moverEtapaCandidato(c.id, etapa, comentario, forzarPrueba);
-    const data = resolver(
-      r, `Enviado a ${nombreEtapa(etapa)}.`,
-      modoPrueba && !forzarPrueba ? () => enviarAEtapa(etapa, true) : undefined,
-    );
-    if (data) {
-      setComentario("");
       onCambio(data);
     }
   }
@@ -1365,40 +1182,51 @@ function ModalCandidato({
   // Punto 12: cada acción que notifica pasa por una confirmación ligera con la línea
   // "Notificar: … · Editar"; el ajuste viaja como `notificar` solo para esa acción.
   const [confirmacion, setConfirmacion] = useState<null | "solicitar" | "recordatorio" | "alta">(null);
-  // 2026-09-16 (control manual de RH): «Mover a otra etapa» — selector simple + motivo opcional
-  // 2026-10-06: con ruta, si quedan obligatorios atrás la API responde 409 → el modal muestra qué falta y permite
-  // omitirlos con justificación (≥10 caracteres) y el permiso «Autorizar omisiones».
-  const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string; bloqueo?: string }>(null);
-  const puedeAutorizarOmisiones = Boolean(useSesion().usuario?.puedeAutorizarOmisiones);
+  // UX 2026-10-07: menú «…» del encabezado — cambiar ruta, agregar actividad, opciones de prueba, descartar, eliminar.
+  const [seg, setSeg] = useState<SeguimientoProcesoData | null>(c.proceso ?? null);
+  const [actividad, setActividad] = useState(false);
+  const [cambiarRuta, setCambiarRuta] = useState(false);
+  const [reabrir, setReabrir] = useState<null | { motivo: string }>(null);
   // Evaluaciones unificadas: botón ÚNICO «Agregar evaluación» (2026-10-01). Crear una entrevista humana mueve a
   // Filtro humano desde Prefiltro / Filtro Red Human; cualquier otra evaluación no cambia la columna.
   const [agregarEval, setAgregarEval] = useState<PresetEvaluacion | null>(null);
   const [versionEval, setVersionEval] = useState(0);
-  // 2026-09-22: confirmación de «Avanzar a Filtro humano» (omite la Entrevista Red Human)
-  const [avanceDirecto, setAvanceDirecto] = useState(false);
-  async function confirmarAvanceDirecto() {
-    if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
-    setOcupado("avance-directo");
-    const r = await avanzarAEntrevistaHumana(c.id);
+  async function aplicarRutaVigente() {
+    setOcupado("ruta");
+    const r = await aplicarProcesoVigente(c.id);
     setOcupado("");
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    setAvanceDirecto(false);
-    onCambio(r.data);
-    setAviso({ tono: "ok", texto: "Candidato en Filtro humano. La Entrevista Red Human quedó registrada como omitida manualmente." });
+    setCambiarRuta(false);
+    setSeg(r.data.proceso);
+    setVersionEval((x) => x + 1);
+    onCambio(r.data.candidato);
+    const h = r.data.aplicado.heredados;
+    setAviso({ tono: "ok", texto: `Ruta actualizada a la versión ${r.data.aplicado.version}.${h.length ? ` Se conservan con su actividad: ${h.join(", ")}.` : ""}` });
   }
-  async function moverManual() {
-    if (!moverA?.etapa) return;
-    if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
-    setOcupado("mover");
-    const r = await moverEtapaCandidato(c.id, moverA.etapa, moverA.motivo, false, true, Boolean(moverA.bloqueo));
+
+  /** Reabrir una postulación cerrada: misma acción de siempre (mover a SU columna con `manual` la reabre). */
+  async function reabrirPostulacion() {
+    if (!reabrir) return;
+    setOcupado("reabrir");
+    const r = await moverEtapaCandidato(c.id, c.etapa, reabrir.motivo.trim(), false, true);
     setOcupado("");
-    if (!r.ok && !moverA.bloqueo && r.error.includes("pasos obligatorios")) return setMoverA({ ...moverA, bloqueo: r.error });
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    const omitidas = (r.data.actividadesOmitidas ?? []).filter((o) => o.hacia === moverA.etapa).map((o) => nombreEtapa(o.actividad));
-    setMoverA(null);
+    setReabrir(null);
     onCambio(r.data);
-    setAviso({ tono: "ok", texto: `Movido a ${nombreEtapa(moverA.etapa)}.${omitidas.length ? ` Omitido manualmente: ${omitidas.join(", ")}.` : ""}` });
+    setAviso({ tono: "ok", texto: "Postulación reabierta." });
   }
+
+  async function copiarLigaTelegram() {
+    const liga = seg?.telegram?.liga;
+    if (!liga) return;
+    try {
+      await navigator.clipboard.writeText(liga);
+      setAviso({ tono: "ok", texto: "Liga de Telegram copiada. Solo funciona desde el Telegram con el número del candidato." });
+    } catch {
+      setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
+    }
+  }
+
   const notificarAltaRef = useRef<NotificarAccion | undefined>(undefined);
 
   /** Onboarding · Zero-Touch fase 2 — RH detona, la IA da seguimiento por WhatsApp. */
@@ -1464,7 +1292,21 @@ function ModalCandidato({
     if (data) onCambio(data);
   }
 
-  const siguientesEtapas = SIGUIENTE_ETAPA_MANUAL[c.etapa] ?? [];
+  const accionesFicha: AccionMenu[] = !(live && puedeDecidir) ? [] : [
+    {
+      etiqueta: "Cambiar ruta…", icono: <Route />, onClick: () => setCambiarRuta(true), disabled: Boolean(ocupado) || !seg?.desactualizado,
+      title: seg?.desactualizado ? "Hay una versión más nueva de la ruta" : "El candidato ya tiene la versión vigente de su ruta",
+    },
+    ...(c.activa !== false ? [{ etiqueta: "Agregar actividad a este candidato…", icono: <Plus />, onClick: () => setActividad(true) }] : []),
+    ...(seg?.telegram?.disponible && seg.telegram.liga ? [{ etiqueta: "Copiar liga de Telegram", icono: <Link2 />, onClick: () => void copiarLigaTelegram() }] : []),
+    ...(c.activa === false && c.motivoCierre !== "contratado"
+      ? [{ etiqueta: "Reabrir postulación…", icono: <RotateCw />, onClick: () => setReabrir({ motivo: "" }), disabled: Boolean(ocupado) }] : []),
+    ...(modoPrueba || c.esPrueba
+      ? [{ etiqueta: "Prueba · Reiniciar postulación", icono: <FlaskConical />, onClick: () => void reiniciarPrueba(), disabled: Boolean(ocupado),
+           title: "Cierra la postulación actual y crea una limpia para volver a probar desde cero (solo Modo Prueba)." }] : []),
+    ...(c.activa !== false ? [{ etiqueta: "Descartar candidato…", icono: <ThumbsDown />, peligrosa: true, onClick: descartar, disabled: Boolean(ocupado) }] : []),
+    { etiqueta: "Eliminar candidato…", icono: <Trash2 />, peligrosa: true, onClick: () => setConfirmarEliminar(true), disabled: eliminando },
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-0 backdrop-blur-md animate-in fade-in duration-200 sm:p-6">
@@ -1516,19 +1358,8 @@ function ModalCandidato({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            <EstadoBadge estado={c.estado} prefijo="Prefiltro: " />
-            {live && puedeDecidir && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-bad/40 text-bad hover:bg-bad-soft"
-                onClick={() => setConfirmarEliminar(true)}
-                disabled={eliminando}
-              >
-                <Trash2 className="h-4 w-4" /> Eliminar candidato
-              </Button>
-            )}
+          <div className="flex shrink-0 items-center gap-1">
+            {accionesFicha.length > 0 && <MenuAcciones etiqueta="Acciones del candidato" acciones={accionesFicha} />}
             <button
               onClick={onClose}
               className="grid h-9 w-9 place-items-center rounded-xl text-ink-2 hover:bg-surface-2 transition"
@@ -1547,12 +1378,21 @@ function ModalCandidato({
                   <AlertTriangle className="h-5 w-5" />
                 </span>
                 <div>
-                  <h3 className="font-display text-lg font-bold">¿Estás seguro de que deseas eliminar a este candidato?</h3>
+                  <h3 className="font-display text-lg font-bold">¿Eliminar a este candidato?</h3>
                   <p className="mt-2 text-sm leading-relaxed text-ink-2">
                     <b>{c.nombre}</b> desaparecerá del tablero y de las búsquedas; todas sus postulaciones activas se cerrarán
                     {c.totalPostulaciones && c.totalPostulaciones > 1 ? ` (tiene ${c.totalPostulaciones})` : ""}. Nada se borra físicamente:
                     su historial (entrevistas, expediente, mensajes) se conserva y la acción queda en la bitácora.
                   </p>
+                  <label className="mt-3 flex flex-col gap-1">
+                    <span className="text-xs font-medium text-ink-2">Motivo (obligatorio)</span>
+                    <input
+                      value={motivoEliminar}
+                      onChange={(e) => setMotivoEliminar(e.target.value)}
+                      placeholder="Ej. registro duplicado"
+                      className="h-10 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                    />
+                  </label>
                   {errorEliminar && <p className="mt-2 text-sm font-semibold text-bad">{errorEliminar}</p>}
                 </div>
               </div>
@@ -1560,7 +1400,7 @@ function ModalCandidato({
                 <Button variant="outline" size="sm" onClick={() => setConfirmarEliminar(false)} disabled={eliminando}>
                   Cancelar
                 </Button>
-                <Button size="sm" className="bg-bad text-white hover:bg-bad/90" onClick={eliminarPersona} disabled={eliminando}>
+                <Button size="sm" className="bg-bad text-white hover:bg-bad/90" onClick={eliminarPersona} disabled={eliminando || motivoEliminar.trim().length < 5}>
                   <Trash2 className="h-4 w-4" /> {eliminando ? "Eliminando…" : "Sí, eliminar candidato"}
                 </Button>
               </div>
@@ -1568,45 +1408,42 @@ function ModalCandidato({
           </div>
         )}
 
-        {/* Barra de Pestañas Principales (4 base + Contratación condicional) */}
-        <div className="border-b border-border-soft bg-surface-2/70 pt-3">
-          {/* 2026-09-17 (móvil): las pestañas se deslizan con el dedo (scroll-x) en vez de recortarse */}
-          <div className="scroll-x gap-2 px-4 sm:px-6">
+        {/* Pestañas: Resumen · Evaluación integral · Documentos · WhatsApp · [Expediente] · Historial */}
+        <div className="border-b border-border-soft bg-surface-2/70 pt-2">
+          <div className="scroll-x gap-1 px-3 sm:px-5">
             {(
               [
                 { id: "resumen", label: "Resumen", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
-                { id: "documentos", label: "CV y documentos", icon: FileText, tone: "brand" },
+                { id: "documentos", label: "Documentos", icon: FileText, tone: "brand" },
                 { id: "whatsapp", label: "WhatsApp", icon: MessageCircle, tone: "good", badge: c.mensajes },
-                // 2026-09-17: la pestaña del expediente (checklist de documentos) vive en Contratación Y
-                // Onboarding — antes desaparecía al pasar a Onboarding y RH ya no veía qué faltaba.
+                // la pestaña del expediente vive en Contratación Y Onboarding
                 ...(c.etapa === "Contratación" || c.etapa === "Onboarding"
                   ? [{ id: "contratacion", label: c.etapa === "Onboarding" ? "Expediente" : "Contratación", icon: Briefcase, tone: "warn" }]
                   : []),
+                { id: "historial", label: "Historial", icon: Clock, tone: "brand" },
               ] as { id: TabCandidato; label: string; icon: typeof User; tone: string; badge?: number }[]
             ).map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  "flex shrink-0 items-center gap-2 whitespace-nowrap rounded-t-xl px-3 py-2.5 text-sm font-semibold transition border-b-2 sm:px-4",
-                  tab === t.id ? TAB_TONE_ACTIVA[t.tone] : "border-transparent text-ink-3 hover:text-ink hover:bg-surface/50",
+                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-lg border-b-2 px-3 py-2 text-[13px] font-semibold transition",
+                  tab === t.id ? TAB_TONE_ACTIVA[t.tone] : "border-transparent text-ink-3 hover:bg-surface/50 hover:text-ink",
                 )}
               >
-                <t.icon className="h-4 w-4" />
+                <t.icon className="h-3.5 w-3.5" />
                 {t.label}
                 {Boolean(t.badge) && (
-                  <span className={cn("rounded-full px-2 py-0.2 font-mono text-[11px] font-bold", TAB_TONE_BADGE[t.tone])}>
-                    {t.badge}
-                  </span>
+                  <span className={cn("rounded-full px-1.5 font-mono text-[10px] font-bold", TAB_TONE_BADGE[t.tone])}>{t.badge}</span>
                 )}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Cuerpo Scrolleable */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-5">
+        {/* Cuerpo — sin barra flotante inferior: la acción principal vive en el Resumen; lo secundario en «…» */}
+        <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-3 sm:p-5">
           {aviso && (
             <Aviso tono={aviso.tono} onCerrar={() => setAviso(null)}>
               {aviso.texto}
@@ -1619,199 +1456,52 @@ function ModalCandidato({
           )}
 
           {c.consentimiento === false && (
-            <Card className="border-warn/30 bg-warn-soft/40 p-4">
-              <div className="flex items-start gap-2.5">
-                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
-                <div className="flex-1">
-                  <p className="text-[13px] leading-relaxed text-ink-2">
-                    <b className="text-ink">Sin consentimiento registrado.</b> La LFPDPPP exige consentimiento
-                    explícito antes de tratar los datos del candidato o abrir su expediente.
-                  </p>
-                  {live && (
-                    <Button size="sm" variant="outline" className="mt-3" onClick={consentir} disabled={Boolean(ocupado)}>
-                      Registrar consentimiento
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </Card>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warn/30 bg-warn-soft/40 px-3 py-2 text-[12px] text-ink-2">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-warn" />
+              <span className="flex-1"><b className="text-ink">Sin consentimiento registrado.</b> La LFPDPPP lo exige antes de tratar sus datos o abrir su expediente.</span>
+              {live && (
+                <Button size="sm" variant="outline" onClick={consentir} disabled={Boolean(ocupado)}>Registrar consentimiento</Button>
+              )}
+            </div>
           )}
 
-          {(tab === "resumen" || tab === "seguimiento") && conProceso && (
+          {(tab === "resumen" || tab === "seguimiento") && (
             <SeguimientoProceso
               c={c}
               live={live && puedeDecidir}
               version={versionEval}
               onCambio={onCambio}
               setAviso={setAviso}
+              onSeg={setSeg}
               onAbrir={(p) => setTab(p)}
               onSolicitarDocumentos={() => setConfirmacion("solicitar")}
+              onAlta={() => setConfirmacion("alta")}
               onIniciarEvaluacion={(p) => setAgregarEval({
                 tipo: p.tipo as PresetEvaluacion["tipo"], pasoId: p.pasoId, titulo: p.titulo,
                 evaluador: p.usuarioId ? { ...evaluadorVacio, usuarioId: p.usuarioId } : undefined,
               })}
             />
           )}
-          {(tab === "resumen" || tab === "evaluaciones") && <PanelResultadoIntegral r={c.resultadoIntegral} />}
-          {tab === "resumen" && (
-            <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
+          {tab === "evaluaciones" && (
+            <>
+              <PanelResultadoIntegral r={c.resultadoIntegral} />
+              <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
+              <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} seccion="evaluacion" />
+              <PestanaEvaluaciones c={c} live={live} onCambio={onCambio} versionEval={versionEval} />
+            </>
           )}
-          {tab === "resumen" && <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} />}
-          {tab === "evaluaciones" && <PestanaEvaluaciones c={c} live={live} onCambio={onCambio} versionEval={versionEval} />}
-          {tab === "documentos" && <PestanaDocumentos c={c} live={live} onCambio={onCambio} setAviso={setAviso} />}
+          {tab === "documentos" && (
+            <>
+              <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} seccion="perfil" />
+              <PestanaDocumentos c={c} live={live} onCambio={onCambio} setAviso={setAviso} />
+            </>
+          )}
           {tab === "whatsapp" && <PestanaWhatsApp c={c} live={live} onCambio={onCambio} />}
           {tab === "contratacion" && (c.etapa === "Contratación" || c.etapa === "Onboarding") && (
-            <PanelContratacion c={c} live={live} onCambio={onCambio} setAviso={setAviso} onDocumentos={setConfirmacion} onDescartar={descartar} />
+            <PanelContratacion c={c} live={live} onCambio={onCambio} setAviso={setAviso} onDocumentos={setConfirmacion} />
           )}
+          {tab === "historial" && <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} seccion="historial" />}
         </div>
-
-        {/* MODO PRUEBA (Punto 8): independiente de la etapa — reinicia la postulación sin borrar teléfono.
-            Solo visible con Modo Prueba activo o sobre una postulación de prueba (el backend lo exige). */}
-        {puedeDecidir && (modoPrueba || c.esPrueba) && (
-          <div className="border-t border-border-soft bg-surface px-6 py-2">
-            <div className="flex justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={reiniciarPrueba}
-                disabled={Boolean(ocupado)}
-                title="Modo Prueba (Punto 8): cierra la postulación actual y crea una nueva limpia para volver a probar desde cero."
-                className="text-[11px] text-ink-3 hover:text-brand hover:bg-brand-soft/40 transition"
-              >
-                <RotateCw className="h-3.5 w-3.5" /> Reiniciar prueba
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Etapa Prefiltro: solo Descartar — el paso a Entrevista IA es zero-touch, lo dispara
-            la IA sola por WhatsApp al completar el prefiltro (no hay botón manual). */}
-        {puedeDecidir && c.etapa === "Prefiltro" && (
-          <div className="border-t border-border-soft bg-surface px-4 py-3 sm:px-6 sm:py-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={descartar}
-                disabled={Boolean(ocupado)}
-                className="border-bad/30 text-bad hover:bg-bad-soft"
-              >
-                <ThumbsDown className="h-4 w-4" /> Descartar candidato
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Footer Fijo con HITL y Acciones — Prefiltro y Contratación tienen su propio panel de acciones; este footer
-            genérico no aplica ahí. */}
-        {puedeDecidir &&
-          c.etapa !== "Prefiltro" &&
-          c.etapa !== "Contratación" && (
-          <div className="border-t border-border-soft bg-surface px-4 py-3 sm:px-6 sm:py-4">
-            <div className="flex flex-col gap-3">
-              <input
-                value={comentario}
-                onChange={(e) => setComentario(e.target.value)}
-                placeholder="Nota de decisión para auditoría (opcional)…"
-                className="h-10 w-full rounded-xl border border-border-soft bg-bg px-3.5 text-xs sm:text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
-              />
-
-              {/* Regla de UI (2026-09-16): UNA acción principal = la siguiente esperada; todo lo demás en «…»
-                  («Mover a otra etapa» abre un selector simple sin bloqueos de secuencia). */}
-              <div className="flex items-center gap-2">
-                {c.etapa === "Entrevista IA" ? (
-                  // 2026-10-01: botón ÚNICO «Agregar evaluación»; elegir «Entrevista humana» mueve solo a Filtro humano
-                  <Button size="sm" className="flex-1" onClick={() => setAgregarEval({ tipo: "entrevista_humana" })} disabled={Boolean(ocupado) || c.activa === false}>
-                    <ClipboardCheck className="h-4 w-4" /> Agregar evaluación
-                  </Button>
-                ) : siguientesEtapas[0] && (
-                  <Button size="sm" className="flex-1" onClick={() => enviarAEtapa(siguientesEtapas[0])} disabled={Boolean(ocupado)}>
-                    <ThumbsUp className="h-4 w-4" /> Enviar a {nombreEtapa(siguientesEtapas[0])}
-                  </Button>
-                )}
-                {c.expedienteId != null && c.etapa !== "Onboarding" && (
-                  <a
-                    href="/dashboard/onboarding"
-                    className="flex items-center gap-1.5 rounded-xl border border-good/30 bg-good-soft px-3 py-2 text-xs font-semibold text-good transition hover:brightness-105"
-                  >
-                    <UserCheck className="h-4 w-4" /> Expediente ({c.expedienteProgreso ?? 0}%)
-                  </a>
-                )}
-                <MenuAcciones
-                  etiqueta="Más acciones"
-                  acciones={[
-                    ...siguientesEtapas.slice(c.etapa === "Entrevista IA" ? 0 : 1).map((etapa) => ({
-                      etiqueta: `Enviar a ${nombreEtapa(etapa)}`,
-                      icono: <ThumbsUp />,
-                      onClick: () => enviarAEtapa(etapa),
-                      disabled: Boolean(ocupado),
-                    })),
-                    ...(ETAPAS_AVANCE_DIRECTO.includes(c.etapa)
-                      ? [{
-                          etiqueta: "Avanzar a Filtro humano",
-                          icono: <CalendarClock />,
-                          title: TEXTO_AVANCE_DIRECTO,
-                          onClick: () => setAvanceDirecto(true),
-                          disabled: Boolean(ocupado),
-                        }]
-                      : []),
-                    { etiqueta: "Mover a otra etapa…", icono: <ArrowRightLeft />, onClick: () => setMoverA({ etapa: "", motivo: "" }), disabled: Boolean(ocupado) },
-                    ...(c.etapa === "Onboarding"
-                      ? [
-                          { etiqueta: "Solicitar documentos", icono: <Send />, onClick: () => setConfirmacion("solicitar"), disabled: Boolean(ocupado) },
-                          { etiqueta: etiquetaRecordatorio(c.recordatorioNivel, c.recordatoriosEnviados).texto, icono: <RotateCw />, onClick: () => setConfirmacion("recordatorio"), disabled: Boolean(ocupado) },
-                        ]
-                      : []),
-                    { etiqueta: "Descartar candidato…", icono: <ThumbsDown />, peligrosa: true, onClick: descartar, disabled: Boolean(ocupado) },
-                  ]}
-                />
-              </div>
-
-              {/* 2026-09-15 (Fase 1): el error del alta se muestra AQUÍ, pegado al botón — antes solo
-                  aparecía arriba del cuerpo scrolleable y RH veía «parpadear» el botón sin explicación. */}
-              {c.etapa === "Onboarding" && aviso && aviso.tono !== "ok" && (
-                <div
-                  role="alert"
-                  className="flex items-start gap-2 rounded-xl border border-bad/40 bg-bad-soft px-3 py-2.5 text-xs font-semibold text-bad"
-                >
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{aviso.texto}</span>
-                </div>
-              )}
-              {/* Botón principal — siempre visible en Onboarding, sin importar el estado de los documentos */}
-              {c.etapa === "Onboarding" && (
-                <>
-                  {/* 2026-09-18: switch de Modo Prueba junto al alta. ACTIVO → se permite con expediente
-                      incompleto (se manda forzar_prueba directo); INACTIVO → el botón queda bloqueado
-                      hasta que el expediente esté validado al 100% (el backend lo refuerza). */}
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[12px] text-ink-3">
-                      Expediente al <b className={cn("font-mono", (c.expedienteProgreso ?? 0) >= 100 ? "text-good" : "text-warn")}>{c.expedienteProgreso ?? 0}%</b>
-                      {(c.expedienteProgreso ?? 0) < 100 && !modoPrueba ? " · el alta exige 100% validado" : ""}
-                      {(c.expedienteProgreso ?? 0) < 100 && modoPrueba ? " · Modo Prueba permite el alta incompleta" : ""}
-                    </span>
-                    <SwitchModoPrueba />
-                  </div>
-                  <Button
-                    className="w-full"
-                    onClick={() => setConfirmacion("alta")}
-                    disabled={Boolean(ocupado) || c.expedienteEstado === "alta" || ((c.expedienteProgreso ?? 0) < 100 && !modoPrueba)}
-                    title={(c.expedienteProgreso ?? 0) < 100 && !modoPrueba ? "Completa y valida el expediente al 100% (o activa Modo Prueba) para dar de alta." : undefined}
-                  >
-                    <UserCheck className="h-4 w-4" />
-                    {c.expedienteEstado === "alta"
-                      ? "Alta completada ✓"
-                      : ocupado === "alta"
-                        ? "Dando de alta…"
-                        : (c.expedienteProgreso ?? 0) < 100 && modoPrueba
-                          ? `DAR DE ALTA (Modo Prueba · expediente al ${c.expedienteProgreso ?? 0}%)`
-                          : "DAR DE ALTA COMO COLABORADOR"}
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {confirmarDescartar && (
@@ -1823,7 +1513,7 @@ function ModalCandidato({
                 {c.expedienteId != null ? " Su expediente de contratación se cancela." : ""}
               </p>
               <label className="mt-4 flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-ink-2">Motivo{c.expedienteId != null ? " (obligatorio)" : ""}</span>
+                <span className="text-xs font-medium text-ink-2">Motivo (obligatorio)</span>
                 <input
                   autoFocus
                   value={confirmarDescartar.motivo}
@@ -1838,7 +1528,7 @@ function ModalCandidato({
                   size="sm"
                   className="bg-bad text-white hover:bg-bad/90"
                   onClick={descartarConfirmado}
-                  disabled={ocupado === "descartar" || (c.expedienteId != null && !confirmarDescartar.motivo.trim())}
+                  disabled={ocupado === "descartar" || confirmarDescartar.motivo.trim().length < 5}
                 >
                   <ThumbsDown className="h-4 w-4" /> {ocupado === "descartar" ? "Descartando…" : "Sí, descartar"}
                 </Button>
@@ -1846,23 +1536,6 @@ function ModalCandidato({
             </div>
           </div>
         )}
-      {avanceDirecto && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => ocupado !== "avance-directo" && setAvanceDirecto(false)}>
-          <div className="w-full max-w-md rounded-3xl border border-border-soft bg-bg p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-display text-lg font-bold">Avanzar a Filtro humano</h3>
-            <p className="mt-2 text-sm leading-relaxed text-ink-2">{TEXTO_AVANCE_DIRECTO}.</p>
-            <p className="mt-2 text-xs text-ink-3">
-              Queda registrado en el historial del expediente ({c.nombre}); lo que ya se generó (chat, análisis de CV, entrevista parcial) se conserva.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setAvanceDirecto(false)} disabled={ocupado === "avance-directo"}>Cancelar</Button>
-              <Button size="sm" onClick={confirmarAvanceDirecto} disabled={ocupado === "avance-directo"}>
-                {ocupado === "avance-directo" ? "Avanzando…" : "Avanzar"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
       {agregarEval && (
         <ModalAgregarEvaluacion
           c={c}
@@ -1883,57 +1556,49 @@ function ModalCandidato({
           }}
         />
       )}
-      {moverA && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => !ocupado && setMoverA(null)}>
-            <div className="w-full max-w-md rounded-3xl border border-border-soft bg-bg p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-              <h3 className="font-display text-lg font-bold">Mover a otra etapa</h3>
-              <p className="mt-1 text-sm text-ink-2">
-                RH decide: el candidato se mueve aunque WhatsApp o el correo fallen. Lo que se salte queda registrado como «Omitida manualmente».
-              </p>
-              <label className="mt-4 flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-ink-2">Etapa destino</span>
-                <select
-                  value={moverA.etapa}
-                  onChange={(e) => setMoverA({ ...moverA, etapa: e.target.value as EtapaCandidato | "", bloqueo: undefined })}
-                  className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                >
-                  <option value="">Elige…</option>
-                  {etapas
-                    .filter((e) => e !== c.etapa || c.activa === false)
-                    .map((e) => (
-                      <option key={e} value={e}>{nombreEtapa(e)}</option>
-                    ))}
-                </select>
-              </label>
-              {moverA.bloqueo && (
-                <div className="mt-3 rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2">
-                  <p>{moverA.bloqueo}</p>
-                  <p className="mt-1 font-semibold">
-                    {puedeAutorizarOmisiones
-                      ? "Para moverlo, justifica la omisión: esos pasos quedarán «Omitida» con tu nombre."
-                      : "No tienes el permiso «Autorizar omisiones». Pídelo a un Administrador (Configuración → Usuarios)."}
-                  </p>
-                </div>
-              )}
-              <label className="mt-3 flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-ink-2">{moverA.bloqueo ? "Justificación (mínimo 10 caracteres)" : "Motivo (opcional)"}</span>
-                <input
-                  value={moverA.motivo}
-                  onChange={(e) => setMoverA({ ...moverA, motivo: e.target.value })}
-                  placeholder="Ej. el candidato ya fue entrevistado por el cliente"
-                  className="h-10 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                />
-              </label>
-              <div className="mt-5 flex justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => setMoverA(null)} disabled={ocupado === "mover"}>Cancelar</Button>
-                <Button size="sm" onClick={moverManual}
-                  disabled={!moverA.etapa || ocupado === "mover" || Boolean(moverA.bloqueo && (!puedeAutorizarOmisiones || moverA.motivo.trim().length < 10))}>
-                  {ocupado === "mover" ? "Moviendo…" : moverA.bloqueo ? "Omitir obligatorios y mover" : "Mover"}
-                </Button>
-              </div>
-            </div>
+      {actividad && (
+        <ModalActividad
+          c={c}
+          etapaActual={c.etapa}
+          onClose={() => setActividad(false)}
+          onAgregada={(r) => {
+            setActividad(false);
+            setSeg(r.proceso);
+            setVersionEval((x) => x + 1);
+            onCambio(r.candidato);
+            setAviso({ tono: "ok", texto: `«${r.paso.nombre}» se agregó solo a este candidato. La plantilla y la vacante no cambian.` });
+          }}
+        />
+      )}
+      {cambiarRuta && (
+        <ModalMarco titulo="Cambiar ruta" subtitulo="Aplica la versión vigente de la ruta de la vacante a este candidato." onClose={() => setCambiarRuta(false)}>
+          <p className="text-sm text-ink-2">
+            Lo que ya tiene actividad se conserva aunque no exista en la versión nueva (queda como «fuera de la ruta vigente», no obligatorio).
+            Su etapa actual no cambia.
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setCambiarRuta(false)}>Cancelar</Button>
+            <Button size="sm" onClick={aplicarRutaVigente} disabled={ocupado === "ruta"}>{ocupado === "ruta" ? "Aplicando…" : "Aplicar versión vigente"}</Button>
           </div>
-        )}
+        </ModalMarco>
+      )}
+      {reabrir && (
+        <ModalMarco titulo="Reabrir postulación" subtitulo={`Vuelve a quedar activa en ${nombreEtapa(c.etapa)}; queda en la bitácora con tu nombre.`} onClose={() => setReabrir(null)}>
+          <input
+            autoFocus
+            value={reabrir.motivo}
+            onChange={(e) => setReabrir({ motivo: e.target.value })}
+            placeholder="Motivo (obligatorio)"
+            className="h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+          />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setReabrir(null)}>Cancelar</Button>
+            <Button size="sm" onClick={reabrirPostulacion} disabled={ocupado === "reabrir" || reabrir.motivo.trim().length < 5}>
+              {ocupado === "reabrir" ? "Reabriendo…" : "Reabrir"}
+            </Button>
+          </div>
+        </ModalMarco>
+      )}
         {confirmacion === "solicitar" && (
           <ConfirmacionAccion
             titulo="Solicitar documentos"
@@ -1969,7 +1634,7 @@ function ModalCandidato({
         {confirmacion === "alta" && (
           <ConfirmacionAccion
             titulo="Dar de alta como colaborador"
-            texto="RH autoriza el alta: el registro se mueve a Colaboradores y la postulación queda cerrada como contratada."
+            texto={`RH autoriza el alta: el registro se mueve a Colaboradores y la postulación queda cerrada como contratada. Expediente al ${c.expedienteProgreso ?? 0}%${(c.expedienteProgreso ?? 0) < 100 ? (modoPrueba ? " · Modo Prueba permite el alta incompleta." : " · el alta exige el expediente al 100 % validado.") : "."}`}
             evento="contratacion"
             hayEntrevistador={false}
             hayCliente={Boolean(c.clienteVacante)}
@@ -2011,14 +1676,6 @@ function estadoAnalisisCv(c: Candidato, enVuelo: boolean): EstadoAnalisisCv {
   return tieneExtraccion ? "analizado" : "error";
 }
 
-const TONOS_RECOMENDACION: Record<string, { card: string; texto: string; icon: typeof CheckCircle2 }> = {
-  "Avanzar a contratación": { card: "border-good/30 bg-good-soft/20", texto: "text-good", icon: CheckCircle2 },
-  "Realizar entrevista humana": { card: "border-warn/30 bg-warn-soft/20", texto: "text-warn", icon: UserCheck },
-  "Realizar Entrevista Red Human": { card: "border-brand/30 bg-brand-soft/20", texto: "text-brand", icon: UserCheck },
-  "Reintentar Entrevista Red Human": { card: "border-warn/30 bg-warn-soft/20", texto: "text-warn", icon: RotateCw },
-  "No avanzar": { card: "border-bad/30 bg-bad-soft/20", texto: "text-bad", icon: XCircle },
-};
-
 /** 2026-09-13: status legible de la Entrevista Red Human (bloque propio en Resumen y Evaluaciones). */
 function textoEntrevistaStatus(s: NonNullable<Candidato["entrevistaStatus"]>): { titulo: string; detalle: string; tono: "good" | "warn" | "bad" | "neutral" } {
   switch (s.estado) {
@@ -2041,16 +1698,22 @@ function textoEntrevistaStatus(s: NonNullable<Candidato["entrevistaStatus"]>): {
   }
 }
 
+/** UX 2026-10-07: el contenido que vivía en «Resumen» se reparte SIN duplicar — «perfil» (CV extraído) va en
+ * Documentos, «evaluacion» (prefiltro, capacitación, afinidad) en Evaluación integral e «historial» (contacto,
+ * omisiones, historial y otras postulaciones) en Historial. Recomendación, fortalezas y puntos por validar viven en el
+ * Resumen; el status de la Entrevista Red Human ya está en Evaluación integral. */
 function PestanaResumen({
   c,
   live,
   onCambio,
   setTab,
+  seccion,
 }: {
   c: Candidato;
   live: boolean;
   onCambio: (c: Candidato) => void;
   setTab: (t: TabCandidato) => void;
+  seccion: "perfil" | "evaluacion" | "historial";
 }) {
   const [reanalizando, setReanalizando] = useState(false);
   const [errorCv, setErrorCv] = useState("");
@@ -2081,19 +1744,17 @@ function PestanaResumen({
   if (cv.anios_experiencia != null) datosPrincipales.push({ icon: CalendarClock, v: `${cv.anios_experiencia} años de experiencia` });
   datosPrincipales.push({ icon: Globe, v: `Canal: ${c.fuente}` });
 
-  const tonoRecomendacion = c.recomendacionRedHuman ? TONOS_RECOMENDACION[c.recomendacionRedHuman] : null;
-
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       {/* A. Datos principales */}
-      <div className="flex flex-wrap gap-2">
+      {seccion === "historial" && <div className="flex flex-wrap gap-2">
         {datosPrincipales.map((d, i) => (
           <Info key={i} icon={d.icon} v={d.v} />
         ))}
-      </div>
+      </div>}
 
       {/* B. Perfil extraído del CV */}
-      <div>
+      {seccion === "perfil" && <div>
         <Eyebrow>Perfil extraído del CV</Eyebrow>
         <Card className="mt-2 p-5">
           {estadoCv === "sin_cv" && <p className="text-sm text-ink-3">Currículum no recibido.</p>}
@@ -2171,10 +1832,10 @@ function PestanaResumen({
             </div>
           )}
         </Card>
-      </div>
+      </div>}
 
       {/* C. Prefiltro — SOLO filtro de entrada (Cumple / No cumple), sin score (2026-09-13) */}
-      <div>
+      {seccion === "evaluacion" && <div>
         <Eyebrow>Prefiltro de entrada</Eyebrow>
         <Card className="mt-2 p-4">
           {!c.prefiltroResumen ? (
@@ -2210,9 +1871,9 @@ function PestanaResumen({
             </div>
           )}
         </Card>
-      </div>
+      </div>}
 
-      {(c.capacitacion?.length ?? 0) > 0 && (
+      {seccion === "evaluacion" && (c.capacitacion?.length ?? 0) > 0 && (
         <div>
           <Eyebrow>Capacitación (filtro de la vacante)</Eyebrow>
           <Card className="mt-2 p-4">
@@ -2229,14 +1890,14 @@ function PestanaResumen({
         </div>
       )}
 
-      {(c.actividadesOmitidas?.length ?? 0) > 0 && (
+      {seccion === "historial" && (c.actividadesOmitidas?.length ?? 0) > 0 && (
         <p className="text-[11px] text-ink-3">
           Omitido manualmente: {c.actividadesOmitidas!.map((o) => `${nombreEtapa(o.actividad)} (${o.usuario}, ${fechaCorta(o.fecha)}${o.motivo ? `: ${o.motivo}` : ""})`).join(" · ")}
         </p>
       )}
 
       {/* 2026-09-22: historial del expediente — decisiones humanas registradas (nunca se borran) */}
-      {(c.historial?.length ?? 0) > 0 && (
+      {seccion === "historial" && (c.historial?.length ?? 0) > 0 && (
         <div>
           <Eyebrow>Historial del expediente</Eyebrow>
           <ul className="mt-2 space-y-1.5">
@@ -2253,30 +1914,8 @@ function PestanaResumen({
         </div>
       )}
 
-      {/* C2. Status de la Entrevista Red Human (2026-09-13) */}
-      {c.entrevistaStatus && (
-        <div>
-          <Eyebrow>Entrevista Red Human</Eyebrow>
-          <Card className="mt-2 p-4">
-            {(() => {
-              const st = textoEntrevistaStatus(c.entrevistaStatus);
-              return (
-                <>
-                  <p className={cn("text-sm font-semibold", st.tono === "good" ? "text-good" : st.tono === "warn" ? "text-warn" : st.tono === "bad" ? "text-bad" : "text-ink")}>{st.titulo}</p>
-                  {st.detalle && <p className="mt-1 text-xs leading-relaxed text-ink-2">{st.detalle}</p>}
-                  <p className="mt-1 text-[11px] text-ink-3">
-                    {c.entrevistaStatus.turnosCandidato} respuestas{c.entrevistaStatus.intentosPrevios ? ` · ${c.entrevistaStatus.intentosPrevios} intento(s) previo(s)` : ""}
-                    {c.entrevistaStatus.accionSiguiente === "reintentar" ? " · Reintentar desde el tablero de Entrevistas (botón «Reintentar»)." : ""}
-                  </p>
-                </>
-              );
-            })()}
-          </Card>
-        </div>
-      )}
-
       {/* D. Evaluación integral (Análisis de CV + Entrevista Red Human) — solo con entrevista válida */}
-      {c.afinidadGlobal != null && c.evaluacionIntegral && (
+      {seccion === "evaluacion" && c.afinidadGlobal != null && c.evaluacionIntegral && (
         <div>
           <Eyebrow>Evaluación integral · Afinidad con la vacante</Eyebrow>
           <Card className="mt-2 p-5">
@@ -2292,56 +1931,8 @@ function PestanaResumen({
         </div>
       )}
 
-      {/* E. Fortalezas principales */}
-      {Boolean(c.fortalezasPrincipales?.length) && (
-        <div>
-          <Eyebrow>Fortalezas principales</Eyebrow>
-          <Card className="mt-2 border-good/30 bg-good-soft/20 p-4">
-            <ul className="space-y-1.5">
-              {c.fortalezasPrincipales!.map((f, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-sm leading-relaxed text-ink-2">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-good" /> <span className="break-words">{f}</span>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      {/* F. Puntos por validar — solo lo que requiere intervención humana */}
-      {Boolean(c.puntosPorValidar?.length) && (
-        <div>
-          <Eyebrow>Puntos por validar</Eyebrow>
-          <Card className="mt-2 border-warn/30 bg-warn-soft/20 p-4">
-            <ul className="space-y-1.5">
-              {c.puntosPorValidar!.map((p, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-sm leading-relaxed text-ink-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" /> <span className="break-words">{p}</span>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      {/* G. Recomendación de Red Human — destacada */}
-      {c.recomendacionRedHuman && tonoRecomendacion && (
-        <Card className={cn("p-5", tonoRecomendacion.card)}>
-          <div className="flex items-start gap-3">
-            <tonoRecomendacion.icon className={cn("mt-0.5 h-6 w-6 shrink-0", tonoRecomendacion.texto)} />
-            <div>
-              <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">Recomendación de Red Human</p>
-              <p className={cn("font-display text-lg font-bold", tonoRecomendacion.texto)}>{c.recomendacionRedHuman}</p>
-              {c.recomendacionMotivo && (
-                <p className="mt-1.5 break-words text-sm leading-relaxed text-ink-2">{c.recomendacionMotivo}</p>
-              )}
-            </div>
-          </div>
-        </Card>
-      )}
-
       {/* H. Fase 2 — otras postulaciones de la misma persona (historial, más reciente primero) */}
-      {(c.historialPostulaciones?.length ?? 0) > 0 && (
+      {seccion === "historial" && (c.historialPostulaciones?.length ?? 0) > 0 && (
         <div>
           <Eyebrow>Otras postulaciones de esta persona</Eyebrow>
           <Card className="mt-2 divide-y divide-border-soft p-0">
@@ -2673,75 +2264,41 @@ function PestanaDocumentos({
   const faltantes = (cv.datos_faltantes as string[]) || (a.datos_faltantes || []);
   const listaArchivos = c.listaArchivos ?? [];
 
-  async function subirCV(archivos: File[]) {
+  const [tipoNuevo, setTipoNuevo] = useState<string | null>(null);
+  const inputArchivo = useRef<HTMLInputElement>(null);
+  async function subirDocumento(archivo: File | undefined, tipo: string) {
+    if (!archivo) return;
     setCargandoCV(true);
     setAviso(null);
-    const r = await subirArchivoCandidato(c.id, archivos[0], "cv");
+    const r = await subirArchivoCandidato(c.id, archivo, tipo);
     setCargandoCV(false);
+    setTipoNuevo(null);
     if (!r.ok) {
       setAviso({ tono: "error", texto: r.error });
       return;
     }
-    setAviso({ tono: "ok", texto: "CV procesado exitosamente: datos y score de afinidad actualizados." });
+    setAviso({ tono: "ok", texto: tipo === "cv" ? "CV procesado: datos y score de afinidad actualizados." : "Documento agregado." });
     if (r.data.candidato) onCambio(r.data.candidato);
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Habilidades detectadas */}
-      {habilidades.length > 0 && (
-        <div>
-          <Eyebrow>Habilidades y Competencias ({habilidades.length})</Eyebrow>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {habilidades.map((h, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-brand/25 bg-brand-soft px-3 py-1.5 text-xs font-medium text-brand"
-              >
-                <Award className="h-3.5 w-3.5 text-brand" /> {h}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Estudios e Idiomas */}
-      {(estudios.length > 0 || idiomas.length > 0) && (
-        <div className="grid gap-3.5 sm:grid-cols-2">
-          {estudios.length > 0 && (
-            <Card className="p-4">
-              <Eyebrow>Formación Académica ({estudios.length})</Eyebrow>
-              <ul className="mt-2 space-y-1.5">
-                {estudios.map((e, i) => (
-                  <li key={i} className="flex items-center gap-2 text-xs text-ink-2">
-                    <GraduationCap className="h-4 w-4 text-ink-3 shrink-0" /> {e}
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-
-          {idiomas.length > 0 && (
-            <Card className="p-4">
-              <Eyebrow>Idiomas</Eyebrow>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {idiomas.map((idm, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border-soft bg-surface-2 px-2.5 py-1 text-xs text-ink-2"
-                  >
-                    <Globe className="h-3.5 w-3.5 text-ink-3" /> {idm}
-                  </span>
-                ))}
-              </div>
-            </Card>
-          )}
+    <div className="flex flex-col gap-4">
+      {(habilidades.length > 0 || idiomas.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {habilidades.map((h, i) => (
+            <span key={`h${i}`} className="rounded-md border border-brand/25 bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand">{h}</span>
+          ))}
+          {idiomas.map((idm, i) => (
+            <span key={`i${i}`} className="inline-flex items-center gap-1 rounded-md border border-border-soft bg-surface-2 px-2 py-0.5 text-[11px] text-ink-2">
+              <Globe className="h-3 w-3 text-ink-3" /> {idm}
+            </span>
+          ))}
         </div>
       )}
 
       {/* Alertas del CV */}
       {(alertas.length > 0 || faltantes.length > 0) && (
-        <div className="rounded-2xl border border-warn/30 bg-warn-soft/30 p-4">
+        <div className="rounded-xl border border-warn/30 bg-warn-soft/30 px-3 py-2.5">
           <div className="flex items-center gap-2 text-warn font-semibold text-xs">
             <AlertTriangle className="h-4 w-4" />
             <span>Focos de atención detectados por la IA en el CV</span>
@@ -2852,39 +2409,72 @@ function PestanaDocumentos({
         </div>
       )}
 
-      {/* Archivos y Descarga de CV */}
+      {/* Archivos de la persona: una línea cada uno + «Agregar documento» */}
       <div>
-        <Eyebrow>Documentos Adjuntos</Eyebrow>
-        <div className="mt-2 flex flex-col gap-2.5">
-          {listaArchivos.map((a) => (
-            <Card key={a.id} className="flex items-center justify-between gap-3 p-3.5">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-surface-2 text-brand">
-                  <FileText className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">{a.nombre}</p>
-                  <p className="font-mono text-[11px] text-ink-3">
-                    {a.tipo} · {pesoLegible(a.tamano)} · {a.subido}
-                  </p>
-                </div>
-              </div>
-
-              <a
-                href={urlArchivoCandidato(c.id, a.id)}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 shrink-0 rounded-xl border border-border-soft bg-surface-2 px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-surface hover:text-brand"
-              >
-                <Download className="h-3.5 w-3.5" /> Descargar
-              </a>
-            </Card>
-          ))}
-
+        <div className="flex items-center justify-between gap-2">
+          <Eyebrow>Archivos ({listaArchivos.length})</Eyebrow>
           {live && puedeDecidir && (
-            <Dropzone compacto onArchivos={subirCV} cargando={cargandoCV} titulo="Subir nuevo CV o actualización" />
+            tipoNuevo === null ? (
+              <Button size="sm" variant="outline" onClick={() => setTipoNuevo("cv")} disabled={cargandoCV}>
+                <Plus className="h-3.5 w-3.5" /> Agregar documento
+              </Button>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={tipoNuevo}
+                  onChange={(e) => setTipoNuevo(e.target.value)}
+                  className="h-8 rounded-lg border border-border-soft bg-surface px-2 text-xs outline-none focus:border-brand"
+                  aria-label="Tipo de documento"
+                >
+                  <option value="cv">CV</option>
+                  <option value="identificacion">Identificación</option>
+                  <option value="certificado">Certificado</option>
+                  <option value="carta">Carta</option>
+                  <option value="otro">Otro</option>
+                </select>
+                <Button size="sm" onClick={() => inputArchivo.current?.click()} disabled={cargandoCV}>
+                  {cargandoCV ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Elegir archivo
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setTipoNuevo(null)} disabled={cargandoCV} aria-label="Cancelar">
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+                <input
+                  ref={inputArchivo}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp"
+                  onChange={(e) => {
+                    void subirDocumento(e.target.files?.[0], tipoNuevo);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+            )
           )}
         </div>
+        {listaArchivos.length === 0 ? (
+          <p className="mt-1.5 text-xs text-ink-3">Sin archivos.</p>
+        ) : (
+          <ul className="mt-1.5 divide-y divide-border-faint rounded-xl border border-border-soft bg-surface">
+            {listaArchivos.map((a) => (
+              <li key={a.id} className="flex items-center gap-2 px-3 py-1.5">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-brand" />
+                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{a.nombre}</span>
+                <span className="hidden shrink-0 font-mono text-[10px] text-ink-3 sm:inline">{a.tipo} · {pesoLegible(a.tamano)} · {a.subido}</span>
+                <a
+                  href={urlArchivoCandidato(c.id, a.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-ink-2 transition hover:bg-surface-2 hover:text-brand"
+                  title="Descargar"
+                  aria-label={`Descargar ${a.nombre}`}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
@@ -2945,36 +2535,21 @@ function PestanaWhatsApp({
   }
 
   return (
-    <div className="flex flex-col gap-3.5">
-      {/* Header del Chat */}
-      <div className="flex items-center justify-between rounded-2xl border border-border-soft bg-surface p-3.5">
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-2xl bg-good/15 text-good">
-            <MessageCircle className="h-5 w-5" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold text-ink">
-              {c.telefono ? `WhatsApp: +${c.telefono}` : "Conversación de Pre-filtro"}
-            </p>
-            <p className="text-xs text-ink-3">
-              {c.prefiltroCompleto ? "Prefiltro completado por el agente" : "Agente de IA (Luna) activo"} · {msgs.length} mensajes
-            </p>
-          </div>
-        </div>
-
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 text-xs text-ink-3">
+        <span>{c.telefono ? `+${c.telefono}` : "Sin teléfono"}</span>
         <button
           onClick={cargar}
           disabled={cargandoMsgs}
-          className="flex items-center gap-1.5 rounded-xl border border-border-soft bg-surface-2 px-3 py-1.5 text-xs font-semibold text-ink-2 hover:bg-surface-3 transition disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 font-semibold text-ink-2 transition hover:bg-surface-2 disabled:opacity-50"
           title="Actualizar conversación"
         >
-          <RotateCw className={cn("h-3.5 w-3.5", cargandoMsgs && "animate-spin")} />
-          Actualizar
+          <RotateCw className={cn("h-3.5 w-3.5", cargandoMsgs && "animate-spin")} /> Actualizar
         </button>
       </div>
 
       {/* Feed de Conversación de WhatsApp */}
-      <div className="flex max-h-[380px] min-h-[260px] flex-col gap-3 overflow-y-auto rounded-2xl border border-border-soft bg-surface-2/40 p-4">
+      <div className="flex max-h-[60vh] min-h-[300px] flex-col gap-2 overflow-y-auto rounded-xl border border-border-soft bg-surface-2/40 p-3">
         {msgs.length === 0 && !cargandoMsgs && (
           <div className="py-12 text-center">
             <MessageCircle className="mx-auto h-10 w-10 text-ink-3/40" />

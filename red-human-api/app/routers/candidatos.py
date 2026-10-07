@@ -1769,7 +1769,7 @@ def _actividades_pendientes(p: Postulacion, desde: str, hasta: str) -> List[str]
 
 @router.delete("/{codigo}")
 def eliminar_candidato(
-    codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    codigo: str, motivo: str = "", db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
     """CRUD (2026-09-15): baja LÓGICA de la PERSONA (se acepta P-#### o C-####: siempre se elimina el
@@ -1793,7 +1793,7 @@ def eliminar_candidato(
     c.postulacion_conversacion_id = None
     registrar(
         db, u.nombre, "candidato_eliminado", "candidato", c.codigo,
-        {"nombre": c.nombre, "postulaciones_cerradas": cerradas, "desde": codigo, "correo_rh": u.correo},
+        {"nombre": c.nombre, "postulaciones_cerradas": cerradas, "desde": codigo, "correo_rh": u.correo, "motivo": (motivo or "")[:500]},
     )
     db.commit()
     return {"ok": True, "candidato": c.codigo, "postulacionesCerradas": cerradas}

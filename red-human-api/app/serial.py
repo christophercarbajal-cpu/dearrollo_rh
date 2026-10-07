@@ -351,6 +351,17 @@ def _postulacion_resumen_dict(p: Postulacion) -> dict:
     }
 
 
+def _siguiente_actividad(p: Postulacion, evaluaciones=None) -> Optional[dict]:
+    from .services import proceso as sproc
+
+    if not p.activa:
+        return None
+    try:
+        return sproc.siguiente_actividad(p, evaluaciones)
+    except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
+        return None
+
+
 def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional[int] = None, evaluaciones=None) -> dict:
     """La tarjeta del Kanban (decisión P4: una por Postulación). `id` es el código P-####
     — es lo que el frontend manda a /candidatos/{codigo}/...; los datos de persona vienen
@@ -443,6 +454,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "resultadoIntegral": evaluacion_integral.calcular(p, evaluaciones),
         # Proceso configurable (2026-10-06): la ficha abre en «Seguimiento» si la postulación tiene proceso
         "tieneProceso": bool((p.proceso or {}).get("pasos")),
+        # UX 2026-10-07: la tarjeta del tablero muestra la SIGUIENTE actividad de la ruta (derivada, nunca guardada).
+        "siguienteActividad": _siguiente_actividad(p, evaluaciones),
         "clienteVacante": v.cliente.nombre if v and v.cliente else None,
         "clienteIdVacante": v.cliente_id if v else None,  # Fase 7A: para elegir contactos/entrevistador externo
         # --- Persona (maestro) ---

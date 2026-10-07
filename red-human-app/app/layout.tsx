@@ -6,7 +6,8 @@ const display = Inter_Tight({
   subsets: ["latin"],
   variable: "--font-display",
   display: "swap",
-  weight: ["400", "500", "600", "700", "800"],
+  // Sin `weight`: Inter Tight es fuente variable (100-900) y cubre 400-800. Con la lista explícita, next/font/google
+  // truena en CI («Cannot read properties of null (reading '1')»).
 });
 
 const sans = Inter({

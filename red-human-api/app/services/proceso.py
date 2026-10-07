@@ -154,6 +154,13 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
             "plazo_dias": plazo,
             "orden": i,
         }
+        if tipo == "solicitud_web":
+            paso["con_cv"] = bool(crudo.get("con_cv", crudo.get("conCv", False)))
+        if tipo == "documentos" and crudo.get("documentos"):
+            paso["documentos"] = [str(d).strip()[:120] for d in crudo["documentos"] if str(d).strip()]
+        for bandera in ("adhoc", "heredado"):  # actividad agregada solo a ESTA postulación / fuera del proceso vigente
+            if crudo.get(bandera):
+                paso[bandera] = True
         if tipo == "entrevista_humana":
             t = crudo.get("tipo_entrevista", crudo.get("tipoEntrevista")) or "general"
             if t not in TIPOS_ENTREVISTA_HUMANA:
@@ -268,6 +275,118 @@ def ejemplo(clave: str) -> dict:
             "etapas": normalizar_etapas(e["etapas"])}
 
 
+# ============================================================ rutas base precargadas (2026-10-06)
+# Las tres rutas del documento de reglas. Se siembran como plantillas EDITABLES en cada Cuenta (`asegurar_rutas_base`)
+# y viven aquí como respaldo: «Corporativos sin psicometría» es el último nivel de la cascada de asignación. El orden
+# visual NO crea dependencias: solo las explícitas (`depende_de`, «Esperar a…»); lo demás corre en paralelo.
+
+RUTA_RESPALDO = "corporativos"
+_AUTO_TODAS = {e: {"avance_automatico": True} for e in ETAPAS_CANDIDATO}  # Contratación/Onboarding se apagan al normalizar
+
+
+def _cola_contratacion_onboarding() -> List[dict]:
+    """Contratación y Onboarding, iguales en las tres rutas. Los documentos de ingreso viven en Onboarding: nunca
+    bloquean la ENTRADA a esa etapa (la compuerta solo revisa las etapas que se dejan atrás)."""
+    return [
+        {"id": "condiciones", "tipo": "condiciones", "nombre": "Condiciones de contratación", "etapa": "Contratación"},
+        {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Carta intención / contrato", "etapa": "Contratación",
+         "depende_de": ["condiciones"]},
+        {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Onboarding"},
+        {"id": "induccion", "tipo": "induccion", "nombre": "Inducción", "etapa": "Onboarding"},
+        {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding",
+         "depende_de": ["documentos-ingreso", "induccion"]},
+    ]
+
+
+RUTAS_BASE = {
+    "masivos": {
+        "nombre": "Masivos",
+        "descripcion": "Solicitud web sin CV → prefiltro por WhatsApp → documentos por liga → Entrevista Red Human → médica y "
+                       "entrevista humana → contratación → onboarding (12 pasos).",
+        "pasos": [
+            {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web sin CV", "con_cv": False},
+            {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Continuar prefiltro por WhatsApp",
+             "depende_de": ["solicitud-web"]},
+            {"id": "solicitar-documentos", "tipo": "solicitud_documentos", "nombre": "Solicitar documentos por liga",
+             "etapa": "Prefiltro", "depende_de": ["prefiltro-whatsapp"]},
+            {"id": "validar-documentos", "tipo": "documentos", "nombre": "Validar documentos", "etapa": "Prefiltro",
+             "depende_de": ["solicitar-documentos"]},
+            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+            {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana"},
+            {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
+            *_cola_contratacion_onboarding(),
+        ],
+    },
+    "corporativos": {
+        "nombre": "Corporativos sin psicometría",
+        "descripcion": "Solicitud web con CV y prefiltro → Análisis de CV y Entrevista Red Human → entrevista humana → "
+                       "contratación → onboarding (9 pasos).",
+        "pasos": [
+            {"id": "solicitud-web", "tipo": "prefiltro_web", "nombre": "Solicitud web con CV y prefiltro"},
+            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Entrevista IA"},
+            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+            {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
+            *_cola_contratacion_onboarding(),
+        ],
+    },
+    "corporativos_psicometria": {
+        "nombre": "Corporativos con psicometría",
+        "descripcion": "Igual que Corporativos, con Psicometría en Filtro humano (10 pasos).",
+        "pasos": [
+            {"id": "solicitud-web", "tipo": "prefiltro_web", "nombre": "Solicitud web con CV y prefiltro"},
+            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Entrevista IA"},
+            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+            {"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría", "etapa": "Entrevista Humana"},
+            {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
+            *_cola_contratacion_onboarding(),
+        ],
+    },
+}
+
+
+def ruta_base(clave: str) -> dict:
+    """Ruta base normalizada (nombre, descripción, pasos, etapas con avance automático encendido)."""
+    if clave not in RUTAS_BASE:
+        raise ErrorProceso(404, "Ruta base no encontrada.")
+    r = copy.deepcopy(RUTAS_BASE[clave])
+    return {"nombre": r["nombre"], "descripcion": r["descripcion"], "pasos": normalizar_pasos(r["pasos"]),
+            "etapas": normalizar_etapas(_AUTO_TODAS)}
+
+
+def asegurar_rutas_base(db: Session, cuenta_id: int, por: str = "sistema") -> int:
+    """Siembra las tres rutas base como plantillas EDITABLES de la Cuenta, una sola vez (por `ruta_base`; si RH la
+    desactivó o la editó, se respeta). Idempotente; regresa cuántas creó. Nunca falla el arranque."""
+    if not _tablas_proceso():
+        return 0
+    try:
+        existentes = {r for (r,) in db.query(PlantillaProceso.ruta_base).filter(PlantillaProceso.cuenta_id == cuenta_id,
+                                                                                 PlantillaProceso.ruta_base != "")}
+    except Exception:  # noqa: BLE001 — tabla del paso no fatal ausente: la cascada usa la ruta en código
+        return 0
+    n = 0
+    for clave in RUTAS_BASE:
+        if clave in existentes:
+            continue
+        r = ruta_base(clave)
+        db.add(PlantillaProceso(cuenta_id=cuenta_id, nombre=r["nombre"], descripcion=r["descripcion"], pasos=r["pasos"],
+                                etapas=r["etapas"], version=1, predeterminada=False, activa=True, creado_por=por,
+                                actualizada_por=por, ruta_base=clave))
+        n += 1
+    if n:
+        db.flush()
+    return n
+
+
+def asegurar_rutas_base_todas(db: Session) -> int:
+    from ..models import Cuenta
+
+    try:
+        ids = [cid for (cid,) in db.query(Cuenta.id).filter(Cuenta.estado != "Eliminada")]
+    except Exception:  # noqa: BLE001
+        return 0
+    return sum(asegurar_rutas_base(db, cid) for cid in ids)
+
+
 # ============================================================ plantillas → vacante → postulación (copias)
 
 def plantilla_dict(pl: PlantillaProceso) -> dict:
@@ -275,7 +394,7 @@ def plantilla_dict(pl: PlantillaProceso) -> dict:
         "id": pl.id, "nombre": pl.nombre, "descripcion": pl.descripcion or "", "pasos": pl.pasos or [],
         "etapas": normalizar_etapas(pl.etapas), "version": pl.version or 1, "predeterminada": bool(pl.predeterminada),
         "activa": bool(pl.activa), "creadoPor": pl.creado_por, "actualizadaPor": pl.actualizada_por or pl.creado_por,
-        "actualizadaEn": pl.actualizada_en.isoformat() if pl.actualizada_en else None,
+        "actualizadaEn": pl.actualizada_en.isoformat() if pl.actualizada_en else None, "rutaBase": getattr(pl, "ruta_base", "") or "",
     }
 
 
@@ -339,15 +458,60 @@ def _firma(proc: dict) -> tuple:
     return (proc.get("plantilla_id"), repr(proc.get("pasos") or []), repr(normalizar_etapas(proc.get("etapas"))))
 
 
-def congelar(p: Postulacion, v=None) -> bool:
-    """Copia el proceso VIGENTE de la vacante a la postulación (al nacer o al elegir vacante por WhatsApp). Nunca
-    reemplaza uno ya congelado. Regresa True si congeló."""
+def _tablas_proceso() -> bool:
+    from .modulos_rh import disponible
+
+    return disponible()  # plantillas_proceso vive en el paso NO fatal del arranque
+
+
+def _plantilla_ruta(db: Optional[Session], cuenta_id: Optional[int], clave: str) -> Optional[PlantillaProceso]:
+    if db is None or not cuenta_id or not _tablas_proceso():
+        return None
+    try:
+        return (db.query(PlantillaProceso)
+                .filter(PlantillaProceso.cuenta_id == cuenta_id, PlantillaProceso.ruta_base == clave, PlantillaProceso.activa.is_(True))
+                .first())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def ruta_para(db: Optional[Session], cuenta_id: Optional[int], v=None) -> dict:
+    """Cascada de asignación (documento de reglas): 1) proceso de la vacante, 2) proceso predeterminado de la Cuenta,
+    3) «Corporativos sin psicometría» (la plantilla de la Cuenta si sigue activa; si no, la ruta en código). Regresa una
+    COPIA lista para guardarse en la postulación, con `origen` = vacante | cuenta | base."""
+    if v is not None and tiene_proceso(v):
+        proc = copy.deepcopy(v.proceso)
+        proc.update({"origen": "vacante", "vacante_version": int(proc.get("version") or 1), "vacante_id": v.id})
+        return proc
+    pl = predeterminada(db, cuenta_id) if db is not None and cuenta_id and _tablas_proceso() else None
+    origen = "cuenta"
+    if pl is None:
+        pl, origen = _plantilla_ruta(db, cuenta_id, RUTA_RESPALDO), "base"
+    if pl is not None:
+        proc = proceso_desde_plantilla(pl)
+    else:
+        r = ruta_base(RUTA_RESPALDO)
+        proc = {"plantilla_id": None, "plantilla_nombre": r["nombre"], "plantilla_version": 1, "version": 1,
+                "personalizado": False, "pasos": r["pasos"], "etapas": r["etapas"]}
+    proc.update({"origen": origen, "ruta_base": getattr(pl, "ruta_base", "") or (RUTA_RESPALDO if origen == "base" else "")})
+    if v is not None:
+        proc["vacante_id"] = v.id
+    return proc
+
+
+def congelar(p: Postulacion, v=None, db: Optional[Session] = None) -> bool:
+    """Toda postulación guarda una COPIA estática de su ruta al nacer (cascada de `ruta_para`). Una ya congelada nunca
+    se reemplaza, salvo la PROVISIONAL de una postulación que nació sin vacante (menú de WhatsApp/Telegram): al elegir
+    la vacante toma la de la cascada con esa vacante, mientras RH no haya tomado decisiones sobre sus pasos. Regresa
+    True si congeló."""
     v = v if v is not None else p.vacante
-    if tiene_proceso(p) or v is None or not tiene_proceso(v):
+    actual = p.proceso or {}
+    if tiene_proceso(p) and not (actual.get("provisional") and v is not None and not (p.proceso_estado or {})):
         return False
-    proc = copy.deepcopy(v.proceso)
-    proc["vacante_version"] = int(proc.get("version") or 1)
-    proc["vacante_id"] = v.id
+    db = db or object_session(p)
+    proc = ruta_para(db, p.cuenta_id or (v.cuenta_id if v is not None else None), v)
+    if v is None:
+        proc["provisional"] = True
     proc["congelado_en"] = _ahora().isoformat()
     p.proceso = proc
     return True
@@ -359,6 +523,8 @@ def desactualizado(p: Postulacion) -> bool:
         return bool(v is not None and tiene_proceso(v))
     if v is None or not tiene_proceso(v):
         return False
+    if (p.proceso or {}).get("origen") in ("cuenta", "base"):
+        return True  # la vacante tiene hoy un proceso propio y esta postulación conserva la ruta de respaldo
     if p.proceso.get("vacante_id") not in (None, v.id):
         return True  # RH reasignó la postulación a otra vacante: su proceso sigue siendo el de la anterior
     return int(v.proceso.get("version") or 1) != int(p.proceso.get("vacante_version") or 1)
@@ -474,7 +640,7 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
             "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
     if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
         web = bool(a.get("respuestas_web"))
-        hecho = bool(p.prefiltro_completo) if tipo == "prefiltro_whatsapp" else (web or (p.prefiltro_completo and p.origen != "whatsapp"))
+        hecho = bool(p.prefiltro_completo) if tipo == "prefiltro_whatsapp" else (web or bool(p.prefiltro_completo))
         if not hecho:
             iniciado = tipo == "prefiltro_whatsapp" and bool(a.get("respuestas_prefiltro"))
             return {**base, "estado": "en_curso" if iniciado else "pendiente",
@@ -497,6 +663,10 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
         r = _con_score(base, regla, int(evaluada.evaluacion["match_perfil"]))
         r["terminado_en"] = _aware(evaluada.finalizada_en)
         return r
+    if evaluada is not None:
+        return {**base, "estado": "completada", "resultado": None, "cumple": regla["tipo"] == "ninguna",
+                "espera": "" if regla["tipo"] == "ninguna" else "Falta la revisión de RH (evaluación sin afinidad)",
+                "detalle": "Evaluada", "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(evaluada.finalizada_en)}
     ultima = entrevistas[-1] if entrevistas else None
     if ultima is not None:
         espera = {"interrumpida": "Se interrumpió: falta reanudar o reintentar", "parcial": "Quedó parcial: falta reintentar",
@@ -506,6 +676,19 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     if p.videollamada_agendada_en:
         return {**base, "estado": "en_curso", "espera": "Videollamada agendada con el candidato"}
     return {**base, "espera": "Falta agendar la entrevista con el candidato"}
+
+
+def _paso_solicitud(paso: dict, p: Postulacion) -> dict:
+    """La solicitud ES la postulación: terminada en cuanto existe con consentimiento (y con CV si el paso lo pide)."""
+    base = {"estado": "pendiente", "resultado": None, "cumple": False, "espera": "", "detalle": "",
+            "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
+    if not p.consentimiento:
+        return {**base, "estado": "en_curso", "espera": "Falta el consentimiento del candidato (aviso de privacidad)"}
+    if paso.get("con_cv") and not (p.cv_datos or {}):
+        return {**base, "estado": "en_curso", "espera": "Falta el CV del candidato"}
+    via = {"formulario": "web", "web": "web", "whatsapp": "WhatsApp", "telegram": "Telegram"}.get(p.origen or "", p.origen or "web")
+    return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"Solicitud recibida por {via}",
+            "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(p.consentimiento_fecha or p.creado_en)}
 
 
 def _con_score(base: dict, regla: dict, score: int) -> dict:
@@ -522,6 +705,14 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
     exp = p.expediente
     base = {"estado": "pendiente", "resultado": None, "cumple": False, "espera": "", "detalle": "",
             "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
+    if tipo == "solicitud_documentos":
+        return _paso_solicitud_documentos(base, p, exp)
+    if tipo == "documentos" and _indice(paso["etapa"]) < _indice("Contratación"):
+        return _paso_documentos_previos(base, paso, exp)
+    if tipo == "carta_contrato":
+        return _paso_carta_contrato(base, p, exp)
+    if tipo == "induccion":
+        return _paso_induccion(base, p)
     if tipo == "documentos":
         if exp is None:
             return {**base, "espera": "El expediente se abre al llegar a Contratación"}
@@ -560,6 +751,121 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
         return {**base, "estado": "en_curso", "espera": _texto_falta(pendientes), "detalle": f"{len(vigentes) - len(pendientes)}/{len(vigentes)} tareas"}
     return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{len(vigentes)}/{len(vigentes)} tareas",
             "revisadoPor": "Revisado por: RH"}
+
+
+def _docs_candidato(exp) -> list:
+    return [d for d in (exp.documentos if exp is not None else []) if not getattr(d, "interno", False)]
+
+
+def _bitacora(p: Postulacion, acciones: tuple, entidad: str = "postulacion", entidad_id: str = "") -> list:
+    db = object_session(p)
+    if db is None:
+        return []
+    from ..models import Bitacora
+
+    try:
+        return (db.query(Bitacora).filter(Bitacora.accion.in_(acciones), Bitacora.entidad == entidad,
+                                          Bitacora.entidad_id == (entidad_id or p.codigo)).order_by(Bitacora.id).all())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _paso_solicitud_documentos(base: dict, p: Postulacion, exp) -> dict:
+    """Terminado cuando la liga llegó al candidato (`Documento.solicitado_en`, B3) o cuando él ya subió algo con ella."""
+    docs = _docs_candidato(exp)
+    solicitados = [d.solicitado_en for d in docs if d.solicitado_en]
+    if solicitados or any(d.entregado for d in docs):
+        cuando = min(solicitados) if solicitados else None
+        canal = next((d.solicitado_canal for d in docs if d.solicitado_canal), "")
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True,
+                "detalle": "Liga enviada" + (f" por {canal}" if canal else "") if solicitados else "El candidato ya subió documentos",
+                "revisadoPor": "Revisado por: RH", "terminado_en": _aware(cuando)}
+    if _bitacora(p, ("documentos_solicitados",)):
+        return {**base, "estado": "en_curso", "espera": "La liga no se pudo entregar: reenvíala o compártela con el candidato"}
+    return {**base, "espera": "Falta enviar la liga de documentos al candidato"}
+
+
+def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
+    """«Validar documentos» antes de Contratación: valida lo SOLICITADO (o la lista del paso, si RH la definió)."""
+    docs = _docs_candidato(exp)
+    lista = paso.get("documentos") or []
+    revisar = [d for d in docs if d.tipo in lista] if lista else [d for d in docs if d.solicitado_en or d.entregado]
+    revisar = [d for d in revisar if d.estado != "no_aplica"]
+    if not revisar:
+        return {**base, "espera": "Falta solicitar los documentos al candidato"}
+    faltan = [d.tipo for d in revisar if not d.aprobado]
+    if faltan:
+        recibidos = sum(1 for d in revisar if d.entregado)
+        return {**base, "estado": "en_curso" if recibidos else "pendiente", "espera": _texto_falta(faltan),
+                "detalle": f"{len(revisar) - len(faltan)}/{len(revisar)} aprobados"}
+    revisores = sorted({d.revisado_por for d in revisar if d.revisado_por})
+    return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{len(revisar)}/{len(revisar)} aprobados",
+            "revisadoPor": f"Revisado por: {', '.join(revisores)}" if revisores else "Revisado por: RH"}
+
+
+def _paso_carta_contrato(base: dict, p: Postulacion, exp) -> dict:
+    """Terminado con la carta o el contrato FIRMADOS (Dropbox Sign o carga manual) o con la carta enviada al candidato;
+    en curso con una firma pendiente o un contrato en borrador."""
+    from ..models import TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO
+
+    if exp is None:
+        return {**base, "espera": "El expediente se abre al llegar a Contratación"}
+    firmados = [d for d in (exp.documentos or []) if getattr(d, "interno", False) and d.tipo in (TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO)]
+    if firmados:
+        d = firmados[-1]
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{d.tipo}",
+                "revisadoPor": "Revisado por: RH", "terminado_en": _aware(getattr(d, "recibido_en", None))}
+    eventos = _bitacora(p, ("carta_intencion_enviada", "contrato_generado"), "expediente", str(exp.id))
+    enviada = [b for b in eventos if b.accion == "carta_intencion_enviada" and (b.detalle or {}).get("enviado")]
+    if enviada:
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Carta de intención enviada",
+                "revisadoPor": f"Revisado por: {enviada[-1].actor}", "terminado_en": _aware(enviada[-1].ts)}
+    db = object_session(p)
+    firma = None
+    if db is not None:
+        try:
+            from ..models import FirmaDocumento
+
+            firma = (db.query(FirmaDocumento).filter(FirmaDocumento.expediente_id == exp.id, FirmaDocumento.estado != "cancelada")
+                     .order_by(FirmaDocumento.id.desc()).first())
+        except Exception:  # noqa: BLE001
+            firma = None
+    if firma is not None:
+        nombre = "carta de intención" if firma.documento == "carta" else "contrato"
+        if firma.estado in ("firmada", "descargada"):
+            return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{nombre.capitalize()} firmado(a)",
+                    "revisadoPor": "Revisado por: RH", "terminado_en": _aware(firma.firmada_en)}
+        if firma.estado == "error":
+            return {**base, "estado": "en_curso", "espera": f"La firma del {nombre} falló: vuelve a mandarla"}
+        return {**base, "estado": "en_curso", "espera": f"Falta la firma del {nombre}"}
+    if eventos:
+        return {**base, "estado": "en_curso", "espera": "Documento generado: falta enviarlo o firmarlo"}
+    return {**base, "espera": "Falta generar la carta de intención o el contrato"}
+
+
+def _paso_induccion(base: dict, p: Postulacion) -> dict:
+    """El curso de inducción asignado a la postulación (Capacitación); el curso filtro de la vacante no cuenta."""
+    db = object_session(p)
+    if db is None:
+        return {**base, "espera": "Falta asignar el curso de inducción"}
+    try:
+        from ..models import AsignacionCurso
+
+        filtro = p.vacante.curso_filtro_id if p.vacante is not None else None
+        asignaciones = [a for a in db.query(AsignacionCurso).filter(AsignacionCurso.postulacion_id == p.id).order_by(AsignacionCurso.id).all()
+                        if a.curso_id != filtro]
+    except Exception:  # noqa: BLE001
+        asignaciones = []
+    if not asignaciones:
+        return {**base, "espera": "Falta asignar el curso de inducción (se asigna al iniciar el Onboarding si la plantilla lo trae)"}
+    a = asignaciones[-1]
+    titulo = a.curso.titulo if a.curso is not None else "inducción"
+    if a.estado == "completado":
+        resultado = "no_favorable" if a.aprobado is False else "favorable"
+        return {**base, "estado": "completada", "resultado": resultado, "cumple": True,
+                "detalle": f"«{titulo}» completado" + (f" · {a.calificacion}%" if a.calificacion is not None else ""),
+                "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(a.completado_en)}
+    return {**base, "estado": "en_curso", "espera": f"Falta que termine el curso «{titulo}»"}
 
 
 def _tareas(p: Postulacion) -> list:
@@ -616,6 +922,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             r = _paso_evaluacion(paso, por_paso.get(paso["id"]))
         elif tipo in ("prefiltro_whatsapp", "prefiltro_web", "analisis_cv", "entrevista_agente"):
             r = _paso_red_human(paso, p)
+        elif tipo == "solicitud_web":
+            r = _paso_solicitud(paso, p)
         else:
             r = _paso_contratacion(paso, p, tareas)
         decision = decisiones.get(paso["id"]) or {}
@@ -666,7 +974,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "espera": espera, "disponible": disponible, "revisadoPor": r.get("revisadoPor", ""),
             "evaluacion": r.get("evaluacion"), "score": r.get("score"),
             "plazoDias": paso.get("plazo_dias"), "fechaLimite": limite.isoformat() if limite else None, "vencido": vencido,
-            "decision": r.get("decision"), "heredado": bool(paso.get("heredado")),
+            "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
             "accion": _accion(paso, r, disponible),
             "_terminado_en": r.get("terminado_en"),
         })
@@ -696,11 +1004,20 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
                "entrevista_agente": "evaluaciones", "documentos": "contratacion", "condiciones": "contratacion",
-               "onboarding": "contratacion", "alta": "contratacion"}[tipo]
+               "onboarding": "contratacion", "alta": "contratacion", "solicitud_web": "resumen",
+               "solicitud_documentos": "contratacion", "carta_contrato": "contratacion", "induccion": "contratacion"}[tipo]
+    previo = _indice(paso["etapa"]) < _indice("Contratación")
+    if tipo in ("documentos", "solicitud_documentos") and previo:
+        destino = "documentos"  # antes de Contratación los documentos se ven y validan en «CV y documentos»
+    if tipo == "solicitud_documentos" and disponible and estado != "completada":
+        # la misma acción ejecuta y refresca la vista: el estado, el resultado y la siguiente acción se recalculan
+        return {"clave": "solicitar_documentos", "texto": "Enviar liga de documentos" if estado == "pendiente" else "Reenviar liga"}
+    if tipo == "documentos" and previo and disponible and estado != "completada":
+        return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
     texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "alta": "Dar de alta",
-             "onboarding": "Ver tareas"}.get(tipo, "Consultar")
+             "onboarding": "Ver tareas", "carta_contrato": "Generar carta / contrato", "induccion": "Ver inducción"}.get(tipo, "Consultar")
     return {"clave": "abrir", "texto": texto, "pestana": destino}
 
 
@@ -763,7 +1080,7 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         })
     return {
         "tieneProceso": True,
-        "plantilla": p.proceso.get("plantilla_nombre") or "",
+        "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
         "version": int(p.proceso.get("vacante_version") or p.proceso.get("version") or 1),
         "desactualizado": desactualizado(p),
@@ -896,6 +1213,7 @@ def aplicar_version_vigente(db: Session, p: Postulacion, u) -> dict:
     nuevo["pasos"] = nuevo["pasos"] + heredados
     nuevo["vacante_version"] = int(nuevo.get("version") or 1)
     nuevo["vacante_id"] = v.id
+    nuevo["origen"] = "vacante"
     nuevo["congelado_en"] = _ahora().isoformat()
     previa = int((p.proceso or {}).get("vacante_version") or 0)
     p.proceso = nuevo
@@ -919,6 +1237,8 @@ def paso_de_tipo(p: Postulacion, tipo: str) -> Optional[dict]:
 def enfoque_entrevista_agente(p: Optional[Postulacion], v) -> str:
     """Enfoque de la Entrevista Red Human: el del paso del proceso si lo trae; si no, el de la vacante."""
     paso = paso_de_tipo(p, "entrevista_agente") if p is not None and tiene_proceso(p) else None
+    if paso and (p.proceso or {}).get("origen") in ("cuenta", "base") and not paso.get("adhoc"):
+        paso = None  # ruta de la Cuenta o de respaldo: el enfoque lo decide la vacante (lo que RH eligió al crearla)
     if paso and paso.get("tipo_entrevista") in ENFOQUES_ENTREVISTA:
         return paso["tipo_entrevista"]
     return ((v.enfoque_entrevista if v else "profesional") or "profesional")
@@ -944,6 +1264,14 @@ def paso_para_evaluacion(p: Postulacion, tipo: str, paso_id: str = "", evaluacio
             if ev is None or ev.estado == "cancelada":
                 return paso
     return None
+
+
+def documentos_anticipados(p: Postulacion) -> bool:
+    """¿La ruta pide documentos ANTES de Contratación en una etapa que ya alcanzó (Masivos)? Entonces «Solicitar
+    documentos por liga» abre el expediente con anticipación."""
+    actual = _indice(p.etapa)
+    return any(x["tipo"] in ("solicitud_documentos", "documentos") and _indice(x["etapa"]) < _indice("Contratación")
+               and _indice(x["etapa"]) <= actual for x in (p.proceso or {}).get("pasos", []))
 
 
 def mueve_entrevista_ia(p: Postulacion) -> bool:
@@ -1007,3 +1335,95 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
         except Exception:  # noqa: BLE001
             pass
         return []
+
+
+# ============================================================ actividades ad hoc (solo ESTA postulación)
+
+def agregar_paso_adhoc(db: Session, p: Postulacion, datos: dict, u, registrar_evento: bool = True) -> dict:
+    """Agrega una actividad extra (entrevista, prueba, documento…) SOLO a esta postulación: se suma a su copia del
+    proceso y nunca toca la plantilla ni la vacante. Por defecto NO es obligatoria (no frena el avance) y va en la etapa
+    actual si el tipo lo permite. No hace commit. Regresa el paso normalizado."""
+    tipo = str((datos or {}).get("tipo") or "").strip()
+    if tipo not in TIPOS_PASO:
+        raise ErrorProceso(400, f"Tipo de actividad inválido: «{tipo}».")
+    if not tiene_proceso(p):
+        congelar(p, db=db)
+    defs = TIPOS_PASO[tipo]
+    etapa = datos.get("etapa") or (p.etapa if p.etapa in defs["etapas"] else defs["etapas"][-1])
+    previos = list(p.proceso.get("pasos") or [])
+    ids = {x["id"] for x in previos}
+    crudo = {k: v for k, v in datos.items() if k not in ("id", "etapa", "obligatorio", "adhoc")}
+    crudo.update({"id": f"extra-{tipo.replace('_', '-')}", "etapa": etapa, "obligatorio": bool(datos.get("obligatorio", False)),
+                  "adhoc": True})
+    pasos = normalizar_pasos([*previos, crudo])
+    nuevo = next(x for x in pasos if x["id"] not in ids)
+    proc = dict(p.proceso)
+    proc["pasos"] = pasos
+    p.proceso = proc
+    if registrar_evento:
+        sello = _ahora()
+        quien = getattr(u, "nombre", "") or "sistema"
+        p.historial = list(p.historial or []) + [{
+            "evento": "actividad_adhoc", "usuario": quien, "fecha": sello.isoformat(), "paso": nuevo["id"],
+            "texto": f"Actividad agregada solo a este candidato: «{nuevo['nombre']}» ({nombre_etapa(etapa)}) por {quien}",
+        }]
+        registrar(db, quien, "proceso_actividad_adhoc", "postulacion", p.codigo,
+                  {"paso": nuevo["id"], "tipo": tipo, "etapa": etapa, "obligatorio": nuevo["obligatorio"], "correo_rh": getattr(u, "correo", "")})
+    return nuevo
+
+
+def paso_adhoc_para_evaluacion(db: Session, p: Postulacion, ev: Evaluacion, u) -> Optional[dict]:
+    """«Agregar evaluación» fuera de la ruta: la evaluación se vuelve una actividad ad hoc de la postulación (visible en
+    el seguimiento con su estado y resultado) y queda ligada a ella por `paso_id`."""
+    if ev.tipo not in TIPOS_PASO_EVALUACION:
+        return None
+    if ev.paso_id and any(x["id"] == ev.paso_id for x in (p.proceso or {}).get("pasos", [])):
+        return None
+    paso = agregar_paso_adhoc(db, p, {"tipo": ev.tipo, "nombre": ev.nombre_visible}, u)
+    ev.paso_id = paso["id"]
+    return paso
+
+
+# ============================================================ migración: ninguna postulación sin ruta
+
+def asignar_rutas_faltantes(db: Session, aplicar: bool = True, por: str = "migración rutas 2026-10-06") -> dict:
+    """Asigna la ruta (cascada de `ruta_para`) a TODA postulación que no tenga una — activas y cerradas. Solo escribe
+    `Postulacion.proceso` y una nota en su historial: NO cambia la etapa, NO toca resultados, documentos ni evaluaciones,
+    NO manda mensajes ni dispara el avance automático. El estado de cada paso NO se guarda: se deriva de los registros
+    reales (prefiltro, CV, entrevistas, evaluaciones, expediente, tareas, cursos), así que nada aparece «Completado» solo
+    por la etapa en la que está el candidato. Idempotente. `aplicar=False` = solo contar. No hace commit."""
+    resumen: dict = {"revisadas": 0, "sin_ruta": 0, "asignadas": 0, "por_origen": {}, "por_cuenta": {},
+                     "pasos": {"completada": 0, "en_curso": 0, "pendiente": 0, "omitida": 0, "cancelada": 0}}
+    sello = _ahora()
+    for p in db.query(Postulacion).order_by(Postulacion.id).all():
+        resumen["revisadas"] += 1
+        if tiene_proceso(p):
+            continue
+        resumen["sin_ruta"] += 1
+        proc = ruta_para(db, p.cuenta_id, p.vacante)
+        resumen["por_origen"][proc["origen"]] = resumen["por_origen"].get(proc["origen"], 0) + 1
+        clave = str(p.cuenta_id)
+        resumen["por_cuenta"][clave] = resumen["por_cuenta"].get(clave, 0) + 1
+        if not aplicar:
+            continue
+        proc.update({"congelado_en": sello.isoformat(), "migrado_en": sello.isoformat()})
+        p.proceso = proc
+        p.historial = list(p.historial or []) + [{
+            "evento": "ruta_asignada", "usuario": por, "fecha": sello.isoformat(),
+            "texto": f"Ruta asignada: «{proc.get('plantilla_nombre') or 'Proceso de la vacante'}» (origen: {proc['origen']}). "
+                     "Se conservan la etapa, los resultados, los documentos y el historial.",
+        }]
+        resumen["asignadas"] += 1
+        try:
+            for x in estado_pasos(p):
+                resumen["pasos"][x["estado"]] = resumen["pasos"].get(x["estado"], 0) + 1
+        except Exception:  # noqa: BLE001 — el conteo es informativo
+            pass
+    if aplicar and resumen["asignadas"]:
+        registrar(db, por, "rutas_asignadas", "postulacion", "migracion",
+                  {k: resumen[k] for k in ("asignadas", "por_origen", "por_cuenta", "pasos")})
+    return resumen
+
+
+def postulaciones_sin_ruta(db: Session) -> int:
+    return sum(1 for p in db.query(Postulacion).all() if not tiene_proceso(p))

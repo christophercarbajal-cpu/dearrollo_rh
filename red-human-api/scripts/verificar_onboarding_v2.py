@@ -160,7 +160,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Jorge Pérez", "telefono": "5511112222", "correo": "jorge@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    EXP = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     e = db.get(Expediente, EXP)
     docs = {d["nombre"]: d for d in client.get(f"/contratacion/expedientes/{EXP}").json()["documentos"]}
     check(all(d["estadoOnboarding"] == "Pendiente" for d in docs.values()), "al abrir el expediente todos los documentos están «Pendiente»")
@@ -270,7 +270,7 @@ with TestClient(app) as client:
     print("\n--- 8. Fase 2 · el porcentaje solo cuenta documentos Aprobados ---")
     r = client.post("/candidatos", json={"nombre": "Luisa Chofer", "telefono": "5533334444", "correo": "luisa@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
-    EXP2 = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP2 = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     client.post(f"/contratacion/expedientes/{EXP2}/documentos", data={"tipo": "CURP"}, files={"archivo": ("curp.pdf", PDF_MIN, "application/pdf")})
     x = client.get(f"/contratacion/expedientes/{EXP2}").json()
     check(x["progreso"] == 0 and "CURP" in x["noAprobados"], f"subido pero sin aprobar NO suma al porcentaje ({x['progreso']} %)")
@@ -280,7 +280,7 @@ with TestClient(app) as client:
     check(r.status_code == 409 and "Aprobados" in r.json()["detail"], "el contrato exige el 100 % de documentos Aprobados")
 
     print("\n--- 9. «Iniciar Onboarding» es el ÚNICO gatillo hacia Onboarding ---")
-    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 409 and "Iniciar Onboarding" in r.json()["detail"], "mover a Onboarding por la etapa → 409 (Modo Prueba apagado)")
     res = client.get(f"/onboarding/expedientes/{EXP2}/resumen").json()
     check(res["puedeIniciar"] is False and "Sueldo" in res["requisitos"]["faltan"] and "Fecha de ingreso" in res["requisitos"]["faltan"],
@@ -304,6 +304,7 @@ with TestClient(app) as client:
     print("\n--- 10. «Cambiar selección» (solo para esta persona) + Iniciar ---")
     admin_nombre = admin.nombre
     seleccion = {
+        "omitir_obligatorios": True, "comentario": "Prueba: carta/contrato fuera del alcance de esta verificación",
         "documentos": [{"tipo": "Identificación oficial"}, {"tipo": "CURP"}, {"tipo": "Licencia federal"}, {"tipo": "Número de Seguridad Social"}],
         "recursos": [{"nombre": "Unidad asignada", "tipo": "equipo", "responsable": admin_nombre, "dias": -1}],
         "responsables": {**cfg["responsables"], "alta_imss_nomina": admin_nombre},
@@ -361,13 +362,13 @@ with TestClient(app) as client:
     print("\n--- 12. Modo Prueba se salta las reglas nuevas ---")
     r = client.post("/candidatos", json={"nombre": "Prueba Directa", "telefono": "5599990000", "correo": "p@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P3 = r.json()["id"]
-    EXP3 = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP3 = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     cfg_sis = obtener(db)
     cfg_sis.modo_prueba = True
     db.commit()
     check(client.get(f"/onboarding/expedientes/{EXP3}/resumen").json()["puedeIniciar"], "Modo Prueba: se puede iniciar sin condiciones")
     check(client.get(f"/contratacion/expedientes/{EXP3}/contrato").status_code == 200, "Modo Prueba: el contrato (borrador) se genera sin el 100 %")
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Onboarding", "Modo Prueba: mover directo a Onboarding sí se permite")
     check(len(client.get(f"/onboarding/expedientes/{EXP3}/tareas").json()) == 3, "…y las tareas fijas nacen igual")
     cfg_sis.modo_prueba = False
@@ -395,7 +396,7 @@ with TestClient(app) as client:
     print("\n--- 14. Botón legado: «Generar tareas» sin mover la etapa ---")
     r = client.post("/candidatos", json={"nombre": "Pedro Legado", "telefono": "5544445555", "correo": "pedro@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P4 = r.json()["id"]
-    EXP4 = client.patch(f"/candidatos/{P4}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP4 = client.patch(f"/candidatos/{P4}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     check(client.post(f"/onboarding/expedientes/{EXP4}/generar-tareas").status_code == 409, "en Contratación no: ahí se usa «Enviar a Onboarding»")
     db.expire_all()
     post4 = db.query(Postulacion).filter(Postulacion.id == db.get(Expediente, EXP4).postulacion_id).one()
@@ -464,11 +465,11 @@ with TestClient(app) as client:
     print("\n--- 17. «No ingresó» ---")
     r = client.post("/candidatos", json={"nombre": "Nora Ausente", "telefono": "5566667777", "correo": "nora@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P5 = r.json()["id"]
-    EXP5 = client.patch(f"/candidatos/{P5}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP5 = client.patch(f"/candidatos/{P5}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     client.patch(f"/candidatos/{P5}/condiciones-contratacion", json={"puesto": "Almacenista", "sueldo": "$11,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-16"})
     res5 = client.get(f"/onboarding/expedientes/{EXP5}/resumen").json()
     client.post(f"/onboarding/expedientes/{EXP5}/iniciar", json={
-        "documentos": res5["configuracion"]["documentos"], "responsables": {"alta_imss_nomina": admin_nombre}, "notificar_responsables": False,
+        "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta", "documentos": res5["configuracion"]["documentos"], "responsables": {"alta_imss_nomina": admin_nombre}, "notificar_responsables": False,
     })
     client.patch(f"/contratacion/expedientes/{EXP5}/preparacion", json={"documentos_hasta": "2099-12-31"})
     check(client.post(f"/onboarding/expedientes/{EXP5}/no-ingreso", json={}).status_code == 400, "«No ingresó» exige motivo")

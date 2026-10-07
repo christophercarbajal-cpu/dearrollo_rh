@@ -45,7 +45,6 @@ import {
   Trash2,
   ArrowRightLeft,
   ClipboardCheck,
-  ListChecks,
 } from "lucide-react";
 import { Card, Badge, Button, Avatar, Eyebrow, Progress } from "@/components/ui";
 import { PageHeader, EstadoBadge, ScoreRing } from "@/components/dashboard/parts";
@@ -109,6 +108,7 @@ import { PanelEvaluaciones } from "@/components/dashboard/evaluaciones/panel-eva
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
 import { BadgeIntegral, PanelResultadoIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
 import { SeguimientoProceso } from "@/components/dashboard/procesos/seguimiento-proceso";
+import { useSesion } from "@/components/sesion";
 import { evaluadorVacio } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
@@ -1284,7 +1284,8 @@ function ModalCandidato({
   }
   // Proceso configurable (2026-10-06): con proceso la ficha abre en «Seguimiento» (etapa actual + siguiente acción)
   const conProceso = Boolean(c.tieneProceso || c.proceso?.tieneProceso);
-  const [tab, setTab] = useState<TabCandidato>(() => (conProceso ? "seguimiento" : c.etapa === "Contratación" ? "contratacion" : "resumen"));
+  // 2026-10-06: toda postulación tiene ruta y «Resumen» la muestra completa (de la solicitud al Alta).
+  const [tab, setTab] = useState<TabCandidato>(() => (c.etapa === "Contratación" && !conProceso ? "contratacion" : "resumen"));
   // Si el candidato ENTRA a Contratación mientras el modal ya está abierto (p.ej. RH lo mueve
   // de etapa sin cerrar la ficha), salta solo a esa pestaña para que no se pierda entre las
   // demás — sin esto, seguiría en "resumen" hasta que el usuario la buscara a mano.
@@ -1365,7 +1366,10 @@ function ModalCandidato({
   // "Notificar: … · Editar"; el ajuste viaja como `notificar` solo para esa acción.
   const [confirmacion, setConfirmacion] = useState<null | "solicitar" | "recordatorio" | "alta">(null);
   // 2026-09-16 (control manual de RH): «Mover a otra etapa» — selector simple + motivo opcional
-  const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string }>(null);
+  // 2026-10-06: con ruta, si quedan obligatorios atrás la API responde 409 → el modal muestra qué falta y permite
+  // omitirlos con justificación (≥10 caracteres) y el permiso «Autorizar omisiones».
+  const [moverA, setMoverA] = useState<null | { etapa: EtapaCandidato | ""; motivo: string; bloqueo?: string }>(null);
+  const puedeAutorizarOmisiones = Boolean(useSesion().usuario?.puedeAutorizarOmisiones);
   // Evaluaciones unificadas: botón ÚNICO «Agregar evaluación» (2026-10-01). Crear una entrevista humana mueve a
   // Filtro humano desde Prefiltro / Filtro Red Human; cualquier otra evaluación no cambia la columna.
   const [agregarEval, setAgregarEval] = useState<PresetEvaluacion | null>(null);
@@ -1386,8 +1390,9 @@ function ModalCandidato({
     if (!moverA?.etapa) return;
     if (!live) return setAviso({ tono: "warn", texto: "Levanta la API para registrar decisiones en la bitácora." });
     setOcupado("mover");
-    const r = await moverEtapaCandidato(c.id, moverA.etapa, moverA.motivo, false, true);
+    const r = await moverEtapaCandidato(c.id, moverA.etapa, moverA.motivo, false, true, Boolean(moverA.bloqueo));
     setOcupado("");
+    if (!r.ok && !moverA.bloqueo && r.error.includes("pasos obligatorios")) return setMoverA({ ...moverA, bloqueo: r.error });
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     const omitidas = (r.data.actividadesOmitidas ?? []).filter((o) => o.hacia === moverA.etapa).map((o) => nombreEtapa(o.actividad));
     setMoverA(null);
@@ -1569,7 +1574,6 @@ function ModalCandidato({
           <div className="scroll-x gap-2 px-4 sm:px-6">
             {(
               [
-                ...(conProceso ? [{ id: "seguimiento", label: "Seguimiento", icon: ListChecks, tone: "brand" }] : []),
                 { id: "resumen", label: "Resumen", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
                 { id: "documentos", label: "CV y documentos", icon: FileText, tone: "brand" },
@@ -1633,7 +1637,7 @@ function ModalCandidato({
             </Card>
           )}
 
-          {tab === "seguimiento" && (
+          {(tab === "resumen" || tab === "seguimiento") && conProceso && (
             <SeguimientoProceso
               c={c}
               live={live && puedeDecidir}
@@ -1890,7 +1894,7 @@ function ModalCandidato({
                 <span className="text-xs font-medium text-ink-2">Etapa destino</span>
                 <select
                   value={moverA.etapa}
-                  onChange={(e) => setMoverA({ ...moverA, etapa: e.target.value as EtapaCandidato | "" })}
+                  onChange={(e) => setMoverA({ ...moverA, etapa: e.target.value as EtapaCandidato | "", bloqueo: undefined })}
                   className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
                 >
                   <option value="">Elige…</option>
@@ -1901,8 +1905,18 @@ function ModalCandidato({
                     ))}
                 </select>
               </label>
+              {moverA.bloqueo && (
+                <div className="mt-3 rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2">
+                  <p>{moverA.bloqueo}</p>
+                  <p className="mt-1 font-semibold">
+                    {puedeAutorizarOmisiones
+                      ? "Para moverlo, justifica la omisión: esos pasos quedarán «Omitida» con tu nombre."
+                      : "No tienes el permiso «Autorizar omisiones». Pídelo a un Administrador (Configuración → Usuarios)."}
+                  </p>
+                </div>
+              )}
               <label className="mt-3 flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-ink-2">Motivo (opcional)</span>
+                <span className="text-xs font-medium text-ink-2">{moverA.bloqueo ? "Justificación (mínimo 10 caracteres)" : "Motivo (opcional)"}</span>
                 <input
                   value={moverA.motivo}
                   onChange={(e) => setMoverA({ ...moverA, motivo: e.target.value })}
@@ -1912,8 +1926,9 @@ function ModalCandidato({
               </label>
               <div className="mt-5 flex justify-end gap-2">
                 <Button variant="outline" size="sm" onClick={() => setMoverA(null)} disabled={ocupado === "mover"}>Cancelar</Button>
-                <Button size="sm" onClick={moverManual} disabled={!moverA.etapa || ocupado === "mover"}>
-                  {ocupado === "mover" ? "Moviendo…" : "Mover"}
+                <Button size="sm" onClick={moverManual}
+                  disabled={!moverA.etapa || ocupado === "mover" || Boolean(moverA.bloqueo && (!puedeAutorizarOmisiones || moverA.motivo.trim().length < 10))}>
+                  {ocupado === "mover" ? "Moviendo…" : moverA.bloqueo ? "Omitir obligatorios y mover" : "Mover"}
                 </Button>
               </div>
             </div>
@@ -2745,6 +2760,19 @@ function PestanaDocumentos({
               ))}
             </ul>
           )}
+        </div>
+      )}
+
+      {/* 2026-10-06 (ruta Masivos): documentos pedidos ANTES de Contratación — RH los valida aquí mismo (misma fila
+          y mismas acciones del expediente); el paso «Validar documentos» del seguimiento se actualiza solo. */}
+      {c.expedienteId != null && c.etapa !== "Contratación" && c.etapa !== "Onboarding" && expediente && (
+        <div>
+          <Eyebrow>Validar documentos</Eyebrow>
+          <div className="mt-2 flex flex-col gap-2">
+            {(expediente.documentos ?? []).filter((d) => !d.interno).map((d) => (
+              <FilaDocumentoSimple key={d.nombre} d={d} expedienteId={c.expedienteId ?? undefined} live={live && puedeDecidir} onActualizado={setExpediente} />
+            ))}
+          </div>
         </div>
       )}
 

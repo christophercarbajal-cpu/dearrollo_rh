@@ -3408,6 +3408,8 @@ export interface OpcionesProceso {
   estados: { valor: string; texto: string }[];
   resultados: { valor: string; texto: string }[];
   ejemplos: { clave: string; nombre: string; descripcion: string }[];
+  /** 2026-10-06: rutas base precargadas (Masivos / Corporativos sin y con psicometría). */
+  rutasBase?: { clave: string; nombre: string; descripcion: string; pasos: number; respaldo: boolean }[];
 }
 export interface PlantillaProceso {
   id: number;
@@ -3421,6 +3423,8 @@ export interface PlantillaProceso {
   creadoPor: string;
   actualizadaPor: string;
   actualizadaEn: string | null;
+  /** Ruta base que la originó («masivos», «corporativos», «corporativos_psicometria»); vacía = propia. */
+  rutaBase?: string;
 }
 /** Lo que manda el formulario de vacante: copiar una plantilla, personalizar o quitar el proceso. */
 export type ProcesoEntrada = { plantilla_id?: number | null; pasos?: PasoProceso[]; etapas?: EtapasProceso } | { quitar: true };
@@ -3461,6 +3465,13 @@ export function cancelarPasoProceso(codigoPostulacion: string, pasoId: string, m
 }
 export function reactivarPasoProceso(codigoPostulacion: string, pasoId: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reactivar`);
+}
+/** Actividad AD HOC: un paso extra solo para esta postulación (nunca toca la plantilla ni la vacante). */
+export function agregarActividadProceso(codigoPostulacion: string, datos: { tipo: string; nombre?: string; etapa?: string; obligatorio?: boolean; depende_de?: string[] }) {
+  return post<RespuestaPaso & { paso: PasoProceso }>(`/procesos/postulaciones/${codigoPostulacion}/pasos`, datos);
+}
+export function restaurarRutasBase() {
+  return post<{ creadas: number }>("/procesos/plantillas/rutas-base");
 }
 export function aplicarProcesoVigente(codigoPostulacion: string) {
   return post<RespuestaPaso & { aplicado: { version: number; heredados: string[] } }>(`/procesos/postulaciones/${codigoPostulacion}/aplicar-vigente`);

@@ -112,6 +112,23 @@ with TestClient(app) as client:
         db.expire_all()
         return db.get(Postulacion, p.id).etapa
 
+    def omitir_previos(codigo):
+        """2026-10-06: toda postulación tiene ruta. Esta verificación es de evaluaciones, no de la ruta: RH omite (con
+        permiso) los obligatorios de Prefiltro y Filtro Red Human y apaga el avance automático de su copia."""
+        seg = client.get(f"/procesos/postulaciones/{codigo}").json()
+        for e in seg.get("etapas", []):
+            if e["etapa"] in ("Prefiltro", "Entrevista IA"):
+                for x in e["pasos"]:
+                    if x["obligatorio"] and x["estado"] in ("pendiente", "en_curso"):
+                        client.post(f"/procesos/postulaciones/{codigo}/pasos/{x['id']}/omitir",
+                                    json={"motivo": "Prueba: fuera del alcance de esta verificación"})
+        db.expire_all()
+        pp = db.query(Postulacion).filter_by(codigo=codigo).one()
+        pp.proceso = {**pp.proceso, "etapas": {e: {"avance_automatico": False} for e in pp.proceso.get("etapas", {})}}
+        db.commit()
+
+    omitir_previos(P)
+
     # ---------------- 1. Pantalla única ----------------
     print("\n--- 1. Agregar evaluación ---")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={

@@ -60,6 +60,12 @@ export interface PasoProceso {
   tipo_entrevista?: string;
   orden?: number;
   heredado?: boolean;
+  /** 2026-10-06: actividad agregada solo a esta postulación (no viene de la plantilla ni de la vacante). */
+  adhoc?: boolean;
+  /** Solicitud web: exige CV. */
+  con_cv?: boolean;
+  /** Documentos: lista a validar (vacía = lo solicitado antes de Contratación / todos los obligatorios después). */
+  documentos?: string[];
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {
@@ -77,10 +83,10 @@ export type EstadoPaso = "pendiente" | "en_curso" | "completada" | "omitida" | "
 export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
 /** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
 export interface AccionPaso {
-  clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir";
+  clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos";
   texto: string;
   evaluacion?: string;
-  pestana?: "whatsapp" | "documentos" | "evaluaciones" | "contratacion";
+  pestana?: "whatsapp" | "documentos" | "evaluaciones" | "contratacion" | "resumen";
 }
 export interface PasoSeguimiento {
   id: string;
@@ -111,6 +117,7 @@ export interface PasoSeguimiento {
   vencido: boolean;
   decision?: { por: string; motivo: string; fecha: string; autorizado_por?: string } | null;
   heredado: boolean;
+  adhoc?: boolean;
   accion: AccionPaso | null;
 }
 export interface EtapaSeguimiento {
@@ -135,6 +142,8 @@ export interface SeguimientoProceso {
   tieneProceso: boolean;
   vacanteTieneProceso?: boolean;
   plantilla?: string;
+  /** De dónde salió la ruta: proceso de la vacante, predeterminado de la Cuenta o la ruta base de respaldo. */
+  origen?: "vacante" | "cuenta" | "base";
   personalizado?: boolean;
   version?: number;
   desactualizado?: boolean;

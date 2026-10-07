@@ -149,7 +149,7 @@ with TestClient(app) as client:
     r = client.post("/procesos/plantillas", json={"nombre": "Ciclo", "pasos": [
         {"id": "a", "tipo": "medica", "depende_de": ["b"]}, {"id": "b", "tipo": "tecnica", "depende_de": ["a"]}]})
     check(r.status_code == 400 and "ciclo" in r.json()["detail"], "dependencias en ciclo → 400")
-    r = client.post("/procesos/plantillas", json={"nombre": "Etapa", "pasos": [{"tipo": "documentos", "etapa": "Prefiltro"}]})
+    r = client.post("/procesos/plantillas", json={"nombre": "Etapa", "pasos": [{"tipo": "alta", "etapa": "Prefiltro"}]})
     check(r.status_code == 400 and "no puede ir" in r.json()["detail"], "un paso en una etapa no permitida → 400")
 
     V1 = vacante("Operador de almacén", {"plantilla_id": plantillas["operativo_minimo"]["id"]})
@@ -402,8 +402,12 @@ with TestClient(app) as client:
     if vac_sin is None:
         vac_sin = db.query(Vacante).filter(Vacante.codigo == vacante("Sin proceso", {"quitar": True})).one()
     P5 = nueva("Eva Legado", vac_sin.codigo)
-    check(seg(P5)["tieneProceso"] is False and client.patch(f"/candidatos/{P5}/etapa", json={"etapa": "Contratación", "manual": True}).status_code == 200,
-          "una vacante sin proceso conserva el flujo de siempre")
+    # 2026-10-06: ninguna postulación sin ruta → vacante sin proceso = predeterminado de la Cuenta (cascada nivel 2)
+    s5 = seg(P5)
+    check(s5["tieneProceso"] is True and s5["origen"] == "cuenta" and s5["plantilla"] == "Médica y socioeconómica en paralelo",
+          "una vacante sin proceso: el candidato recibe el proceso predeterminado de la Cuenta")
+    r = client.patch(f"/candidatos/{P5}/etapa", json={"etapa": "Contratación", "manual": True})
+    check(r.status_code == 409 and "obligatorios" in r.json()["detail"], "…y su compuerta aplica igual (409 sin omisión autorizada)")
 
     db.close()
 

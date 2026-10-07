@@ -142,7 +142,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Carta Persona", "telefono": "5512121212", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP = r.json()["expedienteId"]
     client.patch(f"/candidatos/{P}/contratacion", json={"puesto": "Cajero", "sueldo": "$10,000", "tipo_contratacion": "Indeterminado"})
     r = client.get(f"/contratacion/expedientes/{EXP}/carta-intencion")

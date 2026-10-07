@@ -401,6 +401,9 @@ class IniciarOnboardingIn(BaseModel):
     plantilla_id: Optional[int] = None
     solicitar_documentos: bool = True
     notificar_responsables: bool = True
+    # Proceso (2026-10-06): obligatorios de Contratación sin cumplir → omitirlos con justificación + permiso.
+    omitir_obligatorios: bool = False
+    comentario: str = ""
 
 
 @router.post("/expedientes/{exp_id}/iniciar")
@@ -430,9 +433,10 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
         # Proceso configurable (2026-10-06): los obligatorios de Contratación deben cumplir su condición antes de iniciar.
         from ..services import proceso as sproc
 
-        falta = sproc.faltantes(sproc.estado_pasos(p), "Contratación", "Onboarding") if sproc.tiene_proceso(p) else []
-        if falta:
-            raise HTTPException(409, sproc.mensaje_bloqueo(falta, "Onboarding"))
+        try:
+            sproc.verificar_avance(db, p, "Onboarding", u, datos.omitir_obligatorios, datos.comentario)
+        except sproc.ErrorProceso as ex:
+            raise HTTPException(ex.status, ex.mensaje)
     if not onb.normalizar_documentos(datos.documentos):
         raise HTTPException(400, "Selecciona al menos un documento.")
     if datos.curso_induccion_id and not _curso_titulo(db, datos.curso_induccion_id, cuenta.id):

@@ -218,7 +218,7 @@ with TestClient(app) as client:
     check(r.status_code == 200, "capturar resultado desde el sistema")
     check(enviados(base) == [], "registrar el resultado no manda ningún aviso (tampoco candidato_apto)")
     # alta con override
-    r = client.patch(f"/candidatos/{p.codigo}/etapa", json={"etapa": "Contratación"})
+    r = client.patch(f"/candidatos/{p.codigo}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     exp_id = r.json()["expedienteId"]
     db.expire_all()
     base = db.query(NotificacionEnviada).count()

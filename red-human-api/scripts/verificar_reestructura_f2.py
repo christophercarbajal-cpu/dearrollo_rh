@@ -141,14 +141,14 @@ with TestClient(app) as client:
     P3 = r.json()["id"]
     r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista Humana"})
     check(r.status_code == 409, "sin manual: Entrevista Humana sigue exigiendo el flujo de agenda (409)")
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista Humana", "manual": True, "comentario": "el cliente ya la entrevistó"})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista Humana", "manual": True, "omitir_obligatorios": True, "comentario": "el cliente ya la entrevistó"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista Humana", "manual=true: RH mueve a Entrevista Humana sin agendar")
     om = r.json()["actividadesOmitidas"]
     check([o["actividad"] for o in om] == ["Prefiltro", "Entrevista IA"] and all(o["usuario"] == admin.nombre and o["fecha"] and o["motivo"] == "el cliente ya la entrevistó" for o in om),
           f"lo saltado quedó como «Omitida manualmente» con usuario, fecha y motivo: {[o['actividad'] for o in om]}")
     # Onboarding v2 (2026-09-28): a Onboarding solo se entra con «Iniciar Onboarding»; el salto manual directo
     # queda bloqueado salvo con Modo Prueba activo (ahí sigue abriendo el expediente sin bloquear).
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 409 and "Iniciar Onboarding" in r.json()["detail"], "manual sin Modo Prueba: el salto directo a Onboarding pide «Iniciar Onboarding» (Onboarding v2)")
     from app.services.configuracion import obtener as _obtener_cfg  # noqa: E402
 
@@ -156,12 +156,12 @@ with TestClient(app) as client:
     _antes = _cfg.modo_prueba
     _cfg.modo_prueba = True
     db.commit()
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     _cfg.modo_prueba = _antes
     db.commit()
     check(r.status_code == 200 and r.json()["etapa"] == "Onboarding" and r.json()["expedienteId"], "manual con Modo Prueba: salto directo a Onboarding abre el expediente y no bloquea")
     check([o["actividad"] for o in r.json()["actividadesOmitidas"]][-2:] == ["Entrevista Humana", "Contratación"], "segundo salto agrega sus propias omisiones")
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Prefiltro", "manual": True})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Prefiltro", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Prefiltro", "manual: también permite regresar de etapa")
     db.expire_all()
     p3 = db.query(Postulacion).filter_by(codigo=P3).one()
@@ -171,7 +171,7 @@ with TestClient(app) as client:
     async def _explota(*a, **k):
         raise RuntimeError("Meta caída")
     rc.enviar_mensaje = _explota
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista IA", "con WhatsApp caído, mover a Entrevista IA sigue funcionando (200)")
     rc.enviar_mensaje = _fake_wa
 

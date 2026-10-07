@@ -88,7 +88,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Rec Persona", "telefono": "5512120001", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     exp_id = r.json()["expedienteId"]
     r = client.get(f"/contratacion/expedientes/{exp_id}").json()
     check(r["nivelRecordatorio"] == 1 and r["tonoRecordatorio"] == "ligero" and r["recordatoriosAgotados"] is False, "expediente nuevo: próximo recordatorio = nivel 1 (ligero)")

@@ -350,6 +350,13 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     db.add(ev)
     db.flush()
     sev.asignar_codigo(ev)
+    if paso is None:
+        # 2026-10-06: fuera de la ruta = actividad AD HOC solo de esta postulación (la plantilla y la vacante no cambian);
+        # así aparece en el seguimiento con su estado y resultado. Nunca bloquea la creación.
+        try:
+            sproc.paso_adhoc_para_evaluacion(db, p, ev, u)
+        except Exception as ex:  # noqa: BLE001
+            print(f"[proceso] no se pudo registrar la evaluación {ev.codigo} como actividad ad hoc: {ex}")
     sev.evento(db, ev, "creada", u.nombre, a=ev.estado, usuario_id=u.id, tipo=ev.tipo, forma=ev.forma,
                evaluador=ev.evaluador_nombre, cita=fechas.iso(ev.cita_fecha_hora), consentimiento=ev.consentimiento,
                proveedor=ev.proveedor)
@@ -635,6 +642,39 @@ async def reenviar_liga(codigo: str, db: Session = Depends(get_db), u: Usuario =
     return _respuesta(db, ev, u, None, resultados)
 
 
+def _activar_psicometria(db: Session, ev: Evaluacion, p) -> str:
+    """Da de alta al candidato en Psicométricas.mx (agregaCandidato) y deja su `clave_proveedor` en la evaluación.
+
+    Cuida el saldo de la API (lo compartimos con producción): exige correo ANTES de llamar y llama SOLO si el candidato
+    no tiene ya una clave EN CURSO para esas pruebas — la de esta evaluación o la de otra evaluación pendiente de la
+    misma postulación con el mismo proveedor y las mismas pruebas (`id_proveedor`), que se reutiliza. Una aplicación ya
+    con resultado no se reutiliza: pedir otra vez la misma prueba es un re-test y sí da de alta una clave nueva."""
+    from ..services import psicometricas as psi
+
+    if ev.clave_proveedor:
+        return ev.clave_proveedor
+    if not (p.correo or "").strip():
+        raise HTTPException(409, "Psicométricas.mx necesita el correo del candidato para mandarle su liga.")
+    previa = (
+        db.query(Evaluacion)
+        .filter(Evaluacion.postulacion_id == ev.postulacion_id, Evaluacion.id != ev.id, Evaluacion.tipo == "psicometrica",
+                Evaluacion.clave_proveedor != "", Evaluacion.estado == "pendiente")
+        .all()
+    )
+    tests = psi.tests_de(ev.id_proveedor)
+    previa = next((x for x in previa if psi.es_psicometricas(x.proveedor) and psi.tests_de(x.id_proveedor) == tests), None)
+    if previa:
+        ev.clave_proveedor = previa.clave_proveedor
+        registrar(db, "sistema", "psicometria_clave_reutilizada", "evaluaciones", ev.codigo,
+                  {"clave_proveedor": previa.clave_proveedor, "de": previa.codigo})
+        return ev.clave_proveedor
+    try:
+        ev.clave_proveedor = psi.agregar_candidato(p.nombre, p.correo, p.vacante.titulo if p.vacante else ev.nombre_visible, tests)
+    except psi.PsicometricasError as ex:
+        raise HTTPException(400 if ex.status == 400 else 502, str(ex))
+    return ev.clave_proveedor
+
+
 @router.post("/{codigo}/enviar")
 async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """Proveedor integrado: manda la evaluación. Psicométricas.mx real si está configurado (agregaCandidato); si no,
@@ -650,13 +690,7 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
     if ev.forma != "integrada" or ev.estado != "pendiente" or (ev.paso_integrada or "asignada") != "asignada":
         raise HTTPException(409, "Solo se envía al proveedor una evaluación integrada pendiente.")
     if sev.usa_psicometricas(ev) and psi.configurado():
-        if not p.correo:
-            raise HTTPException(409, "Psicométricas.mx necesita el correo del candidato para mandarle su liga.")
-        try:
-            clave = psi.agregar_candidato(p.nombre, p.correo, p.vacante.titulo if p.vacante else ev.nombre_visible, psi.tests_de(ev.id_proveedor))
-        except psi.PsicometricasError as ex:
-            raise HTTPException(400 if ex.status == 400 else 502, str(ex))
-        ev.clave_proveedor = clave
+        _activar_psicometria(db, ev, p)
         sev.aplicar_paso(db, ev, "enviada", u.nombre, "Psicométricas.mx")
     else:
         sev.aplicar_paso(db, ev, "enviada", u.nombre)

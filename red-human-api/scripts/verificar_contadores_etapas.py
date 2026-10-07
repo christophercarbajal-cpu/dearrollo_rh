@@ -78,8 +78,8 @@ with TestClient(app) as client:
     P["d"] = alta("Dani Cuatro", "5511110004", V1)    # → descartada (cerrada)
     P["e"] = alta("Eli Cinco", "5511110005", V1)      # → persona eliminada
     P["f"] = alta("Fer Seis", "5511110006", V2)       # otra vacante, Prefiltro
-    client.patch(f"/candidatos/{P['b']}/etapa", json={"etapa": "Entrevista Humana", "manual": True})
-    client.patch(f"/candidatos/{P['c']}/etapa", json={"etapa": "Contratación", "manual": True})
+    client.patch(f"/candidatos/{P['b']}/etapa", json={"etapa": "Entrevista Humana", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
+    client.patch(f"/candidatos/{P['c']}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     r = client.post(f"/candidatos/{P['d']}/decision", json={"accion": "descartar", "comentario": "No cumple"})
     check(r.status_code == 200, "una postulación descartada (cerrada)")
     r = client.delete(f"/candidatos/{P['e']}")
@@ -125,7 +125,7 @@ with TestClient(app) as client:
     # Onboarding v2 (2026-09-28): a Onboarding solo se entra con «Iniciar Onboarding» o con Modo Prueba activo
     cfg.modo_prueba = True
     db.commit()
-    check(client.patch(f"/candidatos/{P['a']}/etapa", json={"etapa": "Onboarding", "manual": True}).status_code == 200, "Modo Prueba: mover directo a Onboarding")
+    check(client.patch(f"/candidatos/{P['a']}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).status_code == 200, "Modo Prueba: mover directo a Onboarding")
     cfg.modo_prueba = False
     db.commit()
     r = client.post(f"/candidatos/{P['b']}/decision", json={"accion": "descartar", "comentario": "Declinó"})

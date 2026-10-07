@@ -111,7 +111,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Laura Méndez", "telefono": "5512345678", "correo": "laura@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Contratación", "candidato en Contratación con expediente abierto")
     ENVIOS.clear()
     n_msgs = db.query(Mensaje).count()

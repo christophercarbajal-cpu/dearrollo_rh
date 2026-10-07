@@ -103,7 +103,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Carla Méndez", "telefono": "5512121212", "correo": "carla@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
 
     def crear(post, **cuerpo):
         return client.post(f"/evaluaciones/postulaciones/{post}", json=cuerpo)
@@ -230,7 +230,7 @@ with TestClient(app) as client:
     check(v2["avisarEvaluacionesAntesOnboarding"] is True, "casilla «Avisar antes de Onboarding»")
     r = client.post("/candidatos", json={"nombre": "Diego Onboarding", "telefono": "5556565656", "correo": "diego@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P3 = r.json()["id"]
-    EXP3 = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP3 = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     crear(P3, tipo="psicometrica", forma="integrada", prueba_id=CLEAVER)
     avisos = client.get(f"/onboarding/expedientes/{EXP3}/resumen").json()["avisosEvaluaciones"]
     check(any("Médica" in a for a in avisos) and any("Referencias" in a for a in avisos) and any("Cleaver" in a and "Pendiente" in a for a in avisos),

@@ -86,7 +86,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes", headers=H).json()[0]
     r = client.post("/candidatos", headers=H, json={"nombre": "Masiva Uno", "telefono": "5511223344", "correo": "masiva@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    EXP = client.patch(f"/candidatos/{P}/etapa", headers=H, json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    EXP = client.patch(f"/candidatos/{P}/etapa", headers=H, json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     client.patch(f"/candidatos/{P}/condiciones-contratacion", headers=H, json={"puesto": "Cajero", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
     check(client.get(f"/contratacion/expedientes/{EXP}/carta-intencion").status_code == 404, "reproducción: sin cabecera (como un <iframe>) caía en la Cuenta predeterminada → 404")
     check(client.get(f"/contratacion/expedientes/{EXP}/carta-intencion?cuenta_id={B.id}").status_code == 200, "con ?cuenta_id la carta se genera (200)")
@@ -306,6 +306,27 @@ with TestClient(app) as client:
           "reintento idempotente y el informe PDF se descarga")
     r = client.post(f"/evaluaciones/{ev2['id']}/resultado", headers=H, data={"conclusion": "favorable", "modo": "complementar", "version": str(e2.resultado_version)})
     check(r.status_code == 200 and r.json()["evaluacion"]["conclusion"] == "favorable", "RH agrega su conclusión (HITL) sobre el resultado del proveedor")
+    # Saldo compartido con producción: con una clave EN CURSO para las mismas pruebas no se vuelve a llamar al proveedor.
+    psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-999"}))[1]
+    eva = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
+    client.post(f"/evaluaciones/{eva['id']}/enviar", headers=H)
+    n_llamadas = len(ENVIADO)
+    evb = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
+    r = client.post(f"/evaluaciones/{evb['id']}/enviar", headers=H)
+    check(r.status_code == 200 and r.json()["evaluacion"]["claveProveedor"] == "1-EUPQ-0116-999" and len(ENVIADO) == n_llamadas,
+          "_activar_psicometria: con clave previa en curso REUTILIZA la clave y NO consume otra petición")
+    for x in (eva, evb):
+        client.post(f"/evaluaciones/{x['id']}/cancelar", headers=H, json={"motivo": "prueba de saldo"})
+    sin_correo = db.query(Postulacion).filter(Postulacion.codigo == PE).one().candidato
+    correo_prev, sin_correo.correo = sin_correo.correo, ""
+    db.commit()
+    evc = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
+    r = client.post(f"/evaluaciones/{evc['id']}/enviar", headers=H)
+    check(r.status_code == 409 and "correo" in r.json()["detail"] and len(ENVIADO) == n_llamadas,
+          "sin correo del candidato → 409 ANTES de llamar al proveedor")
+    sin_correo.correo = correo_prev
+    db.commit()
+    client.post(f"/evaluaciones/{evc['id']}/cancelar", headers=H, json={"motivo": "prueba de saldo"})
     psi.httpx.post = lambda url, data=None, timeout=None: R(401, {"code": "1001", "msg": "Token inválido"})
     ev3 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev3['id']}/enviar", headers=H)

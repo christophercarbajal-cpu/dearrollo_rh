@@ -181,7 +181,7 @@ with TestClient(app) as client:
 
     # ================= 3/4/5. Descartar con expediente + Expediente en Onboarding =================
     print("\n--- 3/4/5. Descartar desde Contratación/Onboarding y expediente visible ---")
-    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["expedienteId"], "Contratación abre el expediente")
     # Onboarding v2 (2026-09-28): a Onboarding solo se entra con «Iniciar Onboarding» o con Modo Prueba activo
     from app.services.configuracion import obtener as _obtener_cfg  # noqa: E402
@@ -190,7 +190,7 @@ with TestClient(app) as client:
     _antes = _cfg.modo_prueba
     _cfg.modo_prueba = True
     db.commit()
-    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     _cfg.modo_prueba = _antes
     db.commit()
     ficha = r.json()

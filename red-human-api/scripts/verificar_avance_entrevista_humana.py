@@ -68,11 +68,15 @@ with TestClient(app) as client:
     ficha = client.get(f"/candidatos/{P1}").json()
     check(ficha["etapa"] == "Prefiltro" and ficha["resultadoApto"] is None, "candidato en Prefiltro, sin evaluación")
     r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 409 and "Agregar evaluación" in r.json()["detail"], "sin la bandera ni entrevista agregada, mover a Entrevista Humana se rechaza")
+    check(r.status_code == 409 and ("Agregar evaluación" in r.json()["detail"] or "pasos obligatorios" in r.json()["detail"]),
+          "sin la bandera ni entrevista agregada, mover a Entrevista Humana se rechaza")
     r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista Humana", "omitir_entrevista_ia": True})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista Humana", f"“Avanzar a Entrevista Humana” mueve la etapa directo ({r.status_code})")
     hist = r.json()["historial"]
-    check(len(hist) == 1 and hist[0]["evento"] == "entrevista_ia_omitida", "queda UNA nota en el historial del expediente")
+    notas = [h for h in hist if h["evento"] == "entrevista_ia_omitida"]
+    check(len(notas) == 1 and all(h["evento"] in ("entrevista_ia_omitida", "paso_omitida") for h in hist),
+          "queda UNA nota en el historial del expediente (más los pasos de la ruta omitidos con autorización)")
+    hist = notas
     check(re.fullmatch(r"Entrevista Red Human omitida manualmente por .+ — \d{2}/\d{2}/\d{4} \d{2}:\d{2} h", hist[0]["texto"]), f"texto exacto con usuario y fecha/hora: «{hist[0]['texto']}»")
     check(hist[0]["usuario"] == admin.nombre and hist[0]["desde"] == "Prefiltro", "la nota registra quién y desde qué etapa")
     check(any("Entrevista IA" == o["actividad"] for o in r.json()["actividadesOmitidas"]), "«Entrevista Red Human» queda además como actividad omitida manualmente")
@@ -84,7 +88,7 @@ with TestClient(app) as client:
 
     print("\n--- 2. Desde Entrevista IA, con entrevista y chat previos ---")
     P2 = nuevo("Beto EnCurso", "5511110002")
-    client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     p2 = db.query(Postulacion).filter_by(codigo=P2).one()
     db.add(Mensaje(postulacion_id=p2.id, candidato_id=p2.candidato_id, rol="user", texto="Hola, sí me interesa", canal="whatsapp"))
     db.add(Entrevista(codigo="ENT-9001", candidato_id=p2.candidato_id, postulacion_id=p2.id, token="tok-aeh-1", estado="interrumpida",
@@ -95,7 +99,8 @@ with TestClient(app) as client:
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Entrevista Humana", "omitir_entrevista_ia": True, "comentario": "El cliente ya lo quiere ver"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista Humana", "también avanza desde Entrevista Red Human en curso")
     d = r.json()
-    check(d["historial"][0]["desde"] == "Entrevista IA" and d["historial"][0]["motivo"] == "El cliente ya lo quiere ver", "la nota guarda la etapa de origen y el motivo")
+    nota = next(h for h in d["historial"] if h["evento"] == "entrevista_ia_omitida")  # + pasos de la ruta omitidos
+    check(nota["desde"] == "Entrevista IA" and nota["motivo"] == "El cliente ya lo quiere ver", "la nota guarda la etapa de origen y el motivo")
     check(d["score"] == 78 and d["analisis"]["resumen_cv"] == "3 años en caja", "el análisis de CV y el score se conservan")
     check(len(client.get(f"/candidatos/{P2}/mensajes").json()) >= 1, "el chat de WhatsApp se conserva")
     db.expire_all()
@@ -110,7 +115,8 @@ with TestClient(app) as client:
     check(v1["embudo"]["etapas"].get("Entrevista Humana") == 2, "los contadores de la vacante cuadran (B4)")
     r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista Humana", "omitir_entrevista_ia": True})
     check(r.status_code == 409, "repetir el avance cuando ya está en Entrevista Humana responde 409 (sin duplicar notas)")
-    check(len(client.get(f"/candidatos/{P1}").json()["historial"]) == 1, "el historial no se duplicó")
+    check(sum(1 for h in client.get(f"/candidatos/{P1}").json()["historial"] if h["evento"] == "entrevista_ia_omitida") == 1,
+          "el historial no se duplicó")
     db.close()
 
 print(f"\n🎉 Bloque 2 (avance directo a Entrevista Humana) verificado: {OK} comprobaciones OK.")

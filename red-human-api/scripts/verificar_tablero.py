@@ -78,7 +78,7 @@ with TestClient(app) as client:
     for nombre, tel, fuente in (("Lucía A", "5510000001", "RH"), ("Mario A", "5510000002", "RH"), ("Nora A", "5510000003", "RH")):
         r = client.post("/candidatos", json={"nombre": nombre, "telefono": tel, "correo": f"{tel}@a.mx", "vacante": "VAC-A1", "consentimiento": True, "fuente": fuente})
         P[nombre] = r.json()["id"]
-    client.patch(f"/candidatos/{P['Mario A']}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P['Mario A']}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     # evaluaciones (modelo unificado): una Pendiente, una Realizada · Resultado pendiente y una Con resultado
     client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "referencias", "forma": "registro_directo"})
     ev = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "tecnica", "forma": "registro_directo"}).json()["evaluacion"]
@@ -86,10 +86,10 @@ with TestClient(app) as client:
     ev3 = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "socioeconomica", "forma": "registro_directo"}).json()["evaluacion"]
     client.post(f"/evaluaciones/{ev3['id']}/resultado", data={"comentarios": "Visita realizada", "version": "0"})
     # onboarding activo con una tarea atrasada
-    exp = client.patch(f"/candidatos/{P['Nora A']}/etapa", json={"etapa": "Contratación", "manual": True}).json()["expedienteId"]
+    exp = client.patch(f"/candidatos/{P['Nora A']}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     client.patch(f"/candidatos/{P['Nora A']}/condiciones-contratacion", json={"puesto": "Cajero A", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-12-01"})
     res = client.get(f"/onboarding/expedientes/{exp}/resumen").json()
-    r = client.post(f"/onboarding/expedientes/{exp}/iniciar", json={"documentos": res["configuracion"]["documentos"], "notificar_responsables": False, "solicitar_documentos": False})
+    r = client.post(f"/onboarding/expedientes/{exp}/iniciar", json={"omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta", "documentos": res["configuracion"]["documentos"], "notificar_responsables": False, "solicitar_documentos": False})
     check(r.status_code == 200, f"Cuenta A: Onboarding iniciado ({r.status_code})")
     client.post(f"/onboarding/expedientes/{exp}/tareas", json={"nombre": "Credencial", "dias": -500})
     # desempeño: un ciclo en curso con 1 persona

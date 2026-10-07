@@ -77,14 +77,14 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Laura Méndez", "telefono": "5512345678", "correo": "laura@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP = r.json()["expedienteId"]
 
     print("\n--- 1. Flujo lineal: sin condiciones no hay contrato ni alta ---")
     r = client.get(f"/candidatos/{P}")
     check(r.json()["expedienteCondiciones"]["completas"] is False, "condiciones incompletas al abrir el expediente")
     check(client.get(f"/contratacion/expedientes/{EXP}/contrato").status_code == 409, "contrato bloqueado (expediente al 0 % / sin condiciones)")
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     client.post(f"/contratacion/expedientes/{EXP}/documentos", data={"tipo": "CURP"}, files={"archivo": ("curp.pdf", PDF_MIN, "application/pdf")})  # con un adjunto, el gate que sigue es el de condiciones
     r = client.post(f"/contratacion/expedientes/{EXP}/alta", json={})
     check(r.status_code == 409 and "condiciones" in r.json()["detail"].lower(), "alta bloqueada hasta capturar las condiciones (Modo Prueba apagado)")

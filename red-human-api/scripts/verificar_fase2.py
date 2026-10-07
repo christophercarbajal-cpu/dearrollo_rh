@@ -158,7 +158,7 @@ with TestClient(app) as client:
     check(ult.postulacion_id == p2.id and ult.candidato_id == persona.id, "el mensaje del candidato quedó ligado a esa postulación y a la persona")
 
     # RH manda un mensaje PROACTIVO sobre P1 (forzar Entrevista IA → aviso de apto por WhatsApp)
-    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista IA"})
+    r = client.patch(f"/candidatos/{P1}/etapa", json={"etapa": "Entrevista IA", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista IA", f"RH fuerza Entrevista IA en {P1}: sale un mensaje proactivo por WhatsApp")
     db.expire_all()
     check(p1.mensajes[-1].rol == "assistant" and persona.postulacion_conversacion_id == p2.id,
@@ -198,10 +198,10 @@ with TestClient(app) as client:
     check(client.get(f"/candidatos/{P1}").json()["activa"] is False, "la postulación cerrada sigue consultable")
 
     # ---------- 6. Un expediente por postulación (P5) ----------
-    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación"})
+    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["expedienteId"], f"{P2} → Contratación abre expediente")
     exp_p2 = r.json()["expedienteId"]
-    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación"})
+    r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["expedienteId"] and r.json()["expedienteId"] != exp_p2, f"{P3} → Contratación abre OTRO expediente")
     db.expire_all()
     e1 = db.get(Expediente, exp_p2)

@@ -96,6 +96,22 @@ async def lifespan(app: FastAPI):
         # excepción «ya tenía entrevista humana → Filtro humano» se aplica una sola vez (ver migraciones).
         pipeline = migrar_pipeline_cinco_columnas(db)
         db.commit()
+        # 2026-10-06 (rutas): cada Cuenta tiene las tres rutas base editables y NINGUNA postulación queda sin ruta.
+        # Determinista e idempotente: solo llena `Postulacion.proceso` donde falta (cascada vacante → Cuenta →
+        # «Corporativos sin psicometría»); nunca mueve etapas, ni manda mensajes, ni marca pasos por la etapa.
+        from .services import proceso as sproc
+
+        try:
+            with db.begin_nested():
+                creadas = sproc.asegurar_rutas_base_todas(db)
+        except Exception as ex:  # noqa: BLE001 — sin plantillas la cascada usa la ruta en código
+            creadas = 0
+            print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)
+        rutas = sproc.asignar_rutas_faltantes(db)
+        db.commit()
+        if creadas or rutas["asignadas"]:
+            print(f"[proceso] rutas base sembradas: {creadas} · postulaciones con ruta nueva: {rutas['asignadas']} "
+                  f"{rutas['por_origen']}", flush=True)
         if pipeline["postulaciones"] or pipeline["candidatos_legado"]:
             print(f"[pipeline] 5 columnas: {pipeline['evaluacion_a_filtro_red_human']} a Filtro Red Human, "
                   f"{pipeline['a_filtro_humano']} a Filtro humano", flush=True)

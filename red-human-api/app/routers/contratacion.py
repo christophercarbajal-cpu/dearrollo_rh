@@ -85,6 +85,8 @@ def listar(
             Candidato.cuenta_id == cuenta.id,
             Candidato.eliminado_en.is_(None),
             or_(Postulacion.id.is_(None), Postulacion.activa.is_(True), Postulacion.motivo_cierre == "contratado"),
+            # 2026-10-06: un expediente abierto ANTES de Contratación (documentos de la ruta Masivos) no es Onboarding
+            or_(Postulacion.id.is_(None), Postulacion.etapa.in_(("Contratación", "Onboarding")), Postulacion.motivo_cierre == "contratado"),
         )
         .order_by(Expediente.id)
     )

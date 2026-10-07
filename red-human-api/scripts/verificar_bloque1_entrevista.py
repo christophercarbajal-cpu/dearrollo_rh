@@ -114,7 +114,7 @@ with TestClient(app) as client:
     p.candidato.cv_datos = {"resumen_profesional": "Abogado con 5 años de experiencia.", "habilidades": ["Fiscal", "Litigio"], "estudios": ["Lic. Derecho"], "idiomas": ["Inglés"]}
     db.add(Archivo(candidato_id=p.candidato_id, tipo="cv", nombre="cv.pdf", ruta="", mime="application/pdf"))
     db.commit()
-    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     CORREOS.clear()
     # Evaluaciones unificadas (2026-09-29): «Agregar evaluación» → entrevista humana asignada con cita
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={
@@ -179,7 +179,7 @@ with TestClient(app) as client:
     print("\n--- 5. RH registra resultado en un solo paso ---")
     r = client.post("/candidatos", json={"nombre": "Ana Ruiz", "telefono": "5599990000", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
-    client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     r = client.post(f"/evaluaciones/postulaciones/{P2}", json={
         "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
         "cita": {"fecha": "2026-10-01", "hora": "10:00", "modalidad": "Teléfono"}, "notificar": {"cliente_correo": False, "cliente_whatsapp": False},

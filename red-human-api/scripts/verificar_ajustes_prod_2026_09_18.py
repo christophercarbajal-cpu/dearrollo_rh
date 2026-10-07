@@ -79,7 +79,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Aviso Persona", "telefono": "5512121212", "correo": "aviso@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     # Evaluaciones unificadas (2026-09-29): la entrevista humana se asigna con la pantalla única «Agregar evaluación»
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={
         "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
@@ -94,11 +94,11 @@ with TestClient(app) as client:
     print("\n--- 4. Modo Prueba total ---")
     cfg.modo_prueba = True
     db.commit()
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP = r.json()["expedienteId"]
     r = client.post(f"/contratacion/expedientes/{EXP}/documentos", data={"tipo": "Identificación oficial"}, files={"archivo": ("cualquier.pdf", PDF_MIN, "application/pdf")})
     check(r.status_code == 200 and r.json()["documento"]["estado"] == "recibido" and "Modo Prueba" in r.json()["documento"]["notas"], "Modo Prueba: subir un PDF lo marca válido sin OCR/IA")
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     r = client.post(f"/contratacion/expedientes/{EXP}/alta", json={"puesto": "Cajero"})
     check(r.status_code == 200, f"Modo Prueba: alta directa con expediente incompleto y sin confirmación de RH ({r.status_code})")
     cfg.modo_prueba = False
@@ -107,7 +107,7 @@ with TestClient(app) as client:
     P2 = r.json()["id"]
     # Onboarding v2 (2026-09-28): sin Modo Prueba a Onboarding solo se entra con «Iniciar Onboarding»; el
     # expediente nace en Contratación y ahí se prueba que el alta lo sigue exigiendo.
-    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP2 = r.json()["expedienteId"]
     r = client.post(f"/contratacion/expedientes/{EXP2}/alta", json={"puesto": "Cajero"})
     check(r.status_code in (400, 409), "sin Modo Prueba: el alta sigue exigiendo el expediente")

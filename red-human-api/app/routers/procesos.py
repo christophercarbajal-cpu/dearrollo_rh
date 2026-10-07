@@ -49,6 +49,9 @@ def opciones(_: Usuario = Depends(usuario_actual)):
         "estados": [{"valor": k, "texto": t} for k, t in ESTADOS_PASO.items()],
         "resultados": [{"valor": k, "texto": t} for k, t in RESULTADOS_PASO.items()],
         "ejemplos": [{"clave": k, "nombre": e["nombre"], "descripcion": e["descripcion"]} for k, e in sproc.PROCESOS_EJEMPLO.items()],
+        # 2026-10-06: rutas base precargadas (sembradas como plantillas editables en cada Cuenta)
+        "rutasBase": [{"clave": k, "nombre": e["nombre"], "descripcion": e["descripcion"], "pasos": len(e["pasos"]),
+                       "respaldo": k == sproc.RUTA_RESPALDO} for k, e in sproc.RUTAS_BASE.items()],
     }
 
 
@@ -123,6 +126,22 @@ def crear_plantilla(datos: PlantillaIn, db: Session = Depends(get_db), u: Usuari
               {"nombre": pl.nombre, "pasos": len(pasos), "predeterminada": pl.predeterminada, "correo_rh": u.correo})
     db.commit()
     return sproc.plantilla_dict(pl)
+
+
+@router.post("/plantillas/rutas-base", dependencies=[Depends(requiere_modulos_rh)])
+def restaurar_rutas_base(db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Restaurar rutas base»: siembra las que falten y REACTIVA las que RH desactivó (con sus ediciones; nunca las
+    sobrescribe)."""
+    n = sproc.asegurar_rutas_base(db, cuenta.id, u.nombre)
+    for pl in db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cuenta.id, PlantillaProceso.ruta_base != "",
+                                                PlantillaProceso.activa.is_(False)).all():
+        pl.activa = True
+        pl.actualizada_por = u.nombre
+        n += 1
+    if n:
+        registrar(db, u.nombre, "rutas_base_sembradas", "cuenta", str(cuenta.id), {"creadas": n, "correo_rh": u.correo})
+    db.commit()
+    return {"creadas": n}
 
 
 @router.post("/plantillas/ejemplo/{clave}", status_code=201, dependencies=[Depends(requiere_modulos_rh)])
@@ -302,6 +321,35 @@ def reactivar_paso(codigo: str, paso_id: str, db: Session = Depends(get_db), u: 
         raise _error(e)
     db.commit()
     return _salida(p)
+
+
+class ActividadAdHocIn(BaseModel):
+    tipo: str
+    nombre: str = ""
+    etapa: str = ""
+    obligatorio: bool = False
+    depende_de: List[str] = []
+    responsable: Optional[dict] = None
+    plazo_dias: Optional[int] = None
+    tipo_entrevista: Optional[str] = None
+
+
+@router.post("/postulaciones/{codigo}/pasos", status_code=201)
+def agregar_actividad(codigo: str, datos: ActividadAdHocIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                      cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Más acciones → Agregar actividad»: un paso extra SOLO para este candidato (entrevista, prueba, documentos…).
+    Nunca toca la plantilla ni la vacante. Por defecto no es obligatorio."""
+    p = _postulacion(db, codigo, cuenta.id)
+    if not p.activa:
+        raise HTTPException(409, "La postulación está cerrada.")
+    crudo = {k: v for k, v in datos.model_dump().items() if v not in (None, "", [])}
+    crudo["obligatorio"] = datos.obligatorio
+    try:
+        paso = sproc.agregar_paso_adhoc(db, p, crudo, u)
+    except sproc.ErrorProceso as e:
+        raise _error(e)
+    db.commit()
+    return {**_salida(p), "paso": paso}
 
 
 @router.post("/postulaciones/{codigo}/aplicar-vigente")

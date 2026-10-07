@@ -114,7 +114,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Karla Demo", "telefono": "5577778888", "correo": "karla@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP = r.json()["expedienteId"]
     check(r.status_code == 200 and EXP, "candidato en Contratación con expediente")
     e = client.get(f"/contratacion/expedientes/{EXP}").json()
@@ -191,7 +191,7 @@ with TestClient(app) as client:
     check(any(x["id"] == P and x["etapa"] == "Contratación" for x in kan), "el candidato sigue en el Kanban en Contratación")
     r = client.patch(f"/candidatos/{P}/condiciones-contratacion", json={"puesto": "Cajera", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-10-01"})
     check(r.status_code == 200 and r.json()["etapa"] == "Contratación", "guardar condiciones no mueve la etapa")
-    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding"})
+    r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Onboarding", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Onboarding", "«Enviar a Onboarding» (PATCH /etapa) es la única forma de pasar a Onboarding")
     kan = client.get("/candidatos").json()
     check(any(x["id"] == P and x["etapa"] == "Onboarding" for x in kan), "…y sigue visible en el Kanban, ahora en Onboarding")

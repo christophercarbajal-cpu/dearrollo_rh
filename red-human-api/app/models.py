@@ -2376,6 +2376,9 @@ class FirmaDocumento(Base):
 # Tipos de paso: nombre, etapa y regla por defecto, quién lo resuelve por defecto y en qué etapas puede ir. Los tipos
 # de evaluación son los MISMOS de TIPOS_EVALUACION_U (se ejecutan con «Agregar evaluación»).
 TIPOS_PASO = {
+    # 2026-10-06 (rutas base): la solicitud del candidato (portal o chat). Con `con_cv` exige el CV.
+    "solicitud_web": {"nombre": "Solicitud web", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "candidato",
+                      "etapas": ("Prefiltro",)},
     "prefiltro_whatsapp": {"nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
                            "responsable": "red_human", "etapas": ("Prefiltro",)},
     "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
@@ -2388,10 +2391,18 @@ TIPOS_PASO = {
               "responsable": "usuario" if tipo == "entrevista_humana" else "rh",
               "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación")}
        for tipo, nombre in TIPOS_EVALUACION_U.items()},
+    # Documentos ANTES de Contratación (Masivos): «Solicitar documentos por liga» abre el expediente con anticipación y
+    # «Validar documentos» valida lo SOLICITADO; en Contratación/Onboarding valida todos los obligatorios.
+    "solicitud_documentos": {"nombre": "Solicitar documentos por liga", "etapa": "Prefiltro", "regla": "ninguna",
+                             "responsable": "rh", "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
     "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion", "responsable": "rh",
-                   "etapas": ("Contratación", "Onboarding")},
+                   "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
     "condiciones": {"nombre": "Condiciones de contratación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                     "etapas": ("Contratación",)},
+    "carta_contrato": {"nombre": "Carta intención / contrato", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
+                       "etapas": ("Contratación", "Onboarding")},
+    "induccion": {"nombre": "Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+                  "etapas": ("Onboarding",)},
     "onboarding": {"nombre": "Tareas de Onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                    "etapas": ("Onboarding",)},
     "alta": {"nombre": "Alta como colaborador", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
@@ -2440,6 +2451,9 @@ class PlantillaProceso(Base):
     creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_por: Mapped[str] = mapped_column(String(150), default="")
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+    # 2026-10-06: ruta base precargada que originó la plantilla (masivos | corporativos | corporativos_psicometria);
+    # vacía = plantilla propia de RH. Sirve para sembrarlas una sola vez por Cuenta y para el respaldo de asignación.
+    ruta_base: Mapped[str] = mapped_column(String(40), default="", index=True)
 
 
 def _al_cambiar_etapa(p: "Postulacion", nueva, anterior, _iniciador) -> None:

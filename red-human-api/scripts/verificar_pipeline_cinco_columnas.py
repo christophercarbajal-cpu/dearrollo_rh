@@ -88,11 +88,28 @@ with TestClient(app) as client:
     VAC = client.get("/vacantes").json()[0]["id"]
     tel = iter(range(5530000001, 5530000100))
 
-    def nueva(nombre):
+    def nueva(nombre, omitir=True):
         r = client.post("/candidatos", json={"nombre": nombre, "telefono": str(next(tel)), "correo": f"{nombre.split()[0].lower()}@p5c.mx",
                                              "vacante": VAC, "consentimiento": True, "fuente": "RH"})
         assert r.status_code == 201, r.text
+        if omitir:
+            omitir_previos(r.json()["id"])
         return r.json()["id"]
+
+    def omitir_previos(codigo):
+        """2026-10-06: toda postulación tiene ruta. Esta verificación es de la regla del pipeline, no de la ruta: RH
+        omite (con permiso) los obligatorios de Prefiltro y Filtro Red Human para aislarla."""
+        seg = client.get(f"/procesos/postulaciones/{codigo}").json()
+        for e in seg.get("etapas", []):
+            if e["etapa"] in ("Prefiltro", "Entrevista IA"):
+                for x in e["pasos"]:
+                    if x["obligatorio"] and x["estado"] in ("pendiente", "en_curso"):
+                        client.post(f"/procesos/postulaciones/{codigo}/pasos/{x['id']}/omitir",
+                                    json={"motivo": "Prueba: fuera del alcance de esta verificación"})
+        db.expire_all()
+        pp = db.query(Postulacion).filter_by(codigo=codigo).one()  # «RH decide el avance»: interruptor apagado
+        pp.proceso = {**pp.proceso, "etapas": {e: {"avance_automatico": False} for e in pp.proceso.get("etapas", {})}}
+        db.commit()
 
     def post(codigo):
         db.expire_all()
@@ -107,7 +124,7 @@ with TestClient(app) as client:
     pipe = client.get("/metricas/pipeline").json()
     check(list(pipe["candidatos"]["por_etapa"]) == ETAPAS_CANDIDATO, "el pipeline de métricas trae exactamente las 5 columnas (sin Evaluación)")
     P0 = nueva("Olga Legado")
-    r = client.patch(f"/candidatos/{P0}/etapa", json={"etapa": "Evaluación", "manual": True})
+    r = client.patch(f"/candidatos/{P0}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["etapa"] == "Entrevista IA", "un cliente viejo que manda «Evaluación» cae en Filtro Red Human")
     r = client.get("/candidatos", params={"etapa": "Filtro Red Human"})
     check(any(x["id"] == P0 for x in r.json()), "el filtro ?etapa= acepta el nombre visible «Filtro Red Human»")
@@ -127,14 +144,14 @@ with TestClient(app) as client:
     check(r.status_code == 200 and post(PA).etapa == "Entrevista Humana", "registrar el resultado NO mueve (RH decide el avance)")
 
     PC = nueva("Carlos Contratado")
-    client.patch(f"/candidatos/{PC}/etapa", json={"etapa": "Contratación", "manual": True})
+    client.patch(f"/candidatos/{PC}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     r = entrevista_humana(PC)
     check(r.status_code == 201 and post(PC).etapa == "Contratación", "una entrevista humana nueva nunca regresa a quien ya está en Contratación")
 
     # ---------------- 3. Descartar ----------------
     print("\n--- 3. No cumple se queda en su columna ---")
     PD = nueva("Diego Descartado")
-    client.patch(f"/candidatos/{PD}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    client.patch(f"/candidatos/{PD}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     r = client.post(f"/candidatos/{PD}/decision", json={"accion": "descartar", "comentario": "Sin licencia de manejo"})
     d = r.json()
     check(r.status_code == 200 and d["etapa"] == "Entrevista IA" and d["activa"] is False and d["estado"] == "no_cumple",
@@ -143,12 +160,12 @@ with TestClient(app) as client:
     check(all(x["id"] != PD for x in client.get("/candidatos").json()), "por defecto (filtro existente) no se muestra")
     visibles = client.get("/candidatos", params={"mostrar_cerradas": True}).json()
     check(any(x["id"] == PD and x["etapa"] == "Entrevista IA" for x in visibles), "con «Mostrar cerradas» aparece en su misma columna")
-    r = client.patch(f"/candidatos/{PD}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    r = client.patch(f"/candidatos/{PD}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["activa"] is True, "RH puede reabrirla en la misma columna")
 
     # ---------------- 4. Evaluación integral ----------------
     print("\n--- 4. Evaluación integral (resultado) ---")
-    PI = nueva("Ivonne Integral")
+    PI = nueva("Ivonne Integral", omitir=False)  # la evaluación integral toma de la ruta sus validaciones obligatorias
     ri = client.get(f"/candidatos/{PI}").json()["resultadoIntegral"]
     check(ri["estado"] == "pendiente" and ri["score"] is None, "sin calificaciones: Pendiente y score None (nunca cero)")
     p = post(PI)
@@ -191,7 +208,7 @@ with TestClient(app) as client:
     PM5 = nueva("Mila Cerrada")              # Evaluación descartada → Filtro Red Human (cerrada)
     for cod in (PM2, PM3):
         entrevista_humana(cod)
-    client.patch(f"/candidatos/{PM4}/etapa", json={"etapa": "Contratación", "manual": True})
+    client.patch(f"/candidatos/{PM4}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     entrevista_humana(PM4)
     expediente_pm4 = post(PM4).expediente.id
     for cod, etapa in ((PM1, "Evaluación"), (PM2, "Evaluación"), (PM3, "Prefiltro"), (PM5, "Evaluación")):
@@ -220,7 +237,7 @@ with TestClient(app) as client:
     pipe = client.get("/metricas/pipeline").json()["candidatos"]["por_etapa"]
     check(pipe["Entrevista IA"] == despues.get("Entrevista IA", 0), "el embudo del tablero coincide con los contadores")
     # idempotente y la excepción solo una vez: RH regresa a PM3 a Filtro Red Human y un segundo arranque lo respeta
-    client.patch(f"/candidatos/{PM3}/etapa", json={"etapa": "Entrevista IA", "manual": True})
+    client.patch(f"/candidatos/{PM3}/etapa", json={"etapa": "Entrevista IA", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     res2 = migrar_pipeline_cinco_columnas(db)
     db.commit()
     check(post(PM3).etapa == "Entrevista IA" and not res2["postulaciones"], "segunda corrida: no deshace la decisión de RH (idempotente)")

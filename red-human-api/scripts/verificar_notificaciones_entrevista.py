@@ -104,7 +104,7 @@ with TestClient(app) as client:
     vac = client.get("/vacantes").json()[0]
     r = client.post("/candidatos", json={"nombre": "Carlos Hernández", "telefono": "5512345678", "correo": "carlos@correo.mx", "vacante": vac["id"], "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True})
+    client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     WA_PLANTILLA.clear(); WA_TEXTO.clear(); CORREOS.clear()
     # Evaluaciones unificadas (2026-09-29): «Agregar evaluación» → entrevista humana asignada con cita
     SIN_CLIENTE = {"cliente_correo": False, "cliente_whatsapp": False}

@@ -2,8 +2,8 @@
 
 /* Editor ÚNICO del proceso de selección (2026-10-06). Lo usan Configuración → Procesos de selección (plantilla de la
    Cuenta) y el formulario de vacante (copia personalizable, sin tocar la plantilla). Las cinco etapas son fijas; en
-   cada una RH agrega pasos con su responsable, condición de avance (regla), plazo y dependencias EXPLÍCITAS (sin
-   dependencias = en paralelo). El interruptor «Avance automático» de la etapa mueve al candidato cuando todos los
+   cada una RH agrega pasos DESDE EL CATÁLOGO con su responsable, condición de avance (regla), plazo y su ejecución:
+   «En paralelo» o «Esperar a…» (dependencias EXPLÍCITAS). El orden visual NO crea dependencias. El interruptor «Avance automático» de la etapa mueve al candidato cuando todos los
    obligatorios cumplen su condición. La validación final (ciclos, etapas permitidas) la hace la API. */
 
 import { useEffect, useMemo, useState } from "react";
@@ -132,11 +132,11 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                           onChange={(ev) => cambiarPaso(p.id, { obligatorio: ev.target.checked })} />
                         Obligatorio
                       </label>
-                      {p.depende_de.length > 0 && (
-                        <span className="text-[11px] text-ink-3">
-                          Después de: {p.depende_de.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}
-                        </span>
-                      )}
+                      <span className="text-[11px] text-ink-3">
+                        {p.depende_de.length > 0
+                          ? `Espera a: ${p.depende_de.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}`
+                          : "En paralelo"}
+                      </span>
                       {!soloLectura && (
                         <span className="ml-auto flex items-center">
                           <button type="button" onClick={() => mover(p.id, -1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -161,7 +161,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                   className="h-9 rounded-lg border border-dashed border-border-soft bg-transparent px-2 text-xs font-semibold text-brand outline-none"
                   aria-label={`Agregar paso en ${e.texto}`}
                 >
-                  <option value="">+ Agregar paso en {e.texto}…</option>
+                  <option value="">+ Agregar paso del catálogo en {e.texto}…</option>
                   {disponibles.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
                 </select>
               </div>
@@ -277,26 +277,59 @@ function DetallePaso({ p, t, previos, usuarios, opciones, soloLectura, onCambio 
           </select>
         </label>
       )}
-      <fieldset className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
-        <legend className="mb-1">Depende de (sin dependencias corre en paralelo)</legend>
-        {previos.length === 0 ? (
-          <span className="text-[11px] text-ink-3">No hay pasos previos.</span>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {previos.map((x) => {
-              const marcado = p.depende_de.includes(x.id);
-              return (
-                <button key={x.id} type="button" disabled={soloLectura}
-                  onClick={() => onCambio({ depende_de: marcado ? p.depende_de.filter((d) => d !== x.id) : [...p.depende_de, x.id] })}
-                  className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold transition",
-                    marcado ? "border-brand bg-brand-soft text-brand" : "border-border-soft text-ink-3 hover:text-ink")}>
-                  {x.nombre}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </fieldset>
+      {p.tipo === "solicitud_web" && (
+        <label className="flex items-center gap-2 text-xs text-ink-2 sm:col-span-2">
+          <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={Boolean(p.con_cv)} disabled={soloLectura}
+            onChange={(ev) => onCambio({ con_cv: ev.target.checked })} />
+          La solicitud exige CV
+        </label>
+      )}
+      <EjecucionPaso p={p} previos={previos} soloLectura={soloLectura} onCambio={onCambio} />
     </div>
+  );
+}
+
+/** «En paralelo» (sin dependencias) o «Esperar a…» (dependencias explícitas). El orden de la lista nunca las crea. */
+function EjecucionPaso({ p, previos, soloLectura, onCambio }: {
+  p: PasoProceso;
+  previos: PasoProceso[];
+  soloLectura: boolean;
+  onCambio: (c: Partial<PasoProceso>) => void;
+}) {
+  const [esperar, setEsperar] = useState(p.depende_de.length > 0);
+  useEffect(() => setEsperar(p.depende_de.length > 0), [p.id, p.depende_de.length]);
+  return (
+    <fieldset className="flex flex-col gap-2 text-xs text-ink-2 sm:col-span-2">
+      <legend className="mb-1">Ejecución</legend>
+      <div className="flex flex-wrap gap-4">
+        <label className="flex items-center gap-1.5">
+          <input type="radio" className="h-4 w-4 accent-brand" checked={!esperar} disabled={soloLectura}
+            onChange={() => { setEsperar(false); onCambio({ depende_de: [] }); }} />
+          En paralelo <span className="text-ink-3">(arranca en cuanto el candidato llega a la etapa)</span>
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="radio" className="h-4 w-4 accent-brand" checked={esperar} disabled={soloLectura || previos.length === 0}
+            onChange={() => setEsperar(true)} />
+          Esperar a…
+        </label>
+      </div>
+      {esperar && (previos.length === 0 ? (
+        <span className="text-[11px] text-ink-3">No hay pasos previos.</span>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {previos.map((x) => {
+            const marcado = p.depende_de.includes(x.id);
+            return (
+              <button key={x.id} type="button" disabled={soloLectura}
+                onClick={() => onCambio({ depende_de: marcado ? p.depende_de.filter((d) => d !== x.id) : [...p.depende_de, x.id] })}
+                className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold transition",
+                  marcado ? "border-brand bg-brand-soft text-brand" : "border-border-soft text-ink-3 hover:text-ink")}>
+                {x.nombre}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </fieldset>
   );
 }

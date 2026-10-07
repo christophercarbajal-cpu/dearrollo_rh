@@ -1900,6 +1900,12 @@ async def aplicar_movimiento(
     if datos.etapa == p.etapa and p.activa:  # 2026-10-01: una descartada se queda en su columna y se reabre ahí mismo
         raise HTTPException(409, f"La postulación ya está en {nombre_etapa(datos.etapa)}.")
     con_proceso = sproc.tiene_proceso(p)
+    if omitiendo_ia and not datos.omitir_obligatorios:
+        # «Avanzar a Filtro humano» (2026-09-22) ya es una omisión explícita confirmada por RH: con ruta, omite los
+        # obligatorios previos con la MISMA exigencia (permiso «Autorizar omisiones»; sin él, 403).
+        datos.omitir_obligatorios = True
+        if len((datos.comentario or "").strip()) < sproc.MOTIVO_MINIMO:
+            datos.comentario = "Avance directo a Filtro humano: Entrevista Red Human omitida manualmente"
     omitidos_proceso: List[str] = []
     if con_proceso and not puede_forzar_prueba(db, forzar_prueba):
         try:
@@ -1908,7 +1914,7 @@ async def aplicar_movimiento(
             raise HTTPException(e.status, e.mensaje)
     if datos.etapa == "Entrevista Humana" and not manual and not con_proceso and not _tiene_entrevista_humana(db, p):
         # 2026-10-01 (pipeline de 5 columnas): agregar una entrevista humana mueve sola a Filtro humano
-        # (mover_por_entrevista_humana); aquí solo llega quien no tiene ninguna.
+        # (mover_por_entrevista_humana); aquí solo llega quien no tiene ninguna. Con ruta manda la compuerta del proceso.
         raise HTTPException(409, "Para pasar a Filtro humano agrega una entrevista humana con «Agregar evaluación»: el candidato se mueve solo.")
     if datos.etapa == "Onboarding":
         if p.etapa != "Contratación" and not libre:
@@ -1918,7 +1924,8 @@ async def aplicar_movimiento(
 
     # 2026-09-16 (control manual): lo que se salta queda como «Omitida manualmente» — registro interno.
     # Con proceso, lo que se salta son sus PASOS (verificar_avance los dejó «Omitida» con autorización).
-    omitidas = _actividades_pendientes(p, p.etapa, datos.etapa) if manual and not con_proceso else []
+    # 2026-10-06: con ruta también queda la leyenda por etapa (además de los pasos «Omitida» de la ruta).
+    omitidas = _actividades_pendientes(p, p.etapa, datos.etapa) if manual and not automatico else []
     if omitidas:
         ahora_iso = datetime.now(timezone.utc).isoformat()
         p.actividades_omitidas = list(p.actividades_omitidas or []) + [
@@ -2029,7 +2036,7 @@ def mover_por_entrevista_humana(db: Session, p: Postulacion, u: Usuario, codigo_
     anterior = p.etapa
     sello = datetime.now(timezone.utc)
     motivo = f"Se agregó la entrevista humana {codigo_evaluacion}"
-    omitidas = [] if sproc.tiene_proceso(p) else _actividades_pendientes(p, anterior, "Entrevista Humana")
+    omitidas = _actividades_pendientes(p, anterior, "Entrevista Humana")  # leyenda por etapa (con o sin ruta)
     if omitidas:
         p.actividades_omitidas = list(p.actividades_omitidas or []) + [
             {"actividad": e, "etapa": e, "usuario": u.nombre, "fecha": sello.isoformat(), "motivo": motivo, "hacia": "Entrevista Humana"}
@@ -2210,7 +2217,7 @@ async def _disparar_mensaje_onboarding(
 ) -> dict:
     # 2026-09-15: también en Contratación — el expediente nace en esa etapa y el cliente pide los
     # papeles (INE, comprobante) desde ahí por WhatsApp.
-    if p.etapa not in ("Contratación", "Onboarding"):
+    if p.etapa not in ("Contratación", "Onboarding") and not sproc.documentos_anticipados(p):
         raise HTTPException(409, "Esta acción es solo para postulaciones en Contratación u Onboarding.")
     if p.expediente and p.expediente.no_ingreso_en:
         raise HTTPException(409, "Esta persona quedó como «No ingresó»: ya no se le piden documentos.")
@@ -2237,9 +2244,16 @@ async def _disparar_mensaje_onboarding(
     return {"resultados": resultados, "nivel": extra.get("nivel"), "candidato": postulacion_dict(p, detalle=True)}
 
 
-def _liga_documentos(p: Postulacion) -> str:
+def _liga_documentos(p: Postulacion, db: Optional[Session] = None, u: Optional[Usuario] = None) -> str:
     """Liga pública para que el candidato suba sus documentos (ver routers/expediente_publico.py)
-    — genera el token del expediente perezosamente si es uno anterior (Expediente.token es nullable)."""
+    — genera el token del expediente perezosamente si es uno anterior (Expediente.token es nullable).
+    2026-10-06: si la ruta pide documentos ANTES de Contratación (Masivos), el expediente se abre aquí (con
+    consentimiento); la etapa no cambia."""
+    if not p.expediente and db is not None and u is not None and p.etapa not in ("Contratación", "Onboarding")             and sproc.documentos_anticipados(p):
+        if not p.consentimiento:
+            raise HTTPException(409, "El candidato no tiene consentimiento registrado (LFPDPPP): no se le pueden pedir documentos.")
+        exp = _abrir_expediente(db, p, u)
+        registrar(db, u.nombre, "expediente_anticipado", "postulacion", p.codigo, {"expediente": exp.id, "etapa": p.etapa, "correo_rh": u.correo})
     if not p.expediente:
         raise HTTPException(409, "La postulación no tiene expediente de contratación; no se puede generar la liga de documentos.")
     if not p.expediente.token:
@@ -2255,7 +2269,7 @@ async def solicitar_documentos(
     """Botón 'Solicitar documentos' — rompe el hielo por WhatsApp al entrar a Onboarding, con
     la liga pública para que el candidato suba sus documentos él mismo."""
     p = _por_codigo(db, codigo, cuenta.id)
-    liga = _liga_documentos(p)
+    liga = _liga_documentos(p, db, u)
     return await _disparar_mensaje_onboarding(db, p, "solicitud_documentos", "documentos_solicitados", liga, u, notificar)
 
 

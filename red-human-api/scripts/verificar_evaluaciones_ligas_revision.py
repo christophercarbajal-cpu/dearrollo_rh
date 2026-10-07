@@ -108,6 +108,21 @@ with TestClient(app) as client:
         db.expire_all()
         return db.get(Postulacion, p.id).etapa
 
+    def omitir_previos(codigo):
+        """2026-10-06: toda postulación tiene ruta. Esta verificación es de evaluaciones, no de la ruta: RH omite (con
+        permiso) los obligatorios de Prefiltro y Filtro Red Human y apaga el avance automático de su copia."""
+        seg = client.get(f"/procesos/postulaciones/{codigo}").json()
+        for e in seg.get("etapas", []):
+            if e["etapa"] in ("Prefiltro", "Entrevista IA"):
+                for x in e["pasos"]:
+                    if x["obligatorio"] and x["estado"] in ("pendiente", "en_curso"):
+                        client.post(f"/procesos/postulaciones/{codigo}/pasos/{x['id']}/omitir",
+                                    json={"motivo": "Prueba: fuera del alcance de esta verificación"})
+        db.expire_all()
+        pp = db.query(Postulacion).filter_by(codigo=codigo).one()
+        pp.proceso = {**pp.proceso, "etapas": {e: {"avance_automatico": False} for e in pp.proceso.get("etapas", {})}}
+        db.commit()
+
     def tarjeta(codigo):
         return next(x for x in client.get(f"/evaluaciones/postulaciones/{P}").json() if x["codigo"] == codigo)
 
@@ -117,8 +132,9 @@ with TestClient(app) as client:
     # ---------------- 1. Solo la entrevista humana mueve (a Filtro humano) ----------------
     print("\n--- 1. Agregar evaluación: solo la entrevista humana mueve a Filtro humano ---")
     r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 409 and "Agregar evaluación" in r.json()["detail"],
+    check(r.status_code == 409 and ("Agregar evaluación" in r.json()["detail"] or "pasos obligatorios" in r.json()["detail"]),
           "sin entrevista humana agregada no se envía a «Filtro humano» (salvo movimiento manual)")
+    omitir_previos(P)
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "registro_directo"})
     check(r.status_code == 201 and etapa() == "Entrevista IA", "agregar otra evaluación (técnica) NO cambia la columna")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={

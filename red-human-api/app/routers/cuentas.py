@@ -221,6 +221,14 @@ def crear(
     nueva.slug = slug_cuenta_unico(db, nueva.nombre_comercial or nueva.nombre, nueva.id)  # 2026-09-17
     db.add(UsuarioCuenta(usuario_id=admin.id, cuenta_id=nueva.id))
     registrar(db, admin.nombre, "cuenta_creada", "cuenta", str(nueva.id), {"nombre": nombre, "correo_rh": admin.correo})
+    # 2026-10-06: la Cuenta nace con las tres rutas base editables (Masivos / Corporativos con y sin psicometría).
+    try:
+        from ..services import proceso as sproc
+
+        with db.begin_nested():
+            sproc.asegurar_rutas_base(db, nueva.id, admin.nombre)
+    except Exception as ex:  # noqa: BLE001 — nunca impide crear la Cuenta; la cascada usa la ruta en código
+        print(f"[proceso] rutas base no sembradas en la Cuenta {nueva.id}: {ex}")
     db.commit()
     db.refresh(nueva)
     return _ficha_dict(nueva, cuenta.id)

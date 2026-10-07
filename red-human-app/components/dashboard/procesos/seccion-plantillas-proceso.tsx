@@ -2,17 +2,19 @@
 
 /* Configuración → Procesos de selección (2026-10-06). Plantillas de la Cuenta: pasos por etapa (las cinco son fijas),
    dependencias, responsables, condiciones de avance, plazos y avance automático. Editar una plantilla sube su versión y
-   NUNCA cambia a las vacantes que ya la copiaron ni a sus candidatos. Hay tres ejemplos listos para empezar. */
+   NUNCA cambia a las vacantes que ya la copiaron ni a sus candidatos. 2026-10-06: cada Cuenta trae las tres RUTAS BASE
+   editables (Masivos / Corporativos sin y con psicometría). Asignación de un candidato: proceso de la vacante →
+   predeterminado de la Cuenta → «Corporativos sin psicometría»; ningún candidato queda sin ruta. */
 
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, Loader2, PenLine, Plus, Save, Star, Trash2, X } from "lucide-react";
+import { GitBranch, Loader2, PenLine, Plus, RotateCcw, Save, Star, Trash2, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { AvisoLinea, CampoRH, ModalMarco, inputRH, type AvisoRH } from "@/components/dashboard/modulos-rh";
 import { EditorProceso } from "@/components/dashboard/procesos/editor-proceso";
 import {
   crearPlantillaProceso, crearPlantillaProcesoDesdeEjemplo, desactivarPlantillaProceso, editarPlantillaProceso, fetchOpcionesProceso,
-  fetchPlantillasProceso, nombreEtapa, type OpcionesProceso, type PlantillaProceso,
+  fetchPlantillasProceso, nombreEtapa, restaurarRutasBase, type OpcionesProceso, type PlantillaProceso,
 } from "@/lib/api";
 import type { EtapasProceso, PasoProceso } from "@/lib/data";
 
@@ -42,6 +44,14 @@ export function SeccionPlantillasProceso() {
     setAviso({ tono: "ok", texto: `Proceso «${r.data.nombre}» creado. Ajústalo con «Editar».` });
     void recargar();
   }
+  async function restaurar() {
+    setOcupado("rutas");
+    const r = await restaurarRutasBase();
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setAviso({ tono: "ok", texto: r.data.creadas ? `Se restauraron ${r.data.creadas} ruta(s) base.` : "Las tres rutas base ya existen." });
+    void recargar();
+  }
   async function predeterminar(p: PlantillaProceso) {
     const r = await editarPlantillaProceso(p.id, { predeterminada: !p.predeterminada });
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
@@ -62,7 +72,7 @@ export function SeccionPlantillasProceso() {
           <div>
             <h2 className="font-display text-base font-bold">Procesos de selección</h2>
             <p className="mt-0.5 text-sm text-ink-2">
-              Pasos por etapa, con responsables, condiciones de avance, plazos y dependencias. Cada vacante copia uno y lo puede personalizar; los candidatos conservan la versión con la que entraron.
+              Pasos del catálogo por etapa, con responsables, condiciones de avance, plazos y ejecución (en paralelo o «Esperar a…»). Cada candidato recibe una copia de su ruta: la de su vacante, la predeterminada de la Cuenta o «Corporativos sin psicometría».
             </p>
           </div>
         </div>
@@ -76,7 +86,10 @@ export function SeccionPlantillasProceso() {
           <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
         ) : lista.length === 0 ? (
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-ink-3">Sin procesos: las vacantes siguen el flujo de siempre. Empieza con un ejemplo:</p>
+            <p className="text-sm text-ink-3">
+              Sin procesos activos: los candidatos reciben la ruta «Corporativos sin psicometría».{" "}
+              <button className="font-semibold text-brand hover:underline" onClick={restaurar} disabled={Boolean(ocupado)}>Restaurar las rutas base</button> o empieza con un ejemplo:
+            </p>
             <div className="grid gap-2 sm:grid-cols-3">
               {(opciones?.ejemplos ?? []).map((e) => (
                 <button key={e.clave} onClick={() => desdeEjemplo(e.clave)} disabled={Boolean(ocupado)}
@@ -96,6 +109,8 @@ export function SeccionPlantillasProceso() {
                     <span className="truncate">{p.nombre}</span>
                     <Badge tone="neutral">v{p.version}</Badge>
                     {p.predeterminada && <Badge tone="brand">Predeterminado</Badge>}
+                    {p.rutaBase && <Badge tone="human">Ruta base</Badge>}
+                    {p.rutaBase === "corporativos" && !lista.some((x) => x.predeterminada) && <Badge tone="neutral">Respaldo</Badge>}
                   </p>
                   <p className="truncate text-[11px] text-ink-3">{resumenPasos(p.pasos)}</p>
                   <p className="text-[11px] text-ink-3">
@@ -113,6 +128,11 @@ export function SeccionPlantillasProceso() {
               </li>
             ))}
             <li className="flex flex-wrap gap-2 pt-3">
+              {(opciones?.rutasBase ?? []).some((r) => !lista.some((x) => x.rutaBase === r.clave)) && (
+                <Button size="sm" variant="ghost" onClick={restaurar} disabled={Boolean(ocupado)}>
+                  <RotateCcw className="h-3.5 w-3.5" /> Restaurar rutas base
+                </Button>
+              )}
               {(opciones?.ejemplos ?? []).map((e) => (
                 <Button key={e.clave} size="sm" variant="ghost" onClick={() => desdeEjemplo(e.clave)} disabled={Boolean(ocupado)}>
                   <Plus className="h-3.5 w-3.5" /> {e.nombre}
@@ -175,7 +195,7 @@ function EditorPlantilla({ plantilla, opciones, onClose, onGuardada }: {
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={predeterminada} onChange={(e) => setPredeterminada(e.target.checked)} />
-          Usar como predeterminado en vacantes nuevas
+          Usar como predeterminado (vacantes nuevas y candidatos de vacantes sin proceso propio)
         </label>
         <EditorProceso pasos={pasos} etapas={etapas} opciones={opciones} onChange={(p, e) => { setPasos(p); setEtapas(e); }} />
         {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}

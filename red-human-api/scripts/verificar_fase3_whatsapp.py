@@ -153,7 +153,7 @@ with TestClient(app) as client:
     print("\n--- Cron de recordatorios de documentos (fecha límite «hasta») ---")
     r = client.post("/candidatos", json={"nombre": "Doc Pendiente", "telefono": "5599900011", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
-    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación"})
+    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     EXP = r.json()["expedienteId"]
     cfg = obtener(db)
     cfg.recordatorio_documentos_dias = 2

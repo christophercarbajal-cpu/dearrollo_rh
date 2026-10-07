@@ -1,19 +1,22 @@
 "use client";
 
-/* Ficha del candidato → «Seguimiento» (proceso configurable, 2026-10-06). Arriba: la etapa actual y la SIGUIENTE
-   acción principal. Abajo: todos los pasos del proceso del candidato agrupados por etapa con Nombre, Responsable,
-   Estado, Resultado y la Acción disponible (iniciar o consultar). Lo que está en espera dice exactamente qué falta y
-   nunca frena a las demás actividades en paralelo. Las acciones REUTILIZAN lo que ya existe: «Agregar evaluación»
-   precargada, las tarjetas de evaluación, el chat, el CV o el expediente. El estado lo calcula la API. */
+/* Ficha del candidato → «Resumen»: la RUTA completa del candidato (2026-10-06), de la solicitud al «Alta como
+   colaborador». Arriba: la etapa actual y la SIGUIENTE acción principal. Abajo: todos los pasos agrupados por etapa con
+   Nombre, Responsable, Estado (+ qué falta / bloqueo), Resultado y la Acción disponible. Lo que está en espera dice
+   exactamente qué falta y nunca frena a las demás actividades en paralelo. Las acciones REUTILIZAN lo que ya existe:
+   «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, el CV, la liga de documentos o el expediente;
+   al terminar, la API recalcula estado, resultado y siguiente acción en esta misma vista. «Agregar actividad» suma un
+   paso SOLO a este candidato (la plantilla y la vacante no cambian). */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, RotateCcw, SkipForward, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, Plus, RotateCcw, SkipForward, Zap } from "lucide-react";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { useSesion } from "@/components/sesion";
 import {
-  aplicarProcesoVigente, cancelarPasoProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa, omitirPasoProceso, reactivarPasoProceso,
+  agregarActividadProceso, aplicarProcesoVigente, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
+  omitirPasoProceso, reactivarPasoProceso, type OpcionesProceso,
 } from "@/lib/api";
 import type { AccionPaso, Candidato, EstadoPaso, EtapaCandidato, PasoSeguimiento, ResultadoPaso, SeguimientoProceso } from "@/lib/data";
 import { textoDia } from "@/lib/fechas";
@@ -41,6 +44,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const [seg, setSeg] = useState<SeguimientoProceso | null>(c.proceso ?? null);
   const [ocupado, setOcupado] = useState("");
   const [decision, setDecision] = useState<{ tipo: "omitir" | "cancelar" | "avanzar"; paso?: PasoSeguimiento; motivo: string } | null>(null);
+  const [actividad, setActividad] = useState(false);
 
   useEffect(() => {
     if (c.proceso) setSeg(c.proceso);
@@ -76,6 +80,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: r?.tipo === "usuario" ? r.usuario_id : null });
     }
     if (accion.clave === "consultar_evaluacion") return onAbrir("evaluaciones");
+    if (accion.clave === "solicitar_documentos") return onSolicitarDocumentos();
+    if (accion.clave === "validar_documentos") return onAbrir("documentos");
     if (paso?.tipo === "documentos" && accion.clave === "abrir" && c.etapa === "Contratación") return onSolicitarDocumentos();
     if (accion.pestana) onAbrir(accion.pestana);
   }
@@ -134,7 +140,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       onClick: () => setDecision({ tipo: "avanzar", motivo: "" }),
     }] : []),
     ...(tg?.liga ? [{ etiqueta: "Copiar liga de Telegram", icono: <Link2 />, onClick: () => copiarLigaTelegram(tg.liga) }] : []),
+    ...(c.activa !== false ? [{ etiqueta: "Agregar actividad a este candidato…", icono: <Plus />, onClick: () => setActividad(true) }] : []),
   ];
+  const ORIGEN: Record<string, string> = { vacante: "ruta de la vacante", cuenta: "ruta predeterminada de la Cuenta", base: "ruta de respaldo" };
 
   return (
     <div className="flex flex-col gap-4">
@@ -142,13 +150,13 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       <Card className="p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <Eyebrow>Seguimiento del proceso</Eyebrow>
+            <Eyebrow>Ruta del candidato</Eyebrow>
             <p className="mt-1 font-display text-lg font-bold">
               {seg.etapaTexto}
               {seg.siguienteEtapaTexto && <span className="text-sm font-normal text-ink-3"> · después: {seg.siguienteEtapaTexto}</span>}
             </p>
             <p className="text-[11px] text-ink-3">
-              {seg.plantilla || "Proceso propio"}{seg.personalizado ? " (personalizado en la vacante)" : ""} · versión {seg.version}
+              {seg.plantilla || "Proceso propio"}{seg.personalizado ? " (personalizado en la vacante)" : ""} · {ORIGEN[seg.origen ?? "vacante"]} · versión {seg.version}
             </p>
           </div>
           {live && sig && (
@@ -184,7 +192,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         )}
         {seg.desactualizado && (
           <p className="mt-3 text-[12px] text-ink-3">
-            La vacante tiene una versión más nueva del proceso; este candidato conserva la suya.{" "}
+            {seg.origen === "vacante" ? "La vacante tiene una versión más nueva del proceso" : "La vacante ahora tiene su propio proceso"}; este candidato conserva su ruta.{" "}
             {live && <button className="font-semibold text-brand hover:underline" onClick={aplicarVigente} disabled={Boolean(ocupado)}>Aplicar versión vigente</button>}
           </p>
         )}
@@ -213,10 +221,11 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                       {p.nombre}
                       {p.obligatorio && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3">obligatorio</span>}
                       {p.heredado && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-ink-3">fuera del proceso vigente</span>}
+                      {p.adhoc && <span className="ml-1.5 font-mono text-[9px] font-bold uppercase tracking-wide text-human">solo este candidato</span>}
                     </p>
                     <p className="text-[11px] text-ink-3">
                       {p.reglaTexto}
-                      {p.dependeDe.length > 0 && ` · después de ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}`}
+                      {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : " · en paralelo"}
                       {p.plazoDias != null && ` · plazo ${p.plazoDias} día(s)`}
                     </p>
                   </div>
@@ -262,6 +271,20 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         </section>
       ))}
 
+      {actividad && (
+        <ModalActividad
+          c={c}
+          etapaActual={c.etapa}
+          onClose={() => setActividad(false)}
+          onAgregada={(r) => {
+            setActividad(false);
+            setSeg(r.proceso);
+            onCambio(r.candidato);
+            setAviso({ tono: "ok", texto: `«${r.paso.nombre}» se agregó solo a este candidato. La plantilla y la vacante no cambian.` });
+          }}
+        />
+      )}
+
       {decision && (
         <ModalMarco
           titulo={decision.tipo === "avanzar" ? `Avanzar a ${seg.siguienteEtapaTexto} omitiendo obligatorios`
@@ -294,5 +317,82 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         </ModalMarco>
       )}
     </div>
+  );
+}
+
+/** «Agregar actividad a este candidato»: un paso del catálogo SOLO para esta postulación (entrevista, prueba,
+ * documentos…). Por defecto no es obligatorio: no frena el avance salvo que RH lo marque. */
+function ModalActividad({ c, etapaActual, onClose, onAgregada }: {
+  c: Candidato;
+  etapaActual: EtapaCandidato;
+  onClose: () => void;
+  onAgregada: (r: { proceso: SeguimientoProceso; candidato: Candidato; paso: { nombre: string } }) => void;
+}) {
+  const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
+  const [tipo, setTipo] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [etapa, setEtapa] = useState<EtapaCandidato>(etapaActual);
+  const [obligatorio, setObligatorio] = useState(false);
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  useEffect(() => {
+    fetchOpcionesProceso().then((o) => setOpciones(o ?? null));
+  }, []);
+  const tipos = (opciones?.tiposPaso ?? []).filter((t) => !["solicitud_web", "prefiltro_web", "prefiltro_whatsapp", "alta"].includes(t.valor));
+  const elegido = tipos.find((t) => t.valor === tipo);
+  const etapas = (opciones?.etapas ?? []).filter((e) => elegido?.etapas.includes(e.valor));
+
+  function elegir(valor: string) {
+    const t = tipos.find((x) => x.valor === valor);
+    setTipo(valor);
+    setNombre(t?.texto ?? "");
+    if (t) setEtapa(t.etapas.includes(etapaActual) ? etapaActual : t.etapas[t.etapas.length - 1]);
+  }
+
+  async function guardar() {
+    if (!tipo) return setError("Elige la actividad del catálogo.");
+    setGuardando(true);
+    setError("");
+    const r = await agregarActividadProceso(c.id, { tipo, nombre: nombre.trim() || undefined, etapa, obligatorio });
+    setGuardando(false);
+    if (!r.ok) return setError(r.error);
+    onAgregada(r.data);
+  }
+
+  return (
+    <ModalMarco titulo="Agregar actividad a este candidato" subtitulo="Solo para esta postulación: la plantilla y la vacante no cambian." onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          Actividad del catálogo
+          <select className={cn(inputRH, "h-10")} value={tipo} onChange={(e) => elegir(e.target.value)}>
+            <option value="">Elegir…</option>
+            {tipos.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
+          </select>
+        </label>
+        {elegido && (
+          <>
+            <label className="flex flex-col gap-1 text-xs text-ink-2">
+              Nombre
+              <input className={inputRH} value={nombre} onChange={(e) => setNombre(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-ink-2">
+              Etapa
+              <select className={cn(inputRH, "h-10")} value={etapa} onChange={(e) => setEtapa(e.target.value as EtapaCandidato)}>
+                {etapas.map((e) => <option key={e.valor} value={e.valor}>{e.texto}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={obligatorio} onChange={(e) => setObligatorio(e.target.checked)} />
+              Obligatoria (el candidato no avanza de etapa sin cumplirla)
+            </label>
+          </>
+        )}
+        {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={guardando}>Cancelar</Button>
+          <Button size="sm" onClick={guardar} disabled={guardando || !tipo}>{guardando ? "Agregando…" : "Agregar actividad"}</Button>
+        </div>
+      </div>
+    </ModalMarco>
   );
 }

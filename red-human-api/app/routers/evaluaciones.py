@@ -717,8 +717,10 @@ def avanzar_integrada(codigo: str, db: Session = Depends(get_db), u: Usuario = D
 
 
 @router.post("/{codigo}/sincronizar")
-def sincronizar(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
-    """«Consultar resultado» en Psicométricas.mx (por si el webhook no llegó). Solo guarda si su API confirma que terminó."""
+async def sincronizar(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Sincronizar resultado» en Psicométricas.mx (por si el webhook no llegó: en desarrollo apunta a la Demo).
+    consultaCandidato → si terminó, descarga JSON + PDF → «Con resultado» (el paso de la ruta queda Completado) y corre
+    el avance automático de la etapa. Solo guarda si su API confirma que terminó."""
     from ..services import psicometricas as psi
 
     ev = _ev(db, codigo, cuenta.id)
@@ -731,6 +733,11 @@ def sincronizar(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends
         raise HTTPException(502, str(ex))
     registrar(db, u.nombre, "evaluacion_sincronizada", "evaluaciones", ev.codigo, {"resultado": r, "correo_rh": u.correo})
     db.commit()
+    if r == "resultado_recibido":
+        try:
+            await sproc.avanzar_seguro(db, sev.postulacion_de(db, ev))
+        except sev.ErrorEvaluacion:
+            pass  # evaluación sin postulación viva: el resultado ya quedó guardado
     return _respuesta(db, ev, u, sincronizacion=r)
 
 

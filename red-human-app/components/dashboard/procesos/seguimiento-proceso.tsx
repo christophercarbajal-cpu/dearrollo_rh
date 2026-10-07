@@ -9,14 +9,14 @@
    paso SOLO a este candidato (la plantilla y la vacante no cambian). */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, Plus, RotateCcw, SkipForward, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, CheckCircle2, Clock, Link2, Play, Plus, RefreshCw, RotateCcw, SkipForward, Zap } from "lucide-react";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { useSesion } from "@/components/sesion";
 import {
   agregarActividadProceso, aplicarProcesoVigente, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
-  omitirPasoProceso, reactivarPasoProceso, type OpcionesProceso,
+  omitirPasoProceso, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
 } from "@/lib/api";
 import type { AccionPaso, Candidato, EstadoPaso, EtapaCandidato, PasoSeguimiento, ResultadoPaso, SeguimientoProceso } from "@/lib/data";
 import { textoDia } from "@/lib/fechas";
@@ -119,6 +119,21 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     } catch {
       setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
     }
+  }
+
+  /** Psicométricas.mx sin webhook (desarrollo): consulta su API, trae JSON + PDF y el paso queda Completado aquí mismo. */
+  async function sincronizar(paso: PasoSeguimiento) {
+    if (!paso.evaluacion) return;
+    setOcupado(`sync-${paso.id}`);
+    const r = await sincronizarEvaluacion(paso.evaluacion);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    const s = await fetchSeguimiento(c.id);
+    if (s) setSeg(s);
+    const estado = r.data.sincronizacion;
+    setAviso(estado === "resultado_recibido"
+      ? { tono: "ok", texto: `Resultado de «${paso.nombre}» recibido (JSON y PDF). El paso quedó Completado.` }
+      : { tono: "warn", texto: `Psicométricas.mx todavía no reporta «${paso.nombre}» como terminada. Vuelve a sincronizar cuando el candidato la conteste.` });
   }
 
   async function reactivar(paso: PasoSeguimiento) {
@@ -247,6 +262,11 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                     )}
                   </div>
                   <div className="flex items-center gap-1 sm:justify-end">
+                    {live && p.sincronizable && (
+                      <Button size="sm" variant="outline" onClick={() => sincronizar(p)} disabled={Boolean(ocupado)}>
+                        <RefreshCw className={cn("h-3.5 w-3.5", ocupado === `sync-${p.id}` && "animate-spin")} /> Sincronizar resultado
+                      </Button>
+                    )}
                     {live && p.accion && (
                       <Button size="sm" variant={p.accion.clave === "iniciar_evaluacion" || p.accion.clave === "abrir" ? "primary" : "outline"}
                         onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>

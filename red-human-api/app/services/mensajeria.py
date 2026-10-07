@@ -63,8 +63,19 @@ def es_chat(canal: str) -> bool:
     return canal in ("whatsapp", "telegram")
 
 
+def solo_telegram() -> bool:
+    """AMBIENTE_PRUEBA=true + bot configurado: Telegram es el ÚNICO canal con candidatos (desarrollo). Ignora el canal
+    de cada Cuenta y cualquier configuración de WhatsApp."""
+    from ..config import settings
+
+    return bool(settings.ambiente_prueba) and telegram.activo()
+
+
 def canal_de_cuenta(db, cuenta_id: Optional[int]) -> str:
     from ..models import Cuenta, normalizar_canal_mensajeria
+
+    if solo_telegram():
+        return "telegram"
 
     if not cuenta_id:
         return "whatsapp"
@@ -96,6 +107,8 @@ def _ultimo_canal_entrante(db, tel: str) -> str:
 
 def resolver(telefono: str, cuenta_id: Optional[int] = None, db=None) -> str:
     """'whatsapp' | 'telegram' para un envío a `telefono`. Nunca lanza (ante cualquier error, WhatsApp)."""
+    if solo_telegram():
+        return "telegram"
     conv = canal_conversacion(telefono)
     if conv:
         return conv
@@ -130,6 +143,8 @@ def alcance_canal(cuentas: list, canal: str) -> list:
     eligieron Telegram o ambos."""
     from ..models import normalizar_canal_mensajeria
 
+    if solo_telegram():  # desarrollo: Telegram atiende a todas las Cuentas; WhatsApp a ninguna
+        return list(cuentas) if canal == "telegram" else []
     if canal == "whatsapp" and not telegram.activo():
         return list(cuentas)  # sin bot, una Cuenta «solo Telegram» sigue atendiendo por WhatsApp
     if canal == "telegram":
@@ -151,7 +166,7 @@ def canales_publicos(vacante) -> dict:
     from ..models import normalizar_canal_mensajeria
 
     cuenta = getattr(vacante, "cuenta", None)
-    canal = normalizar_canal_mensajeria(cuenta.canal_mensajeria if cuenta else "")
+    canal = "telegram" if solo_telegram() else normalizar_canal_mensajeria(cuenta.canal_mensajeria if cuenta else "")
     bot = telegram.usuario_bot() if telegram.activo() else ""
     if not bot:
         canal = "whatsapp"

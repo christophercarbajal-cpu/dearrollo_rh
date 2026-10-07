@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_bot_username: str = ""
+    # AMBIENTE_PRUEBA=true (2026-10-07, desarrollo): TODO el contacto con candidatos sale y entra por Telegram, sin
+    # importar `Cuenta.canal_mensajeria` ni la configuración de WhatsApp (el número de WhatsApp de desarrollo no
+    # atiende). Requiere TELEGRAM_BOT_TOKEN + TELEGRAM_BOT_USERNAME; sin bot el sistema sigue como siempre.
+    ambiente_prueba: bool = False
 
     # --- Gateway propio (alternativa sin costo por mensaje) ---
     waha_url: str = "http://localhost:3001"

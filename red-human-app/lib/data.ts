@@ -118,6 +118,8 @@ export interface PasoSeguimiento {
   decision?: { por: string; motivo: string; fecha: string; autorizado_por?: string } | null;
   heredado: boolean;
   adhoc?: boolean;
+  /** Conectada a Psicométricas.mx y sin resultado: «Sincronizar resultado» consulta su API a mano (2026-10-07). */
+  sincronizable?: boolean;
   accion: AccionPaso | null;
 }
 export interface EtapaSeguimiento {

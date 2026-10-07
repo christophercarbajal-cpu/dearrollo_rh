@@ -304,6 +304,30 @@ with TestClient(app) as client:
     tg(mensaje(7004, nombre="Dana", text="/start vac_VAC-9999"))
     check(any("ya no está disponible" in (e.get("text") or "") for e in enviados(7004)[-3:]),
           "vac_ de una vacante inexistente → aviso + menú (nunca silencio)")
+    # 2026-10-07: AMBIENTE_PRUEBA=true → Telegram es el ÚNICO canal (desarrollo), aunque la Cuenta diga WhatsApp
+    from app.services import mensajeria
+    from app.models import Vacante as _V
+
+    cuenta.canal_mensajeria = "whatsapp"
+    db.commit()
+    vac_obj = db.query(_V).filter_by(codigo=VAC).one()
+    check(mensajeria.canales_publicos(vac_obj)["canalCandidatos"] == "whatsapp" and mensajeria.resolver("5541000004", cuenta.id) == "whatsapp",
+          "sin AMBIENTE_PRUEBA una Cuenta de WhatsApp sigue por WhatsApp")
+    settings.ambiente_prueba = True
+    cp = mensajeria.canales_publicos(vac_obj)
+    check(cp["canalCandidatos"] == "telegram" and cp["telegramLiga"].endswith(f"vac_{VAC}") and not cp["whatsappLiga"],
+          "AMBIENTE_PRUEBA: el portal manda a Telegram aunque la Cuenta tenga WhatsApp")
+    check(mensajeria.resolver("5541000004", cuenta.id) == "telegram" and mensajeria.canal_de_cuenta(db, cuenta.id) == "telegram",
+          "AMBIENTE_PRUEBA: todo envío al candidato sale por Telegram")
+    check(mensajeria.alcance_canal([cuenta], "whatsapp") == [] and mensajeria.alcance_canal([cuenta], "telegram") == [cuenta],
+          "AMBIENTE_PRUEBA: el webhook de WhatsApp no atiende a nadie; Telegram atiende a todas las Cuentas")
+    r = client.post("/candidatos/postular", data={"vacante": slug or VAC, "nombre": "Elsa Dev", "telefono": "5541000009", "correo": "elsa@tg.mx", "consentimiento": "true"})
+    db.expire_all()
+    pe = db.query(Postulacion).filter_by(codigo=r.json()["postulacion"]).one()
+    check(r.json()["telegram"].startswith("https://t.me/RedHumanPruebaBot?start=p_")
+          and not any("Plantilla de WhatsApp" in m.texto or "Fallo de envío Meta" in m.texto for m in pe.mensajes),
+          "AMBIENTE_PRUEBA: /postular entrega la liga de Telegram y no intenta la plantilla de WhatsApp")
+    settings.ambiente_prueba = False
     telegram.llamar = _llamar_real
     telegram.API_URL = "http://127.0.0.1:9"
     r = asyncio.run(telegram.llamar("getMe"))

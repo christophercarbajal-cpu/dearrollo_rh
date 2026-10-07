@@ -116,6 +116,16 @@ async def lifespan(app: FastAPI):
             print(f"[pipeline] 5 columnas: {pipeline['evaluacion_a_filtro_red_human']} a Filtro Red Human, "
                   f"{pipeline['a_filtro_humano']} a Filtro humano", flush=True)
 
+    # 2026-10-07: AMBIENTE_PRUEBA fuerza Telegram como único canal con candidatos (desarrollo).
+    if settings.ambiente_prueba:
+        from .services import mensajeria, telegram as _tg
+
+        if mensajeria.solo_telegram():
+            print(f"[mensajeria] AMBIENTE_PRUEBA activo: TODO el contacto con candidatos va por Telegram (@{_tg.usuario_bot() or '¿bot?'}); "
+                  "WhatsApp y el canal de cada Cuenta se ignoran.", flush=True)
+        else:
+            print("[mensajeria] ⚠️ AMBIENTE_PRUEBA=true pero falta TELEGRAM_BOT_TOKEN: los mensajes siguen saliendo por WhatsApp.", flush=True)
+
     # 2026-09-14: en el log de arranque queda qué variables de Anam ve ESTE proceso (presencia, no
     # valores). Si la sala "cae a texto" en producción, aquí se ve si es configuración o Anam.
     ea = estado_avatar()

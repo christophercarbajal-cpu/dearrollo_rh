@@ -284,6 +284,12 @@ with TestClient(app) as client:
     settings.psicometricas_url_candidato = "https://evaluacion.ejemplo.mx/acceso/{clave}"
     check(ev_de(ev2["id"])["urlCandidatoProveedor"] == "https://evaluacion.ejemplo.mx/acceso/1-EUPQ-0116-164", "con la plantilla configurada se arma la liga")
     check(client.post(f"/evaluaciones/{ev2['id']}/integracion/avanzar", headers=H).status_code == 409, "conectada al proveedor: ya no se simula a mano")
+    # 2026-10-07: en la ruta del candidato, la psicométrica conectada y sin resultado ofrece «Sincronizar resultado»
+    seg_pe = client.get(f"/procesos/postulaciones/{PE}", headers=H).json()
+    paso_psi = next(x for e in seg_pe["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev2["id"])
+    check(paso_psi["sincronizable"] is True and paso_psi["estado"] == "en_curso", "la ruta muestra «Sincronizar resultado» en la psicométrica en curso")
+    r = client.post(f"/evaluaciones/{ev2['id']}/sincronizar", headers=H)
+    check(r.status_code == 200 and r.json()["sincronizacion"] == "en_curso", "sincronizar sin terminar en el proveedor: no guarda nada")
     settings.psicometricas_webhook_secret = "secreto-xyz"
     check(client.post("/api/webhooks/psicometricas?secreto=malo", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba"}).status_code == 401, "webhook con secreto incorrecto → 401")
     r = client.post("/api/webhooks/psicometricas?secreto=secreto-xyz", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba", "nombre_prueba": "Cleaver"})

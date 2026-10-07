@@ -629,6 +629,9 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         "revisadoPor": revisado, "evaluacion": ev.codigo,
         "terminado_en": _aware(ev.revisada_en or ev.registrada_en) if completada else None,
         "responsable": ev.evaluador_nombre or "",
+        # 2026-10-07: conectada a Psicométricas.mx y sin resultado → «Sincronizar resultado» (consulta su API a mano;
+        # sirve cuando el webhook del proveedor apunta a otro servidor, p. ej. desarrollo).
+        "sincronizable": bool(ev.clave_proveedor) and ev.estado in ("pendiente", "realizada_sin_resultado"),
     }
 
 
@@ -975,6 +978,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "evaluacion": r.get("evaluacion"), "score": r.get("score"),
             "plazoDias": paso.get("plazo_dias"), "fechaLimite": limite.isoformat() if limite else None, "vencido": vencido,
             "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
+            "sincronizable": bool(r.get("sincronizable")),
             "accion": _accion(paso, r, disponible),
             "_terminado_en": r.get("terminado_en"),
         })

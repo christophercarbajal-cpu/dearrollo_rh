@@ -1096,10 +1096,11 @@ def prueba_psicometrica_dict(pr) -> dict:
     }
 
 
-def _url_psico(clave: str):
-    from .services import psicometricas as psi
+def _url_psico(ev):
+    """Liga de acceso del candidato: la interceptada de la respuesta del proveedor o la de PSICOMETRICAS_URL_CANDIDATO."""
+    from .services import evaluaciones as sev
 
-    return psi.url_candidato(clave) if clave else None
+    return sev._url_proveedor(ev) or None
 
 
 def _ultima_entrevista_humana_con_resultado(p):
@@ -1167,7 +1168,7 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         "proveedor": ev.proveedor or "",
         "idProveedor": ev.id_proveedor or "",
         "claveProveedor": ev.clave_proveedor or None,
-        "urlCandidatoProveedor": _url_psico(ev.clave_proveedor),
+        "urlCandidatoProveedor": _url_psico(ev),
         "usaPsicometricas": sev.usa_psicometricas(ev),
         "pasoIntegrada": ev.paso_integrada or None,
         "siguientePaso": sev.siguiente_paso(ev) if ev.forma == "integrada" and not ev.clave_proveedor and ev.estado in ("pendiente", "realizada_sin_resultado") else None,

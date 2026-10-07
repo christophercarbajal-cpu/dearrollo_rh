@@ -281,6 +281,29 @@ with TestClient(app) as client:
     check(e["claveProveedor"] == "1-EUPQ-0116-164" and e["estado"] == "pendiente" and e["pasoIntegrada"] == "enviada",
           "guarda la clave y queda Pendiente (paso Enviada)")
     check(e["urlCandidatoProveedor"] is None, "su API no regresa liga: sin PSICOMETRICAS_URL_CANDIDATO solo se muestra la clave (no se inventa)")
+    env = r.json().get("envioCandidato") or {}
+    check(env.get("conLiga") is False and "enviado" in env, "sin liga del proveedor Red Human igual le escribe al candidato (su clave + revisar spam)")
+    # 2026-10-07: payload limpio y liga interceptada de la respuesta (si el proveedor la regresa).
+    pl = psi.payload_agrega_candidato("  Ana   López ", " Ana@Correo.MX ", "Vacante X", "1, 7")
+    check(pl == {"Candidate": "Ana López", "Email": "ana@correo.mx", "Vacancy": "Vacante X", "Tests": "1,7", "Lang": "Mx"},
+          "payload de agregaCandidato normalizado (correo en minúsculas sin espacios, nombre limpio, Tests «1,7»)")
+    for malo in (("Ana", "sin-arroba"), ("Candidato WhatsApp", "a@b.mx")):
+        try:
+            psi.payload_agrega_candidato(malo[0], malo[1], "V", "1")
+            check(False, f"rechaza {malo}")
+        except psi.PsicometricasError as ex:
+            check(ex.status == 400, f"rechaza antes de gastar saldo: {malo}")
+    check(psi._buscar_liga({"status": "200", "clave": "X", "data": {"url": "https://psicometricas.mx/e/abc"}}) == "https://psicometricas.mx/e/abc",
+          "intercepta la URL de acceso si viene en la respuesta")
+    check(psi._buscar_liga({"status": "200", "clave": "X", "msg": "Candidato agregado correctamente."}) == "", "sin URL en la respuesta no inventa liga")
+    n_antes = len(ENVIADO)
+    psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-500", "url": "https://psicometricas.mx/e/xyz"}))[1]
+    PR2 = client.post("/evaluaciones/pruebas", headers=H, json={"clave": "PSI-KOSTICK", "nombre": "Kostick", "modo": "integrada", "proveedor": "Psicometricas.mx", "id_proveedor": "2"}).json()["id"]
+    ev_l = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json={**NUEVA, "prueba_id": PR2}).json()["evaluacion"]
+    r_l = client.post(f"/evaluaciones/{ev_l['id']}/enviar", headers=H).json()
+    check(len(ENVIADO) == n_antes + 1 and r_l["evaluacion"]["urlCandidatoProveedor"] == "https://psicometricas.mx/e/xyz" and r_l["envioCandidato"]["conLiga"] is True,
+          "con URL en la respuesta: se guarda y se manda al candidato «Aquí tienes la liga de tu evaluación»")
+    psi.httpx.post = lambda url, data=None, timeout=None: (ENVIADO.append((url, data)), R(200, {"status": "200", "clave": "1-EUPQ-0116-164", "msg": "Candidato agregado correctamente."}))[1]
     settings.psicometricas_url_candidato = "https://evaluacion.ejemplo.mx/acceso/{clave}"
     check(ev_de(ev2["id"])["urlCandidatoProveedor"] == "https://evaluacion.ejemplo.mx/acceso/1-EUPQ-0116-164", "con la plantilla configurada se arma la liga")
     check(client.post(f"/evaluaciones/{ev2['id']}/integracion/avanzar", headers=H).status_code == 409, "conectada al proveedor: ya no se simula a mano")

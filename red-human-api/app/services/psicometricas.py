@@ -10,6 +10,8 @@
   `consultaCandidato` (fecha_fin) antes de guardar nada.
 """
 
+import json
+import re
 from typing import List, Optional, Union
 
 import httpx
@@ -73,16 +75,84 @@ def tests_de(id_proveedor: str) -> str:
     return ",".join(ids)
 
 
-def agregar_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: str = "Mx") -> str:
+CORREO_VALIDO = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Llaves que, si el proveedor llegara a regresarlas, traen la liga/token de acceso del candidato. Su documentación
+# solo promete `status`, `clave` y `msg`; se revisa todo el JSON por si su respuesta real trae más.
+LLAVES_LIGA = ("url", "liga", "link", "enlace", "url_acceso", "url_candidato", "acceso", "url_prueba", "login")
+LLAVES_TOKEN = ("token_acceso", "token_candidato", "access_token")
+
+
+def _oculto(payload: dict) -> dict:
+    return {k: ("***" if k in ("Token", "Password") else v) for k, v in payload.items()}
+
+
+def payload_agrega_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: str = "Mx") -> dict:
+    """Cuerpo EXACTO de agregaCandidato según https://psicometricas.mx/api (form-encoded): Candidate, Email, Vacancy,
+    Tests («1,7»), Lang (Mx|Es) + Token/Password. Limpia los valores: un correo con espacios/mayúsculas o un nombre
+    de relleno («Candidato WhatsApp») hace que el proveedor registre al candidato pero no le entregue su correo."""
+    correo = (correo or "").strip().lower()
+    if not CORREO_VALIDO.match(correo):
+        raise PsicometricasError(f"El correo del candidato no es válido para Psicométricas.mx: «{correo}».", 400)
+    nombre = " ".join((nombre or "").split())
+    if not nombre or nombre.startswith("Candidato") or nombre == "TMP":
+        raise PsicometricasError("El candidato no tiene nombre real en su ficha; captúralo antes de enviar la psicometría.", 400)
+    return {"Candidate": nombre, "Email": correo, "Vacancy": " ".join((vacante or "").split())[:150] or "Vacante",
+            "Tests": tests_de(tests), "Lang": lang if lang in ("Mx", "Es") else "Mx"}
+
+
+def _buscar_liga(datos) -> str:
+    """URL (o token) de acceso del candidato en cualquier nivel de la respuesta; '' si no viene."""
+    if isinstance(datos, dict):
+        for k, v in datos.items():
+            kl = str(k).lower()
+            if isinstance(v, str) and v.strip():
+                if kl in LLAVES_LIGA and v.strip().lower().startswith("http"):
+                    return v.strip()
+                if kl in LLAVES_TOKEN:
+                    return v.strip()
+        for v in datos.values():
+            liga = _buscar_liga(v)
+            if liga:
+                return liga
+    elif isinstance(datos, list):
+        for v in datos:
+            liga = _buscar_liga(v)
+            if liga:
+                return liga
+    elif isinstance(datos, str):
+        m = re.search(r"https?://\S+", datos)
+        if m:
+            return m.group(0).rstrip(".,)")
+    return ""
+
+
+def asignar_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: str = "Mx") -> dict:
+    """agregaCandidato → {clave, liga, respuesta}. `liga` = la URL/token de acceso si el proveedor la regresa; si no,
+    PSICOMETRICAS_URL_CANDIDATO con la clave; si tampoco, ''. Deja en el log el payload (sin credenciales) y el JSON
+    COMPLETO de la respuesta."""
+    cuerpo = payload_agrega_candidato(nombre, correo, vacante, tests, lang)
+    payload = {**_cred(), **cuerpo}
+    print(f"[psicometricas] POST {_url('agregaCandidato')} payload={json.dumps(_oculto(payload), ensure_ascii=False)}", flush=True)
     try:
-        r = httpx.post(_url("agregaCandidato"), data={**_cred(), "Candidate": nombre, "Email": correo, "Vacancy": vacante, "Tests": tests, "Lang": lang}, timeout=30)
+        r = httpx.post(_url("agregaCandidato"), data=payload, timeout=30)
     except httpx.HTTPError as ex:
+        print(f"[psicometricas] sin conexión: {ex}", flush=True)
         raise PsicometricasError(f"No se pudo conectar con Psicométricas.mx: {ex}")
+    try:
+        crudo = json.dumps(r.json(), ensure_ascii=False)
+    except ValueError:
+        crudo = (r.text or "")[:2000]
+    print(f"[psicometricas] respuesta HTTP {r.status_code}: {crudo}", flush=True)
     datos = _revisar(r)
     clave = str((datos or {}).get("clave") or "") if isinstance(datos, dict) else ""
     if not clave:
         raise PsicometricasError(f"Psicométricas.mx no regresó la clave del candidato: {str(datos)[:200]}")
-    return clave
+    liga = _buscar_liga(datos) or (url_candidato(clave) or "")
+    return {"clave": clave, "liga": liga, "respuesta": datos}
+
+
+def agregar_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: str = "Mx") -> str:
+    return asignar_candidato(nombre, correo, vacante, tests, lang)["clave"]
 
 
 def consultar_candidato(clave: str) -> List[dict]:

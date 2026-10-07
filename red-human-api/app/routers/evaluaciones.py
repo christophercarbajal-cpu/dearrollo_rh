@@ -669,10 +669,39 @@ def _activar_psicometria(db: Session, ev: Evaluacion, p) -> str:
                   {"clave_proveedor": previa.clave_proveedor, "de": previa.codigo})
         return ev.clave_proveedor
     try:
-        ev.clave_proveedor = psi.agregar_candidato(p.nombre, p.correo, p.vacante.titulo if p.vacante else ev.nombre_visible, tests)
+        alta = psi.asignar_candidato(p.nombre, p.correo, p.vacante.titulo if p.vacante else ev.nombre_visible, tests)
     except psi.PsicometricasError as ex:
         raise HTTPException(400 if ex.status == 400 else 502, str(ex))
+    ev.clave_proveedor = alta["clave"]
+    if alta["liga"]:
+        ev.liga_externa_candidato = alta["liga"][:500]
+    registrar(db, "sistema", "psicometria_alta_proveedor", "evaluaciones", ev.codigo,
+              {"clave_proveedor": alta["clave"], "liga": alta["liga"], "respuesta": alta["respuesta"]})
     return ev.clave_proveedor
+
+
+async def _mandar_liga_psicometria(db: Session, ev: Evaluacion, p) -> dict:
+    """No depender solo del correo del proveedor: Red Human manda al candidato, por su canal activo (Telegram /
+    WhatsApp, vía la fachada), la liga de acceso si la tenemos; si el proveedor solo dio la clave, le avisa que revise
+    su correo (también spam) con esa clave. Nunca lanza: el resultado queda en bitácora y no bloquea."""
+    from ..services import mensajeria, whatsapp
+
+    if not p.telefono:
+        return {"enviado": False, "conLiga": False, "detalle": "El candidato no tiene teléfono registrado."}
+    liga = sev._url_proveedor(ev)
+    if liga:
+        texto = f"Aquí tienes la liga de tu evaluación: {liga}"
+    else:
+        texto = (f"Te registramos en tu evaluación psicométrica. Psicométricas.mx te enviará el acceso a {p.correo} "
+                 f"(revisa también la carpeta de spam). Tu clave es: {ev.clave_proveedor}")
+    try:
+        with mensajeria.de_cuenta(p.cuenta_id):
+            r = await whatsapp.enviar_mensaje(p.telefono, texto, cuenta_id=p.cuenta_id)
+    except Exception as ex:  # noqa: BLE001
+        r = {"enviado": False, "detalle": str(ex)}
+    registrar(db, "sistema", "psicometria_liga_enviada", "evaluaciones", ev.codigo,
+              {"con_liga": bool(liga), "enviado": bool(r.get("enviado")), "proveedor": r.get("proveedor"), "detalle": r.get("detalle")})
+    return {"enviado": bool(r.get("enviado")), "conLiga": bool(liga), "canal": r.get("proveedor"), "detalle": r.get("detalle")}
 
 
 @router.post("/{codigo}/enviar")
@@ -689,7 +718,8 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
             raise sev.ErrorEvaluacion(409, bloqueo)
     if ev.forma != "integrada" or ev.estado != "pendiente" or (ev.paso_integrada or "asignada") != "asignada":
         raise HTTPException(409, "Solo se envía al proveedor una evaluación integrada pendiente.")
-    if sev.usa_psicometricas(ev) and psi.configurado():
+    real = sev.usa_psicometricas(ev) and psi.configurado()
+    if real:
         _activar_psicometria(db, ev, p)
         sev.aplicar_paso(db, ev, "enviada", u.nombre, "Psicométricas.mx")
     else:
@@ -697,7 +727,11 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
     registrar(db, u.nombre, "evaluacion_enviada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "proveedor": ev.proveedor, "clave_proveedor": ev.clave_proveedor, "correo_rh": u.correo})
     db.commit()
-    return _respuesta(db, ev, u)
+    if not real:
+        return _respuesta(db, ev, u)
+    envio = await _mandar_liga_psicometria(db, ev, p)
+    db.commit()
+    return _respuesta(db, ev, u, envioCandidato=envio)
 
 
 @router.post("/{codigo}/integracion/avanzar")

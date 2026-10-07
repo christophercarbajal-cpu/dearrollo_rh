@@ -132,7 +132,12 @@ def liga_evaluador_disponible(ev: Evaluacion) -> bool:
 def _url_proveedor(ev: Evaluacion) -> str:
     from . import psicometricas as psi
 
-    return (psi.url_candidato(ev.clave_proveedor) or "") if ev.clave_proveedor else ""
+    if not ev.clave_proveedor:
+        return ""
+    # 2026-10-07: la liga interceptada de la respuesta de agregaCandidato (forma integrada) manda sobre la plantilla.
+    if ev.forma == "integrada" and ev.liga_externa_candidato:
+        return ev.liga_externa_candidato
+    return psi.url_candidato(ev.clave_proveedor) or ""
 
 
 def _filas_envio(e: EventoEvaluacion, clave: str) -> list:

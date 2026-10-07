@@ -105,6 +105,22 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
     listo(r.data, r.data.sincronizacion === "en_curso" ? "El candidato aún no termina sus pruebas." : texto);
   }
 
+  /** Psicométricas.mx: además del alta en el proveedor, Red Human manda la liga (o la clave) al candidato por su canal. */
+  async function enviarProveedor(e: Evaluacion) {
+    setOcupado(e.codigo);
+    setAviso(null);
+    const r = await enviarEvaluacionProveedor(e.codigo);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    const env = r.data.envioCandidato;
+    const texto = !env
+      ? `«${e.nombre}» enviada al proveedor.`
+      : env.enviado
+        ? `«${e.nombre}» enviada al proveedor. ${env.conLiga ? "Le mandamos la liga" : "Le mandamos su clave"} al candidato${env.canal ? ` por ${env.canal === "telegram" ? "Telegram" : "WhatsApp"}` : ""}.`
+        : `«${e.nombre}» enviada al proveedor, pero no pudimos escribirle al candidato: ${env.detalle || "sin detalle"}.`;
+    listo(r.data, texto);
+  }
+
   function copiar(texto: string, que: string) {
     void navigator.clipboard?.writeText(texto);
     setAviso({ tono: "ok", texto: `${que}: copiada.` });
@@ -128,7 +144,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
       case "modificar": return setModificar(e);
       case "no_realizada": return setMotivo({ e, accion: "no_realizada" });
       case "cancelar": return setMotivo({ e, accion: "cancelar" });
-      case "enviar_proveedor": return accion(e, () => enviarEvaluacionProveedor(e.codigo), `«${e.nombre}» enviada al proveedor.`);
+      case "enviar_proveedor": return void enviarProveedor(e);
       case "sincronizar": return accion(e, () => sincronizarEvaluacion(e.codigo), "Resultado recibido del proveedor.");
       case "avanzar_paso": return accion(e, () => avanzarEvaluacionIntegrada(e.codigo), "Paso registrado.");
       case "programar_otra":

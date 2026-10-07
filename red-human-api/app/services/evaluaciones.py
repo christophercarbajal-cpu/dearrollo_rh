@@ -237,12 +237,16 @@ async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, a
     return resultados
 
 
-async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, actor: str, usuario_id: Optional[int] = None) -> List[dict]:
+async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, actor: str, usuario_id: Optional[int] = None,
+                                evento_notificacion: str = "psicometria_enviada") -> List[dict]:
     """Psicométricas.mx (2026-10-07): Red Human es el ÚNICO que avisa al candidato — no se depende del correo del
     proveedor. Manda por su canal de mensajería activo (Telegram/WhatsApp, vía la fachada) y por correo corporativo: la
     URL del portal del sustentante, la clave de agregaCandidato y los pasos. Nunca lanza; cada resultado queda en el
-    historial y marca «Enviada» con el primer envío confirmado."""
+    historial y marca «Enviada» con el primer envío confirmado.
+    2026-10-07: los canales los decide la regla de la Cuenta (Configuración → Notificaciones): «Psicometría enviada» o
+    «Recordatorio de psicometría pendiente» (`evento_notificacion`)."""
     from ..serial import nombre_empresa_candidato
+    from .notificaciones import canales_candidato
     from . import plantillas_correo
     from . import psicometricas as psi
     from .correo import enviar_correo
@@ -254,29 +258,34 @@ async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, act
     empresa = nombre_empresa_candidato(p.vacante) if p.vacante else ""
     vacante = p.vacante.titulo if p.vacante else ""
     nombre = ((p.nombre or "").split(" ")[0]) if p.nombre and not p.nombre.startswith("Candidato") else ""
+    recordatorio = evento_notificacion == "recordatorio_psicometria"
+    canales = canales_candidato(db, p.cuenta_id, evento_notificacion)
     resultados = []
-    if p.telefono:
+    if p.telefono and canales["whatsapp"]:
         try:
             with de_cuenta(p.cuenta_id):
-                r = await enviar_con_boton(p.telefono, psi.mensaje_candidato(nombre, clave, liga, empresa, vacante),
+                r = await enviar_con_boton(p.telefono, psi.mensaje_candidato(nombre, clave, liga, empresa, vacante, recordatorio=recordatorio),
                                            "Ir a mi evaluación", liga, cuenta_id=p.cuenta_id)
         except Exception as ex:  # noqa: BLE001
             r = {"enviado": False, "detalle": str(ex)[:200]}
         canal = r.get("proveedor") if r.get("proveedor") == "telegram" else "whatsapp"
         resultados.append({"destinatario": "candidato", "canal": canal, "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
-    if p.correo:
+    if p.correo and canales["correo"]:
         try:
             asunto, html = plantillas_correo.html_psicometria({
                 "nombre": nombre, "empresa": empresa, "vacante": vacante, "prueba": ev.nombre_visible,
-                "liga": liga, "clave": clave, "instrucciones": psi.instrucciones(clave),
+                "liga": liga, "clave": clave, "instrucciones": psi.instrucciones(clave), "recordatorio": recordatorio,
             })
             r = await enviar_correo(p.correo, asunto, html)
         except Exception as ex:  # noqa: BLE001
             r = {"enviado": False, "detalle": str(ex)[:200]}
         resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
     if not resultados:
-        resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": "El candidato no tiene teléfono ni correo registrados."})
-    evento(db, ev, "envio", actor, usuario_id=usuario_id, que="liga_proveedor", liga="proveedor", envios=resultados)
+        detalle = ("El aviso al candidato está apagado en Configuración → Notificaciones." if not (canales["whatsapp"] or canales["correo"])
+                   else "El candidato no tiene teléfono ni correo registrados.")
+        resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": detalle})
+    evento(db, ev, "envio", actor, usuario_id=usuario_id, que="recordatorio_psicometria" if recordatorio else "liga_proveedor",
+           liga="proveedor", envios=resultados)
     marcar_enviada(ev, resultados)
     return resultados
 
@@ -739,6 +748,21 @@ def aplicar_paso(db: Session, ev: Evaluacion, paso: str, actor: str, origen: str
                "proveedor" if origen != "simulado" else "sistema", paso=paso, origen=origen)
 
 
+def estado_proveedor(ev: Evaluacion) -> Optional[tuple]:
+    """Psicometría del proveedor integrado → (clave, texto) de SOLO tres estados: Pendiente (asignada, sin iniciar),
+    En curso (el proveedor confirmó el inicio) y Completada (terminó; con o sin resultado descargado). None si la
+    evaluación no es psicométrica integrada o se canceló."""
+    from ..models import ESTADOS_PROVEEDOR_PSICOMETRIA as E
+
+    if ev.tipo != "psicometrica" or ev.forma != "integrada" or ev.estado in ("cancelada", "no_realizada"):
+        return None
+    if ev.estado in ("realizada_sin_resultado", "con_resultado") or ev.paso_integrada in ("completada", "resultado_recibido"):
+        return "completada", E["completada"]
+    if ev.iniciada_en or ev.paso_integrada == "iniciada":
+        return "en_curso", E["en_curso"]
+    return "pendiente", E["pendiente"]
+
+
 def resumen_resultado(datos) -> str:
     """Texto breve a partir del JSON del proveedor (sin interpretar: lo revisa una persona)."""
     import json as _json
@@ -759,6 +783,9 @@ def sincronizar_psicometricas(db: Session, ev: Evaluacion, por: str = "Psicomét
         return "ya_estaba"
     filas = psi.consultar_candidato(ev.clave_proveedor)
     if not psi.terminado(filas):
+        # 2026-10-07: si el proveedor ya registra el inicio de alguna prueba → «En curso» (una sola vez, con historial)
+        if psi.iniciado(filas) and not ev.iniciada_en and ev.estado == "pendiente":
+            aplicar_paso(db, ev, "iniciada", por, "Psicométricas.mx")
         return "en_curso"
     datos = psi.resultado_json(ev.clave_proveedor)
     pdf = psi.resultado_pdf(ev.clave_proveedor)

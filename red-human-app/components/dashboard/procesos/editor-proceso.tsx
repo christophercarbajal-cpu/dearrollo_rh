@@ -4,13 +4,18 @@
    Cuenta) y el formulario de vacante (copia personalizable, sin tocar la plantilla). Las cinco etapas son fijas; en
    cada una RH agrega pasos DESDE EL CATÁLOGO con su responsable, condición de avance (regla), plazo y su ejecución:
    «En paralelo» o «Esperar a…» (dependencias EXPLÍCITAS). El orden visual NO crea dependencias. El interruptor «Avance automático» de la etapa mueve al candidato cuando todos los
-   obligatorios cumplen su condición. La validación final (ciclos, etapas permitidas) la hace la API. */
+   obligatorios cumplen su condición. La validación final (ciclos, etapas permitidas) la hace la API.
+   2026-10-07: la actividad «Psicométrica» elige su batería predeterminada del catálogo (`pruebas`); en una vacante es
+   su copia, así que cambiarla ahí nunca altera la ruta. */
 
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui";
 import { inputRH } from "@/components/dashboard/modulos-rh";
-import { fetchEntrevistadores, type Entrevistador, type OpcionesProceso, type OpcionTipoPaso } from "@/lib/api";
+import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
+import {
+  fetchEntrevistadores, fetchPruebasPsicometricas, type Entrevistador, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica,
+} from "@/lib/api";
 import type { EtapaCandidato, EtapasProceso, PasoProceso, ReglaPaso, ResponsablePaso } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -47,9 +52,11 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   soloLectura?: boolean;
 }) {
   const [usuarios, setUsuarios] = useState<Entrevistador[]>([]);
+  const [catalogo, setCatalogo] = useState<PruebaPsicometrica[]>([]);
   const [abierto, setAbierto] = useState<string | null>(null);
   useEffect(() => {
     fetchEntrevistadores().then((u) => setUsuarios(u ?? []));
+    fetchPruebasPsicometricas().then((l) => setCatalogo((l ?? []).filter((x) => x.modo === "integrada" && x.activa)));
   }, []);
   const tipos = useMemo(() => Object.fromEntries(opciones.tiposPaso.map((t) => [t.valor, t])), [opciones]);
   const ordenEtapa = (e: string) => opciones.etapas.findIndex((x) => x.valor === e);
@@ -146,7 +153,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                       )}
                     </div>
                     {expandido && (
-                      <DetallePaso p={p} t={t} previos={previos} usuarios={usuarios} opciones={opciones} soloLectura={soloLectura}
+                      <DetallePaso catalogo={catalogo} p={p} t={t} previos={previos} usuarios={usuarios} opciones={opciones} soloLectura={soloLectura}
                         onCambio={(c) => cambiarPaso(p.id, c)} />
                     )}
                   </li>
@@ -176,11 +183,12 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   );
 }
 
-function DetallePaso({ p, t, previos, usuarios, opciones, soloLectura, onCambio }: {
+function DetallePaso({ p, t, previos, usuarios, catalogo = [], opciones, soloLectura, onCambio }: {
   p: PasoProceso;
   t?: OpcionTipoPaso;
   previos: PasoProceso[];
   usuarios: Entrevistador[];
+  catalogo?: PruebaPsicometrica[];
   opciones: OpcionesProceso;
   soloLectura: boolean;
   onCambio: (c: Partial<PasoProceso>) => void;
@@ -276,6 +284,17 @@ function DetallePaso({ p, t, previos, usuarios, opciones, soloLectura, onCambio 
             {opciones.enfoquesEntrevistaAgente.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
           </select>
         </label>
+      )}
+      {p.tipo === "psicometrica" && (
+        <div className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
+          Batería predeterminada
+          <span className="text-[11px] text-ink-3">
+            {(p.pruebas ?? []).length
+              ? (p.pruebas ?? []).map((id) => catalogo.find((x) => x.id === id)?.nombre ?? `#${id} (inactiva)`).join(" + ")
+              : "Sin batería: RH la elige al asignar."} Al abrir la actividad del candidato se precarga y RH solo da «Asignar y enviar».
+          </span>
+          {!soloLectura && <SelectorPruebas catalogo={catalogo} seleccion={p.pruebas ?? []} onChange={(ids) => onCambio({ pruebas: ids })} />}
+        </div>
       )}
       {p.tipo === "solicitud_web" && (
         <label className="flex items-center gap-2 text-xs text-ink-2 sm:col-span-2">

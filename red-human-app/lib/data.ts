@@ -66,6 +66,8 @@ export interface PasoProceso {
   con_cv?: boolean;
   /** Documentos: lista a validar (vacía = lo solicitado antes de Contratación / todos los obligatorios después). */
   documentos?: string[];
+  /** Psicometría (2026-10-07): batería predeterminada = ids del catálogo de pruebas psicométricas. */
+  pruebas?: number[];
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {

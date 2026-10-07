@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     # el proveedor acepta la clave en la URL, se puede usar «{clave}» (p. ej. https://…/?clave={clave}). Una URL del
     # panel de administración (admin.*) se ignora: nunca llega al candidato.
     psicometricas_url_candidato: str = "https://evaluacion.psicometrica.mx/"
+    # Recordatorio automático de psicometría pendiente (2026-10-07): días desde el envío (o el último recordatorio) sin
+    # que el proveedor confirme el inicio, y tope de recordatorios automáticos. 0 días = apagado. Nunca consulta la API
+    # del proveedor (el saldo se comparte con producción): usa lo que Red Human ya sabe.
+    psicometricas_recordatorio_dias: int = 2
+    psicometricas_recordatorios_max: int = 2
 
     cors_origins: str = "http://localhost:3000"
 

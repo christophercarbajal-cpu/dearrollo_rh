@@ -15,7 +15,9 @@
 * Informe médico COMPLETO (comentarios y adjuntos) solo para quien tiene permiso (`Usuario.puede_ver_informe_medico`).
 """
 
+import asyncio
 import hashlib
+import re
 import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -70,8 +72,11 @@ def _prueba(db: Session, pid: int, cuenta_id: int) -> PruebaPsicometrica:
 
 
 class PruebaIn(BaseModel):
-    clave: str
+    # 2026-10-07: el formulario solo pide Nombre, Tipo, Identificador en el proveedor y Activa; el identificador
+    # interno se genera solo si no llega (las capturas previas se siguen aceptando).
+    clave: str = ""
     nombre: str
+    tipo: str = "prueba"
     descripcion: str = ""
     puestos: List[str] = []
     modo: str = "manual"
@@ -84,6 +89,7 @@ class PruebaIn(BaseModel):
 class EditarPruebaIn(BaseModel):
     clave: Optional[str] = None
     nombre: Optional[str] = None
+    tipo: Optional[str] = None
     descripcion: Optional[str] = None
     puestos: Optional[List[str]] = None
     modo: Optional[str] = None
@@ -93,13 +99,28 @@ class EditarPruebaIn(BaseModel):
     activa: Optional[bool] = None
 
 
+def _clave_automatica(db: Session, cuenta_id: int, nombre: str, pid: int) -> str:
+    """Identificador interno a partir del nombre («Cleaver + Terman» → PSI-CLEAVER-TERMAN), único en la Cuenta."""
+    base = "PSI-" + (re.sub(r"[^A-Z0-9]+", "-", _norm(nombre).upper()).strip("-")[:48] or "PRUEBA")
+    usadas = {_norm(o.clave) for o in db.query(PruebaPsicometrica).filter(PruebaPsicometrica.cuenta_id == cuenta_id, PruebaPsicometrica.id != (pid or 0)).all()}
+    clave, i = base, 1
+    while _norm(clave) in usadas:
+        i += 1
+        clave = f"{base}-{i}"
+    return clave
+
+
 def _validar_prueba(db: Session, cuenta_id: int, pr: PruebaPsicometrica) -> None:
-    pr.clave = (pr.clave or "").strip()[:60]
+    from ..models import TIPOS_PRUEBA
+
     pr.nombre = (pr.nombre or "").strip()[:200]
-    if not pr.clave:
-        raise HTTPException(400, "Captura el identificador interno de la prueba.")
     if not pr.nombre:
         raise HTTPException(400, "Captura el nombre visible de la prueba.")
+    pr.clave = (pr.clave or "").strip()[:60] or _clave_automatica(db, cuenta_id, pr.nombre, pr.id)
+    if (pr.tipo or "prueba") not in TIPOS_PRUEBA:
+        raise HTTPException(400, "Tipo inválido: usa prueba o batería.")
+    pr.tipo = pr.tipo or "prueba"
+    pr.id_proveedor = (pr.id_proveedor or "").strip()[:150]
     if pr.modo not in MODOS_PRUEBA:
         raise HTTPException(400, "Modo inválido: usa integrada, enlace o manual.")
     if pr.modo == "enlace" and not (pr.url or "").strip().lower().startswith(("http://", "https://")):
@@ -617,6 +638,17 @@ async def recordatorio(codigo: str, datos: RecordatorioIn, db: Session = Depends
     audiencias = {"candidato": {"candidato"}, "evaluador": {"entrevistador"}, "ambos": {"candidato", "entrevistador"}}.get(datos.a)
     if audiencias is None:
         raise HTTPException(400, "Elige a quién: candidato, evaluador o ambos.")
+    if sev.usa_psicometricas(ev) and ev.clave_proveedor and "candidato" in audiencias:
+        # 2026-10-07: psicometría del proveedor → «Recordatorio de psicometría pendiente» (portal + clave, regla propia)
+        if (sev.estado_proveedor(ev) or ("",))[0] == "completada":
+            raise HTTPException(409, "El candidato ya terminó su psicometría.")
+        resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id, evento_notificacion="recordatorio_psicometria")
+        ev.recordatorios_psicometria = (ev.recordatorios_psicometria or 0) + 1
+        ev.recordatorio_psicometria_en = datetime.now(timezone.utc)
+        sev.evento(db, ev, "recordatorio", u.nombre, usuario_id=u.id, a_quien="candidato")
+        registrar(db, u.nombre, "psicometria_recordatorio", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
+        db.commit()
+        return _respuesta(db, ev, u, None, resultados)
     resultados = await sev.notificar(db, ev, p, "recordatorio_evaluacion", u.nombre, override=override_de(datos.notificar), audiencias=audiencias)
     sev.evento(db, ev, "recordatorio", u.nombre, usuario_id=u.id, a_quien=datos.a)
     registrar(db, u.nombre, "evaluacion_recordatorio", "postulacion", p.codigo, {"evaluacion": ev.codigo, "a": datos.a, "correo_rh": u.correo, "notificaciones": resultados})
@@ -712,6 +744,208 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
              "canales": [r["canal"] for r in resultados if r["enviado"]],
              "detalle": "; ".join(f"{r['canal'] or 'sin canal'}: {r['detalle']}" for r in resultados if not r["enviado"])}
     return _respuesta(db, ev, u, resultados=resultados, envioCandidato=envio)
+
+
+# ---------------- Psicometría: «Asignar y enviar» (2026-10-07, asignación simplificada) ----------------
+# Vista limpia: la batería sale de la actividad de la ruta (o de la vacante/ruta vigente si la copia del candidato no
+# la trae); RH solo confirma o cambia la selección. Una sola acción da de alta en el proveedor, guarda la clave y avisa
+# al candidato por Notificaciones. Si el proveedor falla NO se guarda nada (ni la evaluación ni «Enviada»). Doble clic /
+# dos pestañas: candado por postulación + verificación en base de una asignación viva con las mismas pruebas.
+
+_candados_psicometria: dict = {}
+
+
+def _tests(id_proveedor: str) -> str:
+    """Identificadores del proveedor normalizados («1, 7» → «1,7») sin lanzar con capturas no numéricas (legado)."""
+    from ..services import psicometricas as psi
+
+    try:
+        return psi.tests_de(id_proveedor)
+    except psi.PsicometricasError:
+        return ",".join(x.strip() for x in (id_proveedor or "").split(",") if x.strip())
+
+
+def _candado_psicometria(postulacion_id: int) -> asyncio.Lock:
+    return _candados_psicometria.setdefault(postulacion_id, asyncio.Lock())
+
+
+def _catalogo_integrado(db: Session, cuenta_id: int) -> List[PruebaPsicometrica]:
+    return (db.query(PruebaPsicometrica)
+            .filter(PruebaPsicometrica.cuenta_id == cuenta_id, PruebaPsicometrica.activa.is_(True), PruebaPsicometrica.modo == "integrada")
+            .order_by(PruebaPsicometrica.nombre).all())
+
+
+def _pruebas_de_ruta(proc: dict, paso_id: str = "") -> List[int]:
+    pasos = [x for x in (proc or {}).get("pasos", []) if x.get("tipo") == "psicometrica" and x.get("pruebas")]
+    propio = next((x for x in pasos if x.get("id") == paso_id), None) if paso_id else None
+    elegido = propio or (pasos[0] if pasos else None)
+    return [int(i) for i in (elegido or {}).get("pruebas", [])]
+
+
+def bateria_predeterminada(db: Session, p: Postulacion, paso: Optional[dict]) -> tuple:
+    """(ids, origen): la batería de la actividad en la ruta del candidato; si su copia no la trae (entró antes de
+    configurarla), la de la vacante o la ruta VIGENTE — solo como sugerencia, la copia del candidato no cambia."""
+    origen_copia = "vacante" if (p.proceso or {}).get("origen") == "vacante" else "ruta"
+    ids = _pruebas_de_ruta(p.proceso or {}, (paso or {}).get("id", ""))
+    if ids:
+        return ids, origen_copia
+    try:
+        vigente = sproc.ruta_para(db, p.cuenta_id, p.vacante)
+    except Exception:  # noqa: BLE001
+        vigente = {}
+    ids = _pruebas_de_ruta(vigente, (paso or {}).get("id", ""))
+    return ids, ("vacante" if vigente.get("origen") == "vacante" else "ruta") if ids else ""
+
+
+def _psicometrias_vivas(db: Session, p: Postulacion) -> List[Evaluacion]:
+    return (db.query(Evaluacion)
+            .filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "psicometrica", Evaluacion.forma == "integrada",
+                    Evaluacion.estado.in_(("pendiente", "realizada_sin_resultado")))
+            .order_by(Evaluacion.id).all())
+
+
+def _ya_asignada(vivas: List[Evaluacion], tests: str) -> Optional[Evaluacion]:
+    """Asignación viva de las MISMAS pruebas que ya salió (clave del proveedor o envío simulado)."""
+    from ..services import psicometricas as psi
+
+    return next((e for e in vivas if _tests(e.id_proveedor) == tests
+                 and (e.clave_proveedor or (e.paso_integrada or "asignada") != "asignada")), None)
+
+
+@router.get("/postulaciones/{codigo}/psicometria")
+def vista_psicometria(codigo: str, paso_id: str = "", db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Vista limpia de la actividad de psicometría: batería configurada, catálogo para «Cambiar selección» y, si ya
+    hay una asignación viva con esas pruebas, cuál es (para no duplicarla)."""
+    from ..services import psicometricas as psi
+
+    p = _postulacion(db, codigo, cuenta.id)
+    try:
+        paso = sproc.paso_para_evaluacion(p, "psicometrica", paso_id.strip())
+    except sproc.ErrorProceso as e:
+        raise HTTPException(e.status, e.mensaje)
+    ids, origen = bateria_predeterminada(db, p, paso)
+    catalogo = _catalogo_integrado(db, cuenta.id)
+    por_id = {x.id: x for x in catalogo}
+    seleccion = [por_id[i] for i in ids if i in por_id]
+    tests = _tests(",".join(x.id_proveedor or "" for x in seleccion)) if seleccion else ""
+    vigente = _ya_asignada(_psicometrias_vivas(db, p), tests) if tests else None
+    return {
+        "paso": {"id": paso["id"], "nombre": paso["nombre"]} if paso else None,
+        "seleccion": [x.id for x in seleccion],
+        "origen": origen,
+        "noDisponibles": len([i for i in ids if i not in por_id]),
+        "catalogo": [prueba_psicometrica_dict(x) for x in catalogo],
+        "conectado": psi.configurado(),
+        "faltaCorreo": not (p.correo or "").strip(),
+        "consentimiento": bool(p.consentimiento),
+        "asignada": evaluacion_dict(vigente, u) if vigente else None,
+    }
+
+
+class AsignarPsicometriaIn(BaseModel):
+    prueba_ids: List[int] = []  # vacía = la batería configurada en la ruta/vacante
+    paso_id: str = ""
+
+
+@router.post("/postulaciones/{codigo}/psicometria", status_code=201)
+async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Asignar y enviar»: valida → (candado) → crea la asignación en el proveedor (agregaCandidato) y guarda la clave →
+    marca Enviada → avisa al candidato por el evento «Psicometría enviada». La evaluación queda ligada a la actividad de
+    la ruta (`paso_id`), así «Ruta» y «Evaluaciones» leen el MISMO registro. Una repetición de las mismas pruebas se
+    liga a la misma actividad (la anterior conserva su historial); otras pruebas fuera de la ruta = actividad ad hoc."""
+    from ..services import psicometricas as psi
+
+    p = _postulacion(db, codigo, cuenta.id)
+    if not p.activa:
+        raise HTTPException(409, "La postulación está cerrada.")
+    if not p.consentimiento:
+        raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
+    async with _candado_psicometria(p.id):
+        try:
+            paso = sproc.paso_para_evaluacion(p, "psicometrica", datos.paso_id.strip())
+        except sproc.ErrorProceso as e:
+            raise HTTPException(e.status, e.mensaje)
+        ids = list(dict.fromkeys(int(i) for i in datos.prueba_ids)) or bateria_predeterminada(db, p, paso)[0]
+        if not ids:
+            raise HTTPException(400, "Elige la batería o las pruebas del catálogo («Cambiar selección»).")
+        por_id = {x.id: x for x in _catalogo_integrado(db, cuenta.id)}
+        if any(i not in por_id for i in ids):
+            raise HTTPException(400, "Alguna prueba elegida ya no está activa en el catálogo; vuelve a elegir con «Cambiar selección».")
+        pruebas = [por_id[i] for i in ids]
+        sin_id = [x.nombre for x in pruebas if not (x.id_proveedor or "").strip()]
+        if sin_id:
+            raise HTTPException(400, f"Falta el identificador en el proveedor de: {', '.join(sin_id)} (Configuración → Pruebas psicométricas).")
+        proveedores = {(x.proveedor or "").strip() or "Psicométricas.mx" for x in pruebas}
+        if len(proveedores) > 1:
+            raise HTTPException(400, "Las pruebas elegidas son de proveedores distintos: asígnalas por separado.")
+        proveedor = proveedores.pop()
+        tests = _tests(",".join(x.id_proveedor for x in pruebas))
+        vivas = _psicometrias_vivas(db, p)
+        ya = _ya_asignada(vivas, tests)
+        if ya:
+            raise HTTPException(409, f"Estas pruebas ya se asignaron y enviaron ({ya.codigo}). Para volver a avisar al candidato usa «Reenviar» o «Recordatorio».")
+        if paso is None and not datos.paso_id.strip() and sproc.tiene_proceso(p):
+            # repetición de las mismas pruebas: se liga a la actividad de la ruta que ya las tuvo
+            previa = (db.query(Evaluacion)
+                      .filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == "psicometrica", Evaluacion.paso_id != "")
+                      .order_by(Evaluacion.id.desc()).all())
+            previa = next((e for e in previa if _tests(e.id_proveedor) == tests), None)
+            if previa and any(x["id"] == previa.paso_id and not x.get("heredado") for x in p.proceso.get("pasos", [])):
+                paso = sproc._paso(p, previa.paso_id)
+        paso_id = paso["id"] if paso else ""
+        campos = {"tipo": "psicometrica", "nombre": " + ".join(x.nombre for x in pruebas)[:200], "forma": "integrada",
+                  "prueba_id": pruebas[0].id, "pruebas": ids, "proveedor": proveedor, "id_proveedor": tests,
+                  "paso_integrada": "asignada", "paso_id": paso_id}
+        # una asignación previa que nunca salió (intento fallido del flujo anterior) se reutiliza: no se duplica
+        ev = next((e for e in vivas if not e.clave_proveedor and (e.paso_integrada or "asignada") == "asignada" and e.paso_id == paso_id), None)
+        nueva = ev is None
+        if nueva:
+            ev = sev.nueva(p, cuenta.id, u.nombre, u.id, **campos)
+            sev.asegurar_ligas(ev)
+            db.add(ev)
+            db.flush()
+            sev.asignar_codigo(ev)
+            sev.evento(db, ev, "creada", u.nombre, a=ev.estado, usuario_id=u.id, tipo=ev.tipo, forma=ev.forma, proveedor=ev.proveedor, pruebas=ids)
+        else:
+            anteriores = {k: getattr(ev, k) for k in ("nombre", "id_proveedor")}
+            for k, v in campos.items():
+                setattr(ev, k, v)
+            sev.evento(db, ev, "modificada", u.nombre, usuario_id=u.id, anteriores=anteriores, pruebas=ids)
+        real = psi.es_psicometricas(proveedor) and psi.configurado()
+        if real:
+            try:
+                psi.tests_de(tests)
+            except psi.PsicometricasError as ex:
+                db.rollback()
+                raise HTTPException(400, str(ex))
+            try:
+                _activar_psicometria(db, ev, p)
+            except HTTPException:
+                db.rollback()  # sin clave del proveedor no queda NADA guardado: ni la evaluación ni «Enviada»
+                raise
+            sev.aplicar_paso(db, ev, "enviada", u.nombre, "Psicométricas.mx")
+        else:
+            sev.aplicar_paso(db, ev, "enviada", u.nombre)  # proveedor sin llaves: modo integrado simulado
+        if nueva and not paso_id:
+            try:
+                sproc.paso_adhoc_para_evaluacion(db, p, ev, u)
+            except Exception as ex:  # noqa: BLE001
+                print(f"[proceso] no se pudo registrar la psicometría {ev.codigo} como actividad ad hoc: {ex}")
+        registrar(db, u.nombre, "psicometria_asignada", "postulacion", p.codigo,
+                  {"evaluacion": ev.codigo, "pruebas": ids, "proveedor": proveedor, "tests": tests, "clave_proveedor": ev.clave_proveedor,
+                   "simulado": not real, "paso_proceso": paso_id, "correo_rh": u.correo})
+        _tocar(p)
+        db.commit()
+    if not real:
+        return _respuesta(db, ev, u, p, simulado=True,
+                          aviso="Psicométricas.mx sin llaves en este servidor: asignación simulada (no se llamó a su API ni se avisó al candidato).")
+    resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id)
+    registrar(db, "sistema", "psicometria_notificada", "evaluaciones", ev.codigo, {"clave_proveedor": ev.clave_proveedor, "envios": resultados})
+    db.commit()
+    envio = {"enviado": any(r["enviado"] for r in resultados), "conLiga": True,
+             "canales": [r["canal"] for r in resultados if r["enviado"]],
+             "detalle": "; ".join(f"{r['canal'] or 'sin canal'}: {r['detalle']}" for r in resultados if not r["enviado"])}
+    return _respuesta(db, ev, u, p, resultados, envioCandidato=envio, simulado=False)
 
 
 @router.post("/{codigo}/integracion/avanzar")

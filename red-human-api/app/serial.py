@@ -1091,7 +1091,7 @@ def tarea_onboarding_dict(t) -> dict:
 
 
 def prueba_psicometrica_dict(pr) -> dict:
-    from .models import MODOS_PRUEBA
+    from .models import MODOS_PRUEBA, TIPOS_PRUEBA
 
     return {
         "id": pr.id,
@@ -1103,6 +1103,8 @@ def prueba_psicometrica_dict(pr) -> dict:
         "modoTexto": MODOS_PRUEBA.get(pr.modo, pr.modo),
         "proveedor": pr.proveedor or "",
         "idProveedor": pr.id_proveedor or "",
+        "tipo": pr.tipo or "prueba",
+        "tipoTexto": TIPOS_PRUEBA.get(pr.tipo or "prueba", "Prueba"),
         "url": pr.url or "",
         "activa": bool(pr.activa),
         "actualizada": iso(pr.actualizada_en),
@@ -1184,6 +1186,11 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         "urlCandidatoProveedor": _url_psico(ev),
         "usaPsicometricas": sev.usa_psicometricas(ev),
         "pasoIntegrada": ev.paso_integrada or None,
+        # 2026-10-07: psicometría integrada → SOLO tres estados visibles (Pendiente / En curso / Completada)
+        "estadoProveedor": (sev.estado_proveedor(ev) or (None, ""))[0],
+        "estadoProveedorTexto": (sev.estado_proveedor(ev) or (None, ""))[1],
+        "pruebas": list(ev.pruebas or ([ev.prueba_id] if ev.prueba_id else [])),
+        "recordatoriosPsicometria": ev.recordatorios_psicometria or 0,
         "siguientePaso": sev.siguiente_paso(ev) if ev.forma == "integrada" and not ev.clave_proveedor and ev.estado in ("pendiente", "realizada_sin_resultado") else None,
         "cita": {
             "fechaHora": iso(ev.cita_fecha_hora), "zona": ev.cita_zona_horaria or "", "modalidad": ev.cita_modalidad or "",
@@ -1254,7 +1261,8 @@ def acciones_evaluacion(ev, restringido: bool = False) -> dict:
         inicio = puede_confirmar_inicio(ev)
         secundaria = None if bloqueo else ("confirmar_inicio" if inicio else "marcar_realizada")
         if not bloqueo:
-            menu += ["recordatorio"] if ev.forma in ("asignada", "liga_otro_sistema") else []
+            # 2026-10-07: psicometría del proveedor con clave → «Recordatorio de psicometría pendiente» al candidato
+            menu += ["recordatorio"] if ev.forma in ("asignada", "liga_otro_sistema") or (ev.forma == "integrada" and ev.clave_proveedor) else []
             if inicio:
                 menu.append("marcar_realizada")
             menu.append("modificar")

@@ -156,6 +156,16 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
         }
         if tipo == "solicitud_web":
             paso["con_cv"] = bool(crudo.get("con_cv", crudo.get("conCv", False)))
+        if tipo == "psicometrica":
+            # 2026-10-07: batería predeterminada del catálogo (ids de PruebaPsicometrica). La ruta la define; la vacante
+            # la hereda en su COPIA y puede cambiarla sin tocar la ruta. La existencia se valida al asignar.
+            ids = []
+            for x in (crudo.get("pruebas", crudo.get("prueba_ids")) or []):
+                try:
+                    ids.append(int(x))
+                except (TypeError, ValueError):
+                    raise ErrorProceso(400, f"La batería de «{defs['nombre']}» debe ser una lista de pruebas del catálogo.")
+            paso["pruebas"] = list(dict.fromkeys(ids))
         if tipo == "documentos" and crudo.get("documentos"):
             paso["documentos"] = [str(d).strip()[:120] for d in crudo["documentos"] if str(d).strip()]
         for bandera in ("adhoc", "heredado"):  # actividad agregada solo a ESTA postulación / fuera del proceso vigente
@@ -971,6 +981,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "etapaTexto": nombre_etapa(paso["etapa"]), "obligatorio": paso["obligatorio"],
             "dependeDe": paso.get("depende_de", []), "regla": paso["regla"],
             "reglaTexto": _texto_regla(paso["regla"]), "tipoEntrevista": paso.get("tipo_entrevista"),
+            "pruebas": list(paso.get("pruebas") or []),
             "responsable": r["responsableTexto"], "responsableConfig": paso.get("responsable") or {},
             "estado": r["estado"], "estadoTexto": ESTADOS_PASO[r["estado"]],
             "resultado": r["resultado"], "resultadoTexto": RESULTADOS_PASO.get(r["resultado"] or "", ""),
@@ -1047,7 +1058,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         if r.get("evaluacion") and estado != "pendiente":
             return {"clave": "consultar_evaluacion", "texto": "Consultar", "evaluacion": r["evaluacion"]}
         if disponible:
-            return {"clave": "iniciar_evaluacion", "texto": "Iniciar"}
+            # psicometría: abre la vista limpia con la batería de la ruta/vacante y «Asignar y enviar»
+            return {"clave": "iniciar_evaluacion", "texto": "Asignar y enviar" if tipo == "psicometrica" else "Iniciar"}
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
                "entrevista_agente": "evaluaciones", "documentos": "contratacion", "condiciones": "contratacion",

@@ -279,7 +279,11 @@ def html_psicometria(d: dict) -> tuple[str, str]:
     empresa = d.get("empresa") or ""
     clave = d.get("clave") or ""
     liga = d.get("liga") or ""
-    titulo = f"{nombre}, se te asignó una evaluación psicométrica" if nombre else "Se te asignó una evaluación psicométrica"
+    recordatorio = bool(d.get("recordatorio"))
+    if recordatorio:
+        titulo = f"{nombre}, tu evaluación psicométrica sigue pendiente" if nombre else "Tu evaluación psicométrica sigue pendiente"
+    else:
+        titulo = f"{nombre}, se te asignó una evaluación psicométrica" if nombre else "Se te asignó una evaluación psicométrica"
     contexto = "Como parte de tu proceso de selección"
     if d.get("vacante"):
         contexto += f" para la vacante <strong style=\"color:{INK};\">{escape(d['vacante'])}</strong>"
@@ -305,7 +309,7 @@ def html_psicometria(d: dict) -> tuple[str, str]:
         f'<li style="margin:0 0 8px;">{escape(t)}</li>' for t in (d.get("instrucciones") or [])
     )
     contenido = (
-        f'<p style="margin:0 0 6px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:{ROJO};font-weight:700;">Evaluación asignada</p>'
+        f'<p style="margin:0 0 6px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:{ROJO};font-weight:700;">{"Recordatorio" if recordatorio else "Evaluación asignada"}</p>'
         f'<h1 class="titulo" style="margin:4px 0 12px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:24px;line-height:1.25;color:{INK};">{escape(titulo)}</h1>'
         f'<p style="margin:0 0 4px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:{INK2};">{contexto}</p>'
         + caja_clave + tabla
@@ -316,7 +320,7 @@ def html_psicometria(d: dict) -> tuple[str, str]:
     pie = ("Si el botón no abre, copia la página de evaluación en tu navegador y escribe tu clave. "
            "¿Problemas para entrar? Responde por el mismo medio en que te contactamos. "
            "Tus resultados son confidenciales y solo los revisa el equipo de Recursos Humanos.")
-    asunto = f"Tu evaluación psicométrica · clave {clave}"
+    asunto = f"{'Recordatorio: t' if recordatorio else 'T'}u evaluación psicométrica · clave {clave}"
     return asunto, _base(titulo, f"Tu clave de acceso es {clave}. Entra a {liga}", empresa, "", contenido, pie)
 
 

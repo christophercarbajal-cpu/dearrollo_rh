@@ -439,6 +439,9 @@ export const EVENTOS_NOTIFICACION = [
   "solicitud_documentos",
   "recordatorio_documentos",
   "instrucciones_ingreso",
+  // 2026-10-07: psicometría del proveedor integrado (portal + clave) y su recordatorio mientras no la inicie.
+  "psicometria_enviada",
+  "recordatorio_psicometria",
 ] as const;
 
 export type EventoNotificacion = (typeof EVENTOS_NOTIFICACION)[number];
@@ -454,6 +457,8 @@ export const NOMBRE_EVENTO_NOTIFICACION: Record<EventoNotificacion, string> = {
   solicitud_documentos: "Solicitud de documentos",
   recordatorio_documentos: "Recordatorio de documentos",
   instrucciones_ingreso: "Bienvenida e instrucciones de ingreso (automático al dar de alta)",
+  psicometria_enviada: "Psicometría enviada (portal + clave al candidato)",
+  recordatorio_psicometria: "Recordatorio de psicometría pendiente",
 };
 
 export interface ReglaNotificacion {
@@ -3090,12 +3095,19 @@ export const MODOS_PRUEBA: { valor: ModoPrueba; texto: string }[] = [
   { valor: "enlace", texto: "Enlace externo" },
   { valor: "manual", texto: "Carga manual" },
 ];
+/** 2026-10-07: una fila del catálogo es una prueba suelta o una batería del proveedor. */
+export type TipoPrueba = "prueba" | "bateria";
+export const TIPOS_PRUEBA: { valor: TipoPrueba; texto: string }[] = [
+  { valor: "prueba", texto: "Prueba" },
+  { valor: "bateria", texto: "Batería" },
+];
 export interface PruebaPsicometrica {
   id: number; clave: string; nombre: string; descripcion: string; puestos: string[]; modo: ModoPrueba; modoTexto: string;
-  proveedor: string; idProveedor: string; url: string; activa: boolean; actualizada: string | null; sugerida?: boolean;
+  proveedor: string; idProveedor: string; tipo: TipoPrueba; tipoTexto: string; url: string; activa: boolean; actualizada: string | null; sugerida?: boolean;
 }
 export interface PruebaPsicometricaIn {
   clave: string; nombre: string; descripcion: string; puestos: string[]; modo: ModoPrueba; proveedor: string; id_proveedor: string; url: string; activa: boolean;
+  tipo: TipoPrueba;
 }
 export interface EvaluacionSugerida { tipo: TipoEvaluacion; prueba_id: number | null; nombre: string }
 export function fetchPruebasPsicometricas(incluirInactivas = false, puesto = "") {
@@ -3112,6 +3124,29 @@ export function editarPruebaPsicometrica(id: number, datos: Partial<PruebaPsicom
 }
 export function inactivarPruebaPsicometrica(id: number) {
   return eliminar<PruebaPsicometrica>(`/evaluaciones/pruebas/${id}`);
+}
+
+/** Vista limpia de la actividad de psicometría (2026-10-07): batería configurada (ruta/vacante), catálogo para
+ * «Cambiar selección» y la asignación vigente con esas pruebas (para no duplicarla). */
+export interface VistaPsicometria {
+  paso: { id: string; nombre: string } | null;
+  seleccion: number[];
+  origen: "vacante" | "ruta" | "";
+  noDisponibles: number;
+  catalogo: PruebaPsicometrica[];
+  conectado: boolean;
+  faltaCorreo: boolean;
+  consentimiento: boolean;
+  asignada: Evaluacion | null;
+}
+export function fetchVistaPsicometria(codigoPostulacion: string, pasoId = "") {
+  return get<VistaPsicometria>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria${pasoId ? `?paso_id=${encodeURIComponent(pasoId)}` : ""}`);
+}
+/** «Asignar y enviar»: alta en el proveedor + clave + aviso por Notificaciones. Si el proveedor falla no queda nada. */
+export function asignarPsicometria(codigoPostulacion: string, datos: { pruebaIds: number[]; pasoId?: string }) {
+  return post<RespuestaEvaluacion & { simulado?: boolean; aviso?: string }>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria`, {
+    prueba_ids: datos.pruebaIds, paso_id: datos.pasoId ?? "",
+  });
 }
 
 /* ============================================================
@@ -3169,6 +3204,9 @@ export interface Evaluacion {
   evaluador: { tipo: "interno" | "externo" | ""; usuarioId: number | null; contactoId: number | null; nombre: string; correo: string; whatsapp: string } | null;
   instrucciones: string; ligaExternaCandidato: string; pruebaId: number | null; proveedor: string; idProveedor: string;
   claveProveedor: string | null; urlCandidatoProveedor: string | null; usaPsicometricas: boolean; pasoIntegrada: string | null; siguientePaso: string | null;
+  /** 2026-10-07: psicometría integrada → solo Pendiente / En curso / Completada. */
+  estadoProveedor?: "pendiente" | "en_curso" | "completada" | null; estadoProveedorTexto?: string;
+  pruebas?: number[]; recordatoriosPsicometria?: number;
   cita: CitaEvaluacion | null;
   conclusion: string | null; conclusionTexto: string; conclusionesPosibles: { valor: string; texto: string }[]; conclusionObligatoria: boolean; sinConclusion: boolean;
   comentarios: string; adjuntos: AdjuntoEvaluacion[];

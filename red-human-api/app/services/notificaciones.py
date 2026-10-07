@@ -623,6 +623,17 @@ class _ReglaEfectiva:
         return any(getattr(self, f) for f in FLAGS_NOTIFICACION)
 
 
+def canales_candidato(db: Session, cuenta_id: Optional[int], evento: str) -> dict:
+    """{whatsapp, correo} hacia el CANDIDATO según la regla guardada de la Cuenta o, sin regla, la regla con la que
+    nacería (`REGLAS_NOTIFICACION_DEFAULT`). Para avisos con contenido propio (psicometría: portal + clave) que no pasan
+    por `disparar` pero respetan Configuración → Notificaciones."""
+    regla = _regla(db, cuenta_id, evento) if cuenta_id else None
+    if regla is not None:
+        return {"whatsapp": bool(regla.candidato_whatsapp), "correo": bool(regla.candidato_correo)}
+    d = REGLAS_NOTIFICACION_DEFAULT.get(evento) or {}
+    return {"whatsapp": bool(d.get("candidato_whatsapp")), "correo": bool(d.get("candidato_correo"))}
+
+
 async def disparar(
     db: Session,
     evento: str,

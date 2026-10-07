@@ -188,6 +188,17 @@ def terminado(filas: List[dict]) -> bool:
     return bool(filas) and all(f.get("fecha_fin") for f in filas)
 
 
+CAMPOS_INICIO = ("fecha_inicio", "fecha_ini", "inicio", "fecha_inicial")
+
+
+def iniciado(filas: List[dict]) -> bool:
+    """¿El sustentante ya empezó? Alguna prueba con fecha de inicio (o de fin, si terminó una de varias)."""
+    for f in filas or []:
+        if f.get("fecha_fin") or any(f.get(c) for c in CAMPOS_INICIO):
+            return True
+    return False
+
+
 def resultado_json(clave: str) -> Union[dict, list]:
     try:
         r = httpx.get(_url("consultaResultado"), params={**_cred(), "Clave": clave, "Pdf": "false"}, timeout=60)
@@ -232,13 +243,15 @@ def instrucciones(clave: str) -> List[str]:
     ]
 
 
-def mensaje_candidato(nombre: str, clave: str, liga: str, empresa: str = "", vacante: str = "") -> str:
+def mensaje_candidato(nombre: str, clave: str, liga: str, empresa: str = "", vacante: str = "", recordatorio: bool = False) -> str:
     """Texto que Red Human manda por Telegram/WhatsApp: SIEMPRE la URL del portal, la clave y los pasos."""
     saludo = f"Hola {nombre}," if nombre else "Hola,"
     contexto = f" para la vacante {vacante}" if vacante else ""
     contexto += f" en {empresa}" if empresa else ""
     pasos = "\n".join(f"{i}. {t}" for i, t in enumerate(instrucciones(clave), 1))
-    return (f"{saludo} se te asignó una evaluación psicométrica{contexto}.\n\n"
+    inicio = (f"{saludo} te recordamos que tienes pendiente tu evaluación psicométrica{contexto}."
+              if recordatorio else f"{saludo} se te asignó una evaluación psicométrica{contexto}.")
+    return (f"{inicio}\n\n"
             f"Aquí tienes la liga de tu evaluación:\n{liga}\n\n"
             f"Tu clave de acceso: {clave}\n\n"
             f"Cómo empezar:\n{pasos}\n\n"

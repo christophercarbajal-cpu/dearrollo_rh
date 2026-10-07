@@ -188,7 +188,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
     const items: { etiqueta: string; icono: React.ReactNode; onClick: () => void; peligrosa?: boolean; disabled?: boolean }[] = [];
     for (const a of e.acciones.menu) {
       if (a === "recordatorio") {
-        const alCandidato = Boolean(e.cita) || e.forma === "liga_otro_sistema";
+        const alCandidato = Boolean(e.cita) || e.forma === "liga_otro_sistema" || (e.forma === "integrada" && Boolean(e.claveProveedor));
         const alEvaluador = e.forma === "asignada";
         if (alCandidato) items.push({ etiqueta: "Enviar recordatorio al candidato", icono: <BellRing className="h-4 w-4" />, onClick: () => accion(e, () => recordatorioEvaluacion(e.codigo, "candidato"), "Recordatorio enviado al candidato.") });
         if (alEvaluador) items.push({ etiqueta: "Enviar recordatorio al evaluador", icono: <BellRing className="h-4 w-4" />, onClick: () => accion(e, () => recordatorioEvaluacion(e.codigo, "evaluador"), "Recordatorio enviado al evaluador.") });
@@ -403,11 +403,12 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
             {e.responsable}
             {e.tipo === "psicometrica" && e.proveedor && e.responsable !== e.proveedor ? ` · Proveedor: ${e.proveedor}` : ""}
             {e.cita?.fechaHora ? ` · ${textoCita(e.cita.fechaHora, { dateStyle: "medium", timeStyle: "short" })}` : ""}
-            {e.pasoIntegrada && e.forma === "integrada" && e.estado !== "con_resultado" ? ` · Proveedor: ${PASOS[e.pasoIntegrada] ?? e.pasoIntegrada}` : ""}
+            {e.pasoIntegrada && e.forma === "integrada" && e.estado !== "con_resultado" && !e.estadoProveedorTexto ? ` · Proveedor: ${PASOS[e.pasoIntegrada] ?? e.pasoIntegrada}` : ""}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone={tonoEstado(e)}>{e.seguimientoTexto || e.estadoTexto}</Badge>
+          {/* psicometría del proveedor: solo Pendiente / En curso / Completada (la revisión de RH va en su insignia) */}
+          <Badge tone={tonoEstado(e)}>{e.estadoProveedorTexto || e.seguimientoTexto || e.estadoTexto}</Badge>
           {e.conclusionTexto && <Badge tone={tonoConclusion(e.conclusion)} dot>{e.conclusionTexto}</Badge>}
           {e.revision && e.revision.conclusion !== e.conclusion && <Badge tone={tonoConclusion(e.revision.conclusion)} dot>RH: {e.revision.conclusionTexto}</Badge>}
           {e.sinConclusion && <Badge tone="neutral">Resultado recibido · Sin conclusión</Badge>}

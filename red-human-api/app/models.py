@@ -1554,6 +1554,10 @@ EVENTOS_NOTIFICACION = [
     "instrucciones_ingreso",
     # 2026-09-19: al publicar una vacante, su descripción (HTML) al Cliente y al responsable.
     "vacante_publicada",
+    # 2026-10-07: psicometría del proveedor integrado — portal + clave al candidato («Asignar y enviar») y recordatorio
+    # mientras no la inicie (manual o automático, `services/recordatorios_psicometria.py`).
+    "psicometria_enviada",
+    "recordatorio_psicometria",
 ]
 
 # Fase 7A (2026-09-12): valores con los que NACE la regla de cada evento cuando una Cuenta no la
@@ -1577,6 +1581,8 @@ REGLAS_NOTIFICACION_DEFAULT = {
     "solicitud_documentos": {"candidato_whatsapp": True},
     "recordatorio_documentos": {"candidato_whatsapp": True},
     "instrucciones_ingreso": {"candidato_correo": True, "candidato_whatsapp": True},
+    "psicometria_enviada": {"candidato_correo": True, "candidato_whatsapp": True},
+    "recordatorio_psicometria": {"candidato_correo": True, "candidato_whatsapp": True},
     # entrevista_modificada, entrevista_cancelada, recomendacion_final, candidato_apto: todo apagado.
 }
 
@@ -2034,6 +2040,11 @@ TIPOS_EVALUACION = {
     "otra": "Otra",
 }
 MODOS_PRUEBA = {"integrada": "Integrada", "enlace": "Enlace externo", "manual": "Carga manual"}
+# 2026-10-07 (asignación simplificada): una fila del catálogo es una prueba suelta o una batería del proveedor.
+TIPOS_PRUEBA = {"prueba": "Prueba", "bateria": "Batería"}
+# Estado VISIBLE de una psicometría del proveedor integrado: SOLO tres (asignada sin iniciar · inicio confirmado por
+# el proveedor · terminada). Se deriva de `paso_integrada`/`iniciada_en`/`estado`; nunca se guarda aparte.
+ESTADOS_PROVEEDOR_PSICOMETRIA = {"pendiente": "Pendiente", "en_curso": "En curso", "completada": "Completada"}
 # Seguimiento (lo que ve RH). «fallida» = Fallida/Cancelada, siempre con motivo.
 ESTADOS_EVALUACION = {
     "en_espera_consentimiento": "En espera de consentimiento",
@@ -2074,6 +2085,7 @@ class PruebaPsicometrica(Base):
     modo: Mapped[str] = mapped_column(String(20), default="manual")  # MODOS_PRUEBA
     proveedor: Mapped[str] = mapped_column(String(150), default="")
     id_proveedor: Mapped[str] = mapped_column(String(150), default="")  # identificador en el proveedor
+    tipo: Mapped[str] = mapped_column(String(20), default="prueba")  # TIPOS_PRUEBA
     url: Mapped[str] = mapped_column(String(500), default="")  # modo «Enlace externo»
     activa: Mapped[bool] = mapped_column(Boolean, default=True)
     creado_por: Mapped[str] = mapped_column(String(150), default="")
@@ -2254,6 +2266,10 @@ class Evaluacion(Base):
     clave_proveedor: Mapped[str] = mapped_column(String(60), default="", index=True)  # webhook de Psicométricas.mx
     resultado_json: Mapped[dict] = mapped_column(JSON, default=dict)
     paso_integrada: Mapped[str] = mapped_column(String(20), default="")  # PASOS_INTEGRADA
+    # 2026-10-07: pruebas/baterías del catálogo que se asignaron juntas («Asignar y enviar», una sola clave del proveedor)
+    pruebas: Mapped[list] = mapped_column(JSON, default=list)
+    recordatorios_psicometria: Mapped[int] = mapped_column(Integer, default=0)  # automáticos + manuales al candidato
+    recordatorio_psicometria_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # --- cita (opcional): se guarda UTC + la zona con la que se capturó ---
     cita_fecha_hora: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     cita_zona_horaria: Mapped[str] = mapped_column(String(50), default="")

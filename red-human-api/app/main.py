@@ -25,6 +25,7 @@ from .services import modulos_rh, rag
 from .services.agenda import revisar_videollamadas_noshow
 from .services.recordatorios import revisar_recordatorios_documentos
 from .services.recordatorios_entrevista import revisar_recordatorios_entrevista
+from .services.recordatorios_psicometria import revisar_recordatorios_psicometria
 from .routers.entrevistas import cerrar_entrevistas_inactivas
 from .services.clima_cierre import cerrar_mediciones_vencidas
 from .services.avatar import avatar_activo, estado_avatar
@@ -163,6 +164,12 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         revisar_recordatorios_entrevista, "interval", minutes=10,
         id="recordatorios_entrevista", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
+    # 2026-10-07: recordatorio de psicometría pendiente (sin consultar la API del proveedor).
+    scheduler.add_job(
+        revisar_recordatorios_psicometria, "interval", minutes=60,
+        id="recordatorios_psicometria", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=300,
     )
     # 2026-09-17: entrevistas IA abandonadas (pestaña cerrada sin /finalizar) se cierran y evalúan.

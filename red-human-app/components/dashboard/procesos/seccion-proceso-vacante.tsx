@@ -2,16 +2,20 @@
 
 /* Formulario de vacante → «Proceso de selección» (2026-10-06). Asocia una plantilla de la Cuenta y permite
    personalizar sus pasos, dependencias y responsables SOLO para esta vacante (la plantilla no cambia). Los candidatos
-   que ya existen conservan la versión con la que entraron. Acordeón cerrado (reglas de UI: lo opcional plegado). */
+   que ya existen conservan la versión con la que entraron. Acordeón cerrado (reglas de UI: lo opcional plegado).
+   2026-10-07: «Batería psicométrica» a la vista — la vacante hereda la de la ruta y puede elegir otra del catálogo sin
+   alterar la ruta (cambia solo la copia de la vacante). */
 
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import { Badge } from "@/components/ui";
 import { inputRH } from "@/components/dashboard/modulos-rh";
 import { EditorProceso } from "@/components/dashboard/procesos/editor-proceso";
+import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import { resumenPasos } from "@/components/dashboard/procesos/seccion-plantillas-proceso";
 import {
-  fetchOpcionesProceso, fetchPlantillasProceso, fetchProcesoVacante, type OpcionesProceso, type PlantillaProceso, type ProcesoEntrada,
+  fetchOpcionesProceso, fetchPlantillasProceso, fetchProcesoVacante, fetchPruebasPsicometricas, type OpcionesProceso, type PlantillaProceso,
+  type ProcesoEntrada, type PruebaPsicometrica,
 } from "@/lib/api";
 import type { EtapasProceso, PasoProceso, ProcesoConfig, Vacante } from "@/lib/data";
 import { cn } from "@/lib/utils";
@@ -45,9 +49,12 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
   const [plantillas, setPlantillas] = useState<PlantillaProceso[]>([]);
   const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
   const [activos, setActivos] = useState<number | null>(null);
+  const [catalogo, setCatalogo] = useState<PruebaPsicometrica[]>([]);
+  const [cambiarBateria, setCambiarBateria] = useState(false);
 
   useEffect(() => {
     fetchPlantillasProceso().then((l) => setPlantillas(l ?? []));
+    fetchPruebasPsicometricas().then((l) => setCatalogo((l ?? []).filter((x) => x.modo === "integrada" && x.activa)));
     fetchOpcionesProceso().then((o) => setOpciones(o ?? null));
     if (codigoVacante) fetchProcesoVacante(codigoVacante).then((r) => setActivos(r?.candidatosActivos ?? null));
   }, [codigoVacante]);
@@ -68,6 +75,16 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
     }
     const p = plantillas.find((x) => x.id === Number(id));
     if (p) onChange({ tocado: true, plantillaId: p.id, pasos: p.pasos, etapas: p.etapas });
+  }
+
+  const pasoPsico = efectivo.pasos.find((x) => x.tipo === "psicometrica");
+  const pasoPsicoRuta = plantilla?.pasos.find((x) => x.tipo === "psicometrica");
+  const bateriaPropia = Boolean(pasoPsico && pasoPsicoRuta) && JSON.stringify(pasoPsico?.pruebas ?? []) !== JSON.stringify(pasoPsicoRuta?.pruebas ?? []);
+  const nombresBateria = (ids: number[]) => ids.map((id) => catalogo.find((x) => x.id === id)?.nombre ?? `#${id} (inactiva)`).join(" + ");
+  function elegirBateria(ids: number[]) {
+    if (!pasoPsico) return;
+    onChange({ tocado: true, plantillaId: efectivo.plantillaId, etapas: efectivo.etapas,
+      pasos: efectivo.pasos.map((x) => (x.id === pasoPsico.id ? { ...x, pruebas: ids } : x)) });
   }
 
   const resumen = efectivo.pasos.length
@@ -109,6 +126,32 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
               <button type="button" onClick={() => setPersonalizar((x) => !x)} className="text-[12px] font-semibold text-brand hover:underline">
                 {personalizar ? "Ocultar pasos" : "Personalizar pasos, dependencias y responsables"}
               </button>
+            </div>
+          )}
+          {pasoPsico && (
+            <div className="rounded-xl border border-border-soft p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-ink-2">Batería psicométrica{bateriaPropia ? " (elegida para esta vacante)" : plantilla ? " (de la ruta)" : ""}</p>
+                  <p className="truncate text-sm text-ink">{(pasoPsico.pruebas ?? []).length ? nombresBateria(pasoPsico.pruebas ?? []) : "Sin batería: RH la elige al asignar"}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {bateriaPropia && (
+                    <button type="button" onClick={() => elegirBateria(pasoPsicoRuta?.pruebas ?? [])} className="text-[12px] font-semibold text-ink-2 hover:underline">
+                      Usar la de la ruta
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setCambiarBateria((x) => !x)} className="text-[12px] font-semibold text-brand hover:underline">
+                    {cambiarBateria ? "Listo" : "Cambiar selección"}
+                  </button>
+                </div>
+              </div>
+              {cambiarBateria && (
+                <div className="mt-2">
+                  <SelectorPruebas catalogo={catalogo} seleccion={pasoPsico.pruebas ?? []} onChange={elegirBateria} />
+                  <p className="mt-1 text-[11px] text-ink-3">Cambia solo esta vacante; la ruta general no se altera.</p>
+                </div>
+              )}
             </div>
           )}
           {(personalizar || (efectivo.plantillaId == null && value.tocado)) && opciones && (

@@ -164,8 +164,8 @@ with TestClient(app) as client:
     laura.rol = "Usuario"
     db.commit()
     r = client.get("/notificaciones/reglas")
-    check(r.status_code == 200 and len(r.json()) == 10,
-          "GET reglas: un Usuario no-admin puede LEER la configuración (10 eventos: Evaluaciones unificadas 2026-09-29 sustituye los 7 de entrevista por 4 de evaluación)")
+    check(r.status_code == 200 and len(r.json()) == 12,
+          "GET reglas: un Usuario no-admin puede LEER la configuración (12 eventos: Evaluaciones unificadas 2026-09-29 sustituye los 7 de entrevista por 4 de evaluación; 2026-10-07 suma «Psicometría enviada» y su recordatorio)")
     r = client.put("/notificaciones/reglas", json=[])
     check(r.status_code == 403, "…pero no guardarla")
     usuario_activo["u"] = admin

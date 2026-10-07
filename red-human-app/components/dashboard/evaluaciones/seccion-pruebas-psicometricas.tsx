@@ -1,9 +1,9 @@
 "use client";
 
-/* Configuración → Pruebas psicométricas (2026-09-28). Catálogo por Cuenta: identificador interno, nombre visible,
-   descripción, puestos sugeridos, modo (Integrada / Enlace externo / Carga manual), proveedor, identificador en el
-   proveedor y estado (Activa / Inactiva). «Eliminar» = inactivar; las evaluaciones ya asignadas no cambian.
-   Sin conexión a proveedores todavía: las llaves se inyectan en un sprint posterior. */
+/* Configuración → Pruebas psicométricas (2026-09-28; simplificado 2026-10-07). Catálogo por Cuenta de pruebas y
+   baterías del proveedor integrado: Nombre, Tipo, Identificador en el proveedor y Activa. Las rutas («Corporativos con
+   psicometría») y las vacantes eligen de aquí su batería predeterminada. «Eliminar» = inactivar; las evaluaciones ya
+   asignadas no cambian. Las ligas externas o los resultados manuales van por «Agregar prueba externa» en la ficha. */
 
 import { useCallback, useEffect, useState } from "react";
 import { Brain, Loader2, PenLine, Plus, Power, Save } from "lucide-react";
@@ -11,9 +11,11 @@ import { Badge, Button, Card } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { AvisoLinea, CampoRH, ModalMarco, inputRH, type AvisoRH } from "@/components/dashboard/modulos-rh";
 import {
-  MODOS_PRUEBA, crearPruebaPsicometrica, editarPruebaPsicometrica, fetchPruebasPsicometricas, inactivarPruebaPsicometrica,
-  type ModoPrueba, type PruebaPsicometrica,
+  TIPOS_PRUEBA, crearPruebaPsicometrica, editarPruebaPsicometrica, fetchPruebasPsicometricas, inactivarPruebaPsicometrica,
+  type PruebaPsicometrica, type TipoPrueba,
 } from "@/lib/api";
+
+const PROVEEDOR_INTEGRADO = "Psicométricas.mx";
 
 export function SeccionPruebasPsicometricas() {
   const [lista, setLista] = useState<PruebaPsicometrica[] | null>(null);
@@ -39,7 +41,7 @@ export function SeccionPruebasPsicometricas() {
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><Brain className="h-4 w-4" /></span>
           <div>
             <h2 className="font-display text-base font-bold">Pruebas psicométricas</h2>
-            <p className="mt-0.5 text-sm text-ink-2">Catálogo que se ofrece al agregar una evaluación psicométrica a un candidato.</p>
+            <p className="mt-0.5 text-sm text-ink-2">Pruebas y baterías del proveedor. Las rutas y las vacantes eligen de aquí su batería predeterminada.</p>
           </div>
         </div>
         <Button size="sm" onClick={() => setEditor({ prueba: null })}><Plus className="h-4 w-4" /> Nueva prueba</Button>
@@ -57,12 +59,12 @@ export function SeccionPruebasPsicometricas() {
                 <div className="min-w-0">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                     <span className="truncate">{p.nombre}</span>
-                    <span className="font-mono text-[10px] font-normal text-ink-3">{p.clave}</span>
+                    <Badge tone="neutral">{p.tipoTexto}</Badge>
                     <Badge tone={p.activa ? "good" : "neutral"}>{p.activa ? "Activa" : "Inactiva"}</Badge>
                   </p>
                   <p className="truncate text-[11px] text-ink-3">
-                    {p.modoTexto}{p.proveedor ? ` · ${p.proveedor}` : ""}{p.idProveedor ? ` (${p.idProveedor})` : ""}
-                    {p.puestos.length ? ` · sugerida para: ${p.puestos.join(", ")}` : ""}
+                    {p.idProveedor ? `Identificador en el proveedor: ${p.idProveedor}` : "Sin identificador en el proveedor"}
+                    {p.modo !== "integrada" ? ` · ${p.modoTexto}` : ""}
                   </p>
                 </div>
                 <MenuAcciones
@@ -87,26 +89,26 @@ export function SeccionPruebasPsicometricas() {
   );
 }
 
+/** 2026-10-07 (asignación simplificada): solo Nombre, Tipo (prueba o batería), Identificador en el proveedor y Activa.
+ * El identificador interno lo genera la API; las altas nuevas son del proveedor integrado (Psicométricas.mx). Al editar
+ * una prueba previa solo se mandan estos cuatro campos: su modo, proveedor, liga y puestos se conservan. */
 function ModalPrueba({ prueba, onClose, onGuardada }: { prueba: PruebaPsicometrica | null; onClose: () => void; onGuardada: (n: string) => void }) {
-  const [clave, setClave] = useState(prueba?.clave ?? "");
   const [nombre, setNombre] = useState(prueba?.nombre ?? "");
-  const [descripcion, setDescripcion] = useState(prueba?.descripcion ?? "");
-  const [puestos, setPuestos] = useState((prueba?.puestos ?? []).join(", "));
-  const [modo, setModo] = useState<ModoPrueba>(prueba?.modo ?? "manual");
-  const [proveedor, setProveedor] = useState(prueba?.proveedor ?? "");
+  const [tipo, setTipo] = useState<TipoPrueba>(prueba?.tipo ?? "prueba");
   const [idProveedor, setIdProveedor] = useState(prueba?.idProveedor ?? "");
-  const [url, setUrl] = useState(prueba?.url ?? "");
   const [activa, setActiva] = useState(prueba?.activa ?? true);
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState("");
 
   async function guardar() {
+    if (!nombre.trim()) return setError("Captura el nombre.");
+    if (!idProveedor.trim()) return setError("Captura el identificador en el proveedor (p. ej. 1,7).");
     setOcupado(true);
-    const datos = {
-      clave, nombre, descripcion, puestos: puestos.split(",").map((x) => x.trim()).filter(Boolean),
-      modo, proveedor, id_proveedor: idProveedor, url, activa,
-    };
-    const r = prueba ? await editarPruebaPsicometrica(prueba.id, datos) : await crearPruebaPsicometrica(datos);
+    setError("");
+    const base = { nombre: nombre.trim(), tipo, id_proveedor: idProveedor.trim(), activa };
+    const r = prueba
+      ? await editarPruebaPsicometrica(prueba.id, base)
+      : await crearPruebaPsicometrica({ ...base, clave: "", descripcion: "", puestos: [], modo: "integrada", proveedor: PROVEEDOR_INTEGRADO, url: "" });
     setOcupado(false);
     if (!r.ok) return setError(r.error);
     onGuardada(r.data.nombre);
@@ -115,30 +117,20 @@ function ModalPrueba({ prueba, onClose, onGuardada }: { prueba: PruebaPsicometri
   return (
     <ModalMarco titulo={prueba ? "Editar prueba psicométrica" : "Nueva prueba psicométrica"} onClose={onClose}>
       <div className="grid gap-3 sm:grid-cols-2">
-        <CampoRH label="Identificador interno"><input value={clave} onChange={(e) => setClave(e.target.value)} className={inputRH} placeholder="PSI-CLEAVER" /></CampoRH>
-        <CampoRH label="Nombre visible"><input value={nombre} onChange={(e) => setNombre(e.target.value)} className={inputRH} placeholder="Cleaver" /></CampoRH>
         <div className="sm:col-span-2">
-          <CampoRH label="Descripción"><input value={descripcion} onChange={(e) => setDescripcion(e.target.value)} className={inputRH} /></CampoRH>
+          <CampoRH label="Nombre"><input value={nombre} onChange={(e) => setNombre(e.target.value)} className={inputRH} placeholder="Batería corporativa (Cleaver + Terman)" autoFocus /></CampoRH>
         </div>
-        <div className="sm:col-span-2">
-          <CampoRH label="Puestos sugeridos" ayuda="Separados por coma. Al asignar a un candidato de ese puesto aparece primero.">
-            <input value={puestos} onChange={(e) => setPuestos(e.target.value)} className={inputRH} placeholder="Chofer repartidor, Almacenista" />
-          </CampoRH>
-        </div>
-        <CampoRH label="Modo">
-          <select value={modo} onChange={(e) => setModo(e.target.value as ModoPrueba)} className={inputRH}>
-            {MODOS_PRUEBA.map((m) => <option key={m.valor} value={m.valor}>{m.texto}</option>)}
+        <CampoRH label="Tipo">
+          <select value={tipo} onChange={(e) => setTipo(e.target.value as TipoPrueba)} className={inputRH}>
+            {TIPOS_PRUEBA.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
           </select>
         </CampoRH>
-        <CampoRH label={modo === "integrada" ? "Proveedor" : "Proveedor (opcional)"}><input value={proveedor} onChange={(e) => setProveedor(e.target.value)} className={inputRH} /></CampoRH>
-        <CampoRH label="Identificador en el proveedor"><input value={idProveedor} onChange={(e) => setIdProveedor(e.target.value)} className={inputRH} /></CampoRH>
-        {modo === "enlace" && <CampoRH label="Liga de la prueba"><input value={url} onChange={(e) => setUrl(e.target.value)} className={inputRH} placeholder="https://…" /></CampoRH>}
+        <CampoRH label="Identificador en el proveedor" ayuda="ID numérico en Psicométricas.mx; varios separados por coma (1,7).">
+          <input value={idProveedor} onChange={(e) => setIdProveedor(e.target.value)} className={inputRH} placeholder="1,7" inputMode="numeric" />
+        </CampoRH>
         <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">
           <input type="checkbox" checked={activa} onChange={(e) => setActiva(e.target.checked)} /> Activa
         </label>
-        {modo === "integrada" && (
-          <p className="text-[11px] text-ink-3 sm:col-span-2">Integrada: por ahora los pasos (Asignada → Enviada → Iniciada → Completada → Resultado recibido) se registran a mano; la conexión con el proveedor llega después.</p>
-        )}
       </div>
       {error && <p className="mt-3 text-sm font-semibold text-bad">{error}</p>}
       <div className="mt-5 flex justify-end gap-2">

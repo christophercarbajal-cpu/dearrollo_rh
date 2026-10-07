@@ -9,7 +9,11 @@
    una ENTREVISTA HUMANA mueve al candidato a «Filtro humano» si estaba en Prefiltro o Filtro Red Human; cualquier
    otra evaluación (o sus resultados) no cambia la columna y nada manda al candidato a Contratación. Las ligas externas quedan en la tarjeta (Abrir / Copiar / Enviar)
    aunque el envío automático falle. Psicométrica: nombre de prueba o batería + proveedor y tres vías (liga de otro
-   sistema, asignar a una persona, registrar ahora); socioeconómica: evaluador + cita opcional. */
+   sistema, asignar a una persona, registrar ahora); socioeconómica: evaluador + cita opcional.
+   2026-10-07 (asignación simplificada): la psicométrica abre primero la vista LIMPIA del catálogo
+   (`VistaAsignarPsicometria`: batería configurada · «Cambiar selección» · «Asignar y enviar») sin «¿Cómo se
+   realizará?», evaluador ni cita; «Agregar prueba externa» abre el formulario de siempre para ligas de otro sistema o
+   resultados manuales (sin la opción del proveedor integrado, que ya es la vista limpia). */
 
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, ChevronDown, ClipboardCheck, Eye, Loader2 } from "lucide-react";
@@ -17,6 +21,7 @@ import { Button } from "@/components/ui";
 import { ModalMarco } from "@/components/dashboard/modulos-rh";
 import { LineaNotificar, useNotificarAccion } from "@/components/dashboard/linea-notificar";
 import { FormularioResultado } from "@/components/dashboard/evaluaciones/formulario-resultado";
+import { VistaAsignarPsicometria } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import {
   CamposCita, Campo, Opciones, SelectorEvaluador, citaEntrada, citaVacia, evaluadorEntrada, evaluadorVacio, inputEv, nombreEvaluador,
   useCatalogoEvaluadores, useTeamsConectado, validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
@@ -66,6 +71,8 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   const [preview, setPreview] = useState<null | "entrevistador" | "candidato">(null);
   // «Registrar resultado ahora»: si el resultado falla después de crear, el reintento no crea otra evaluación
   const [creada, setCreada] = useState<RespuestaEvaluacion | null>(null);
+  // psicométrica: vista limpia del catálogo (por defecto) o flujo secundario «Agregar prueba externa»
+  const [externa, setExterna] = useState(false);
   const notificar = useNotificarAccion("evaluacion_asignada");
 
   useEffect(() => {
@@ -78,8 +85,9 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     const directo = { valor: "registro_directo" as const, texto: "Registrar resultado ahora", ayuda: "Ya se hizo; lo capturas tú (carga manual)" };
     const otro = { valor: "liga_otro_sistema" as const, texto: "Enviar liga de otro sistema", ayuda: "El candidato la realiza fuera (externo)" };
     const integrada = hayIntegradas ? [{ valor: "integrada" as const, texto: "Usar proveedor integrado", ayuda: "Psicométricas.mx u otro conectado" }] : [];
-    // psicométrica: primero la liga del otro sistema (lo más común), luego asignar y registrar ahora
-    return tipo === "psicometrica" ? [otro, asignada, directo, ...integrada] : [asignada, directo, otro, ...integrada];
+    // psicométrica externa: liga del otro sistema (lo más común), asignar o registrar ahora; el proveedor integrado
+    // ya es la vista limpia («Asignar y enviar»)
+    return tipo === "psicometrica" ? [otro, asignada, directo] : [asignada, directo, otro, ...integrada];
   }, [hayIntegradas, tipo]);
 
   function elegirTipo(t: TipoEvaluacion) {
@@ -87,7 +95,8 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     setError("");
     // predeterminados por tipo (especificación): la cita solo viene activada en la entrevista humana
     if (forma !== "registro_directo") setConCita(t === "entrevista_humana");
-    if (forma === "integrada" && t === "entrevista_humana") setForma("asignada");
+    if (forma === "integrada" && (t === "entrevista_humana" || t === "psicometrica")) setForma(t === "psicometrica" ? "liga_otro_sistema" : "asignada");
+    if (t === "psicometrica" && forma === "asignada") setForma("liga_otro_sistema");
   }
   function elegirForma(f: FormaEvaluacion) {
     setForma(f);
@@ -97,6 +106,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
   }
 
   const medicaDirecta = tipo === "medica" && forma === "registro_directo";
+  const vistaLimpia = tipo === "psicometrica" && !externa && !creada;
   const citaVisible = forma !== "registro_directo";
   const tipoTexto = TIPOS_EVALUACION.find((t) => t.valor === tipo)?.texto ?? "";
 
@@ -171,7 +181,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
         ? "Al agregar la entrevista humana el candidato pasa a Filtro humano."
         : "Esta evaluación no cambia la columna del candidato; RH decide el avance."}`} onClose={onClose}>
       <div className="flex flex-col gap-5">
-        <section>
+        {!(preset?.pasoId && vistaLimpia) && <section>
           <h3 className="text-sm font-semibold text-ink">1 · Tipo</h3>
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {TIPOS_EVALUACION.map((t) => (
@@ -193,7 +203,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
               <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej. Prueba de manejo" className={inputEv} />
             </Campo>
           )}
-          {tipo === "psicometrica" && forma !== "integrada" && (
+          {tipo === "psicometrica" && !vistaLimpia && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <Campo etiqueta="Nombre de prueba o batería">
                 <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej. Cleaver + Terman" className={inputEv} />
@@ -208,8 +218,22 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
               La evaluación médica requiere el consentimiento expreso y por escrito del candidato. Primero se genera la liga de consentimiento; cuando lo otorgue se habilita la «Liga del médico» para registrar el resultado y adjuntar el dictamen. Sin consentimiento tampoco se puede capturar el resultado desde la ficha.
             </p>
           )}
-        </section>
+        </section>}
 
+        {vistaLimpia && (
+          <VistaAsignarPsicometria c={c} pasoId={preset?.pasoId} onListo={onListo} onCancelar={onClose}
+            onExterna={() => { setExterna(true); setError(""); if (forma === "integrada") setForma("liga_otro_sistema"); }} />
+        )}
+
+        {!vistaLimpia && <>
+        {tipo === "psicometrica" && (
+          <p className="-mt-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
+            Prueba externa: liga de otro sistema o resultado manual.
+            <button type="button" onClick={() => setExterna(false)} disabled={Boolean(creada)} className="font-semibold text-brand hover:underline">
+              Volver a la batería del catálogo
+            </button>
+          </p>
+        )}
         <section>
           <h3 className="text-sm font-semibold text-ink">2 · ¿Cómo se realizará?</h3>
           <div className="mt-2">
@@ -304,6 +328,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
           </div>
         )}
         {medicaDirecta && <p className="text-[12px] text-ink-3">Se agrega en espera de consentimiento; cuando el candidato lo otorgue podrás registrar el resultado con «Registrar resultado / Adjuntar reporte» o compartir la «Liga del médico».</p>}
+        </>}
       </div>
 
       {preview && (

@@ -44,6 +44,7 @@ const FILTRO: Record<string, [string, string]> = {
 };
 const ALERTA_PSICO: Record<string, string> = {
   sin_enviar: "Psicométrica sin enviar", sin_respuesta: "Psicométrica sin respuesta", error_envio: "Psicométrica: error de envío",
+  falta_correo: "Falta correo para la prueba",
 };
 
 /** Score protagonista = `card_score` de la API (evaluación REAL del agente IA: Análisis de CV + Entrevista Red Human).

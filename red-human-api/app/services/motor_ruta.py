@@ -190,6 +190,13 @@ async def _disparar_psicometria(db: Session, p: Postulacion, paso: dict) -> Tupl
     from fastapi import HTTPException
 
     from ..routers.evaluaciones import AsignarPsicometriaIn, asignar_psicometria
+    from . import actividades
+    from . import psicometricas as psi
+
+    if psi.configurado() and not (p.correo or "").strip():
+        # 2026-10-08: falta un DATO, no es falla de envío → «Falta correo para enviar la prueba»; al guardarlo se retoma sola
+        actividades.marcar_pendiente_correo(p, paso["id"])
+        return False, "Falta el correo del candidato para enviar la prueba", None
 
     try:
         r = await asignar_psicometria(p.codigo, AsignarPsicometriaIn(paso_id=paso["id"]), db=db, u=_actor(), cuenta=p.cuenta)
@@ -230,7 +237,23 @@ async def _disparar_documentos(db: Session, p: Postulacion, paso: dict) -> Tuple
     return True, "Liga de documentos enviada" if enviados else "Liga creada; el aviso no salió", bool(enviados)
 
 
-DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista,
+async def _disparar_referencias(db: Session, p: Postulacion, paso: dict) -> Tuple[bool, str, Optional[bool]]:
+    """Referencias (2026-10-08): al habilitarse, se crea la actividad y el candidato recibe su liga para capturar contactos."""
+    from fastapi import HTTPException
+
+    from . import actividades
+
+    try:
+        r = await actividades.iniciar(db, p, paso["id"], _actor(), p.cuenta, {})
+    except HTTPException as ex:
+        return False, str(ex.detail), None
+    if not r.get("iniciada"):
+        return False, r.get("mensaje") or "Falta un dato para solicitar las referencias", None
+    enviados = [x for x in r.get("resultados") or [] if x.get("enviado") and x.get("destinatario") == "candidato"]
+    return True, "Solicitud de referencias enviada al candidato" if enviados else "Creada; el aviso no salió", bool(enviados)
+
+
+DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista, "referencias": _disparar_referencias,
                 "solicitud_documentos": _disparar_documentos}
 
 

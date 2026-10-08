@@ -311,7 +311,7 @@ with TestClient(app) as client:
     check(client.post(f"/evaluaciones/publica/referencias/{ev_rf.referencias_token}", json={"referencias": [{"nombre": "Otro", "empresa": "X", "correo": "o@x.mx"}]}).status_code == 409,
           "la captura no se repite")
     x = paso(seg(PRF), "refs")
-    check(x["estadoUnificado"] == "esperando_evaluador" and x["envios"]["evaluador"]["estado"] == "enviado", "estado = «Esperando evaluador» con su envío trazado")
+    check(x["estadoUnificado"] == "pendiente_revision" and x["envios"]["evaluador"]["estado"] == "enviado", "estado = «Pendiente de revisión» con el aviso al evaluador trazado")
     db.expire_all()
     ev_rf = db.get(Evaluacion, ev_rf.id)
     pub = client.get(f"/evaluaciones/publica/{ev_rf.token_evaluador}").json()

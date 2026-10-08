@@ -85,8 +85,13 @@ export type EstadoPaso = "pendiente" | "en_curso" | "completada" | "omitida" | "
 export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
 /** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
 export interface AccionPaso {
-  clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos";
+  clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos"
+    | "agregar_correo" | "registrar_resultado" | "reenviar";
   texto: string;
+  /** «reenviar»: a quién (p. ej. «Solicitar referencias» = la liga del candidato). */
+  a?: string;
+  /** Lo que detiene a la ruta es un DATO concreto: esta acción es el botón principal. */
+  urgente?: boolean;
   evaluacion?: string;
   pestana?: "whatsapp" | "documentos" | "evaluaciones" | "contratacion" | "resumen";
 }
@@ -151,6 +156,11 @@ export interface PasoSeguimiento {
   reenvios?: { a: string; motivo: string; texto: string }[];
   /** Submenú «…» estandarizado (sin la acción que ya es el botón principal de la ficha). */
   menu?: ItemMenuPaso[];
+  /** «Continuar por decisión de RH»: el resultado reprobatorio se conserva; solo libera la compuerta. */
+  excepcionRH?: { por: string; motivo: string; fecha: string; resultado?: string; score?: number | null } | null;
+  /** Psicometría detenida por falta de correo (no es error de envío): «Agregar correo» la retoma sola. */
+  faltaCorreo?: boolean;
+  referenciasCapturadas?: boolean;
 }
 export type EstadoEnvio = "intento" | "enviado" | "entregado" | "fallido";
 export interface EnvioDestinatario {
@@ -164,7 +174,8 @@ export interface EnvioDestinatario {
   canales: { canal: string; destino: string; estado: EstadoEnvio; detalle: string }[];
 }
 export interface ItemMenuPaso {
-  clave: "accion" | "abrir_liga" | "copiar_liga" | "registrar_resultado" | "reintentar_sincronizacion" | "omitir" | "reactivar" | `reenviar_${string}`;
+  clave: "accion" | "abrir_liga" | "copiar_liga" | "registrar_resultado" | "reintentar_sincronizacion" | "omitir" | "reactivar"
+    | "continuar_excepcion" | `reenviar_${string}`;
   texto: string;
   a?: string;
   accion?: AccionPaso;
@@ -197,7 +208,8 @@ export interface PsicometriaPaso {
 /** 2026-10-08: «Enviada» dejó de ser un estado; la actividad dice a QUIÉN espera (cuello de botella real). */
 export type EstadoUnificado =
   | "sin_iniciar" | "esperando_candidato" | "esperando_referencias" | "esperando_consentimiento" | "esperando_evaluador"
-  | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error";
+  | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error"
+  | "aprobada_excepcion" | "falta_correo";
 /** Ruta automática: una obligatoria «No aprobada» detiene el funnel; RH confirma el descarte (nunca es automático). */
 export interface DescarteSugerido {
   paso: string;
@@ -215,7 +227,7 @@ export interface EtapaSeguimiento {
   pasos: PasoSeguimiento[];
 }
 export interface SiguienteAccionProceso {
-  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada";
+  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada" | "bloqueo";
   texto: string;
   detalle?: string;
   paso?: string;
@@ -244,6 +256,10 @@ export interface SeguimientoProceso {
   /** 2026-10-08: motor de ruta automatizado (solo demo-grupak). */
   rutaAutomatica?: boolean;
   descarteSugerido?: DescarteSugerido | null;
+  /** 2026-10-08 (todas las Cuentas): obligatoria «No aprobada» → «Confirmar descarte» o «Continuar por decisión de RH». */
+  bloqueo?: DescarteSugerido | null;
+  /** Recomendación derivada de la ruta (misma fuente que la acción principal); null = la de Red Human. */
+  recomendacion?: { texto: string; motivo: string; tono: "bad" | "warn" | "good" } | null;
 }
 
 export interface RespuestaPrefiltro {
@@ -333,7 +349,7 @@ export interface Candidato {
   has_consent?: boolean;
   expediente_pct?: number | null;
   /** Flujo simple de psicometría (solo Cuentas con `psicometriaSimple`). */
-  psychometric_alert?: "sin_enviar" | "sin_respuesta" | "error_envio" | null;
+  psychometric_alert?: "sin_enviar" | "sin_respuesta" | "error_envio" | "falta_correo" | null;
   /** Ruta automática: actividad obligatoria «No aprobada» → RH confirma el descarte. */
   suggested_discard?: DescarteSugerido | null;
   /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */

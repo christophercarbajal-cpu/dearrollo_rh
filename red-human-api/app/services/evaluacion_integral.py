@@ -179,12 +179,12 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
                 # 2026-10-08: bajo la calificación mínima de su actividad = «No aprobada» (antes contaba como aprobada)
                 v["estado"] = "no_apto"
                 v["resultado"] = f"{x['detalle']} · No aprobada" if x.get("detalle") else "No aprobada"
-            validaciones.append(v)
+            validaciones.append(_con_excepcion(v, x))
             continue
         ev = asignadas.get(x["id"])
         if ev is not None and ev.estado != "cancelada":
             ligadas.add(ev.id)
-            validaciones.append({**_validacion_evaluacion(ev, x["obligatorio"]), "nombre": x["nombre"]})
+            validaciones.append(_con_excepcion({**_validacion_evaluacion(ev, x["obligatorio"]), "nombre": x["nombre"]}, x))
         elif x["obligatorio"]:
             validaciones.append({
                 "clave": f"paso:{x['id']}", "nombre": x["nombre"], "obligatoria": True, "fuente": "persona", "tipo": x["tipo"],
@@ -196,6 +196,16 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
         if ev.id not in ligadas:
             validaciones.append(_validacion_evaluacion(ev, False))
     return validaciones
+
+
+def _con_excepcion(v: dict, x: dict) -> dict:
+    """«Continuar por decisión de RH»: el resultado reprobatorio y el score se muestran TAL CUAL; deja de contar como
+    «No apto» y cuenta como «con observaciones», con quién lo decidió."""
+    d = x.get("excepcionRH")
+    if not d or v.get("estado") != "no_apto":
+        return v
+    return {**v, "estado": "observaciones", "resultado": f"{v['resultado']} · Continúa por decisión de RH",
+            "revisadoPor": f"Revisado por: {d.get('por', '')} (decisión de RH: {d.get('motivo', '')})"}
 
 
 def _resultado(validaciones: List[dict]) -> dict:

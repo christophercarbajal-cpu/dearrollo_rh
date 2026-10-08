@@ -416,10 +416,30 @@ async def reenviar_actividad(codigo: str, paso_id: str, datos: ReenviarIn, db: S
     return {**r, **_salida(p)}
 
 
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/excepcion")
+async def excepcion_rh(codigo: str, paso_id: str, datos: MotivoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                       cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Continuar por decisión de RH» sobre una actividad «No aprobada»: la libera SIN cambiar su resultado ni su score
+    y SIN omitirla; el motor se recalcula en el mismo momento (avanza si la ruta quedó lista y la Cuenta lo permite)."""
+    p = _postulacion(db, codigo, cuenta.id)
+    try:
+        sproc.excepcion_rh(db, p, paso_id, u, datos.motivo)
+    except sproc.ErrorProceso as e:
+        raise _error(e)
+    from .candidatos import _recalcular_resultado_apto
+
+    _recalcular_resultado_apto(p)
+    db.commit()
+    await sproc.avanzar_seguro(db, p)
+    db.refresh(p)
+    return _salida(p)
+
+
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/resultado")
 async def registrar_resultado_actividad(
     codigo: str, paso_id: str,
     conclusion: str = Form(""), comentarios: str = Form(""), realizada_por: str = Form(""),
+    referencias: str = Form(""),  # JSON: contactos verificados fuera del sistema (solo Referencias)
     archivos: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual),
 ):
@@ -428,8 +448,14 @@ async def registrar_resultado_actividad(
     from ..services import actividades
 
     p = _postulacion(db, codigo, cuenta.id)
+    import json
+
+    try:
+        lista = json.loads(referencias) if referencias.strip() else None
+    except ValueError:
+        raise HTTPException(400, "Las referencias capturadas no tienen un formato válido.")
     r = await actividades.registrar_resultado(db, p, paso_id, u, conclusion=conclusion, comentarios=comentarios,
-                                              realizada_por=realizada_por, archivos=archivos)
+                                              realizada_por=realizada_por, archivos=archivos, referencias=lista)
     db.refresh(p)
     return {**r, **_salida(p)}
 

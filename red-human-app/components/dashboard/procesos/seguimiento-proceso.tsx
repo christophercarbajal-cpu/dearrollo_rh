@@ -35,7 +35,7 @@ import {
   urlResultadoPsicometria,
 } from "@/components/dashboard/evaluaciones/psicometria-simple";
 import {
-  agregarActividadProceso, aprobarPrefiltro, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
+  actualizarContactoCandidato, agregarActividadProceso, aprobarPrefiltro, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
   moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
   sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
 } from "@/lib/api";
@@ -47,7 +47,7 @@ import { cn } from "@/lib/utils";
 export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human" | "good" | "warn" | "bad"> = {
   sin_iniciar: "neutral", esperando_candidato: "human", esperando_referencias: "human", esperando_consentimiento: "human",
   esperando_evaluador: "human", pendiente_resultado: "warn", en_curso: "brand", pendiente_revision: "warn", completada: "good",
-  aprobada: "good", no_aprobada: "bad", omitida: "neutral", error: "bad",
+  aprobada: "good", no_aprobada: "bad", omitida: "neutral", error: "bad", aprobada_excepcion: "warn", falta_correo: "warn",
 };
 const TEXTO_DESTINATARIO: Record<string, string> = {
   candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador", rh: "RH", cliente: "Cliente",
@@ -93,6 +93,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   // «Iniciar» en un paso: si la API dice que falta un dato crítico, se pide SOLO ese dato
   const [faltan, setFaltan] = useState<{ paso: PasoSeguimiento; faltan: NonNullable<RespuestaIniciar["faltan"]>; mensaje: string } | null>(null);
   const [registrar, setRegistrar] = useState<PasoSeguimiento | null>(null);
+  // 2026-10-08: «Agregar correo» (psicometría detenida por falta de correo) y «Continuar por decisión de RH»
+  const [pedirCorreo, setPedirCorreo] = useState<PasoSeguimiento | null>(null);
+  const [excepcion, setExcepcion] = useState<{ paso: string; nombre: string; detalle: string; motivo: string } | null>(null);
 
   function setSeg(s: Seg) {
     setSegLocal(s);
@@ -112,6 +115,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (paso?.tipo === "alta" && onAlta) return onAlta();
     if (simple && paso?.tipo === "psicometrica" && paso.psicometria && accion.clave === "iniciar_evaluacion") return setEnviarPrueba(paso);
     if (accion.clave === "iniciar_evaluacion" && paso) return void iniciar(paso);
+    if (accion.clave === "agregar_correo" && paso) return setPedirCorreo(paso);
+    if (accion.clave === "registrar_resultado" && paso) return setRegistrar(paso);
+    if (accion.clave === "reenviar" && paso) return void reenviar(paso, accion.a ?? "candidato");
     if (accion.clave === "consultar_evaluacion") return onAbrir("evaluaciones");
     if (accion.clave === "solicitar_documentos") return onSolicitarDocumentos();
     if (accion.clave === "validar_documentos") return onAbrir("documentos");
@@ -133,6 +139,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         const rc = paso.responsableConfig;
         return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: rc?.tipo === "usuario" ? rc.usuario_id : null });
       }
+      // falta el correo → edición rápida del contacto; al guardarlo la prueba se envía sola (sin duplicar)
+      if (r.data.faltan.length === 1 && r.data.faltan[0] === "correo") return setPedirCorreo(paso);
       return setFaltan({ paso, faltan: r.data.faltan, mensaje: r.data.mensaje });
     }
     setFaltan(null);
@@ -178,11 +186,27 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         lista.push({ etiqueta: m.texto, icono: <SkipForward />, onClick: () => setDecision({ tipo: "omitir", paso: p, motivo: "" }), disabled: c.activa === false });
       } else if (m.clave === "reactivar") {
         lista.push({ etiqueta: m.texto, icono: <RotateCcw />, onClick: () => void reactivar(p) });
+      } else if (m.clave === "continuar_excepcion") {
+        lista.push({ etiqueta: m.texto, icono: <CheckCircle2 />, disabled: c.activa === false,
+          onClick: () => setExcepcion({ paso: p.id, nombre: p.nombre, detalle: p.detalle, motivo: "" }) });
       }
     }
     const url = ps?.status === "completada" ? urlResultadoPsicometria(ps) : null;
     if (url) lista.unshift({ etiqueta: "Ver resultado", icono: <FileText />, onClick: () => window.open(url, "_blank", "noopener,noreferrer") });
     return lista;
+  }
+
+  async function confirmarExcepcion() {
+    if (!excepcion) return;
+    setOcupado("excepcion");
+    const r = await excepcionRHPaso(c.id, excepcion.paso, excepcion.motivo);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setSeg(r.data.proceso);
+    onCambio(r.data.candidato);
+    const movida = r.data.candidato.etapa !== c.etapa;
+    setExcepcion(null);
+    setAviso({ tono: "ok", texto: `«${excepcion.nombre}» continúa por decisión de RH (su resultado se conserva).${movida ? ` La ruta avanzó a ${nombreEtapa(r.data.candidato.etapa)}.` : ""}` });
   }
 
   /** Solo cuando la ruta lo permite (todos los obligatorios de la etapa cumplidos y su avance automático apagado). */
@@ -274,15 +298,19 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const sig = seg.siguienteAccion;
   const pasos = (seg.etapas ?? []).flatMap((e) => e.pasos);
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
-  const descarte = seg.descarteSugerido ?? null;
+  // un solo evaluador de condiciones: la API manda `bloqueo` (todas las Cuentas) y `descarteSugerido` (ruta automática)
+  const descarte = seg.bloqueo ?? seg.descarteSugerido ?? null;
   const pasoPrefiltro = pasos.find((p) => p.revisarPrefiltro && p.estado !== "omitida" && p.estado !== "cancelada");
-  const rec = c.recomendacionRedHuman ? TONO_RECOMENDACION[c.recomendacionRedHuman] : null;
+  const recRuta = seg.recomendacion ?? null;
+  const rec = recRuta
+    ? { texto: recRuta.tono === "bad" ? "text-bad" : recRuta.tono === "warn" ? "text-warn" : "text-good", icon: recRuta.tono === "good" ? CheckCircle2 : AlertTriangle }
+    : c.recomendacionRedHuman ? TONO_RECOMENDACION[c.recomendacionRedHuman] : null;
   const RecIcon = rec?.icon ?? Sparkles;
 
   // UN botón principal: la siguiente acción concreta que define la ruta.
   let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
-  if (live && c.activa !== false && descarte && onDescartar) {
-    principal = { texto: "Confirmar descarte", onClick: () => onDescartar(descarte.motivo), icono: <ThumbsDown className="h-4 w-4" /> };
+  if (live && c.activa !== false && descarte) {
+    principal = null; // el bloqueo trae SUS dos decisiones (abajo): Confirmar descarte · Continuar por decisión de RH
   } else if (live && c.activa !== false && pasoPrefiltro) {
     principal = { texto: "Aprobar prefiltro", onClick: () => void aprobarPrefiltroRH(), icono: <CheckCircle2 className="h-4 w-4" /> };
   } else if (live && sig && c.activa !== false) {
@@ -312,10 +340,10 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             <div className="min-w-0">
               <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">Recomendación</p>
               <p className={cn("font-display text-base font-bold leading-tight", rec?.texto ?? "text-ink")}>
-                {c.recomendacionRedHuman || c.resultadoIntegral?.texto || "Sin recomendación todavía"}
+                {recRuta?.texto || c.recomendacionRedHuman || c.resultadoIntegral?.texto || "Sin recomendación todavía"}
               </p>
-              {(c.recomendacionMotivo || (!c.recomendacionRedHuman && c.resultadoIntegral?.motivo)) && (
-                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{c.recomendacionMotivo || c.resultadoIntegral?.motivo}</p>
+              {(recRuta?.motivo || c.recomendacionMotivo || (!c.recomendacionRedHuman && c.resultadoIntegral?.motivo)) && (
+                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-2">{recRuta?.motivo || c.recomendacionMotivo || c.resultadoIntegral?.motivo}</p>
               )}
             </div>
           </div>
@@ -328,11 +356,24 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         {descarte && c.activa !== false && (
           <div role="alert" className="mt-3 rounded-lg border border-bad/40 bg-bad-soft/50 px-3 py-2">
             <p className="flex items-center gap-2 text-[13px] font-semibold text-bad">
-              <XCircle className="h-4 w-4 shrink-0" /> Descarte sugerido: {descarte.motivo}
+              <XCircle className="h-4 w-4 shrink-0" /> {seg.descarteSugerido ? "Descarte sugerido" : "No aprobada"}: {descarte.motivo}
             </p>
             <p className="mt-0.5 pl-6 text-[12px] text-ink-2">
-              La ruta se detuvo. Confirma el descarte o, si RH decide continuar, omite la actividad con un motivo.
+              La ruta se detuvo. Confirma el descarte o, si RH decide seguir, continúa con un motivo (el resultado se conserva).
             </p>
+            {live && (
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                {onDescartar && (
+                  <Button size="sm" variant="outline" onClick={() => onDescartar(descarte.motivo)} disabled={Boolean(ocupado)}>
+                    <ThumbsDown className="h-4 w-4" /> Confirmar descarte
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => setExcepcion({ paso: descarte.paso, nombre: descarte.nombre, detalle: descarte.motivo, motivo: "" })}
+                  disabled={Boolean(ocupado)}>
+                  <CheckCircle2 className="h-4 w-4" /> Continuar por decisión de RH
+                </Button>
+              </div>
+            )}
           </div>
         )}
         {pasoPrefiltro && !descarte && (
@@ -466,6 +507,54 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
           onClose={() => setFaltan(null)}
           onEnviar={(datos) => void iniciar(faltan.paso, datos)}
         />
+      )}
+
+      {pedirCorreo && (
+        <ModalAgregarCorreo
+          c={c}
+          paso={pedirCorreo}
+          onClose={() => setPedirCorreo(null)}
+          onListo={async (candidato, reanudadas) => {
+            setPedirCorreo(null);
+            onCambio(candidato);
+            const s = await fetchSeguimiento(c.id);
+            if (s) setSeg(s);
+            const ok = reanudadas.filter((x) => x.ok);
+            const mal = reanudadas.filter((x) => !x.ok);
+            setAviso(mal.length
+              ? { tono: "warn", texto: `Correo guardado, pero no se pudo retomar: ${mal.map((x) => `${x.nombre} (${x.mensaje})`).join("; ")}` }
+              : { tono: "ok", texto: `Correo guardado.${ok.length ? ` Se retomó el envío de ${ok.map((x) => `«${x.nombre}»`).join(", ")}.` : ""}` });
+          }}
+        />
+      )}
+
+      {excepcion && (
+        <ModalMarco
+          titulo={`Continuar por decisión de RH: ${excepcion.nombre}`}
+          subtitulo="El resultado y el score se conservan tal cual; la actividad deja de detener la ruta. Queda en el historial con tu nombre."
+          onClose={() => setExcepcion(null)}
+        >
+          <div className="flex flex-col gap-3">
+            {excepcion.detalle && <p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-ink-2">{excepcion.detalle}</p>}
+            <textarea
+              className={cn(inputRH, "h-24 py-2")}
+              value={excepcion.motivo}
+              onChange={(ev) => setExcepcion({ ...excepcion, motivo: ev.target.value })}
+              placeholder="¿Por qué continúa? (obligatorio, mínimo 10 caracteres)"
+            />
+            {!puedeAutorizar && (
+              <p className="rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2">
+                En una actividad obligatoria se requiere el permiso «Autorizar omisiones» (Configuración → Usuarios).
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setExcepcion(null)}>Cancelar</Button>
+              <Button size="sm" onClick={confirmarExcepcion} disabled={Boolean(ocupado) || excepcion.motivo.trim().length < 10}>
+                {ocupado === "excepcion" ? "Guardando…" : "Continuar"}
+              </Button>
+            </div>
+          </div>
+        </ModalMarco>
       )}
 
       {registrar && (
@@ -627,6 +716,47 @@ function ModalDatosFaltantes({ c, paso, faltan, mensaje, ocupado, onClose, onEnv
   );
 }
 
+/** «Agregar correo» (2026-10-08): edición rápida del contacto. Al guardarlo, la API retoma SOLA el envío de la
+ * psicometría que se detuvo por falta de correo (sin duplicar). */
+function ModalAgregarCorreo({ c, paso, onClose, onListo }: {
+  c: Candidato;
+  paso: PasoSeguimiento;
+  onClose: () => void;
+  onListo: (c: Candidato, reanudadas: { paso: string; nombre: string; ok: boolean; mensaje: string }[]) => void;
+}) {
+  const [correo, setCorreo] = useState(c.correo ?? "");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+
+  async function guardar() {
+    if (!esCorreoValido(correo.trim())) return setError("Escribe un correo válido.");
+    setGuardando(true);
+    setError("");
+    const r = await actualizarContactoCandidato(c.id, { correo: correo.trim(), reanudar_paso: paso.id });
+    setGuardando(false);
+    if (!r.ok) return setError(r.error);
+    onListo(r.data, r.data.psicometriaReanudada ?? []);
+  }
+
+  return (
+    <ModalMarco titulo="Agregar correo del candidato" subtitulo={`«${paso.nombre}» necesita un correo; al guardarlo la prueba se envía sola.`} onClose={onClose}>
+      <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void guardar(); }}>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          Correo
+          <input className={inputRH} type="email" inputMode="email" autoFocus value={correo} onChange={(e) => setCorreo(e.target.value)} placeholder="correo@ejemplo.com" />
+        </label>
+        {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={guardando}>Cancelar</Button>
+          <Button type="submit" size="sm" disabled={guardando}>{guardando ? "Guardando…" : "Guardar y enviar prueba"}</Button>
+        </div>
+      </form>
+    </ModalMarco>
+  );
+}
+
+type ContactoVerificado = { nombre: string; empresa: string; telefono: string; dictamen: string; comentario: string };
+
 /** «Registrar resultado» de algo hecho FUERA del sistema: dictamen, quién la aplicó y comentarios (quién captura = tu
  * sesión). Se guarda en la evaluación de la actividad, sin duplicados; un resultado tardío del proveedor no la pisa. */
 function ModalRegistrarResultado({ c, paso, onClose, onListo }: {
@@ -643,16 +773,24 @@ function ModalRegistrarResultado({ c, paso, onClose, onListo }: {
   const [archivos, setArchivos] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+  const esReferencias = paso.tipo === "referencias";
+  const [contactos, setContactos] = useState<ContactoVerificado[]>([]);
   useEffect(() => {
     fetchOpcionesProceso().then((o) => setOpciones(o?.tiposPaso.find((t) => t.valor === paso.tipo)?.dictamenes ?? []));
   }, [paso.tipo]);
+  const cambiarContacto = (i: number, k: keyof ContactoVerificado, v: string) =>
+    setContactos((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
 
   async function guardar() {
     if (paso.tipo === "entrevista_humana" && !conclusion) return setError("Elige la conclusión de la entrevista.");
-    if (!conclusion && !comentarios.trim() && !archivos.length) return setError("Elige el dictamen o agrega un comentario o un archivo.");
+    const llenos = contactos.filter((x) => x.nombre.trim());
+    if (!conclusion && !comentarios.trim() && !archivos.length && !llenos.length) return setError("Elige el dictamen o agrega un comentario, un archivo o los contactos verificados.");
     setGuardando(true);
     setError("");
-    const r = await registrarResultadoActividad(c.id, paso.id, { conclusion, comentarios, realizadaPor, archivos });
+    const r = await registrarResultadoActividad(c.id, paso.id, {
+      conclusion, comentarios, realizadaPor, archivos,
+      referencias: llenos.map((x) => ({ nombre: x.nombre.trim(), empresa: x.empresa, telefono: x.telefono, dictamen: x.dictamen, comentario: x.comentario, contactado: true })),
+    });
     setGuardando(false);
     if (!r.ok) return setError(r.error);
     onListo(r.data);
@@ -668,6 +806,29 @@ function ModalRegistrarResultado({ c, paso, onClose, onListo }: {
             {opciones.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
           </select>
         </label>
+        {esReferencias && (
+          <div className="flex flex-col gap-2 rounded-xl border border-border-soft p-3">
+            <p className="text-xs font-semibold text-ink-2">Contactos verificados fuera del sistema (opcional)</p>
+            {contactos.map((x, i) => (
+              <div key={i} className="grid gap-1.5 sm:grid-cols-2">
+                <input className={inputRH} placeholder="Nombre *" value={x.nombre} onChange={(e) => cambiarContacto(i, "nombre", e.target.value)} />
+                <input className={inputRH} placeholder="Empresa" value={x.empresa} onChange={(e) => cambiarContacto(i, "empresa", e.target.value)} />
+                <input className={inputRH} placeholder="Teléfono" value={x.telefono} onChange={(e) => cambiarContacto(i, "telefono", e.target.value)} />
+                <select className={cn(inputRH, "h-10")} value={x.dictamen} onChange={(e) => cambiarContacto(i, "dictamen", e.target.value)}>
+                  <option value="">Dictamen…</option>
+                  <option value="favorable">Favorable</option>
+                  <option value="con_observaciones">Con observaciones</option>
+                  <option value="desfavorable">Desfavorable</option>
+                </select>
+                <input className={cn(inputRH, "sm:col-span-2")} placeholder="Qué comentó" value={x.comentario} onChange={(e) => cambiarContacto(i, "comentario", e.target.value)} />
+              </div>
+            ))}
+            <button type="button" className="self-start text-[12px] font-semibold text-brand hover:underline"
+              onClick={() => setContactos((xs) => [...xs, { nombre: "", empresa: "", telefono: "", dictamen: "", comentario: "" }])}>
+              + Agregar contacto verificado
+            </button>
+          </div>
+        )}
         <label className="flex flex-col gap-1 text-xs text-ink-2">
           ¿Quién la aplicó?
           <input className={inputRH} value={realizadaPor} onChange={(e) => setRealizadaPor(e.target.value)} placeholder="Nombre de quien la realizó (opcional)" />

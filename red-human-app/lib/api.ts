@@ -3202,8 +3202,9 @@ export function proveedorVisible(nombre?: string | null): string {
 export const esCorreoValido = (v: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim());
 
 /** Ficha → datos de contacto (2026-10-07): corrige correo y/o teléfono en cualquier etapa. Campo omitido = sin cambio. */
-export function actualizarContactoCandidato(codigo: string, datos: { correo?: string; telefono?: string }) {
-  return patch<Candidato>(`/candidatos/${codigo}/contacto`, datos);
+/** `reanudar_paso` (2026-10-08): «Agregar correo» desde una psicometría detenida; al guardar se retoma sola. */
+export function actualizarContactoCandidato(codigo: string, datos: { correo?: string; telefono?: string; reanudar_paso?: string }) {
+  return patch<Candidato & { psicometriaReanudada?: { paso: string; nombre: string; ok: boolean; mensaje: string }[] }>(`/candidatos/${codigo}/contacto`, datos);
 }
 
 /* ============================================================
@@ -3592,11 +3593,14 @@ export function reenviarActividad(codigoPostulacion: string, pasoId: string, a: 
 /** «Registrar resultado» de algo hecho fuera del sistema (dictamen + quién la aplicó; quién capturó = la sesión). */
 export function registrarResultadoActividad(codigoPostulacion: string, pasoId: string, datos: {
   conclusion: string; comentarios: string; realizadaPor: string; archivos?: File[];
+  /** Solo Referencias: contactos verificados fuera del sistema. */
+  referencias?: (Partial<ReferenciaCaptura> & { contactado?: boolean; dictamen?: string; comentario?: string })[];
 }) {
   const form = new FormData();
   form.append("conclusion", datos.conclusion);
   form.append("comentarios", datos.comentarios);
   form.append("realizada_por", datos.realizadaPor);
+  if (datos.referencias?.length) form.append("referencias", JSON.stringify(datos.referencias));
   (datos.archivos ?? []).forEach((f) => form.append("archivos", f));
   return subir<RespuestaPaso & { evaluacion: string }>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/resultado`, form);
 }
@@ -3622,6 +3626,10 @@ export function dictaminarReferenciaPublica(token: string, rid: string, datos: {
 }
 export function dictaminarReferencia(codigoEvaluacion: string, rid: string, datos: { contactado: boolean; dictamen: string; comentario: string }) {
   return post<{ ok: boolean; referencia: Referencia; evaluacion: Evaluacion }>(`/evaluaciones/${codigoEvaluacion}/referencias/${rid}`, datos);
+}
+/** «Continuar por decisión de RH» (2026-10-08): libera una actividad «No aprobada» sin cambiar su resultado ni omitirla. */
+export function excepcionRHPaso(codigoPostulacion: string, pasoId: string, motivo: string) {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/excepcion`, { motivo });
 }
 export function reactivarPasoProceso(codigoPostulacion: string, pasoId: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reactivar`);

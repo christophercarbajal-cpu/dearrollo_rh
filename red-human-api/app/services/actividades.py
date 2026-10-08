@@ -42,6 +42,66 @@ def evaluacion_de_paso(db: Session, p: Postulacion, paso_id: str) -> Optional[Ev
     return sproc.asignar_evaluaciones(p.proceso["pasos"], evs).get(paso_id)
 
 
+def marcar_pendiente_correo(p: Postulacion, paso_id: str) -> None:
+    """La psicometría de ese paso quiso salir y no tenía correo: queda pendiente de reanudarse al capturarlo."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    a = dict(p.analisis or {})
+    pend = list(a.get("psicometria_pendiente_correo") or [])
+    if paso_id not in pend:
+        pend.append(paso_id)
+    a["psicometria_pendiente_correo"] = pend
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def _quitar_pendiente_correo(p: Postulacion, paso_id: str) -> None:
+    from sqlalchemy.orm.attributes import flag_modified
+
+    a = dict(p.analisis or {})
+    pend = [x for x in (a.get("psicometria_pendiente_correo") or []) if x != paso_id]
+    a["psicometria_pendiente_correo"] = pend
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+async def reanudar_por_correo(db: Session, p: Postulacion, u, cuenta, paso_extra: str = "") -> List[dict]:
+    """Al guardar el correo del candidato: retoma AUTOMÁTICAMENTE el envío de las psicometrías que se detuvieron por
+    falta de correo (y la que RH pidió al pulsar «Agregar correo»). `iniciar` nunca duplica: si ya hay asignación viva,
+    regresa esa. Regresa [{paso, nombre, ok, mensaje}]."""
+    if not (p.correo or "").strip() or not p.activa or not sproc.tiene_proceso(p):
+        return []
+    pasos = list((p.analisis or {}).get("psicometria_pendiente_correo") or [])
+    if paso_extra and paso_extra not in pasos:
+        pasos.append(paso_extra)
+    salida = []
+    for paso_id in pasos:
+        paso = next((x for x in p.proceso.get("pasos", []) if x["id"] == paso_id and x["tipo"] == "psicometrica"), None)
+        if paso is None:
+            _quitar_pendiente_correo(p, paso_id)
+            continue
+        try:
+            r = await iniciar(db, p, paso_id, u, cuenta, {})
+            ok = bool(r.get("iniciada"))
+            salida.append({"paso": paso_id, "nombre": paso["nombre"], "ok": ok, "mensaje": r.get("mensaje") or ""})
+        except HTTPException as ex:
+            salida.append({"paso": paso_id, "nombre": paso["nombre"], "ok": False, "mensaje": str(ex.detail)})
+            ok = False
+        db.refresh(p)
+        if ok:
+            _quitar_pendiente_correo(p, paso_id)
+    db.commit()
+    return salida
+
+
+def _admin_de_cuenta(db: Session, cuenta_id: int) -> Optional[int]:
+    from ..models import UsuarioCuenta
+
+    fila = (db.query(Usuario).join(UsuarioCuenta, UsuarioCuenta.usuario_id == Usuario.id)
+            .filter(UsuarioCuenta.cuenta_id == cuenta_id, Usuario.activo.is_(True)).order_by(Usuario.id).first())
+    return fila.id if fila else None
+
+
 def _evaluador_configurado(db: Session, p: Postulacion, paso: dict, u: Usuario) -> Optional[dict]:
     """Evaluador que ya trae la ruta: usuario responsable del paso; si el responsable es RH, el responsable de la vacante
     (o quien inicia). None = hay que pedirlo (externos: médico, socioeconómico, entrevista sin entrevistador)."""
@@ -51,8 +111,9 @@ def _evaluador_configurado(db: Session, p: Postulacion, paso: dict, u: Usuario) 
     if paso["tipo"] in TIPOS_EVALUADOR_EXTERNO or paso["tipo"] == "entrevista_humana" or r.get("tipo") == "externo":
         return None
     v = p.vacante
-    uid = (v.responsable_id if v is not None and v.responsable_id else None) or u.id
-    return {"tipo": "interno", "usuario_id": uid}
+    # el motor automático no es una persona: responsable de la vacante o, si no hay, un usuario de la Cuenta
+    uid = (v.responsable_id if v is not None and v.responsable_id else None) or getattr(u, "id", None) or _admin_de_cuenta(db, p.cuenta_id)
+    return {"tipo": "interno", "usuario_id": uid} if uid else None
 
 
 async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta, datos: dict) -> dict:
@@ -108,6 +169,9 @@ async def _iniciar_psicometria(db: Session, p: Postulacion, paso: dict, u: Usuar
     correo = (datos.get("correo") or "").strip() or None
     if psi.configurado() and not ((p.correo or "").strip() or correo):
         faltan.append("correo")
+    if "correo" in faltan:
+        marcar_pendiente_correo(p, paso["id"])  # al guardar el correo se retoma sola (sin pedir nada más)
+        db.commit()
     if faltan:
         return {"iniciada": False, "faltan": faltan,
                 "mensaje": "Para enviar la prueba solo falta " + " y ".join({"pruebas": "elegir las pruebas", "correo": "el correo del candidato"}[f] for f in faltan) + "."}
@@ -194,8 +258,41 @@ async def _reenviar_entrevista(db: Session, p: Postulacion, paso: dict, u: Usuar
 # ------------------------------------------------------------ captura manual (fuera del sistema)
 
 
+def referencias_manuales(lista, u: Usuario) -> List[dict]:
+    """Contactos verificados FUERA del sistema (por teléfono, en papel): mismo formato que los que captura el candidato,
+    con su dictamen ya puesto por quien registra."""
+    from datetime import datetime, timezone
+    import secrets as _s
+
+    from .. import fechas
+    from ..models import DICTAMENES_GENERALES
+    from .telegram import telefono_10
+
+    salida = []
+    for i, r in enumerate(lista or []):
+        if not isinstance(r, dict):
+            continue
+        nombre = " ".join(str(r.get("nombre") or "").split())[:150]
+        if not nombre:
+            continue
+        dictamen = str(r.get("dictamen") or "").strip()
+        if dictamen and dictamen not in DICTAMENES_GENERALES:
+            raise HTTPException(400, f"Referencia {i + 1}: dictamen inválido.")
+        contactado = r.get("contactado")
+        salida.append({
+            "id": _s.token_hex(4), "nombre": nombre, "empresa": str(r.get("empresa") or "").strip()[:150],
+            "puesto": str(r.get("puesto") or "").strip()[:150], "relacion": str(r.get("relacion") or "").strip()[:100],
+            "telefono": telefono_10(str(r.get("telefono") or "")) if str(r.get("telefono") or "").strip() else "",
+            "correo": str(r.get("correo") or "").strip().lower()[:200],
+            "contactado": True if contactado is None else bool(contactado), "dictamen": dictamen,
+            "comentario": str(r.get("comentario") or "").strip()[:2000], "dictaminado_por": u.nombre[:150],
+            "dictaminado_en": fechas.iso(datetime.now(timezone.utc)), "capturada_por": "rh",
+        })
+    return salida
+
+
 async def registrar_resultado(db: Session, p: Postulacion, paso_id: str, u: Usuario, *, conclusion: str, comentarios: str,
-                              realizada_por: str, archivos) -> dict:
+                              realizada_por: str, archivos, referencias: Optional[list] = None) -> dict:
     from ..routers.evaluaciones import _adjuntos_subidos, _recalcular_indicador
 
     x = _paso_vivo(p, paso_id)
@@ -222,6 +319,16 @@ async def registrar_resultado(db: Session, p: Postulacion, paso_id: str, u: Usua
         sev.asignar_codigo(ev)
         sev.evento(db, ev, "creada", u.nombre, a=ev.estado, usuario_id=u.id, tipo=ev.tipo, forma=ev.forma, via="registrar_resultado")
     adjuntos = await _adjuntos_subidos(ev, archivos, u.nombre, "sistema")
+    verificadas = referencias_manuales(referencias, u) if paso["tipo"] == "referencias" else []
+    if verificadas:
+        # referencias verificadas fuera del sistema: se SUMAN a las que haya capturado el candidato (nada se pierde)
+        from datetime import datetime, timezone
+
+        ev.referencias = list(ev.referencias or []) + verificadas
+        ev.referencias_capturadas_en = ev.referencias_capturadas_en or datetime.now(timezone.utc)
+        sev.evento(db, ev, "referencias_capturadas", u.nombre, "sistema", total=len(verificadas), via="registro_manual")
+        if not (comentarios or "").strip():
+            comentarios = f"{len(verificadas)} referencia(s) verificada(s) fuera del sistema."
     try:
         accion = sev.registrar_resultado(db, ev, actor=u.nombre, canal="sistema", conclusion=conclusion, comentarios=comentarios,
                                          realizada_por=realizada_por, adjuntos=adjuntos, version=None, modo="registrar", usuario_id=u.id)

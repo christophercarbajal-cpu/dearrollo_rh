@@ -1689,10 +1689,12 @@ def actualizar_contacto(db: Session, p: Postulacion, actor: str, correo: Optiona
 class ContactoIn(BaseModel):
     correo: Optional[str] = None
     telefono: Optional[str] = None
+    # 2026-10-08: «Agregar correo» desde una psicometría detenida por falta de correo → se retoma sola al guardar
+    reanudar_paso: str = ""
 
 
 @router.patch("/{codigo}/contacto")
-def editar_contacto(
+async def editar_contacto(
     codigo: str,
     datos: ContactoIn,
     db: Session = Depends(get_db),
@@ -1704,7 +1706,14 @@ def editar_contacto(
     p = _por_codigo(db, codigo, cuenta.id)
     actualizar_contacto(db, p, u.nombre, correo=datos.correo, telefono=datos.telefono, correo_rh=u.correo)
     db.commit()
-    return postulacion_dict(p, detalle=True)
+    reanudadas: list = []
+    if datos.correo:
+        # 2026-10-08: psicometrías detenidas por falta de correo se retoman SOLAS (sin duplicar: `iniciar` reutiliza)
+        from ..services.actividades import reanudar_por_correo
+
+        reanudadas = await reanudar_por_correo(db, p, u, cuenta, datos.reanudar_paso.strip())
+        db.refresh(p)
+    return {**postulacion_dict(p, detalle=True), "psicometriaReanudada": reanudadas}
 
 
 # ------------------------------------------------------------

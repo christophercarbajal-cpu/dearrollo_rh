@@ -1109,6 +1109,12 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
                          "detalle": f"{ESTADOS_PASO[clave]} por {d.get('por', '')}: {d.get('motivo', '')}".strip(": "),
                          "decision": d}
                     break
+        if decision.get("excepcion") and r["estado"] == "completada" and r.get("resultado") == "no_favorable":
+            # 2026-10-08: «Continuar por decisión de RH». El resultado reprobatorio y su score se CONSERVAN (la actividad
+            # no se omite): solo cuenta como cumplida para la compuerta, con quién, cuándo y por qué.
+            d = decision["excepcion"]
+            r = {**r, "cumple": True, "excepcion": d, "espera": "",
+                 "revisadoPor": f"Continúa por decisión de RH: {d.get('por', '')}"}
         disparo = disparos.get(paso["id"]) or {}
         if r["estado"] == "en_curso" and disparo.get("entregado") is False and not r.get("error"):
             # la actividad se creó (p. ej. la liga de la Entrevista Red Human) pero el aviso no le llegó al candidato
@@ -1131,6 +1137,11 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             except Exception:  # noqa: BLE001 — una liga nunca tumba el seguimiento
                 r["liga"] = None
         r = _con_cuello(paso, r, ev_paso, env)
+        if tipo == "psicometrica" and falta_correo_psicometria(p, paso["id"], r, ev_paso):
+            # 2026-10-08: no es «Error de envío» (eso es una falla HTTP del proveedor): falta un DATO y se resuelve con
+            # «Agregar correo»; al guardarlo, el envío pendiente se retoma solo (`actividades.reanudar_por_correo`).
+            r = {**r, "error": None, "falta_correo": True, "espera": "Falta el correo del candidato para enviar la prueba",
+                 "cuello": {"clave": "falta_correo", "texto": "Falta correo para enviar la prueba", "quien": None}}
         calculados[paso["id"]] = r
 
     salida = []
@@ -1185,6 +1196,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "liga": r.get("liga"),
             "error": r.get("error"),
             "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
+            "excepcionRH": r.get("excepcion"),
+            "faltaCorreo": bool(r.get("falta_correo")),
+            "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
             # a quién se espera (cuello de botella real) y el estado de cada destinatario (intento/enviado/entregado/fallido)
             "condicion": _condicion(paso), "condicionTexto": CONDICIONES[_condicion(paso)],
@@ -1239,8 +1253,11 @@ def _cuello_evaluacion(ev: Optional[Evaluacion]) -> Optional[dict]:
         return {"clave": "esperando_consentimiento", "texto": "Esperando consentimiento", "quien": "candidato",
                 "motivos": ("consentimiento",), "que": "consentimiento"}
     if esperando_referencias(ev):
-        return {"clave": "esperando_referencias", "texto": "Esperando referencias", "quien": "candidato",
+        return {"clave": "esperando_referencias", "texto": "Esperando referencias del candidato", "quien": "candidato",
                 "motivos": ("referencias",), "que": "referencias"}
+    if ev.tipo == "referencias" and ev.referencias_capturadas_en and ev.estado == "pendiente":
+        # el candidato ya entregó sus contactos: le toca al responsable revisarlos y registrar el resultado
+        return {"clave": "pendiente_revision", "texto": "Pendiente de revisión", "quien": None}
     if ev.estado == "realizada_sin_resultado":
         return {"clave": "pendiente_resultado", "texto": "Esperando resultado", "quien": None}
     iniciada = bool(ev.iniciada_en) or ev.paso_integrada in ("iniciada", "completada")
@@ -1273,6 +1290,8 @@ def _con_cuello(paso: dict, r: dict, ev: Optional[Evaluacion], env: Optional[dic
     cuello = None
     if tipo in TIPOS_PASO_EVALUACION:
         cuello = _cuello_evaluacion(ev)
+        if ev is not None and ev.tipo == "referencias" and ev.referencias_capturadas_en:
+            r = {**r, "referencias_capturadas": True}
     elif r.get("revisar_prefiltro"):
         cuello = {"clave": "pendiente_revision", "texto": "Pendiente de revisión", "quien": None}
     elif r["estado"] == "en_curso" and tipo in ("entrevista_agente", "solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web", "solicitud_web"):
@@ -1340,7 +1359,8 @@ def _reenvios(paso: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
 
 
 ETIQUETAS_MENU = {"abrir_liga": "Abrir liga", "copiar_liga": "Copiar liga", "registrar_resultado": "Registrar resultado",
-                  "reintentar_sincronizacion": "Reintentar sincronización", "omitir": "Omitir actividad", "reactivar": "Reactivar"}
+                  "reintentar_sincronizacion": "Reintentar sincronización", "omitir": "Omitir actividad", "reactivar": "Reactivar",
+                  "continuar_excepcion": "Continuar por decisión de RH"}
 
 
 def _menu(paso: dict, x: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
@@ -1363,11 +1383,14 @@ def _menu(paso: dict, x: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
         poner("copiar_liga")
     for rv in x.get("reenvios") or []:
         poner(f"reenviar_{rv['a']}", rv["texto"], a=rv["a"])
-    if puede_registrar_resultado_paso(paso, estado, ev):
+    if puede_registrar_resultado_paso(paso, estado, ev) and (x.get("accion") or {}).get("clave") != "registrar_resultado":
         poner("registrar_resultado")
     if x.get("sincronizable"):
         poner("reintentar_sincronizacion")
-    if not x.get("heredado") and (estado in ("pendiente", "en_curso") or (estado == "completada" and x.get("resultado") == "no_favorable")):
+    if (estado == "completada" and x.get("resultado") == "no_favorable" and not x.get("excepcionRH") and not x.get("heredado")):
+        poner("continuar_excepcion")
+    if not x.get("heredado") and (estado in ("pendiente", "en_curso") or (estado == "completada" and x.get("resultado") == "no_favorable"
+                                                                         and not x.get("excepcionRH"))):
         poner("omitir")
     if estado in ("omitida", "cancelada"):
         poner("reactivar")
@@ -1399,12 +1422,14 @@ ESTADOS_UNIFICADOS = {
     "esperando_consentimiento": "Esperando consentimiento", "esperando_evaluador": "Esperando evaluador",
     "pendiente_resultado": "Pendiente de resultado", "en_curso": "En curso", "pendiente_revision": "Pendiente de revisión",
     "completada": "Completada", "aprobada": "Aprobada", "no_aprobada": "No aprobada", "omitida": "Omitida", "error": "Error",
+    # 2026-10-08: no aprobada, pero RH decidió continuar (el resultado reprobatorio se conserva) · falta un dato
+    "aprobada_excepcion": "Continúa por decisión de RH", "falta_correo": "Falta correo para enviar la prueba",
 }
 # Las resuelve Red Human solas (el candidato las responde o la IA las califica): la ficha solo muestra su estado.
 TIPOS_AUTOMATICOS = ("solicitud_web", "prefiltro_whatsapp", "prefiltro_web", "analisis_cv")
 # Ruta automática: el motor las DISPARA solas al habilitarse (services/motor_ruta.py). Las que piden agendar,
 # aplicar en persona, revisar o aprobar (entrevistas humanas, médica, referencias, condiciones…) siguen manuales.
-TIPOS_DISPARABLES = ("psicometrica", "entrevista_agente", "solicitud_documentos")
+TIPOS_DISPARABLES = ("psicometrica", "entrevista_agente", "solicitud_documentos", "referencias")
 
 
 def _cumplido(r: dict) -> bool:
@@ -1417,6 +1442,10 @@ def _estado_unificado(r: dict, regla: Optional[dict] = None) -> dict:
     texto = None
     if estado in ("omitida", "cancelada"):
         clave = "omitida"
+    elif r.get("excepcion"):
+        clave = "aprobada_excepcion"
+    elif r.get("falta_correo"):
+        clave = "falta_correo"
     elif r.get("error"):
         clave = "error"
     elif resultado == "no_favorable":
@@ -1460,12 +1489,74 @@ def descarte_sugerido(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[d
     if not pasos or not p.activa or not ruta_automatica(p.cuenta):
         return None
     x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
-              and y["estado"] not in ("omitida", "cancelada")), None)
+              and y["estado"] not in ("omitida", "cancelada") and not y.get("excepcionRH")), None)
     if x is None:
         return None
     detalle = x.get("detalle") or ""
     motivo = f"{x['nombre']}: {detalle}" if detalle and detalle != x["nombre"] else f"{x['nombre']}: No aprobada"
     return {"paso": x["id"], "nombre": x["nombre"], "motivo": motivo}
+
+
+def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[dict]:
+    """TODAS las Cuentas (2026-10-08): una obligatoria «No aprobada» (bajo el mínimo, dictamen desfavorable,
+    consentimiento rechazado) ya alcanzada por la ruta detiene el avance. RH decide: «Confirmar descarte» o
+    «Continuar por decisión de RH» (`excepcion_rh`). Nunca se descarta ni se libera solo."""
+    if not pasos or not p.activa:
+        return None
+    actual = _indice(p.etapa)
+    x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
+              and y["estado"] == "completada" and not y.get("excepcionRH") and _indice(y["etapa"]) <= actual), None)
+    if x is None:
+        return None
+    detalle = x.get("detalle") or ""
+    return {"paso": x["id"], "nombre": x["nombre"],
+            "motivo": f"{x['nombre']}: {detalle}" if detalle and detalle != x["nombre"] else f"{x['nombre']}: No aprobada"}
+
+
+def falta_correo_psicometria(p: Postulacion, paso_id: str, r: dict, ev: Optional[Evaluacion]) -> bool:
+    """La psicometría quiso enviarse (RH o el motor) y no pudo porque el candidato no tiene correo: el proveedor lo exige.
+    Se marca en `analisis.psicometria_pendiente_correo` y se apaga sola en cuanto hay correo o una asignación viva."""
+    from . import psicometricas as psi
+
+    if r["estado"] in ("omitida", "cancelada", "completada") or (p.correo or "").strip():
+        return False
+    if ev is not None and ev.estado != "cancelada" and (ev.clave_proveedor or ev.forma != "integrada"):
+        return False
+    pendientes = (p.analisis or {}).get("psicometria_pendiente_correo") or []
+    return paso_id in pendientes and psi.configurado()
+
+
+def excepcion_rh(db: Session, p: Postulacion, paso_id: str, u, motivo: str) -> dict:
+    """«Continuar por decisión de RH» sobre una actividad «No aprobada»: la libera para la compuerta SIN cambiar su
+    resultado ni su score y SIN omitirla. Motivo obligatorio; en una obligatoria exige el permiso «Autorizar omisiones».
+    No hace commit."""
+    paso = _paso(p, paso_id)
+    motivo = (motivo or "").strip()
+    actual = next((x for x in estado_pasos(p) if x["id"] == paso_id), None)
+    if actual is None or actual["resultado"] != "no_favorable" or actual["estado"] != "completada":
+        raise ErrorProceso(409, f"«{paso['nombre']}» no está «No aprobada»: no hay nada que liberar.")
+    if actual.get("excepcionRH"):
+        raise ErrorProceso(409, f"«{paso['nombre']}» ya continúa por decisión de RH.")
+    if len(motivo) < MOTIVO_MINIMO:
+        raise ErrorProceso(400, f"Escribe el motivo de la decisión (al menos {MOTIVO_MINIMO} caracteres).")
+    if paso["obligatorio"] and not u.puede_autorizar_omisiones():
+        raise ErrorProceso(403, f"«{paso['nombre']}» es obligatoria: continuar pese al resultado requiere el permiso «Autorizar omisiones».")
+    sello = _ahora()
+    decisiones = dict(p.proceso_estado or {})
+    d = dict(decisiones.get(paso_id) or {})
+    d["excepcion"] = {"por": u.nombre, "motivo": motivo[:500], "fecha": sello.isoformat(), "obligatorio": paso["obligatorio"],
+                      "resultado": actual.get("resultadoTexto") or "No favorable", "score": actual.get("score"),
+                      "detalle": actual.get("detalle") or ""}
+    decisiones[paso_id] = d
+    p.proceso_estado = decisiones
+    p.historial = list(p.historial or []) + [{
+        "evento": "paso_excepcion_rh", "usuario": u.nombre, "fecha": sello.isoformat(), "paso": paso_id, "motivo": motivo[:500],
+        "texto": f"«{paso['nombre']}» ({actual.get('detalle') or 'No aprobada'}) continúa por decisión de RH ({u.nombre}): {motivo}",
+    }]
+    registrar(db, u.nombre, "proceso_excepcion_rh", "postulacion", p.codigo,
+              {"paso": paso_id, "nombre": paso["nombre"], "resultado": actual.get("detalle"), "score": actual.get("score"),
+               "motivo": motivo[:500], "correo_rh": getattr(u, "correo", "")})
+    return d["excepcion"]
 
 
 def alerta_psicometria(pasos: List[dict], etapa: str) -> Optional[str]:
@@ -1476,6 +1567,8 @@ def alerta_psicometria(pasos: List[dict], etapa: str) -> Optional[str]:
     vivos = [x for x in pasos if x["tipo"] == "psicometrica" and x["obligatorio"] and not x["heredado"]
              and _indice(x["etapa"]) <= actual
              and x["estado"] not in ("omitida", "cancelada") and x.get("psicometria")]
+    if any(x.get("faltaCorreo") for x in vivos):
+        return "falta_correo"  # 2026-10-08: falta un dato (correo), no es una falla de envío
     if any(x["psicometria"]["status"] == "error_envio" for x in vivos):
         return "error_envio"  # 2026-10-08: generada pero la liga no le llegó al candidato
     if any(x["psicometria"]["status"] == "sin_enviar" for x in vivos):
@@ -1501,11 +1594,20 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
     if estado in ("omitida", "cancelada"):
         return None
     if tipo in TIPOS_PASO_EVALUACION:
+        if r.get("falta_correo"):
+            return {"clave": "agregar_correo", "texto": "Agregar correo"}
+        cuello = r.get("cuello") or {}
+        if tipo == "referencias" and cuello.get("que") == "referencias" and (cuello.get("clave") == "sin_iniciar" or r.get("error")):
+            # la actividad existe pero al candidato no le ha llegado su liga: «Solicitar referencias» (envía ESA liga)
+            return {"clave": "reenviar", "a": "candidato", "texto": "Solicitar referencias", "urgente": True}
+        if r.get("referencias_capturadas") and estado == "en_curso":
+            return {"clave": "registrar_resultado", "texto": "Registrar revisión de referencias", "urgente": True}
         if r.get("evaluacion") and estado != "pendiente":
             return {"clave": "consultar_evaluacion", "texto": "Consultar", "evaluacion": r["evaluacion"]}
         if disponible:
             # psicometría: abre la vista limpia con la batería de la ruta/vacante y «Asignar y enviar»
-            return {"clave": "iniciar_evaluacion", "texto": "Asignar y enviar" if tipo == "psicometrica" else "Iniciar"}
+            texto = {"psicometrica": "Asignar y enviar", "referencias": "Solicitar referencias"}.get(tipo, "Iniciar")
+            return {"clave": "iniciar_evaluacion", "texto": texto}
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
                "entrevista_agente": "evaluaciones", "documentos": "contratacion", "condiciones": "contratacion",
@@ -1584,7 +1686,11 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
     cfg = normalizar_etapas(p.proceso.get("etapas"))
     sig = siguiente_etapa(p)
     falta_actual = faltantes(pasos, desde_compuerta(p), sig) if sig else []
+    bloqueo = bloqueo_no_aprobada(p, pasos)
     accion_principal = _siguiente_accion(p, pasos, sig, falta_actual)
+    if bloqueo:
+        accion_principal = {"tipo": "bloqueo", "paso": bloqueo["paso"], "texto": f"Decisión de RH: {bloqueo['nombre']}",
+                            "detalle": bloqueo["motivo"]}
     if accion_principal.get("paso") and accion_principal.get("accion"):
         for x in pasos:  # UNA acción principal visible: la del paso principal no se duplica en su «…»
             if x["id"] == accion_principal["paso"] and (accion_principal["tipo"] == "paso" or x.get("pendienteAprobacion")):
@@ -1603,6 +1709,10 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         # ruta automática (2026-10-08): el motor dispara y avanza solo; el descarte SIEMPRE lo confirma RH
         "rutaAutomatica": ruta_automatica(p.cuenta),
         "descarteSugerido": descarte_sugerido(p, pasos),
+        # 2026-10-08 (todas las Cuentas): una obligatoria «No aprobada» detiene la ruta → «Confirmar descarte» o
+        # «Continuar por decisión de RH». La recomendación de la ficha sale de ESTE mismo cálculo.
+        "bloqueo": bloqueo,
+        "recomendacion": _recomendacion_ruta(bloqueo, accion_principal),
         "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
         "version": int(p.proceso.get("vacante_version") or p.proceso.get("version") or 1),
@@ -1617,10 +1727,30 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
     }
 
 
+def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict) -> Optional[dict]:
+    """Recomendación derivada de la RUTA (misma fuente que la acción principal y los avisos). None = la ficha muestra
+    la recomendación de Red Human (CV + entrevista)."""
+    if bloqueo:
+        return {"texto": "Decisión de RH pendiente", "motivo": f"{bloqueo['motivo']}. Confirma el descarte o continúa por decisión de RH.",
+                "tono": "bad"}
+    if accion.get("accion", {}) and (accion.get("accion") or {}).get("clave") == "agregar_correo":
+        return {"texto": "Falta un dato para continuar", "motivo": "Agrega el correo del candidato: la prueba se envía sola al guardarlo.",
+                "tono": "warn"}
+    return None
+
+
 def _siguiente_accion(p: Postulacion, pasos: List[dict], sig: Optional[str], falta: List[dict]) -> dict:
     if not p.activa:
         return {"tipo": "cerrada", "texto": "Postulación cerrada", "detalle": "Mover de etapa la reabre."}
     de_etapa = [x for x in pasos if x["etapa"] == p.etapa]
+    # 2026-10-08: si lo que detiene a la ruta es un DATO concreto (correo, referencias por revisar), el botón principal
+    # es ESA acción — nunca un «Registrar resultado» genérico.
+    urgentes = [x for x in pasos if x.get("accion") and x["accion"]["clave"] in ("agregar_correo",) + (("registrar_resultado", "reenviar") if x["accion"].get("urgente") else ())
+                and x["estado"] not in ("omitida", "cancelada", "completada") and _indice(x["etapa"]) <= _indice(p.etapa)]
+    if urgentes:
+        x = next((y for y in urgentes if y["obligatorio"]), urgentes[0])
+        return {"tipo": "paso", "paso": x["id"], "texto": f"{x['accion']['texto']}: {x['nombre']}" if x["accion"]["clave"] != "agregar_correo"
+                else "Agregar correo", "accion": x["accion"], "detalle": x["espera"]}
     iniciables = [x for x in de_etapa if x["disponible"] and x["estado"] == "pendiente" and x["accion"]]
     obligatorios = [x for x in iniciables if x["obligatorio"]] or iniciables
     if obligatorios:

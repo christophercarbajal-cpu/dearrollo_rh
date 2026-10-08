@@ -162,6 +162,8 @@
 }
 html {
   scroll-behavior: smooth;
+  /* el topbar del dashboard es fijo (h-16): anclas y scrollIntoView no deben quedar debajo de él */
+  scroll-padding-top: 5rem;
 }
 body {
   background: var(--bg);

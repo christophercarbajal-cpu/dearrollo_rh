@@ -337,7 +337,25 @@ def metricas_tablero(
 
     v = _vacante(db, vacante, cuenta.id) if vacante else None
     stats = conteos.metricas_tablero(db, cuenta.id, v.id if v else None)
-    abiertas = db.query(func.count(Vacante.id)).filter(Vacante.cuenta_id == cuenta.id, Vacante.estado == "Publicada").scalar() or 0
+    # Vacantes abiertas = las que siguen reclutando: Publicadas o En revisión (aún sin publicar en el portal pero con
+    # proceso vivo — p. ej. las de la Demo Grupak), más cualquier otra no cerrada/eliminada con postulaciones activas.
+    # Antes solo contaba «Publicada» y una Cuenta con todo «En revisión» mostraba 0.
+    con_activas = (
+        db.query(Postulacion.vacante_id)
+        .join(Candidato, Postulacion.candidato_id == Candidato.id)
+        .filter(Postulacion.cuenta_id == cuenta.id, Postulacion.activa.is_(True), Candidato.eliminado_en.is_(None),
+                Postulacion.vacante_id.isnot(None))
+    )
+    abiertas = (
+        db.query(func.count(Vacante.id))
+        .filter(
+            Vacante.cuenta_id == cuenta.id,
+            Vacante.estado.notin_(("Cerrada", "Eliminada")),
+            or_(Vacante.estado.in_(("Publicada", "En revisión")), Vacante.id.in_(con_activas)),
+        )
+        .scalar()
+        or 0
+    )
     return {
         "stats": [{**x, "stage": ETAPA_TABLERO[x["etapa"]], "nombre": ETIQUETA_ETAPA.get(x["etapa"], x["etapa"])} for x in stats],
         "en_proceso": sum(x["total"] for x in stats),
@@ -1742,7 +1760,20 @@ def actividad_agente(db: Session = Depends(get_db), _: Usuario = Depends(usuario
                 ultimo = ultimo.replace(tzinfo=timezone.utc)
             if ultimo >= corte:
                 prefiltrando += 1
-    return {"prefiltrando": prefiltrando, "enPrefiltro": len(filas)}
+    # 2026-10-07: volumetría real del agente para la tarjeta del sidebar (antes solo había texto cuando alguien
+    # conversaba en las últimas 24 h). `enPrefiltro` se conserva (chat sin terminar); `prefiltroTotal` = TODAS las
+    # activas en Prefiltro (cualquier canal); `procesados` = activas cuyo prefiltro ya cerró el agente;
+    # `nuevas24h` = postulaciones que llegaron en las últimas 24 h.
+    base = (
+        db.query(func.count(Postulacion.id))
+        .join(Candidato, Postulacion.candidato_id == Candidato.id)
+        .filter(Postulacion.cuenta_id == cuenta.id, Postulacion.activa.is_(True), Candidato.eliminado_en.is_(None))
+    )
+    en_prefiltro = base.filter(Postulacion.etapa == "Prefiltro").scalar() or 0
+    procesados = base.filter(Postulacion.prefiltro_completo.is_(True)).scalar() or 0
+    nuevas = base.filter(Postulacion.creado_en >= corte).scalar() or 0
+    return {"prefiltrando": prefiltrando, "enPrefiltro": len(filas), "prefiltroTotal": int(en_prefiltro),
+            "procesados": int(procesados), "nuevas24h": int(nuevas)}
 
 
 def _fecha_hora_mx(dt: datetime) -> str:

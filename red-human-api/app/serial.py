@@ -380,11 +380,53 @@ def _frase_corta(texto, tope: int = 60) -> str:
     return t if len(t) <= tope else t[: tope - 1].rstrip() + "…"
 
 
-def razon_score(p: Postulacion) -> Optional[dict]:
-    """`score_reason` = {fortaleza, faltante} del Análisis de CV (la IA lo escribe al calificar). None sin datos."""
+_TEXTO_DEMO = ("modo demo", "sin evaluación real", "pendiente de api key", "pendientes de openai_api_key")
+
+
+def _es_real(texto) -> bool:
+    t = str(texto or "").strip()
+    return bool(t) and not any(x in t.lower() for x in _TEXTO_DEMO)
+
+
+def _cv_real(p: Postulacion) -> bool:
+    """Análisis de CV hecho por la IA de verdad: `analisis.ia` False = respuesta de demo sin OPENAI_API_KEY."""
     a = p.analisis or {}
-    fortaleza = next((x for x in (a.get("fortalezas_cv") or []) + (a.get("requisitos_cumplidos") or []) if str(x).strip()), "")
-    faltante = next((x for x in (a.get("brechas") or []) if str(x).strip()), "")
+    hay_cv = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"))
+    return hay_cv and a.get("ia") is not False
+
+
+def _entrevista_ia(p: Postulacion) -> dict:
+    """Evaluación de la Entrevista Red Human (agente IA) — solo si quedó EVALUADA (igual que la evaluación integral)."""
+    e = p.entrevistas[-1] if p.entrevistas else None
+    return (e.evaluacion or {}) if e is not None and e.estado == "evaluada" and e.evaluacion else {}
+
+
+def score_tablero(p: Postulacion) -> Optional[int]:
+    """`card_score` (2026-10-07): el score del agente IA leído de la base — Análisis de CV REAL (`Postulacion.score`)
+    y/o afinidad de la Entrevista Red Human evaluada (`match_perfil`), promediados como en la evaluación integral.
+    None si no hay ninguna evaluación real (un 60 del modo demo o un 0 sin CV no es una calificación)."""
+    valores = []
+    if p.score is not None and _cv_real(p):
+        valores.append(p.score)
+    match = _entrevista_ia(p).get("match_perfil")
+    if isinstance(match, (int, float)):
+        valores.append(match)
+    if not valores:
+        return None
+    return max(0, min(100, round(sum(valores) / len(valores))))
+
+
+def razon_score(p: Postulacion) -> Optional[dict]:
+    """`score_reason` = {fortaleza, faltante} de la evaluación REAL del agente: primero la Entrevista Red Human evaluada
+    (fortalezas / riesgos), luego el Análisis de CV hecho por la IA (fortalezas, requisitos cumplidos, brechas). Los
+    textos del modo demo nunca llegan a la tarjeta. None sin datos."""
+    a = p.analisis or {}
+    ev = _entrevista_ia(p)
+    cv = _cv_real(p)
+    fortalezas = list(ev.get("fortalezas") or []) + (list(a.get("fortalezas_cv") or []) + list(a.get("requisitos_cumplidos") or []) if cv else [])
+    faltantes = list(ev.get("riesgos") or []) + (list(a.get("brechas") or []) if cv else [])
+    fortaleza = next((x for x in fortalezas if _es_real(x)), "")
+    faltante = next((x for x in faltantes if _es_real(x)), "")
     if not fortaleza and not faltante:
         return None
     return {"fortaleza": _frase_corta(fortaleza), "faltante": _frase_corta(faltante)}
@@ -418,6 +460,7 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "vacancy_id": p.vacante.codigo if p.vacante is not None else "",
         "stage": ETAPA_TABLERO.get(p.etapa, "prefiltro"),
         "filter_status": _FILTRO_TABLERO.get(p.estado or ""),
+        "card_score": score_tablero(p),
         "score_reason": razon_score(p),
         "source_channel": canal_origen(p),
         "next_step": (siguiente or {}).get("nombre") or None,

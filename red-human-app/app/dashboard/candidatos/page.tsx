@@ -282,11 +282,33 @@ function CandidatosContenido() {
   const [orden, setOrden] = useState<OrdenTablero>("score");
   const [alerta, setAlerta] = useState<AlertaTablero | null>(null);
   const [metricas, setMetricas] = useState<MetricasTablero | null>(null);
+  // Vista por defecto (2026-10-07): sin ?vacante= el tablero abre en la vacante con MÁS candidatos activos
+  // (`Vacante.candidatos` = postulaciones activas, services/conteos). Se decide UNA vez al montar; si RH elige
+  // «Vacante: Todas» después, se respeta. El tablero no carga hasta decidirlo (evita una carga doble).
+  const [vacanteInicialLista, setVacanteInicialLista] = useState(false);
+  const vacanteInicialDecidida = useRef(false);
 
   // Inicialización desde URL params y localStorage
   useEffect(() => {
     const vParam = searchParams.get("vacante");
     if (vParam) setFiltroVacante(vParam);
+    if (!vacanteInicialDecidida.current) {
+      vacanteInicialDecidida.current = true;
+      if (vParam) {
+        setVacanteInicialLista(true);
+      } else {
+        fetchVacantes()
+          .then((v) => {
+            if (!v) return;
+            setVacantes(v);
+            const mayor = v
+              .filter((x) => x.estado !== "Eliminada" && x.estado !== "Cerrada" && (x.candidatos ?? 0) > 0)
+              .reduce<Vacante | null>((m, x) => (!m || x.candidatos > m.candidatos ? x : m), null);
+            if (mayor) setFiltroVacante(mayor.id);
+          })
+          .finally(() => setVacanteInicialLista(true));
+      }
+    }
 
     // 2026-10-01: una liga vieja con ?etapa=Evaluación (columna retirada) abre Filtro Red Human
     const eCrudo = searchParams.get("etapa");
@@ -295,7 +317,12 @@ function CandidatosContenido() {
       setColumnaResaltada(eParam);
       setTimeout(() => {
         const el = document.getElementById(`columna-etapa-${eParam.replace(/\s/g, "-")}`);
-        if (el) el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+        // Solo desplazamiento HORIZONTAL dentro del tablero: scrollIntoView también movía la ventana y el header fijo
+        // de la app tapaba el título «Candidatos».
+        const contenedor = el?.closest(".overflow-x-auto");
+        if (el && contenedor) {
+          contenedor.scrollTo({ left: el.offsetLeft - (contenedor.clientWidth - el.clientWidth) / 2, behavior: "smooth" });
+        }
       }, 200);
     }
 
@@ -333,14 +360,15 @@ function CandidatosContenido() {
   }, [filtroVacante, mostrarCerradas]);
 
   useEffect(() => {
+    if (!vacanteInicialLista) return;
     recargar();
     fetchVacantes().then((v) => v && setVacantes(v));
     fetchClientes("Activo").then((cl) => setClientes(cl ?? []));
     fetchEntrevistadores().then((u) => setUsuarios(u ?? []));
-  }, [recargar]);
+  }, [recargar, vacanteInicialLista]);
   // Fase 4: el Kanban se revalida solo (WhatsApp, IA y otros usuarios mueven tarjetas) — se pausa
   // mientras hay una ficha abierta para no pisar lo que RH está editando.
-  usePolling(() => recargar(), INTERVALO_TABLERO_MS, sel === null);
+  usePolling(() => recargar(), INTERVALO_TABLERO_MS, sel === null && vacanteInicialLista);
 
   async function abrir(c: Candidato) {
     setSel(c);
@@ -471,7 +499,7 @@ function CandidatosContenido() {
   };
 
   return (
-    <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 sm:py-8">
+    <div className="mx-auto max-w-[1400px] px-4 pb-6 pt-8 sm:px-6 sm:pb-8 sm:pt-10">
       {/* Rediseño 2026-10-07: título + subtítulo con el total en proceso y las vacantes abiertas; buscador, Vacante y
           Ordenar; los chips de alerta reemplazan el banner de consentimiento. */}
       <PageHeader

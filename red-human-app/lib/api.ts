@@ -2099,9 +2099,20 @@ export interface Colaborador {
   eliminadoEn?: string | null;
 }
 
+/** 2026-09-15: contador real del sidebar («Agente activo»). 2026-10-07: + volumetría (todas en Prefiltro, procesadas
+ * por el agente y nuevas en 24 h); los campos nuevos son opcionales por si la API aún no los manda. */
+export interface ActividadAgente {
+  /** Prefiltro con conversación por WhatsApp/Telegram en las últimas 24 h. */
+  prefiltrando: number;
+  /** Prefiltro sin terminar de personas con WhatsApp. */
+  enPrefiltro: number;
+  prefiltroTotal?: number;
+  procesados?: number;
+  nuevas24h?: number;
+}
 /** 2026-09-15: contador real del sidebar («Agente activo»). */
 export function fetchActividadAgente() {
-  return get<{ prefiltrando: number; enPrefiltro: number }>("/candidatos/agente/actividad");
+  return get<ActividadAgente>("/candidatos/agente/actividad");
 }
 
 /** Perfil completo del colaborador (panel de Colaboradores). */

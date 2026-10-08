@@ -269,6 +269,8 @@ export interface Candidato {
   vacancy_id?: string;
   stage?: "prefiltro" | "filtro_ia" | "filtro_humano" | "contratacion" | "onboarding";
   filter_status?: "cumple" | "revisar" | "no_cumple" | null;
+  /** Score del agente IA (Análisis de CV real + Entrevista Red Human evaluada); null = sin evaluación real. */
+  card_score?: number | null;
   score_reason?: { fortaleza: string; faltante: string } | null;
   source_channel?: "whatsapp" | "web" | "referido" | "telegram";
   next_step?: string | null;

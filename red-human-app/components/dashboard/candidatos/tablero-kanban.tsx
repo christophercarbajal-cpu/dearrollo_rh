@@ -4,7 +4,8 @@
    Cada tarjeta tiene UN protagonista (el score) y tres niveles de lectura:
      1. De lejos: nombre + score (color por nivel).
      2. Si interesa: puesto · canal, siguiente paso y el porqué del score.
-     3. Solo si hay problema: alertas (sin consentimiento, atorado, expediente incompleto, psicometría pendiente).
+     3. Solo si hay problema: alertas (sin consentimiento, atorado según el umbral de su etapa, expediente incompleto,
+        psicometría pendiente).
    Los datos son los campos calculados de la API (`name`, `score_reason`, `source_channel`, `next_step`,
    `stage_entered_at`, `has_consent`, `expediente_pct`, `psychometric_alert`); si alguno falta, su zona se oculta (nunca
    se pinta «null», «undefined» ni texto de relleno). Presentación pura: la etapa la sigue definiendo la ruta. */
@@ -15,8 +16,15 @@ import { nombreEtapa, type MetricaEtapaTablero } from "@/lib/api";
 import type { Candidato, EtapaCandidato } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
-/** Umbral de «atorado» (días en la etapa). */
-export const DIAS_ATORADO = 7;
+/** Umbral de «atorado» POR ETAPA (días en la etapa): más de N días = atorado. */
+export const UMBRAL_ATORADO: Record<EtapaCandidato, number> = {
+  Prefiltro: 3,
+  "Entrevista IA": 5,
+  "Entrevista Humana": 5,
+  Contratación: 7,
+  Onboarding: 7,
+};
+export const umbralAtorado = (etapa: EtapaCandidato) => UMBRAL_ATORADO[etapa] ?? 7;
 /** Tarjetas visibles por columna antes de «Ver N más». */
 const TARJETAS_POR_COLUMNA = 20;
 
@@ -30,14 +38,17 @@ export const COLOR_ETAPA: Record<EtapaCandidato, string> = {
 
 const CANAL: Record<string, string> = { whatsapp: "WhatsApp", web: "Web", referido: "Referido", telegram: "Telegram" };
 const FILTRO: Record<string, [string, string]> = {
-  cumple: ["Cumple", "bg-kb-green-bg text-kb-green"],
+  cumple: ["Cumple perfil", "bg-kb-green-bg text-kb-green"],
   revisar: ["Revisar", "bg-kb-amber-bg text-kb-amber"],
   no_cumple: ["No cumple", "bg-kb-red-bg text-kb-red"],
 };
 const ALERTA_PSICO: Record<string, string> = { sin_enviar: "Psicométrica sin enviar", sin_respuesta: "Psicométrica sin respuesta" };
 
-/** Score protagonista: null si no hay análisis de CV (un 0 sin CV no es una calificación). */
+/** Score protagonista = `card_score` de la API (evaluación REAL del agente IA: Análisis de CV + Entrevista Red Human).
+ * null sin evaluación real (un 0 sin CV o el 60 del modo demo no son calificaciones). Una API previa sin
+ * `card_score` cae al score crudo con la regla anterior. */
 export function scoreTarjeta(c: Candidato): number | null {
+  if (c.card_score !== undefined) return c.card_score;
   if (c.score == null) return null;
   return c.score > 0 || c.score_reason ? c.score : null;
 }
@@ -48,7 +59,7 @@ export function diasEnEtapa(c: Candidato): number | null {
   if (Number.isNaN(t)) return null;
   return Math.max(0, Math.floor((Date.now() - t) / 864e5));
 }
-export const estaAtorado = (c: Candidato) => c.activa !== false && (diasEnEtapa(c) ?? 0) > DIAS_ATORADO;
+export const estaAtorado = (c: Candidato) => c.activa !== false && (diasEnEtapa(c) ?? 0) > umbralAtorado(c.etapa);
 export const sinConsentimiento = (c: Candidato) => c.activa !== false && (c.has_consent ?? c.consentimiento) === false;
 export const expedienteIncompleto = (c: Candidato) =>
   c.etapa === "Contratación" && c.expediente_pct != null && c.expediente_pct < 100;
@@ -72,7 +83,7 @@ export function ordenarTablero(a: Candidato, b: Candidato, orden: OrdenTablero):
 export type AlertaTablero = "consentimiento" | "atorados" | "expediente";
 export const ALERTAS_TABLERO: { id: AlertaTablero; prueba: (c: Candidato) => boolean; texto: (n: number) => string; clase: string; icono?: boolean }[] = [
   { id: "consentimiento", prueba: sinConsentimiento, texto: (n) => `${n} sin consentimiento`, clase: "border-[#F3C4BF] bg-kb-red-bg text-kb-red dark:border-kb-red/40", icono: true },
-  { id: "atorados", prueba: estaAtorado, texto: (n) => `${n} atorado${n === 1 ? "" : "s"} más de ${DIAS_ATORADO} días`, clase: "border-[#F0D9A8] bg-kb-amber-bg text-kb-amber dark:border-kb-amber/40", icono: true },
+  { id: "atorados", prueba: estaAtorado, texto: (n) => `${n} atorado${n === 1 ? "" : "s"}`, clase: "border-[#F0D9A8] bg-kb-amber-bg text-kb-amber dark:border-kb-amber/40", icono: true },
   { id: "expediente", prueba: expedienteIncompleto, texto: (n) => `${n} expediente${n === 1 ? "" : "s"} incompleto${n === 1 ? "" : "s"}`, clase: "border-kb-line-2 bg-kb-card font-medium text-kb-ink-2" },
 ];
 
@@ -129,9 +140,10 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
   const canal = c.source_channel ? CANAL[c.source_channel] : "";
   const subtitulo = [puesto, canal].filter(Boolean).join(" · ");
   const razon = c.score_reason;
-  const porque = razon
-    ? [razon.fortaleza ? `Fuerte: ${razon.fortaleza}` : "", razon.faltante ? `Falta: ${razon.faltante}` : ""].filter(Boolean).join(" · ")
-    : "";
+  // «Fuerte: …» con la frase REAL del agente; sin texto el bloque no se pinta.
+  const porque = [razon?.fortaleza?.trim() ? `Fuerte: ${razon.fortaleza.trim()}` : "", razon?.faltante?.trim() ? `Falta: ${razon.faltante.trim()}` : ""]
+    .filter(Boolean)
+    .join(" · ");
   const pct = c.etapa === "Contratación" && c.expediente_pct != null ? Math.max(0, Math.min(100, c.expediente_pct)) : null;
   const filtro = c.filter_status ? FILTRO[c.filter_status] : null;
   const cerrada = c.activa === false;
@@ -173,14 +185,19 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
 
       {porque && <p className="rounded-lg bg-kb-bg px-2.5 py-2 text-[12.5px] leading-[1.45] text-kb-ink-2">{porque}</p>}
 
-      {pct != null && (
+      {pct != null && pct >= 100 && (
+        <p className="text-xs font-semibold text-kb-green">
+          Expediente ✓
+        </p>
+      )}
+      {pct != null && pct < 100 && (
         <div>
           <div className="flex justify-between text-xs text-kb-ink-2">
             <span>Expediente</span>
             <b className="text-kb-ink">{pct}%</b>
           </div>
           <div className="mt-[5px] h-1.5 overflow-hidden rounded-full bg-kb-bar">
-            <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: pct >= 100 ? "var(--kb-bar-ok)" : "var(--kb-bar-warn)" }} />
+            <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: "var(--kb-bar-warn)" }} />
           </div>
         </div>
       )}
@@ -193,7 +210,10 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
           <Chip clase="bg-kb-amber-bg text-kb-amber">{ALERTA_PSICO[c.psychometric_alert]}</Chip>
         )}
         {dias != null && (
-          <span className={cn("ml-auto inline-flex items-center gap-1 text-xs font-medium text-kb-ink-3", atorado && "font-semibold text-kb-amber")}>
+          <span
+            title={atorado ? `Más de ${umbralAtorado(c.etapa)} días en ${nombreEtapa(c.etapa)}` : undefined}
+            className={cn("ml-auto inline-flex items-center gap-1 text-xs font-medium", atorado ? "font-semibold text-kb-amber" : "text-kb-ink-3")}
+          >
             <Clock className="h-3 w-3" />
             {dias} d{atorado ? " · atorado" : ""}
           </span>
@@ -219,7 +239,10 @@ function Columna({ etapa, tarjetas, metrica, filtrando, resaltada, onAbrir, onIn
   const total = filtrando ? tarjetas.length : metrica?.total ?? tarjetas.length;
   const resto = Math.max(tarjetas.length - visibles.length, 0);
   const meta = [
-    metrica ? (metrica.conversion_pct != null ? `${metrica.conversion_pct}% pasa` : etapa === "Prefiltro" ? "Entrada" : null) : null,
+    // «% pasa» no aplica a Onboarding (es la última columna: ahí ya no se filtra)
+    metrica && etapa !== "Onboarding"
+      ? (metrica.conversion_pct != null ? `${metrica.conversion_pct}% pasa` : etapa === "Prefiltro" ? "Entrada" : null)
+      : null,
     metrica?.avg_days != null ? `${metrica.avg_days} d promedio` : null,
   ].filter(Boolean).join(" · ");
 

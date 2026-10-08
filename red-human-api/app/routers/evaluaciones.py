@@ -349,6 +349,11 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
                     "paso_id": paso["id"] if paso else ""}
     if tipo == "entrevista_humana":
         campos["guion"] = _guion_entrevista_humana(p, paso)
+    if tipo == "referencias":
+        # 2026-10-08: cantidad y datos que se le piden al candidato (configurados al agregar la actividad)
+        from ..services.actividades import solicitud_pendiente, solicitud_referencias
+
+        campos["guion"] = {"solicitud_referencias": solicitud_referencias(solicitud_pendiente(p.id) or (paso or {}).get("config", {}).get("referencias"))}
     if tipo == "psicometrica" and datos.forma != "integrada":
         campos["proveedor"] = datos.proveedor.strip()[:150]
     evaluador: dict = {}
@@ -1423,6 +1428,12 @@ async def rechazar_consentimiento(token: str, request: Request, db: Session = De
 REFERENCIAS_MIN, REFERENCIAS_MAX = 1, 5
 
 
+def _solicitud(ev: Evaluacion) -> dict:
+    from ..services.actividades import solicitud_referencias
+
+    return solicitud_referencias(((ev.guion or {}).get("solicitud_referencias")) or {"cantidad": REFERENCIAS_MIN, "datos": ["empresa"]})
+
+
 def _por_token_referencias(db: Session, token: str) -> Evaluacion:
     ev = db.query(Evaluacion).filter(Evaluacion.referencias_token == token).first() if token else None
     if not ev:
@@ -1441,7 +1452,8 @@ def ver_referencias(token: str, db: Session = Depends(get_db)):
         "candidato": p.nombre or "", "empresa": nombre_empresa_candidato(p.vacante) if p.vacante else "",
         "puesto": p.vacante.titulo if p.vacante else "", "cancelada": ev.estado == "cancelada",
         "capturadas": bool(ev.referencias_capturadas_en), "capturadasEn": fechas.iso(ev.referencias_capturadas_en),
-        "minimo": REFERENCIAS_MIN, "maximo": REFERENCIAS_MAX,
+        "minimo": _solicitud(ev)["cantidad"], "maximo": max(REFERENCIAS_MAX, _solicitud(ev)["cantidad"]),
+        "datos": _solicitud(ev)["datos"],
         # el candidato solo ve lo que él capturó (nunca el dictamen del evaluador)
         "referencias": [{k: v for k, v in referencia_dict(x).items() if k in ("id", "nombre", "empresa", "puesto", "relacion", "telefono", "correo")}
                         for x in (ev.referencias or []) if isinstance(x, dict)],
@@ -1461,7 +1473,7 @@ class CapturaReferenciasIn(BaseModel):
     referencias: List[ReferenciaIn]
 
 
-def _limpiar_referencia(r: ReferenciaIn, i: int) -> dict:
+def _limpiar_referencia(r: ReferenciaIn, i: int, pedidos: Optional[list] = None) -> dict:
     from ..services.telegram import telefono_10 as normalizar_telefono_mx
 
     nombre = " ".join((r.nombre or "").split())[:150]
@@ -1478,6 +1490,12 @@ def _limpiar_referencia(r: ReferenciaIn, i: int) -> dict:
         raise HTTPException(400, f"Referencia {i}: el teléfono debe tener 10 dígitos.")
     if not correo and not telefono:
         raise HTTPException(400, f"Referencia {i}: agrega un teléfono o un correo para poder contactarla.")
+    from ..services.actividades import DATOS_REFERENCIA
+
+    valores = {"telefono": telefono, "correo": correo, "puesto": (r.puesto or "").strip(), "relacion": (r.relacion or "").strip(), "empresa": empresa}
+    for d in pedidos or []:
+        if not valores.get(d):
+            raise HTTPException(400, f"Referencia {i}: falta {DATOS_REFERENCIA[d].lower()}.")
     return {"id": secrets.token_hex(4), "nombre": nombre, "empresa": empresa, "puesto": (r.puesto or "").strip()[:150],
             "relacion": (r.relacion or "").strip()[:100], "telefono": telefono, "correo": correo,
             "contactado": None, "dictamen": "", "comentario": ""}
@@ -1491,11 +1509,12 @@ async def capturar_referencias(token: str, datos: CapturaReferenciasIn, request:
         raise HTTPException(409, "Esta solicitud de referencias fue cancelada.")
     if ev.referencias_capturadas_en:
         raise HTTPException(409, "Ya compartiste tus referencias. Gracias.")
-    if not (REFERENCIAS_MIN <= len(datos.referencias) <= REFERENCIAS_MAX):
-        raise HTTPException(400, f"Comparte entre {REFERENCIAS_MIN} y {REFERENCIAS_MAX} referencias.")
+    sol = _solicitud(ev)
+    if not (sol["cantidad"] <= len(datos.referencias) <= max(REFERENCIAS_MAX, sol["cantidad"])):
+        raise HTTPException(400, f"Comparte al menos {sol['cantidad']} referencia(s).")
     with _negocio():
         p = sev.postulacion_de(db, ev)
-    ev.referencias = [_limpiar_referencia(r, i + 1) for i, r in enumerate(datos.referencias)]
+    ev.referencias = [_limpiar_referencia(r, i + 1, sol["datos"]) for i, r in enumerate(datos.referencias)]
     ev.referencias_capturadas_en = datetime.now(timezone.utc)
     sev.evento(db, ev, "referencias_capturadas", p.nombre or "Candidato", "liga_candidato", total=len(ev.referencias),
                ip=(request.client.host if request.client else "")[:64])

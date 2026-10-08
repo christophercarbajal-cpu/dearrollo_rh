@@ -171,6 +171,9 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
         for bandera in ("adhoc", "heredado"):  # actividad agregada solo a ESTA postulación / fuera del proceso vigente
             if crudo.get(bandera):
                 paso[bandera] = True
+        if isinstance(crudo.get("config"), dict) and crudo["config"]:
+            # 2026-10-08: configuración completa guardada al AGREGAR la actividad; «Iniciar» la ejecuta sin volver a pedirla
+            paso["config"] = limpiar_config(crudo["config"])
         if tipo == "entrevista_humana":
             t = crudo.get("tipo_entrevista", crudo.get("tipoEntrevista")) or "general"
             if t not in TIPOS_ENTREVISTA_HUMANA:
@@ -211,6 +214,23 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
     salida.sort(key=lambda p: (_indice(p["etapa"]), p["orden"]))
     for i, p in enumerate(salida):
         p["orden"] = i
+    return salida
+
+
+CAMPOS_CONFIG = ("forma", "evaluador", "cita", "instrucciones", "liga_externa_candidato", "proveedor", "prueba_ids", "examen",
+                 "referencias", "iniciar_al_guardar")
+
+
+def limpiar_config(config: dict) -> dict:
+    """Solo los campos conocidos de la configuración de una actividad (formulario «Agregar actividad»)."""
+    salida = {}
+    for k in CAMPOS_CONFIG:
+        v = config.get(k)
+        if v in (None, "", [], {}):
+            continue
+        if k in ("instrucciones", "liga_externa_candidato", "proveedor", "examen", "forma") and isinstance(v, str):
+            v = v.strip()[:4000]
+        salida[k] = v
     return salida
 
 
@@ -1137,6 +1157,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             except Exception:  # noqa: BLE001 — una liga nunca tumba el seguimiento
                 r["liga"] = None
         r = _con_cuello(paso, r, ev_paso, env)
+        if tipo in TIPOS_PASO_EVALUACION and paso.get("config") and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada"):
+            r = {**r, "cuello": {"clave": "lista_para_iniciar", "texto": "Lista para iniciar", "quien": None},
+                 "espera": r.get("espera") or "Configurada: «Iniciar» la ejecuta tal cual"}
         if tipo == "psicometrica" and falta_correo_psicometria(p, paso["id"], r, ev_paso):
             # 2026-10-08: no es «Error de envío» (eso es una falla HTTP del proveedor): falta un DATO y se resuelve con
             # «Agregar correo»; al guardarlo, el envío pendiente se retoma solo (`actividades.reanudar_por_correo`).
@@ -1182,6 +1205,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "dependeDe": paso.get("depende_de", []), "regla": paso["regla"],
             "reglaTexto": _texto_regla(paso["regla"]), "tipoEntrevista": paso.get("tipo_entrevista"),
             "pruebas": list(paso.get("pruebas") or []),
+            "configurada": bool(paso.get("config")),
             "responsable": r["responsableTexto"], "responsableConfig": paso.get("responsable") or {},
             "estado": r["estado"], "estadoTexto": ESTADOS_PASO[r["estado"]],
             "resultado": r["resultado"], "resultadoTexto": RESULTADOS_PASO.get(r["resultado"] or "", ""),
@@ -1424,6 +1448,7 @@ ESTADOS_UNIFICADOS = {
     "completada": "Completada", "aprobada": "Aprobada", "no_aprobada": "No aprobada", "omitida": "Omitida", "error": "Error",
     # 2026-10-08: no aprobada, pero RH decidió continuar (el resultado reprobatorio se conserva) · falta un dato
     "aprobada_excepcion": "Continúa por decisión de RH", "falta_correo": "Falta correo para enviar la prueba",
+    "lista_para_iniciar": "Lista para iniciar",
 }
 # Las resuelve Red Human solas (el candidato las responde o la IA las califica): la ficha solo muestra su estado.
 TIPOS_AUTOMATICOS = ("solicitud_web", "prefiltro_whatsapp", "prefiltro_web", "analisis_cv")

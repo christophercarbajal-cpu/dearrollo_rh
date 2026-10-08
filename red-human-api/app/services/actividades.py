@@ -42,6 +42,26 @@ def evaluacion_de_paso(db: Session, p: Postulacion, paso_id: str) -> Optional[Ev
     return sproc.asignar_evaluaciones(p.proceso["pasos"], evs).get(paso_id)
 
 
+# Solicitud de referencias configurada (cantidad y datos pedidos) para la evaluación que se está creando ahora mismo.
+_SOLICITUD_REFERENCIAS: dict = {}
+DATOS_REFERENCIA = {"telefono": "Teléfono", "correo": "Correo", "puesto": "Puesto", "relacion": "Relación laboral", "empresa": "Empresa"}
+
+
+def solicitud_referencias(config: Optional[dict]) -> dict:
+    """{cantidad (1-5), datos[]} — qué se le pide al candidato en su liga de referencias."""
+    config = config if isinstance(config, dict) else {}
+    try:
+        cantidad = max(1, min(5, int(config.get("cantidad") or 2)))
+    except (TypeError, ValueError):
+        cantidad = 2
+    datos = [d for d in (config.get("datos") or ["empresa"]) if d in DATOS_REFERENCIA]
+    return {"cantidad": cantidad, "datos": list(dict.fromkeys(datos)) or ["empresa"]}
+
+
+def solicitud_pendiente(postulacion_id: int) -> Optional[dict]:
+    return _SOLICITUD_REFERENCIAS.get(postulacion_id)
+
+
 def marcar_pendiente_correo(p: Postulacion, paso_id: str) -> None:
     """La psicometría de ese paso quiso salir y no tenía correo: queda pendiente de reanudarse al capturarlo."""
     from sqlalchemy.orm.attributes import flag_modified
@@ -134,7 +154,9 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
         # ya iniciada: nunca se crea otra (para avisar de nuevo están los reenvíos del «…»)
         return {"iniciada": True, "yaExistia": True, "evaluacion": ev.codigo,
                 "mensaje": f"«{x['nombre']}» ya estaba iniciada ({ev.codigo}). Para volver a avisar usa «Reenviar»."}
-    if tipo == "psicometrica":
+    # 2026-10-08: lo configurado al AGREGAR la actividad se ejecuta tal cual; `datos` solo trae lo que faltaba
+    datos = {**(paso.get("config") or {}), **{k: v for k, v in (datos or {}).items() if v not in (None, "", [], {})}}
+    if tipo == "psicometrica" and (datos.get("forma") or "integrada") == "integrada":
         return await _iniciar_psicometria(db, p, paso, u, cuenta, datos)
     from ..routers.evaluaciones import CitaIn, CrearEvaluacionIn, EvaluadorIn, crear_evaluacion
 
@@ -146,14 +168,24 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
             quien = {"medica": "el médico", "entrevista_humana": "el entrevistador"}.get(tipo, "quién la aplicará")
             return {"iniciada": False, "faltan": ["evaluador"],
                     "mensaje": f"Para iniciar «{x['nombre']}» solo falta elegir {quien}."}
+    instrucciones = str(datos.get("instrucciones") or "")
+    if tipo == "medica" and datos.get("examen"):
+        instrucciones = f"Examen solicitado: {datos['examen']}" + (f"\n{instrucciones}" if instrucciones else "")
     cuerpo = CrearEvaluacionIn(
-        tipo=tipo, forma=forma, paso_id=paso_id, nombre=paso["nombre"] if tipo == "otra" else "",
+        tipo=tipo, forma=forma, paso_id=paso_id,
+        nombre=paso["nombre"] if tipo == "otra" or paso.get("adhoc") and paso["nombre"] != sproc.TIPOS_PASO[tipo]["nombre"] else "",
         evaluador=EvaluadorIn(**evaluador) if evaluador else None,
-        instrucciones=str(datos.get("instrucciones") or ""),
+        instrucciones=instrucciones,
         liga_externa_candidato=str(datos.get("liga_externa_candidato") or ""),
+        proveedor=str(datos.get("proveedor") or ""),
         cita=CitaIn(**datos["cita"]) if isinstance(datos.get("cita"), dict) else None,
     )
-    r = await crear_evaluacion(p.codigo, cuerpo, db=db, u=u, cuenta=cuenta)
+    if tipo == "referencias" and isinstance(datos.get("referencias"), dict):
+        _SOLICITUD_REFERENCIAS[p.id] = datos["referencias"]  # la toma `crear_evaluacion` antes de mandar la liga
+    try:
+        r = await crear_evaluacion(p.codigo, cuerpo, db=db, u=u, cuenta=cuenta)
+    finally:
+        _SOLICITUD_REFERENCIAS.pop(p.id, None)
     return {"iniciada": True, "evaluacion": r["evaluacion"]["codigo"], "resultados": r.get("resultados") or [],
             "advertencias": r.get("advertencias") or [], "mensaje": f"«{x['nombre']}» iniciada."}
 
@@ -192,6 +224,161 @@ async def _iniciar_otra(db: Session, p: Postulacion, paso: dict, u: Usuario, cue
     if paso["tipo"] == "entrevista_agente":
         return await reenviar(db, p, paso["id"], "candidato", u, cuenta, crear=True)
     raise HTTPException(409, f"«{paso['nombre']}» se trabaja desde su pestaña; no se inicia desde aquí.")
+
+
+# ------------------------------------------------------------ «Agregar actividad» en un paso (2026-10-08)
+
+FORMAS_PSICOMETRIA = ("integrada", "liga_otro_sistema", "registro_directo")
+TIPOS_CON_FORMA = ("tecnica", "socioeconomica", "otra")
+
+
+def validar_config(tipo: str, config: dict, ya_realizada: bool, resultado: dict, nombre: str) -> None:
+    """Las MISMAS dependencias condicionales que el formulario: si algo falta, 400 con el campo exacto."""
+    if tipo == "otra" and not nombre.strip():
+        raise HTTPException(400, "Con «Otra» escribe el nombre de la actividad.")
+    if ya_realizada:
+        if tipo == "medica":
+            raise HTTPException(409, "La evaluación médica no se registra como ya realizada: requiere el consentimiento expreso del "
+                                     "candidato por su liga (LFPDPPP). Agrégala y el consentimiento se pedirá solo.")
+        if tipo == "entrevista_humana" and not (resultado.get("conclusion") or ""):
+            raise HTTPException(400, "Elige la conclusión de la entrevista ya realizada.")
+        score = resultado.get("score")
+        if score not in (None, ""):
+            try:
+                if not 0 <= float(score) <= 100:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise HTTPException(400, "El score debe ser un número de 0 a 100.")
+        if not (resultado.get("conclusion") or resultado.get("comentarios") or score not in (None, "") or resultado.get("referencias")):
+            raise HTTPException(400, "Captura el resultado: dictamen, score o comentario.")
+        return
+    forma = config.get("forma") or ""
+    if tipo == "psicometrica":
+        if forma not in FORMAS_PSICOMETRIA:
+            raise HTTPException(400, "Elige la forma de aplicación: proveedor integrado, liga externa o captura manual.")
+        if forma == "integrada" and not config.get("prueba_ids"):
+            raise HTTPException(400, "Elige la prueba o batería del catálogo.")
+        if forma == "liga_otro_sistema" and not str(config.get("liga_externa_candidato") or "").lower().startswith(("http://", "https://")):
+            raise HTTPException(400, "Captura la liga externa de la prueba (https://…).")
+        return
+    if tipo in TIPOS_CON_FORMA:
+        if forma not in ("asignada", "liga_otro_sistema", "registro_directo"):
+            raise HTTPException(400, "Elige la forma de aplicación.")
+        if forma == "liga_otro_sistema" and not str(config.get("liga_externa_candidato") or "").lower().startswith(("http://", "https://")):
+            raise HTTPException(400, "Captura la liga del otro sistema (https://…).")
+    if tipo in ("entrevista_humana", "medica", "referencias") or (tipo in TIPOS_CON_FORMA and forma == "asignada"):
+        ev = config.get("evaluador") or {}
+        quien = {"entrevista_humana": "el entrevistador", "medica": "el médico o proveedor", "referencias": "quién verificará"}.get(tipo, "el evaluador")
+        if ev.get("tipo") == "interno" and not ev.get("usuario_id"):
+            raise HTTPException(400, f"Elige {quien}.")
+        if ev.get("tipo") == "externo" and not (ev.get("contacto_id") or (str(ev.get("nombre") or "").strip()
+                                                                           and (ev.get("correo") or ev.get("whatsapp")))):
+            raise HTTPException(400, f"Captura nombre y correo o WhatsApp de {quien}.")
+        if ev.get("tipo") not in ("interno", "externo"):
+            raise HTTPException(400, f"Elige {quien}.")
+    if tipo == "medica" and not str(config.get("examen") or "").strip():
+        raise HTTPException(400, "Indica el examen solicitado.")
+    if isinstance(config.get("cita"), dict):
+        c = config["cita"]
+        if not (c.get("fecha") and c.get("hora") and c.get("modalidad")):
+            raise HTTPException(400, "La cita necesita fecha, hora y modalidad.")
+
+
+def precarga(db: Session, p: Postulacion, tipo: str) -> dict:
+    """Lo que ya define la VACANTE (su copia de la ruta) para ese tipo de actividad: el formulario lo trae lleno y solo
+    pide lo faltante. `origen` dice de dónde salió cada campo."""
+    from ..models import TIPOS_PASO, conclusiones_de
+
+    if tipo not in TIPOS_PASO:
+        raise HTTPException(400, "Tipo de actividad inválido.")
+    v = p.vacante
+    plantilla = next((x for x in ((v.proceso or {}).get("pasos") or []) if x.get("tipo") == tipo), None) if v is not None else None
+    plantilla = plantilla or next((x for x in ((p.proceso or {}).get("pasos") or []) if x.get("tipo") == tipo and not x.get("adhoc")), None)
+    config: dict = dict((plantilla or {}).get("config") or {})
+    origen: dict = {k: "vacante" for k in config}
+    r = (plantilla or {}).get("responsable") or {}
+    if "evaluador" not in config:
+        uid = r.get("usuario_id") if r.get("tipo") == "usuario" else None
+        if not uid and tipo == "referencias" and v is not None and v.responsable_id:
+            uid = v.responsable_id
+        if uid:
+            config["evaluador"] = {"tipo": "interno", "usuario_id": uid}
+            origen["evaluador"] = "vacante"
+    if tipo == "psicometrica" and "prueba_ids" not in config:
+        ids = list((plantilla or {}).get("pruebas") or [])
+        if not ids and v is not None:
+            ids = [s.get("prueba_id") for s in (v.evaluaciones_sugeridas or []) if s.get("tipo") == "psicometrica" and s.get("prueba_id")]
+        if ids:
+            config["prueba_ids"], origen["prueba_ids"] = ids, "vacante"
+            config.setdefault("forma", "integrada")
+    if tipo == "referencias" and "referencias" not in config:
+        config["referencias"] = solicitud_referencias(None)
+    return {
+        "tipo": tipo, "nombre": (plantilla or {}).get("nombre") or TIPOS_PASO[tipo]["nombre"], "config": config, "origen": origen,
+        "tipoEntrevista": (plantilla or {}).get("tipo_entrevista"), "conclusiones": [{"valor": k, "texto": t} for k, t in conclusiones_de(tipo).items()]
+        if tipo in sproc.TIPOS_PASO_EVALUACION else [],
+        "candidatoTieneCorreo": bool((p.correo or "").strip()), "consentimiento": bool(p.consentimiento),
+        "puedeRegistrarRealizada": tipo != "medica",
+        "datosReferencia": [{"valor": k, "texto": t} for k, t in DATOS_REFERENCIA.items()],
+    }
+
+
+async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, archivos=None) -> dict:
+    """«Agregar actividad» COMPLETAMENTE configurada en un paso: inserta UNA actividad (etapa actual, solo este
+    candidato) con su configuración; si es «ya realizada» registra su resultado en ese mismo momento; si no y puede
+    iniciar, la inicia (y el motor de las Cuentas automáticas la dispara si le toca); si no, queda «Lista para iniciar»
+    o dice qué la bloquea. Valida ANTES de escribir nada."""
+    if not p.activa:
+        raise HTTPException(409, "La postulación está cerrada.")
+    tipo = str(datos.get("tipo") or "").strip()
+    nombre = str(datos.get("nombre") or "").strip()[:200]
+    config = sproc.limpiar_config(datos.get("config") or {}) if isinstance(datos.get("config"), dict) else {}
+    ya = bool(datos.get("ya_realizada"))
+    resultado = datos.get("resultado") if isinstance(datos.get("resultado"), dict) else {}
+    if tipo not in sproc.TIPOS_PASO:
+        raise HTTPException(400, "Elige el tipo de actividad.")
+    es_eval = tipo in sproc.TIPOS_PASO_EVALUACION
+    if es_eval:
+        validar_config(tipo, config, ya, resultado, nombre)
+        if tipo != "entrevista_humana" and not p.consentimiento:
+            raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
+    crudo = {"tipo": tipo, "obligatorio": bool(datos.get("obligatorio")), **({"nombre": nombre} if nombre else {})}
+    if es_eval and not ya:
+        crudo["config"] = config
+    try:
+        paso = sproc.agregar_paso_adhoc(db, p, crudo, u)
+    except sproc.ErrorProceso as e:
+        raise HTTPException(e.status, e.mensaje)
+    db.commit()
+    salida = {"paso": paso, "iniciada": False, "yaRealizada": ya, "mensaje": f"«{paso['nombre']}» agregada.", "bloqueo": ""}
+    if ya and es_eval:
+        score = resultado.get("score")
+        comentarios = str(resultado.get("comentarios") or "")
+        if score not in (None, ""):
+            comentarios = f"Score: {float(score):g}/100" + (f"\n{comentarios}" if comentarios else "")
+        r = await registrar_resultado(db, p, paso["id"], u, conclusion=str(resultado.get("conclusion") or ""), comentarios=comentarios,
+                                      realizada_por=str(resultado.get("realizada_por") or ""), archivos=archivos,
+                                      referencias=resultado.get("referencias"))
+        if score not in (None, ""):
+            ev = db.query(Evaluacion).filter(Evaluacion.codigo == r["evaluacion"]).first()
+            if ev is not None:
+                ev.resultado_json = {**(ev.resultado_json or {}), "score": float(score)}
+                db.commit()
+        salida.update({"evaluacion": r["evaluacion"], "mensaje": f"«{paso['nombre']}» registrada como ya realizada."})
+        return salida
+    if not es_eval:
+        return salida
+    x = next((y for y in sproc.estado_pasos(p) if y["id"] == paso["id"]), None)
+    if config.get("iniciar_al_guardar") is not False and x is not None and x["disponible"]:
+        r = await iniciar(db, p, paso["id"], u, cuenta, {})
+        salida.update({"iniciada": bool(r.get("iniciada")), "faltan": r.get("faltan"), "evaluacion": r.get("evaluacion"),
+                       "resultados": r.get("resultados") or [], "advertencias": r.get("advertencias") or [],
+                       "mensaje": f"«{paso['nombre']}» agregada e iniciada." if r.get("iniciada") else r.get("mensaje") or salida["mensaje"]})
+    elif x is not None and not x["disponible"]:
+        salida.update({"bloqueo": x["espera"] or "Aún no se habilita en la ruta", "mensaje": f"«{paso['nombre']}» agregada; se iniciará al habilitarse."})
+    else:
+        salida["mensaje"] = f"«{paso['nombre']}» agregada y lista para iniciar."
+    return salida
 
 
 # ------------------------------------------------------------ reenvíos granulares

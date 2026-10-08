@@ -23,6 +23,7 @@ import { ReferenciasDictamen } from "@/components/dashboard/evaluaciones/referen
 import { LineaNotificar, useNotificarAccion } from "@/components/dashboard/linea-notificar";
 import { FormularioResultado, type ModoResultado } from "@/components/dashboard/evaluaciones/formulario-resultado";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
+import { ModalAgregarActividad } from "@/components/dashboard/procesos/agregar-actividad";
 import {
   CamposCita, Campo, SelectorEvaluador, citaEntrada, citaVacia, evaluadorEntrada, inputEv, useCatalogoEvaluadores, useTeamsConectado,
   validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
@@ -83,6 +84,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
   const [aviso, setAviso] = useState<Aviso>(null);
   const [ocupado, setOcupado] = useState("");
   const [agregar, setAgregar] = useState<PresetEvaluacion | null>(null);
+  const [nueva, setNueva] = useState(false);
   const [resultado, setResultado] = useState<{ e: Evaluacion; modo: ModoResultado } | null>(null);
   const [ver, setVer] = useState<string | null>(null);
   const [motivo, setMotivo] = useState<{ e: Evaluacion; accion: "no_realizada" | "cancelar" } | null>(null);
@@ -214,7 +216,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
           <p className="mt-1 text-[12px] text-ink-3">Entrevista humana, médica, psicométrica, socioeconómica, técnica o práctica, referencias laborales u otra. Solo la entrevista humana mueve a Filtro humano; los resultados no cambian la columna.</p>
         </div>
         {live && c.activa !== false && (
-          <Button size="sm" onClick={() => setAgregar({})}><ClipboardCheck className="h-4 w-4" /> Agregar evaluación</Button>
+          <Button size="sm" onClick={() => setNueva(true)}><ClipboardCheck className="h-4 w-4" /> Agregar evaluación</Button>
         )}
       </div>
       {aviso && (
@@ -246,6 +248,19 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
         )}
       </div>
 
+      {nueva && (
+        // 2026-10-08: el MISMO formulario dinámico que «Agregar actividad» de la ruta (configura todo en un paso)
+        <ModalAgregarActividad
+          c={c}
+          onClose={() => setNueva(false)}
+          onAgregada={(r, aviso) => {
+            setNueva(false);
+            setAviso(aviso);
+            if (onCambio) onCambio(r.candidato);
+            void cargar();
+          }}
+        />
+      )}
       {agregar && (
         <ModalAgregarEvaluacion c={c} preset={agregar} onClose={() => setAgregar(null)} onListo={(r, texto) => { setAgregar(null); listo(r, texto); }} />
       )}

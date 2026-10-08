@@ -161,6 +161,8 @@ export interface PasoSeguimiento {
   /** Psicometría detenida por falta de correo (no es error de envío): «Agregar correo» la retoma sola. */
   faltaCorreo?: boolean;
   referenciasCapturadas?: boolean;
+  /** 2026-10-08: configurada al agregarla; «Iniciar» la ejecuta tal cual. */
+  configurada?: boolean;
 }
 export type EstadoEnvio = "intento" | "enviado" | "entregado" | "fallido";
 export interface EnvioDestinatario {
@@ -209,7 +211,7 @@ export interface PsicometriaPaso {
 export type EstadoUnificado =
   | "sin_iniciar" | "esperando_candidato" | "esperando_referencias" | "esperando_consentimiento" | "esperando_evaluador"
   | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error"
-  | "aprobada_excepcion" | "falta_correo";
+  | "aprobada_excepcion" | "falta_correo" | "lista_para_iniciar";
 /** Ruta automática: una obligatoria «No aprobada» detiene el funnel; RH confirma el descarte (nunca es automático). */
 export interface DescarteSugerido {
   paso: string;

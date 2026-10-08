@@ -460,6 +460,38 @@ async def registrar_resultado_actividad(
     return {**r, **_salida(p)}
 
 
+@router.get("/postulaciones/{codigo}/actividades/precarga")
+def precarga_actividad(codigo: str, tipo: str, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual),
+                       cuenta: Cuenta = Depends(cuenta_actual)):
+    """Formulario dinámico «Agregar actividad»: lo que ya define la vacante para ese tipo (solo se pide lo faltante)."""
+    from ..services import actividades
+
+    return actividades.precarga(db, _postulacion(db, codigo, cuenta.id), tipo)
+
+
+@router.post("/postulaciones/{codigo}/actividades", status_code=201)
+async def agregar_actividad_configurada(
+    codigo: str, datos: str = Form(...), archivos: Optional[List[UploadFile]] = File(None),
+    db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """UNA actividad completamente configurada (o ya realizada con su resultado) en un solo paso. `datos` (JSON):
+    {tipo, nombre?, obligatorio?, config{forma, evaluador, cita, instrucciones, liga_externa_candidato, proveedor,
+    prueba_ids, examen, referencias{cantidad, datos[]}, iniciar_al_guardar}, ya_realizada?, resultado{conclusion,
+    score, realizada_por, comentarios, referencias[]}}."""
+    import json
+
+    from ..services import actividades
+
+    try:
+        cuerpo = json.loads(datos)
+    except ValueError:
+        raise HTTPException(400, "Datos de la actividad inválidos.")
+    p = _postulacion(db, codigo, cuenta.id)
+    r = await actividades.agregar(db, p, u, cuenta, cuerpo if isinstance(cuerpo, dict) else {}, archivos)
+    db.refresh(p)
+    return {**r, **_salida(p)}
+
+
 @router.post("/postulaciones/{codigo}/aplicar-vigente")
 def aplicar_vigente(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """Explícito: la postulación toma la versión vigente del proceso de su vacante sin perder lo hecho."""

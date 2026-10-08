@@ -32,6 +32,9 @@ export default function CapturaReferencias() {
     });
   }, [token]);
 
+  /** Datos que RH pidió para cada referencia (configurados al agregar la actividad). */
+  const req = (k: string) => (vista?.datos ?? ["empresa"]).includes(k);
+
   function cambiar(i: number, k: keyof ReferenciaCaptura, v: string) {
     setRefs((xs) => xs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   }
@@ -82,11 +85,11 @@ export default function CapturaReferencias() {
                   <legend className="px-1 text-xs font-semibold text-ink-3">Referencia {i + 1}</legend>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <input className={campo} placeholder="Nombre completo *" value={r.nombre} onChange={(e) => cambiar(i, "nombre", e.target.value)} />
-                    <input className={campo} placeholder="Empresa donde trabajaron juntos *" value={r.empresa} onChange={(e) => cambiar(i, "empresa", e.target.value)} />
-                    <input className={campo} placeholder="Su puesto" value={r.puesto} onChange={(e) => cambiar(i, "puesto", e.target.value)} />
-                    <input className={campo} placeholder="Relación (jefe directo, compañero…)" value={r.relacion} onChange={(e) => cambiar(i, "relacion", e.target.value)} />
-                    <input className={campo} inputMode="tel" placeholder="Teléfono (10 dígitos)" value={r.telefono} onChange={(e) => cambiar(i, "telefono", e.target.value)} />
-                    <input className={campo} type="email" placeholder="Correo" value={r.correo} onChange={(e) => cambiar(i, "correo", e.target.value)} />
+                    <input className={campo} placeholder={`Empresa donde trabajaron juntos${req("empresa") ? " *" : ""}`} value={r.empresa} onChange={(e) => cambiar(i, "empresa", e.target.value)} />
+                    <input className={campo} placeholder={`Su puesto${req("puesto") ? " *" : ""}`} value={r.puesto} onChange={(e) => cambiar(i, "puesto", e.target.value)} />
+                    <input className={campo} placeholder={`Relación (jefe directo, compañero…)${req("relacion") ? " *" : ""}`} value={r.relacion} onChange={(e) => cambiar(i, "relacion", e.target.value)} />
+                    <input className={campo} inputMode="tel" placeholder={`Teléfono (10 dígitos)${req("telefono") ? " *" : ""}`} value={r.telefono} onChange={(e) => cambiar(i, "telefono", e.target.value)} />
+                    <input className={campo} type="email" placeholder={`Correo${req("correo") ? " *" : ""}`} value={r.correo} onChange={(e) => cambiar(i, "correo", e.target.value)} />
                   </div>
                   {refs.length > vista.minimo && (
                     <button type="button" className="mt-2 inline-flex items-center gap-1 text-[12px] font-semibold text-ink-3 hover:text-bad"
@@ -103,7 +106,7 @@ export default function CapturaReferencias() {
                 </button>
               )}
             </div>
-            <p className="mt-3 text-[12px] text-ink-3">* Obligatorio. Cada referencia necesita un teléfono o un correo.</p>
+            <p className="mt-3 text-[12px] text-ink-3">* Obligatorio. Comparte al menos {vista.minimo} referencia(s); cada una necesita un teléfono o un correo.</p>
             {error && <p className="mt-3 rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
             <Button className="mt-5 w-full totem:min-h-16 totem:text-xl" onClick={enviar} disabled={enviando}>
               {enviando ? "Enviando…" : "Enviar referencias"}

@@ -26,6 +26,7 @@ import {
   SkipForward, Sparkles, ThumbsDown, XCircle,
 } from "lucide-react";
 import { MenuAcciones, type AccionMenu } from "@/components/dashboard/menu-acciones";
+import { ModalAgregarActividad } from "@/components/dashboard/procesos/agregar-actividad";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { BadgeIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
@@ -48,6 +49,7 @@ export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human
   sin_iniciar: "neutral", esperando_candidato: "human", esperando_referencias: "human", esperando_consentimiento: "human",
   esperando_evaluador: "human", pendiente_resultado: "warn", en_curso: "brand", pendiente_revision: "warn", completada: "good",
   aprobada: "good", no_aprobada: "bad", omitida: "neutral", error: "bad", aprobada_excepcion: "warn", falta_correo: "warn",
+  lista_para_iniciar: "brand",
 };
 const TEXTO_DESTINATARIO: Record<string, string> = {
   candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador", rh: "RH", cliente: "Cliente",
@@ -671,7 +673,7 @@ function ModalDatosFaltantes({ c, paso, faltan, mensaje, ocupado, onClose, onEnv
   }
 
   return (
-    <ModalMarco titulo={`Iniciar «${paso.nombre}»`} subtitulo={mensaje} onClose={onClose}>
+    <ModalMarco titulo="Falta un dato para iniciar" subtitulo="Solo se pide lo que falta; lo demás ya está configurado en la actividad." onClose={onClose}>
       <div className="flex flex-col gap-3">
         {pideEvaluador && (
           <>
@@ -927,9 +929,14 @@ type PropsActividad = {
   onAgregada: (r: { proceso: Seg; candidato: Candidato; paso: { nombre: string } }, aviso?: { tono: "ok" | "warn" | "error"; texto: string }) => void;
 };
 
-/** «Agregar actividad a este candidato». En las Cuentas con flujo simple de psicometría (solo «demo-grupak») es el modal
- * ÚNICO que también elige y envía la prueba; en las demás, el modal de siempre. */
-export function ModalActividad(props: PropsActividad) {
+/** «Agregar actividad a este candidato» (2026-10-08, TODAS las Cuentas): formulario DINÁMICO que configura la actividad
+ * completa (o la registra ya realizada) en un solo paso. «Iniciar» después ejecuta lo guardado. */
+export function ModalActividad({ c, onClose, onAgregada }: PropsActividad) {
+  return <ModalAgregarActividad c={c} onClose={onClose} onAgregada={(r, aviso) => onAgregada(r, aviso)} />;
+}
+
+/** Modal anterior (solo tipo + nombre + obligatoria). Se conserva como respaldo; ya no se monta. */
+export function ModalActividadAnterior(props: PropsActividad) {
   const simple = usePsicometriaSimple();
   return simple ? <ModalActividadSimple {...props} /> : <ModalActividadClasica {...props} />;
 }

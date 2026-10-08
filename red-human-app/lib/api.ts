@@ -3604,11 +3604,54 @@ export function registrarResultadoActividad(codigoPostulacion: string, pasoId: s
   (datos.archivos ?? []).forEach((f) => form.append("archivos", f));
   return subir<RespuestaPaso & { evaluacion: string }>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/resultado`, form);
 }
+/* ---------- «Agregar actividad» configurada en un paso (2026-10-08) ---------- */
+/** Configuración que se guarda EN la actividad: «Iniciar» la ejecuta tal cual, sin volver a pedirla. */
+export interface ConfigActividad {
+  forma?: "asignada" | "registro_directo" | "liga_otro_sistema" | "integrada";
+  evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string };
+  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean };
+  instrucciones?: string;
+  liga_externa_candidato?: string;
+  proveedor?: string;
+  prueba_ids?: number[];
+  examen?: string;
+  referencias?: { cantidad: number; datos: string[] };
+  iniciar_al_guardar?: boolean;
+}
+export interface ResultadoYaRealizada {
+  conclusion?: string; score?: number | null; realizada_por?: string; comentarios?: string;
+  referencias?: { nombre: string; empresa?: string; telefono?: string; dictamen?: string; comentario?: string; contactado?: boolean }[];
+}
+export interface PrecargaActividad {
+  tipo: string; nombre: string; config: ConfigActividad; origen: Partial<Record<keyof ConfigActividad, "vacante">>;
+  tipoEntrevista?: string | null; conclusiones: { valor: string; texto: string }[];
+  candidatoTieneCorreo: boolean; consentimiento: boolean; puedeRegistrarRealizada: boolean;
+  datosReferencia: { valor: string; texto: string }[];
+}
+export function fetchPrecargaActividad(codigoPostulacion: string, tipo: string) {
+  return enviar<PrecargaActividad>(`/procesos/postulaciones/${codigoPostulacion}/actividades/precarga?tipo=${encodeURIComponent(tipo)}`,
+    { method: "GET", cache: "no-store" });
+}
+export type RespuestaAgregarActividad = RespuestaPaso & {
+  paso: PasoProceso; iniciada: boolean; yaRealizada: boolean; mensaje: string; bloqueo: string; evaluacion?: string;
+  faltan?: string[]; advertencias?: string[];
+};
+export function agregarActividadConfigurada(codigoPostulacion: string, datos: {
+  tipo: string; nombre?: string; obligatorio?: boolean; config?: ConfigActividad; ya_realizada?: boolean; resultado?: ResultadoYaRealizada;
+}, archivos: File[] = []) {
+  const form = new FormData();
+  form.append("datos", JSON.stringify(datos));
+  archivos.forEach((f) => form.append("archivos", f));
+  return subir<RespuestaAgregarActividad>(`/procesos/postulaciones/${codigoPostulacion}/actividades`, form);
+}
+
 /** Referencias en dos fases: liga EXCLUSIVA del candidato para capturar sus contactos (fase 1). */
 export interface ReferenciaCaptura { nombre: string; empresa: string; puesto: string; relacion: string; telefono: string; correo: string }
 export interface VistaReferencias {
   candidato: string; empresa: string; puesto: string; cancelada: boolean; capturadas: boolean; capturadasEn: string | null;
   minimo: number; maximo: number; referencias: (ReferenciaCaptura & { id: string })[];
+  /** Datos que RH pidió para cada referencia (telefono, correo, puesto, relacion, empresa). */
+  datos?: string[];
 }
 export function fetchReferenciasPublicas(token: string) {
   return enviar<VistaReferencias>(`/evaluaciones/publica/referencias/${encodeURIComponent(token)}`, { method: "GET", cache: "no-store" });

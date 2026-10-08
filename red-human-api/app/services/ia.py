@@ -2325,3 +2325,33 @@ def resumen_desempeno(datos: dict) -> Tuple[ResumenDesempenoIA, bool]:
     except Exception as ex:  # noqa: BLE001 — la IA nunca bloquea
         print(f"[ia] resumen de desempeño demo ({ex})", flush=True)
         return _resumen_desempeno_demo(datos), False
+
+
+# ============================================================
+# Prefiltro conversacional (2026-10-08): desempate de respuestas Sí / No
+# ============================================================
+
+
+class ClasificacionRespuesta(BaseModel):
+    sentido: Literal["si", "no", "ambigua"] = Field(description="«si» si la respuesta afirma, «no» si niega, «ambigua» si no queda claro.")
+
+
+def clasificar_respuesta_prefiltro(pregunta: str, respuesta: str) -> Optional[str]:
+    """«si» / «no» / None. Solo se llama cuando el léxico determinista no pudo decidir; ante cualquier duda (o sin
+    clave) regresa None y el bot pide aclaración. Nunca decide el prefiltro: solo interpreta la respuesta."""
+    client = _client()
+    if client is None:
+        return None
+    try:
+        resp = client.responses.parse(
+            model=MODEL,
+            instructions=("Interpretas UNA respuesta de un candidato a una pregunta cerrada de prefiltro (Sí/No). Regresa «si» o «no» "
+                          "SOLO si la respuesta lo dice con claridad; si es condicional, parcial o no responde la pregunta, «ambigua»."),
+            input=f"Pregunta: {pregunta[:300]}\nRespuesta del candidato: {respuesta[:300]}",
+            text_format=ClasificacionRespuesta,
+        )
+        sentido = resp.output_parsed.sentido
+        return None if sentido == "ambigua" else sentido
+    except Exception as ex:  # noqa: BLE001 — sin IA se pide aclaración
+        print(f"[ia] clasificación de respuesta no disponible ({ex})", flush=True)
+        return None

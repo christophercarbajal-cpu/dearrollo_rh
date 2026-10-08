@@ -803,6 +803,13 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
         return {**base, "estado": "completada", "resultado": "favorable" if cumple else "no_favorable", "cumple": cumple,
                 "detalle": "Cumple" if cumple else ("No cumple: " + (pw.get("motivo") or "criterio excluyente")),
                 "revisadoPor": f"Revisado por: {por}", "terminado_en": _aware_iso(pw.get("en"))}
+    if tipo in ("prefiltro_whatsapp", "prefiltro_web") and not (a.get("prefiltro_web") or {}).get("resultado"):
+        # 2026-10-08 (ruta automática): prefiltro conversacional — lo que falta lo pregunta el bot; nunca se aprueba solo
+        from . import prefiltro_conversacional as pconv
+
+        rc = pconv.resumen(p)
+        if rc is not None and rc["pendiente"]:
+            return {**base, "estado": "en_curso", "espera": f"Esperando respuesta del candidato: {rc['pendiente']}"}
     if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
         web = bool(a.get("respuestas_web"))
         hecho = bool(p.prefiltro_completo) if tipo == "prefiltro_whatsapp" else (web or bool(p.prefiltro_completo))
@@ -1525,8 +1532,13 @@ def descarte_sugerido(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[d
 def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[dict]:
     """TODAS las Cuentas (2026-10-08): una obligatoria «No aprobada» (bajo el mínimo, dictamen desfavorable,
     consentimiento rechazado) ya alcanzada por la ruta detiene el avance. RH decide: «Confirmar descarte» o
-    «Continuar por decisión de RH» (`excepcion_rh`). Nunca se descarta ni se libera solo."""
-    if not pasos or not p.activa:
+    «Continuar por decisión de RH» (`excepcion_rh`). Nunca se descarta ni se libera solo.
+    2026-10-08: también la postulación que el prefiltro conversacional CERRÓ por un indispensable (`cerradaPorPrefiltro`):
+    «Continuar por decisión de RH» la reabre y la ruta sigue sola."""
+    from .prefiltro_conversacional import MOTIVO_CIERRE
+
+    cerrada_prefiltro = not p.activa and p.motivo_cierre == MOTIVO_CIERRE
+    if not pasos or not (p.activa or cerrada_prefiltro):
         return None
     actual = _indice(p.etapa)
     x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
@@ -1534,7 +1546,7 @@ def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional
     if x is None:
         return None
     detalle = x.get("detalle") or ""
-    return {"paso": x["id"], "nombre": x["nombre"],
+    return {"paso": x["id"], "nombre": x["nombre"], "cerradaPorPrefiltro": cerrada_prefiltro,
             "motivo": f"{x['nombre']}: {detalle}" if detalle and detalle != x["nombre"] else f"{x['nombre']}: No aprobada"}
 
 

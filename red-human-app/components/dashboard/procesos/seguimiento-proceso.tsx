@@ -302,6 +302,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
   // un solo evaluador de condiciones: la API manda `bloqueo` (todas las Cuentas) y `descarteSugerido` (ruta automática)
   const descarte = seg.bloqueo ?? seg.descarteSugerido ?? null;
+  // 2026-10-08: una postulación que el prefiltro conversacional cerró sigue ofreciendo «Continuar por decisión de RH»
+  const cerradaPrefiltro = Boolean(descarte?.cerradaPorPrefiltro);
+  const vigente = c.activa !== false || cerradaPrefiltro;
   const pasoPrefiltro = pasos.find((p) => p.revisarPrefiltro && p.estado !== "omitida" && p.estado !== "cancelada");
   const recRuta = seg.recomendacion ?? null;
   const rec = recRuta
@@ -311,7 +314,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
   // UN botón principal: la siguiente acción concreta que define la ruta.
   let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
-  if (live && c.activa !== false && descarte) {
+  if (live && vigente && descarte) {
     principal = null; // el bloqueo trae SUS dos decisiones (abajo): Confirmar descarte · Continuar por decisión de RH
   } else if (live && c.activa !== false && pasoPrefiltro) {
     principal = { texto: "Aprobar prefiltro", onClick: () => void aprobarPrefiltroRH(), icono: <CheckCircle2 className="h-4 w-4" /> };
@@ -355,17 +358,19 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             </Button>
           )}
         </div>
-        {descarte && c.activa !== false && (
+        {descarte && vigente && (
           <div role="alert" className="mt-3 rounded-lg border border-bad/40 bg-bad-soft/50 px-3 py-2">
             <p className="flex items-center gap-2 text-[13px] font-semibold text-bad">
-              <XCircle className="h-4 w-4 shrink-0" /> {seg.descarteSugerido ? "Descarte sugerido" : "No aprobada"}: {descarte.motivo}
+              <XCircle className="h-4 w-4 shrink-0" /> {cerradaPrefiltro ? "Prefiltro no aprobado" : seg.descarteSugerido ? "Descarte sugerido" : "No aprobada"}: {descarte.motivo}
             </p>
             <p className="mt-0.5 pl-6 text-[12px] text-ink-2">
-              La ruta se detuvo. Confirma el descarte o, si RH decide seguir, continúa con un motivo (el resultado se conserva).
+              {cerradaPrefiltro
+                ? "La postulación se cerró y se le avisó al candidato. Si RH decide seguir, continúa con un motivo: se reabre, se conservan sus respuestas y la liga de la entrevista sale sola."
+                : "La ruta se detuvo. Confirma el descarte o, si RH decide seguir, continúa con un motivo (el resultado se conserva)."}
             </p>
             {live && (
               <div className="mt-2 flex flex-wrap justify-end gap-2">
-                {onDescartar && (
+                {onDescartar && !cerradaPrefiltro && (
                   <Button size="sm" variant="outline" onClick={() => onDescartar(descarte.motivo)} disabled={Boolean(ocupado)}>
                     <ThumbsDown className="h-4 w-4" /> Confirmar descarte
                   </Button>

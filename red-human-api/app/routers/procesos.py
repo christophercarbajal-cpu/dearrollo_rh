@@ -421,11 +421,16 @@ async def excepcion_rh(codigo: str, paso_id: str, datos: MotivoIn, db: Session =
                        cuenta: Cuenta = Depends(cuenta_actual)):
     """«Continuar por decisión de RH» sobre una actividad «No aprobada»: la libera SIN cambiar su resultado ni su score
     y SIN omitirla; el motor se recalcula en el mismo momento (avanza si la ruta quedó lista y la Cuenta lo permite)."""
+    from ..services import prefiltro_conversacional as pconv
+
     p = _postulacion(db, codigo, cuenta.id)
     try:
         sproc.excepcion_rh(db, p, paso_id, u, datos.motivo)
     except sproc.ErrorProceso as e:
         raise _error(e)
+    # 2026-10-08: si el prefiltro conversacional cerró la postulación, la excepción la REABRE (respuestas conservadas) y
+    # el motor manda en esta misma petición la liga de la entrevista por el canal conectado.
+    pconv.reabrir_por_excepcion(db, p, u)
     from .candidatos import _recalcular_resultado_apto
 
     _recalcular_resultado_apto(p)

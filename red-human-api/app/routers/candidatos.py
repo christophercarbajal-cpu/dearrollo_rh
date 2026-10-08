@@ -1110,6 +1110,14 @@ class MensajeIn(BaseModel):
 UMBRAL_ZERO_TOUCH = 50
 
 
+def entrevista_por_liga(p: Postulacion) -> bool:
+    """2026-10-08: en las Cuentas con ruta automática la Entrevista Red Human es ASÍNCRONA — el motor manda su liga
+    (`motor_ruta._disparar_entrevista`). Ahí NUNCA se invita a «agendar una videollamada» (mensaje duplicado)."""
+    from ..models import ruta_automatica
+
+    return ruta_automatica(p.cuenta)
+
+
 def _texto_apto(p: Postulacion) -> str:
     return (
         f"¡Buenas noticias, {p.nombre.split(' ')[0]}! 🎉 Tu perfil es compatible con lo que buscamos "
@@ -1182,6 +1190,8 @@ async def _auto_decision_zero_touch(db: Session, p: Postulacion, resultado_prefi
         await sproc.avanzar_seguro(db, p)
         if p.etapa == "Entrevista IA" and sproc.mueve_entrevista_ia(p):
             ultimo = next((m for m in reversed(p.mensajes) if m.rol == "assistant"), None)
+            if entrevista_por_liga(p):  # el motor ya mandó la liga de la entrevista: ese es el mensaje del turno
+                return {"respuesta": ultimo.texto if ultimo else "", "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
             return {"respuesta": _texto_apto(p), "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
         texto = (
             f"¡Gracias, {p.nombre.split(' ')[0]}! Completaste el primer filtro de la vacante. El equipo de RH revisará "
@@ -1478,7 +1488,7 @@ def _texto_aclaracion(nombre: str, inc: dict) -> str:
     )
 
 
-async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str, wa_id: str = "") -> dict:
+async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str, wa_id: str = "", reconexion: bool = False) -> dict:
     """Registra el mensaje del candidato en ESTA postulación, corre un turno del agente y
     responde. El historial que ve el modelo es solo el de esta postulación: las preguntas de
     otra vacante no se mezclan."""
@@ -1498,8 +1508,17 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     if p.etapa == "Onboarding":
         return await _procesar_turno_onboarding(db, p, historial, canal)
 
-    # Zero-Touch fase 1: apto y sin videollamada agendada -> herramienta de agendamiento.
-    if p.prefiltro_completo and p.estado == "cumple" and not p.videollamada_agendada_en:
+    # 2026-10-08 (ruta automática): prefiltro CONVERSACIONAL — una sola entidad con lo del formulario web, una pregunta
+    # por mensaje, reconexión = la pregunta pendiente exacta, resolución al vuelo. Ya resuelto → el flujo de siempre.
+    from ..services import prefiltro_conversacional as pconv
+
+    if pconv.aplica(p):
+        r = await pconv.turno(db, p, texto, canal, reconexion=reconexion)
+        if r is not None:
+            return r
+
+    # Zero-Touch fase 1: apto y sin videollamada agendada -> herramienta de agendamiento (nunca con entrevista por liga).
+    if p.prefiltro_completo and p.estado == "cumple" and not p.videollamada_agendada_en and not entrevista_por_liga(p):
         return await _procesar_turno_agenda(db, p, historial, canal)
 
     # Fase 3 (2026-09-15): Entrevista IA interrumpida/parcial → el candidato la reanuda (misma liga)
@@ -2081,8 +2100,9 @@ async def aplicar_movimiento(
         p.estado = "cumple"
         p.prefiltro_completo = True
         await _asignar_curso_filtro(db, p)
-        # Proceso configurable: la agenda de la Entrevista Red Human solo arranca si el proceso la incluye.
-        if sproc.mueve_entrevista_ia(p):
+        # Proceso configurable: la agenda de la Entrevista Red Human solo arranca si el proceso la incluye — y nunca
+        # cuando la entrevista va por liga (ruta automática: la liga la manda el motor; 2026-10-08).
+        if sproc.mueve_entrevista_ia(p) and not entrevista_por_liga(p):
             # Una falla de WhatsApp/Meta NUNCA bloquea el movimiento: se registra y RH sigue.
             try:
                 envio = await _avisar_apto_e_iniciar_agenda(db, p)

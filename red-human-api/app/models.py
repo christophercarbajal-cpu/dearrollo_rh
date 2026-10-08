@@ -422,7 +422,8 @@ class Postulacion(Base):
         if self.etapa == "Prefiltro":
             return not self.prefiltro_completo
         if self.etapa == "Entrevista IA":
-            return self.estado == "cumple" and not self.videollamada_agendada_en
+            # ruta automática (2026-10-08): la entrevista va por liga, no hay agenda que coordinar por chat
+            return self.estado == "cumple" and not self.videollamada_agendada_en and not ruta_automatica(self.cuenta)
         # Evaluación / Entrevista Humana / Contratación: RH ya tomó el control — aunque el
         # prefiltro haya quedado a medias, el agente no tiene nada que preguntar por chat.
         return False

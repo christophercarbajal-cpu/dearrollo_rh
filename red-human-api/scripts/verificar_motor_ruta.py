@@ -3,8 +3,9 @@
     .venv/Scripts/python.exe scripts/verificar_motor_ruta.py
 
 Base desechable, sin red: Psicométricas.mx sin llaves (modo simulado), WhatsApp/correo sin configurar.
-Cubre: prefiltro web resuelto contra la vacante (Cumple → avanza; excluyente → «Descarte sugerido» SIN cerrar la
-postulación; Parcial → «Revisar prefiltro» y RH aprueba), disparo automático de la psicometría y la Entrevista Red
+Cubre: prefiltro web resuelto contra la vacante (Cumple → avanza; 2026-10-08 prefiltro conversacional: excluyente →
+postulación CERRADA con su motivo y «Continuar por decisión de RH» disponible; Parcial → el bot lo pregunta (nunca se
+aprueba solo); Parcial sin teléfono para preguntar → «Revisar prefiltro» y RH aprueba), disparo automático de la psicometría y la Entrevista Red
 Human al habilitarse (una sola vez aunque el motor corra de nuevo), actividades habilitadas por completado (no por
 columna), score propio de la entrevista (no el del CV), «No aprobada» bajo el mínimo → descarte sugerido + evaluación
 integral No apto, vocabulario único de estados y aislamiento: otra Cuenta con la MISMA ruta no se mueve sola.
@@ -164,23 +165,31 @@ with TestClient(app) as client:
     tarjeta = client.get(f"/candidatos/{PA}", headers=HG).json()
     check(tarjeta["suggested_discard"]["paso"] == "entrevista_red_human", "la tarjeta del tablero trae el descarte sugerido")
 
-    print("\n--- 3. Criterio excluyente → descarte SUGERIDO (nunca automático) ---")
+    print("\n--- 3. Criterio indispensable incumplido → postulación CERRADA con su motivo (prefiltro conversacional) ---")
     PB = postular("demo-grupak", "Beto No", "5512347002", "beto@correo.mx", respuestas("Sí", "No", "Sí"))
     db.expire_all()
     pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
-    check(pb.estado == "no_cumple" and "Rolar turnos" in pb.analisis["prefiltro_web"]["motivo"], "No cumple con el criterio excluyente como motivo")
-    check(pb.activa and pb.etapa == "Prefiltro", "la postulación sigue activa en Prefiltro (no se descartó sola)")
+    check(pb.estado == "no_cumple" and "Rolar turnos" in pb.analisis["prefiltro_web"]["motivo"], "No cumple con el criterio indispensable como motivo")
+    check(not pb.activa and pb.motivo_cierre == "prefiltro_no_aprobado" and pb.etapa == "Prefiltro",
+          "la postulación se cierra (No aprobado) y se queda en su columna")
     s = seg(PB)
-    check(s["descarteSugerido"] and paso(s, "prefiltro")["estadoUnificado"] == "no_aprobada", "«Descarte sugerido» + Prefiltro «No aprobada»")
+    check(s["bloqueo"] and s["bloqueo"]["cerradaPorPrefiltro"] and paso(s, "prefiltro")["estadoUnificado"] == "no_aprobada",
+          "la ficha ofrece «Continuar por decisión de RH» + Prefiltro «No aprobada»")
     check(not db.query(Evaluacion).filter(Evaluacion.postulacion_id == pb.id).count() and not pb.entrevistas,
-          "con descarte sugerido no se dispara nada más")
+          "cerrada por el prefiltro no se dispara nada más")
 
-    print("\n--- 4. Indeterminado → «Revisar prefiltro» → RH aprueba ---")
-    PC = postular("demo-grupak", "Caro Parcial", "5512347003", "caro@correo.mx", respuestas("Parcial", "Sí", "Sí"))
+    print("\n--- 4. «Parcial» en un indispensable nunca aprueba ---")
+    PP = postular("demo-grupak", "Pau Parcial", "5512347005", "pau@correo.mx", respuestas("Parcial", "Sí", "Sí"))
+    s = seg(PP)
+    x = paso(s, "prefiltro")
+    check(x["estadoUnificado"] == "esperando_candidato" and "Secundaria" in x["espera"] and s["etapaActual"] == "Prefiltro",
+          "con teléfono → «Esperando candidato»: el bot le preguntará solo lo que falta")
+    print("\n--- 4b. Indeterminado sin teléfono para preguntar → «Revisar prefiltro» → RH aprueba ---")
+    PC = postular("demo-grupak", "Caro Parcial", "", "caro@correo.mx", respuestas("Parcial", "Sí", "Sí"))
     s = seg(PC)
     x = paso(s, "prefiltro")
     check(x["revisarPrefiltro"] and "Revisar prefiltro" in x["espera"] and x["estadoUnificado"] == "pendiente_revision",
-          "Parcial en excluyente → «Revisar prefiltro» (Pendiente de revisión)")
+          "Parcial en excluyente y sin teléfono → «Revisar prefiltro» (Pendiente de revisión)")
     check(s["etapaActual"] == "Prefiltro", "sin decisión de RH no avanza")
     r = client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={"comentario": "Validado por teléfono"})
     check(r.status_code == 200 and r.json()["proceso"]["etapaActual"] == "Entrevista IA", "RH aprueba → avanza y la ruta sigue sola")
@@ -201,7 +210,7 @@ with TestClient(app) as client:
     print("\n--- 6. Vocabulario único de estados ---")
     VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
                "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error"}
-    todos = [x for c, h in ((PA, HG), (PB, HG), (PC, HG), (PM, HM)) for e in seg(c, h)["etapas"] for x in e["pasos"]]
+    todos = [x for c, h in ((PA, HG), (PB, HG), (PC, HG), (PP, HG), (PM, HM)) for e in seg(c, h)["etapas"] for x in e["pasos"]]
     check(all(x["estadoUnificado"] in VALIDOS for x in todos), "toda actividad usa una de las 8 etiquetas")
     db.close()
 

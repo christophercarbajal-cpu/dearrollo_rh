@@ -217,6 +217,9 @@ export interface DescarteSugerido {
   paso: string;
   nombre: string;
   motivo: string;
+  /** 2026-10-08: el prefiltro conversacional ya CERRÓ la postulación (indispensable incumplido). «Continuar por decisión
+   * de RH» la reabre y la ruta sigue sola; no hay descarte que confirmar. */
+  cerradaPorPrefiltro?: boolean;
 }
 export interface EtapaSeguimiento {
   etapa: EtapaCandidato;

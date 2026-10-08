@@ -112,6 +112,20 @@ async def lifespan(app: FastAPI):
             print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)
         rutas = sproc.asignar_rutas_faltantes(db)
         db.commit()
+        # 2026-10-08: ajustes de la ruta de demostración (solo demo-grupak): retira «Persona bajo la lluvia» (los
+        # candidatos que esperaban esa prueba quedan liberados) y fija los criterios del prefiltro de «Ayudante general».
+        # Idempotente y NO fatal.
+        try:
+            from .services import ajustes_demo
+
+            with db.begin_nested():
+                ajuste = ajustes_demo.ajustar(db)
+            db.commit()
+            if any(ajuste.values()):
+                print(f"[demo] ajuste de ruta: {ajuste}", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[demo] ⚠️ ajuste de ruta no aplicado: {ex}", flush=True)
         if creadas or rutas["asignadas"]:
             print(f"[proceso] rutas base sembradas: {creadas} · postulaciones con ruta nueva: {rutas['asignadas']} "
                   f"{rutas['por_origen']}", flush=True)

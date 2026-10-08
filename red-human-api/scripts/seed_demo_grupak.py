@@ -5,10 +5,10 @@ de los endpoints (crear ciclo, evaluar, crear medición, responder…), así cad
 en pantalla:
   1. Cuenta «Demo Grupak» (slug `demo-grupak`) con las tres rutas base, igual que `POST /cuentas`.
   2. Catálogo psicométrico: Cleaver, Zavic, Terman, Herrmann, 16PF y MOSS + Baterías Ayudante, Cumplimiento y Gerente.
-  3. «Ruta Demo Grupak»: 12 actividades en las 5 etapas (validada con `proceso.normalizar_pasos`).
+  3. «Ruta Demo Grupak»: 11 actividades en las 5 etapas (v5: sin «Persona bajo la lluvia», retirada temporalmente) (validada con `proceso.normalizar_pasos`).
   4. Tres vacantes con la ruta; cada una con su batería solo en SU copia (la ruta no se altera).
   5. Tres candidatos en Prefiltro, Filtro Red Human y Filtro humano, con registros reales (el estado de cada actividad
-     se DERIVA solo). «Persona bajo la lluvia» lleva consigna e instrucciones de aplicación; «Referencias y revisión
+     se DERIVA solo). «Referencias y revisión
      documental» lleva el formulario de referencias laborales (liga del evaluador `/evaluacion/{token}`); la
      Entrevista profunda Red Human y las entrevistas humanas llevan su guion.
   6. Colaboradores (roster = base maestra de Desempeño y Clima).
@@ -95,6 +95,7 @@ from app.seed import slug_cuenta_unico  # noqa: E402
 from app.serial import nombre_empresa  # noqa: E402
 from app.services import clima_resultados, ia, rag  # noqa: E402
 from app.services import desempeno_calculo as calc  # noqa: E402
+from app.services.ajustes_demo import PREGUNTAS_AYUDANTE  # noqa: E402
 from app.services import evaluaciones as sev  # noqa: E402
 from app.services import proceso as sproc  # noqa: E402
 from app.services import psicometricas as psi  # noqa: E402
@@ -138,11 +139,13 @@ def clave_prueba(nombre: str) -> str:
     return "GRP-" + "".join(ch for ch in nombre.upper() if ch.isalnum())
 
 
-# ============================================================ ruta (12 actividades en las 5 etapas)
+# ============================================================ ruta (11 actividades en las 5 etapas)
+# v5 (2026-10-08): «Persona bajo la lluvia» se retiró TEMPORALMENTE de la ruta (`services/ajustes_demo.py` la quita de
+# las rutas ya sembradas y libera a los candidatos que la esperaban). Para volver a ponerla, agrega PASO_LLUVIA a la ruta.
+PASO_LLUVIA = {"id": "persona-lluvia", "tipo": "otra", "nombre": "Persona bajo la lluvia", "etapa": "Entrevista IA",
+               "responsable": {"tipo": "rh"}}
 PASOS_RUTA = [
     {"id": "prefiltro", "tipo": "prefiltro_web", "nombre": "Prefiltro", "etapa": "Prefiltro"},
-    {"id": "persona-lluvia", "tipo": "otra", "nombre": "Persona bajo la lluvia", "etapa": "Entrevista IA",
-     "responsable": {"tipo": "rh"}},
     {"id": PASO_BATERIA, "tipo": "psicometrica", "nombre": "Batería psicométrica", "etapa": "Entrevista IA",
      "responsable": {"tipo": "externo", "nombre": PROVEEDOR}},
     {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista profunda Red Human",
@@ -362,7 +365,7 @@ DOCUMENTOS = [
      "Proceso de selección de Demo Grupak.\n\n"
      "1. Prefiltro: el candidato se postula en el portal y responde preguntas cerradas (Sí / No / Parcial) sobre los "
      "requisitos indispensables. Red Human solo recomienda; RH decide.\n"
-     "2. Filtro Red Human: se aplican la prueba proyectiva Persona bajo la lluvia, la batería psicométrica del puesto "
+     "2. Filtro Red Human: se aplican la batería psicométrica del puesto "
      "(Ayudante: Cleaver y Zavic; Cumplimiento: Terman, Cleaver y 16PF; Gerente: Terman, MOSS, Cleaver y 16PF; "
      "Herrmann se aplica aparte como prueba externa) y la Entrevista profunda Red Human.\n"
      "3. Filtro humano: referencias laborales y revisión documental, entrevista con el sindicato, examen médico (con "
@@ -572,19 +575,19 @@ def asegurar_ruta(db, cu: Cuenta) -> PlantillaProceso:
         nota(f"Ruta existente: {NOMBRE_RUTA} (id {pl.id}, versión {pl.version}) — no se sobrescribe")
         return pl
     pasos = sproc.normalizar_pasos(PASOS_RUTA)
-    if len(pasos) != 12:
-        raise Abortar(f"La ruta debía tener 12 actividades y tiene {len(pasos)}.")
+    if len(pasos) != 11:
+        raise Abortar(f"La ruta debía tener 11 actividades y tiene {len(pasos)}.")
     db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id).update({"predeterminada": False})
     pl = PlantillaProceso(
         cuenta_id=cu.id, nombre=NOMBRE_RUTA,
-        descripcion="Prefiltro → Persona bajo la lluvia, batería psicométrica y Entrevista profunda Red Human → "
-                    "referencias, sindicato, médico y líder → propuesta, documentos y contratación → onboarding (12 pasos).",
+        descripcion="Prefiltro conversacional → batería psicométrica y Entrevista profunda Red Human → "
+                    "referencias, sindicato, médico y líder → propuesta, documentos y contratación → onboarding (11 pasos).",
         pasos=pasos, etapas=sproc.normalizar_etapas(ETAPAS_RUTA), version=1, predeterminada=True, activa=True,
         creado_por=ACTOR, actualizada_por=ACTOR,
     )
     db.add(pl)
     db.flush()
-    ok(f"Ruta creada: {NOMBRE_RUTA} (id {pl.id}, 12 actividades, predeterminada de la Cuenta)")
+    ok(f"Ruta creada: {NOMBRE_RUTA} (id {pl.id}, 11 actividades, predeterminada de la Cuenta)")
     return pl
 
 
@@ -623,8 +626,10 @@ def asegurar_vacantes(db, cu: Cuenta, pl: PlantillaProceso, catalogo: dict, publ
             estado="Publicada" if publicar else "En revisión", requisitos=" · ".join(d["indispensables"]),
             requisitos_deseables=d["deseables"], beneficios=d["beneficios"], descripcion=d["descripcion"],
             resumen=d["descripcion"], seniority=d["seniority"], plataformas=["Portal"] if publicar else [],
-            preguntas_filtro=[{"pregunta": f"¿Cumples con: {r}?", "tipo": "si_no", "valida": r, "respuesta_esperada": "Sí",
-                               "descarta": True, "opciones": ["Sí", "No", "Parcial"]} for r in d["indispensables"]],
+            # v5: «Ayudante general» con los criterios del prefiltro conversacional (indispensables + solo registro)
+            preguntas_filtro=[dict(q) for q in PREGUNTAS_AYUDANTE] if d["titulo"] == "Ayudante general" else
+            [{"pregunta": f"¿Cumples con: {r}?", "tipo": "si_no", "valida": r, "respuesta_esperada": "Sí",
+              "descarta": True, "opciones": ["Sí", "No", "Parcial"]} for r in d["indispensables"]],
         )
         v.proceso = proceso_con_bateria(db, cu, pl, bateria.id)
         db.add(v)
@@ -824,18 +829,12 @@ def sembrar_candidato(db, cu: Cuenta, d: dict, v: Vacante, catalogo: dict) -> tu
         elif esc == "filtro_red_human":
             _prefiltro_cumple(p, 82)
             p.etapa = "Entrevista IA"
-            lluvia = _nueva_evaluacion(db, p, cu, tipo="otra", nombre="Persona bajo la lluvia", forma="registro_directo",
-                                       paso_id="persona-lluvia", instrucciones=INSTRUCCIONES_LLUVIA)
-            _resultado(db, lluvia, "favorable", "Prueba proyectiva SIMULADA: manejo adecuado de la presión.", "Psic. Laura Méndez (demo)")
             _psicometria(db, p, cu, bateria, terminada=False)
-            _nota_historial(p, "Candidato de demostración: prefiltro cumple, Persona bajo la lluvia revisada y batería "
-                               "psicométrica enviada (simulada); falta la Entrevista profunda Red Human.")
+            _nota_historial(p, "Candidato de demostración: prefiltro cumple y batería psicométrica enviada (simulada); falta "
+                               "la Entrevista profunda Red Human.")
         elif esc == "filtro_humano":
             _prefiltro_cumple(p, 88)
             p.etapa = "Entrevista Humana"
-            lluvia = _nueva_evaluacion(db, p, cu, tipo="otra", nombre="Persona bajo la lluvia", forma="registro_directo",
-                                       paso_id="persona-lluvia", instrucciones=INSTRUCCIONES_LLUVIA)
-            _resultado(db, lluvia, "favorable", "Prueba proyectiva SIMULADA: seguridad y recursos ante la presión.", "Psic. Laura Méndez (demo)")
             _psicometria(db, p, cu, bateria, terminada=True)
             sindicato = _nueva_evaluacion(db, p, cu, tipo="entrevista_humana", nombre="Entrevista con sindicato",
                                           forma="registro_directo", paso_id="entrevista-sindicato",

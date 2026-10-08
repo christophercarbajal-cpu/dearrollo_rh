@@ -89,7 +89,8 @@ def evaluar_prefiltro_web(respuestas: list, preguntas: list) -> Tuple[str, str, 
 
 def resolver_prefiltro_web(db: Session, p: Postulacion) -> Optional[str]:
     """Resuelve UNA vez el prefiltro web de la postulación (si su ruta lo tiene, hay respuestas y nadie lo decidió).
-    Escribe `analisis.prefiltro_web` y sincroniza `Postulacion.estado` (tablero). No hace commit."""
+    Escribe `analisis.prefiltro_web` y sincroniza `Postulacion.estado` (tablero). No hace commit. Vacantes con criterios
+    configurados usan el prefiltro CONVERSACIONAL (`services/prefiltro_conversacional.desde_web`, ver `procesar`)."""
     if not sproc.tiene_proceso(p) or not any(x["tipo"] == "prefiltro_web" for x in p.proceso.get("pasos", [])):
         return None
     a = dict(p.analisis or {})
@@ -217,8 +218,14 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
     liga = f"{settings.app_url}/entrevista/{e.token}"
     nombre = (p.nombre or "").split(" ")[0] if p.nombre and not p.nombre.startswith("Candidato") else ""
     vacante = p.vacante.titulo if p.vacante else "la vacante"
-    texto = (f"¡Hola{(' ' + nombre) if nombre else ''}! 👋 Avanzaste en tu proceso para {vacante}. El siguiente paso es tu "
-             f"entrevista con Red Human: entra cuando gustes desde tu celular o computadora (dura unos 10 minutos): {liga}")
+    saludo = f"¡{nombre}! " if nombre else ""
+    if ((p.proceso_estado or {}).get(_paso_prefiltro(p)) or {}).get("excepcion"):
+        # el prefiltro no se aprobó, pero RH decidió continuar (2026-10-08)
+        texto = (f"{saludo}Buenas noticias: tu postulación a {vacante} continúa. El siguiente paso es tu entrevista con Red Human "
+                 f"(entra cuando gustes, dura unos 10 minutos): {liga}")
+    else:
+        # 2026-10-08: texto acordado — es el mensaje que sigue al prefiltro aprobado (nunca «agenda una videollamada»)
+        texto = f"{saludo}Tu perfil es compatible con esta vacante. El siguiente paso es tu entrevista con Red Human: {liga}"
     db.flush()
     entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", liga, motivo="entrevista", paso_id=paso["id"])
     return True, (f"Liga enviada por {detalle}" if entregado else f"Liga creada; el aviso no salió ({detalle})"), entregado
@@ -251,6 +258,10 @@ async def _disparar_referencias(db: Session, p: Postulacion, paso: dict) -> Tupl
         return False, r.get("mensaje") or "Falta un dato para solicitar las referencias", None
     enviados = [x for x in r.get("resultados") or [] if x.get("enviado") and x.get("destinatario") == "candidato"]
     return True, "Solicitud de referencias enviada al candidato" if enviados else "Creada; el aviso no salió", bool(enviados)
+
+
+def _paso_prefiltro(p: Postulacion) -> str:
+    return next((x["id"] for x in (p.proceso or {}).get("pasos", []) if x["tipo"] in ("prefiltro_web", "prefiltro_whatsapp")), "")
 
 
 DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista, "referencias": _disparar_referencias,
@@ -295,7 +306,15 @@ async def procesar(db: Session, p: Postulacion) -> List[str]:
     if ((p.analisis or {}).get("motor_ruta") or {}).get("pausado"):
         # p. ej. candidatos sembrados de la demo: se ven sus estados, pero el motor no dispara ni mueve nada
         return []
-    if resolver_prefiltro_web(db, p):
+    from . import prefiltro_conversacional as pconv
+
+    if pconv.aplica(p):
+        # 2026-10-08: web + chat en UNA entidad. Lo que el formulario dejó pendiente lo pregunta el bot (nunca se aprueba
+        # solo); un indispensable incumplido cierra la postulación con su motivo.
+        await pconv.desde_web(db, p)
+        if not p.activa:
+            return []
+    elif resolver_prefiltro_web(db, p):
         db.commit()
     movidas: List[str] = list(await sproc.avanzar_si_corresponde(db, p))
     for _ in range(4):

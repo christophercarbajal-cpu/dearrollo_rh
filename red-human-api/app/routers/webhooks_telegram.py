@@ -148,7 +148,8 @@ async def _entrante(db: Session, tel: str, msg: dict) -> dict:
 async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
     """Arranque por deep link (o saludo si no hay payload válido)."""
     tipo, valor, paso = telegram.separar_inicio(payload)
-    base = {**msg, "contacto": None, "media": None, "tipo": "text", "texto": "Hola", "id_seleccionado": ""}
+    # reconexión (2026-10-08): el prefiltro conversacional repite la pregunta pendiente EXACTA, nunca la toma como respuesta
+    base = {**msg, "contacto": None, "media": None, "tipo": "text", "texto": "Hola", "id_seleccionado": "", "reconexion": True}
     if tipo == "vac":
         return await _iniciar_vacante(db, tel, valor, msg, base)
     if tipo != "p":

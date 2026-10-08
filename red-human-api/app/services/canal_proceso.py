@@ -59,6 +59,16 @@ def _evaluacion(db: Session, p: Postulacion, codigo: Optional[str]) -> Optional[
 def accion_candidato(db: Session, p: Postulacion, paso: dict) -> Optional[dict]:
     """Lo que el candidato puede hacer AHORA en un paso disponible (None = le toca a RH o a un tercero)."""
     tipo, nombre = paso["tipo"], paso["nombre"]
+    if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
+        # 2026-10-08 (ruta automática): el prefiltro se contesta EN EL CHAT — se retoma la pregunta pendiente exacta
+        from . import prefiltro_conversacional as pconv
+
+        resumen = pconv.resumen(p)
+        if resumen is not None:
+            if resumen["resultado"]:
+                return None
+            pregunta = pconv.pregunta_pendiente(p) or resumen["preguntaPendiente"]
+            return _respuesta(f"Retomemos tu postulación a *{_vacante(p)}* 👇\n\n{pregunta}") if pregunta else None
     if tipo == "prefiltro_whatsapp":
         if p.prefiltro_completo:
             return None

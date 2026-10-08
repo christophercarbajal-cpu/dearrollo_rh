@@ -885,7 +885,7 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     # coordinando videollamada, con el prefiltro completo (cita agendada o no) o si le toca
     # una pregunta más. No dupliques esa decisión aquí.
     print(f"[agente] Procesando turno con IA para {p.codigo} / {c.codigo} (etapa={p.etapa}, estado={p.estado})...")
-    resultado = await procesar_prefiltro(db, p, texto, "whatsapp")
+    resultado = await procesar_prefiltro(db, p, texto, "whatsapp", reconexion=bool(msg.get("reconexion")))
     print(f"[agente] Turno completado para {p.codigo}: ia={resultado.get('ia')}, clasificacion={resultado.get('clasificacion')}")
     return {"ok": True, "accion": "turno_prefiltro", "candidato": c.codigo, "postulacion": p.codigo, **resultado}
 

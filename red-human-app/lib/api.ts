@@ -3173,10 +3173,19 @@ export function fetchVistaPsicometria(codigoPostulacion: string, pasoId = "") {
   return get<VistaPsicometria>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria${pasoId ? `?paso_id=${encodeURIComponent(pasoId)}` : ""}`);
 }
 /** «Asignar y enviar»: alta en el proveedor + clave + aviso por Notificaciones. Si el proveedor falla no queda nada. */
-export function asignarPsicometria(codigoPostulacion: string, datos: { pruebaIds: number[]; pasoId?: string }) {
+/** `correo` (2026-10-07, modal de psicometría): se guarda en la ficha ANTES de llamar al proveedor; sin él no se toca. */
+export function asignarPsicometria(codigoPostulacion: string, datos: { pruebaIds: number[]; pasoId?: string; correo?: string }) {
   return post<RespuestaEvaluacion & { simulado?: boolean; aviso?: string }>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria`, {
-    prueba_ids: datos.pruebaIds, paso_id: datos.pasoId ?? "",
+    prueba_ids: datos.pruebaIds, paso_id: datos.pasoId ?? "", ...(datos.correo !== undefined ? { correo: datos.correo.trim() } : {}),
   });
+}
+
+/** Formato de correo que acepta la API (`candidatos.CORREO_VALIDO`, el mismo que exige Psicométricas.mx). */
+export const esCorreoValido = (v: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim());
+
+/** Ficha → datos de contacto (2026-10-07): corrige correo y/o teléfono en cualquier etapa. Campo omitido = sin cambio. */
+export function actualizarContactoCandidato(codigo: string, datos: { correo?: string; telefono?: string }) {
+  return patch<Candidato>(`/candidatos/${codigo}/contacto`, datos);
 }
 
 /* ============================================================

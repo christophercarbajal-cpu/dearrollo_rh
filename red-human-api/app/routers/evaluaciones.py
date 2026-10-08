@@ -845,6 +845,9 @@ def vista_psicometria(codigo: str, paso_id: str = "", db: Session = Depends(get_
 class AsignarPsicometriaIn(BaseModel):
     prueba_ids: List[int] = []  # vacía = la batería configurada en la ruta/vacante
     paso_id: str = ""
+    # 2026-10-07 (modal de psicometría): correo capturado/corregido en el MISMO modal. Se guarda en la persona ANTES de
+    # llamar al proveedor (y se conserva aunque el envío falle). None = no tocar el correo de la ficha.
+    correo: Optional[str] = None
 
 
 @router.post("/postulaciones/{codigo}/psicometria", status_code=201)
@@ -860,6 +863,13 @@ async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Sess
         raise HTTPException(409, "La postulación está cerrada.")
     if not p.consentimiento:
         raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
+    if datos.correo is not None:
+        from .candidatos import actualizar_contacto  # import tardío (evita el ciclo entre routers)
+
+        if not datos.correo.strip():
+            raise HTTPException(400, "Escribe el correo del candidato: Psicométricas.mx le manda ahí su liga.")
+        if actualizar_contacto(db, p, u.nombre, correo=datos.correo, correo_rh=u.correo, origen="psicometria"):
+            db.commit()  # el correo queda guardado aunque después falle el proveedor (su rollback no lo deshace)
     async with _candado_psicometria(p.id):
         try:
             paso = sproc.paso_para_evaluacion(p, "psicometrica", datos.paso_id.strip())

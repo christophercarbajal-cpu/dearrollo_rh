@@ -106,6 +106,7 @@ import {
   ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta,
   type AlertaTablero, type OrdenTablero,
 } from "@/components/dashboard/candidatos/tablero-kanban";
+import { ContactoCandidato } from "@/components/dashboard/candidatos/contacto-candidato";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
 import { ConfirmacionAccion } from "@/components/dashboard/confirmacion-accion";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
@@ -1287,6 +1288,8 @@ function ModalCandidato({
               <p className="truncate text-xs sm:text-sm text-ink-2">
                 {c.puesto || "Sin vacante asignada"} · <b className="text-ink font-semibold">{c.fuente}</b>
               </p>
+              {/* 2026-10-07: correo y teléfono editables en cualquier etapa (todas las Cuentas) */}
+              <ContactoCandidato c={c} editable={live && puedeDecidir} onCambio={onCambio} />
             </div>
           </div>
 

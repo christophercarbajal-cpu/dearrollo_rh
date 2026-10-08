@@ -9,17 +9,19 @@
      - Solo tres estados: Sin enviar · Enviada · Completada (bloque `psicometria` que deriva la API) y el aviso
        «Sin respuesta en N días». UNA acción por fila: Enviar prueba / Reenviar / Ver resultado.
      - Prueba externa: nombre + PDF de resultados → queda Completada.
+     - Correo del candidato EN el mismo modal (precargado de la ficha, editable): «Enviar ahora» exige un correo válido
+       y la API lo guarda en la persona ANTES de llamar al proveedor (`asignarPsicometria({correo})`).
    Todo REUTILIZA las APIs que ya existen (actividad ad hoc, «Asignar y enviar», evaluación de registro directo + su
    resultado, envío de ligas): la API no cambia de comportamiento por Cuenta. */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, FileUp, Loader2, Send } from "lucide-react";
+import { AlertTriangle, FileUp, Loader2, Mail, Send } from "lucide-react";
 import { Badge, Button } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import { useEsAdmin } from "@/components/sesion";
 import {
-  agregarActividadProceso, asignarPsicometria, crearEvaluacion, enviarLigaEvaluacion, fetchOpcionesProceso, fetchPruebasPsicometricas,
+  agregarActividadProceso, asignarPsicometria, crearEvaluacion, enviarLigaEvaluacion, esCorreoValido, fetchOpcionesProceso, fetchPruebasPsicometricas,
   registrarResultadoEvaluacion, urlArchivo, type Evaluacion, type OpcionesProceso, type PruebaPsicometrica,
 } from "@/lib/api";
 import type { Candidato, EtapaCandidato, PasoSeguimiento, PsicometriaPaso, SeguimientoProceso as Seg } from "@/lib/data";
@@ -91,6 +93,44 @@ function BotonPrincipal({ puede, ocupado, pista, onClick, children }: {
   );
 }
 
+/** «Correo del candidato»: precargado de la ficha y editable ahí mismo (sin otra pantalla). */
+function CampoCorreo({ valor, onChange, original, deshabilitado }: {
+  valor: string; onChange: (v: string) => void; original: string; deshabilitado?: boolean;
+}) {
+  const invalido = valor.trim() !== "" && !esCorreoValido(valor);
+  const cambia = valor.trim().toLowerCase() !== original.trim().toLowerCase();
+  return (
+    <label className="flex flex-col gap-1 text-xs text-ink-2">
+      <span className="flex items-center gap-1.5 font-medium"><Mail className="h-3.5 w-3.5" /> Correo del candidato</span>
+      <input
+        type="email"
+        inputMode="email"
+        autoComplete="off"
+        className={cn(inputRH, invalido && "border-bad focus:border-bad focus:ring-bad/20")}
+        value={valor}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="correo@ejemplo.com"
+        disabled={deshabilitado}
+        aria-invalid={invalido}
+      />
+      {invalido ? (
+        <span className="text-[11px] text-bad">Revisa el formato del correo.</span>
+      ) : !original.trim() ? (
+        <span className="text-[11px] text-ink-3">El candidato no tiene correo: escríbelo aquí; se guardará en su ficha al enviar.</span>
+      ) : cambia ? (
+        <span className="text-[11px] text-ink-3">Al enviar se actualizará el correo de su ficha.</span>
+      ) : null}
+    </label>
+  );
+}
+
+/** Pista del botón «Enviar ahora»: lo primero que falta. */
+function pistaEnvio(sinCatalogo: boolean, seleccion: number[], correo: string): string {
+  if (sinCatalogo || !seleccion.length) return "Elige una prueba para enviarla";
+  if (!correo.trim()) return "Escribe el correo del candidato";
+  return "El correo no tiene un formato válido";
+}
+
 /** Prueba externa: nombre + PDF de resultados. */
 function CamposExterna({ nombre, setNombre, archivo, setArchivo }: {
   nombre: string; setNombre: (v: string) => void; archivo: File | null; setArchivo: (f: File | null) => void;
@@ -151,6 +191,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
   const [externa, setExterna] = useState(false);
   const [nombreExterna, setNombreExterna] = useState("");
   const [pdf, setPdf] = useState<File | null>(null);
+  const [correo, setCorreo] = useState(c.correo ?? "");
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState("");
   const candado = useRef(false);
@@ -186,7 +227,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
       if (!r.ok) return setError(r.error);
       const pasoId = r.data.paso.id;
       if (modo === "enviar") {
-        const s = await asignarPsicometria(c.id, { pruebaIds: seleccion, pasoId });
+        const s = await asignarPsicometria(c.id, { pruebaIds: seleccion, pasoId, correo });
         if (!s.ok) {
           return onAgregada(r.data, { tono: "warn", texto: `La actividad quedó en la ruta como «Sin enviar», pero la prueba no se envió: ${s.error}` });
         }
@@ -243,6 +284,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
             <BloquePrueba catalogo={catalogo} seleccion={seleccion} onChange={setSeleccion} deshabilitado={Boolean(ocupado)} />
           </div>
         )}
+        {psico && !externa && <CampoCorreo valor={correo} onChange={setCorreo} original={c.correo ?? ""} deshabilitado={Boolean(ocupado)} />}
         {psico && externa && (
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-ink-2">Prueba externa</span>
@@ -269,7 +311,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
                 <Button variant="outline" size="sm" onClick={() => ejecutar("sin_enviar")} disabled={Boolean(ocupado)}>
                   {ocupado === "sin_enviar" ? "Agregando…" : "Agregar sin enviar"}
                 </Button>
-                <BotonPrincipal puede={!sinCatalogo && seleccion.length > 0} ocupado={ocupado === "enviar"} pista="Elige una prueba para enviarla" onClick={() => ejecutar("enviar")}>
+                <BotonPrincipal puede={!sinCatalogo && seleccion.length > 0 && esCorreoValido(correo)} ocupado={ocupado === "enviar"} pista={pistaEnvio(sinCatalogo, seleccion, correo)} onClick={() => ejecutar("enviar")}>
                   {ocupado === "enviar" ? "Enviando…" : "Enviar ahora"}
                 </BotonPrincipal>
               </>
@@ -297,6 +339,7 @@ export function ModalEnviarPrueba({ c, paso, onClose, onListo }: {
   const [externa, setExterna] = useState(false);
   const [nombreExterna, setNombreExterna] = useState("");
   const [pdf, setPdf] = useState<File | null>(null);
+  const [correo, setCorreo] = useState(c.correo ?? "");
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState("");
   const candado = useRef(false);
@@ -310,7 +353,7 @@ export function ModalEnviarPrueba({ c, paso, onClose, onListo }: {
     candado.current = true;
     setOcupado("enviar");
     setError("");
-    const r = await asignarPsicometria(c.id, { pruebaIds: seleccion, pasoId: paso.id });
+    const r = await asignarPsicometria(c.id, { pruebaIds: seleccion, pasoId: paso.id, correo });
     candado.current = false;
     setOcupado("");
     if (!r.ok) return setError(r.error);
@@ -337,6 +380,9 @@ export function ModalEnviarPrueba({ c, paso, onClose, onListo }: {
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-ink-2">Prueba o batería</span>
             <BloquePrueba catalogo={catalogo} seleccion={seleccion} onChange={setSeleccion} deshabilitado={Boolean(ocupado)} />
+            <div className="mt-1.5">
+              <CampoCorreo valor={correo} onChange={setCorreo} original={c.correo ?? ""} deshabilitado={Boolean(ocupado)} />
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -356,7 +402,7 @@ export function ModalEnviarPrueba({ c, paso, onClose, onListo }: {
                 Guardar prueba externa
               </BotonPrincipal>
             ) : (
-              <BotonPrincipal puede={!sinCatalogo && seleccion.length > 0} ocupado={ocupado === "enviar"} pista="Elige una prueba para enviarla" onClick={enviar}>
+              <BotonPrincipal puede={!sinCatalogo && seleccion.length > 0 && esCorreoValido(correo)} ocupado={ocupado === "enviar"} pista={pistaEnvio(sinCatalogo, seleccion, correo)} onClick={enviar}>
                 {ocupado === "enviar" ? "Enviando…" : "Enviar ahora"}
               </BotonPrincipal>
             )}

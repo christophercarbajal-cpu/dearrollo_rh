@@ -1632,6 +1632,71 @@ async def prefiltro(
 
 
 # ------------------------------------------------------------
+# Datos de contacto (2026-10-07): correo y teléfono editables por RH en cualquier etapa
+# ------------------------------------------------------------
+
+CORREO_VALIDO = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def actualizar_contacto(db: Session, p: Postulacion, actor: str, correo: Optional[str] = None,
+                        telefono: Optional[str] = None, correo_rh: str = "", origen: str = "ficha") -> dict:
+    """ÚNICA forma de cambiar el contacto de la PERSONA (`Candidato`, la fila de esta Cuenta) desde RH: ficha y modal
+    de psicometría. None = no tocar ese campo; correo vacío lo borra; teléfono se guarda a 10 dígitos. Valida formato y
+    que no pertenezca a OTRA persona de la Cuenta (salvo Modo Prueba, `permite_duplicados`). Deja `contacto_actualizado`
+    en bitácora con lo anterior y lo nuevo. No hace commit; regresa {campo: [anterior, nuevo]} de lo que cambió."""
+    c = p.candidato
+    if c is None:
+        raise HTTPException(404, "Candidato no encontrado")
+    cambios: dict = {}
+    duplicados_ok = permite_duplicados(db)
+    if correo is not None:
+        nuevo = correo.strip().lower()
+        if nuevo and not CORREO_VALIDO.match(nuevo):
+            raise HTTPException(400, f"El correo «{correo.strip()}» no tiene un formato válido.")
+        if nuevo != (c.correo or "").strip().lower():
+            otro = None if duplicados_ok or not nuevo else _duplicado(db, "", nuevo, c.cuenta_id, excluir=c.id)
+            if otro:
+                raise HTTPException(409, f"Ese correo ya pertenece a {otro.nombre} ({otro.codigo}).")
+            cambios["correo"] = [c.correo or "", nuevo]
+            c.correo = nuevo
+    if telefono is not None:
+        nuevo = _telefono(telefono)
+        if nuevo and len(nuevo) != 10:
+            raise HTTPException(400, "El teléfono debe tener 10 dígitos.")
+        if nuevo != (c.telefono or ""):
+            otro = None if duplicados_ok or not nuevo else _duplicado(db, nuevo, "", c.cuenta_id, excluir=c.id)
+            if otro:
+                raise HTTPException(409, f"Ese teléfono ya pertenece a {otro.nombre} ({otro.codigo}).")
+            cambios["telefono"] = [c.telefono or "", nuevo]
+            c.telefono = nuevo
+    if cambios:
+        registrar(db, actor, "contacto_actualizado", "postulacion", p.codigo,
+                  {"candidato": c.codigo, "cambios": cambios, "origen": origen, "correo_rh": correo_rh})
+    return cambios
+
+
+class ContactoIn(BaseModel):
+    correo: Optional[str] = None
+    telefono: Optional[str] = None
+
+
+@router.patch("/{codigo}/contacto")
+def editar_contacto(
+    codigo: str,
+    datos: ContactoIn,
+    db: Session = Depends(get_db),
+    u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """Ficha → datos de contacto: corrige correo y/o teléfono en CUALQUIER etapa (también postulaciones cerradas).
+    Solo toca la identidad de la persona: nunca la etapa ni el estado del proceso."""
+    p = _por_codigo(db, codigo, cuenta.id)
+    actualizar_contacto(db, p, u.nombre, correo=datos.correo, telefono=datos.telefono, correo_rh=u.correo)
+    db.commit()
+    return postulacion_dict(p, detalle=True)
+
+
+# ------------------------------------------------------------
 # Consentimiento (LFPDPPP) — requisito para tratar datos del candidato
 # ------------------------------------------------------------
 

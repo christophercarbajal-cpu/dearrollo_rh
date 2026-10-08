@@ -36,7 +36,6 @@ import {
   ChevronDown,
   Building2,
   Clock,
-  ArrowUpDown,
   Copy,
   Pencil,
   XCircle,
@@ -66,6 +65,8 @@ import {
   enviarPrefiltro,
   fetchCandidato,
   fetchCandidatos,
+  fetchMetricasTablero,
+  type MetricasTablero,
   urlContratoPdf,
   enviarCartaIntencion,
   urlCartaIntencionPdf,
@@ -101,6 +102,10 @@ import {
   lineasResultados,
 } from "@/lib/api";
 import { usePuedeDecidir, useModoPrueba } from "@/components/sesion";
+import {
+  ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta,
+  type AlertaTablero, type OrdenTablero,
+} from "@/components/dashboard/candidatos/tablero-kanban";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
 import { ConfirmacionAccion } from "@/components/dashboard/confirmacion-accion";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
@@ -272,7 +277,11 @@ function CandidatosContenido() {
   // Fase 2 (B4): las postulaciones cerradas (descartado/contratado/reinicio) no se cargan salvo
   // que RH lo pida explícitamente — es un parámetro de la API, no un filtro local.
   const [mostrarCerradas, setMostrarCerradas] = useState(false);
-  const [orden, setOrden] = useState<"actividad" | "fecha" | "score" | "nombre">("actividad");
+  // Rediseño del tablero (2026-10-07): orden por defecto = score descendente; chips de alerta que filtran el tablero
+  // (segundo clic los desactiva) y métricas por columna (conversión y días promedio) de la API.
+  const [orden, setOrden] = useState<OrdenTablero>("score");
+  const [alerta, setAlerta] = useState<AlertaTablero | null>(null);
+  const [metricas, setMetricas] = useState<MetricasTablero | null>(null);
 
   // Inicialización desde URL params y localStorage
   useEffect(() => {
@@ -304,10 +313,14 @@ function CandidatosContenido() {
   };
 
   const recargar = useCallback(async (abrirCodigo?: string) => {
-    const c = await fetchCandidatos({
-      ...(filtroVacante ? { vacante: filtroVacante } : {}),
-      ...(mostrarCerradas ? { mostrar_cerradas: true } : {}),
-    });
+    const [c, m] = await Promise.all([
+      fetchCandidatos({
+        ...(filtroVacante ? { vacante: filtroVacante } : {}),
+        ...(mostrarCerradas ? { mostrar_cerradas: true } : {}),
+      }),
+      fetchMetricasTablero(filtroVacante || undefined),
+    ]);
+    if (m) setMetricas(m);
     if (c) {
       setDatos(c);
       setLive(true);
@@ -362,11 +375,9 @@ function CandidatosContenido() {
     return dups;
   }, [datos, modoPrueba]);
 
-  const sinConsentimiento = datos.filter((c) => c.consentimiento === false).length;
-
-  // Filtrado y ordenamiento compuesto
-  const datosFiltrados = useMemo(() => {
-    let res = datos.filter((c) => {
+  // Filtrado compuesto. `datosBase` = todo menos el chip de alerta (es el universo que cuentan los chips).
+  const datosBase = useMemo(() => {
+    return datos.filter((c) => {
       if (filtroVacante && c.vacanteId !== filtroVacante) return false;
       if (columnaResaltada && c.etapa !== columnaResaltada) return false;  // B4: ?etapa= es un filtro exacto
       if (!coincideEstado(c, filtroEstado)) return false;
@@ -404,28 +415,6 @@ function CandidatosContenido() {
       if (fDuplicados && !duplicadosSet.has(c.id)) return false;
       return true;
     });
-
-    res = [...res].sort((a, b) => {
-      if (orden === "actividad") {
-        const ta = a.ultimaActividadEn ? new Date(a.ultimaActividadEn).getTime() : a.aplicado ? new Date(a.aplicado).getTime() : 0;
-        const tb = b.ultimaActividadEn ? new Date(b.ultimaActividadEn).getTime() : b.aplicado ? new Date(b.aplicado).getTime() : 0;
-        return tb - ta;
-      }
-      if (orden === "fecha") {
-        const ta = a.aplicado ? new Date(a.aplicado).getTime() : 0;
-        const tb = b.aplicado ? new Date(b.aplicado).getTime() : 0;
-        return tb - ta;
-      }
-      if (orden === "score") {
-        return (b.score ?? 0) - (a.score ?? 0);
-      }
-      if (orden === "nombre") {
-        return a.nombre.localeCompare(b.nombre);
-      }
-      return 0;
-    });
-
-    return res;
   }, [
     columnaResaltada,
     datos,
@@ -440,11 +429,19 @@ function CandidatosContenido() {
     fScoreMin,
     fScoreMax,
     fDuplicados,
-    orden,
     vacantes,
     clientes,
     duplicadosSet,
   ]);
+  const datosFiltrados = useMemo(() => {
+    const prueba = ALERTAS_TABLERO.find((a) => a.id === alerta)?.prueba;
+    return (prueba ? datosBase.filter(prueba) : datosBase).sort((a, b) => ordenarTablero(a, b, orden));
+  }, [datosBase, alerta, orden]);
+  const filtrando = Boolean(
+    busqueda.trim() || alerta || filtroEstado !== "todos" || columnaResaltada || mostrarCerradas ||
+      fCliente !== "" || fResponsable !== "" || fFuente || fConsentimiento !== "todos" || fApto !== "todos" ||
+      fScoreMin !== "" || fScoreMax !== "" || fDuplicados,
+  );
 
   const vacanteSeleccionada = vacantes.find((v) => v.id === filtroVacante);
   const totalFiltrosAvanzadosActivos =
@@ -454,7 +451,8 @@ function CandidatosContenido() {
     (fConsentimiento !== "todos" ? 1 : 0) +
     (fApto !== "todos" ? 1 : 0) +
     (fScoreMin !== "" || fScoreMax !== "" ? 1 : 0) +
-    (fDuplicados ? 1 : 0);
+    (fDuplicados ? 1 : 0) +
+    (filtroEstado !== "todos" ? 1 : 0);
 
   const limpiarTodosLosFiltros = () => {
     setFiltroVacante("");
@@ -469,19 +467,19 @@ function CandidatosContenido() {
     setFScoreMax("");
     setFDuplicados(false);
     setColumnaResaltada(null);
+    setAlerta(null);
   };
 
   return (
     <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 sm:py-8">
-      <PageHeader title="Candidatos" subtitle="Pipeline de selección · prefiltrado por el agente con evidencia y extracción de CV.">
-        {live && (
-          <Badge tone="good" dot>
-            API en vivo
-          </Badge>
-        )}
-        <Badge tone="brand" dot>
-          <Sparkles className="h-3 w-3" /> Agente activo
-        </Badge>
+      {/* Rediseño 2026-10-07: título + subtítulo con el total en proceso y las vacantes abiertas; buscador, Vacante y
+          Ordenar; los chips de alerta reemplazan el banner de consentimiento. */}
+      <PageHeader
+        title="Candidatos"
+        subtitle={metricas
+          ? `${metricas.en_proceso} en proceso · ${metricas.vacantes_abiertas} vacante${metricas.vacantes_abiertas === 1 ? "" : "s"} abierta${metricas.vacantes_abiertas === 1 ? "" : "s"}`
+          : "Pipeline de selección"}
+      >
         {puedeDecidir && (
           <Button size="sm" onClick={() => setCarga(true)}>
             <UploadCloud className="h-4 w-4" /> Cargar CVs
@@ -489,19 +487,61 @@ function CandidatosContenido() {
         )}
       </PageHeader>
 
-      {/* Barra principal de control: selector de vista, vacante, búsqueda, estado y filtros */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Búsqueda por nombre (también acepta el código) */}
+          <label className="flex h-10 min-w-[240px] flex-1 items-center gap-2 rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink-2 sm:flex-none">
+            <Search className="h-4 w-4 shrink-0" />
+            <input
+              type="text"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar por nombre"
+              aria-label="Buscar por nombre"
+              className="min-w-0 flex-1 bg-transparent text-kb-ink outline-none"
+            />
+            {busqueda && (
+              <button onClick={() => setBusqueda("")} className="text-kb-ink-3 hover:text-kb-ink" aria-label="Limpiar búsqueda">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </label>
+
+          <select
+            id="filtro-vacante"
+            aria-label="Vacante"
+            value={filtroVacante}
+            onChange={(e) => setFiltroVacante(e.target.value)}
+            className="h-10 max-w-[280px] rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
+          >
+            <option value="">Vacante: Todas</option>
+            {vacantes.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.titulo}{v.cliente ? ` · ${v.cliente}` : ""}{v.ubicacion ? ` (${v.ubicacion})` : ""}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Ordenar"
+            value={orden}
+            onChange={(e) => setOrden(e.target.value as OrdenTablero)}
+            className="h-10 rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
+          >
+            <option value="score">Ordenar: Score</option>
+            <option value="dias">Ordenar: Días en etapa</option>
+          </select>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
           {/* Toggle de vista (Pipeline vs Lista) */}
-          <div className="flex items-center rounded-xl border border-border-soft bg-surface p-1 shadow-sm">
+          <div className="flex items-center rounded-[10px] border border-kb-line-2 bg-kb-card p-1">
             <button
               id="candidatos-vista-pipeline"
               onClick={() => cambiarVista("pipeline")}
               className={cn(
                 "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-                vista === "pipeline"
-                  ? "bg-brand text-white shadow-sm"
-                  : "text-ink-3 hover:bg-surface-2 hover:text-ink",
+                vista === "pipeline" ? "bg-surface-2 text-ink" : "text-ink-3 hover:text-ink",
               )}
               title="Vista de Pipeline (Kanban)"
             >
@@ -512,9 +552,7 @@ function CandidatosContenido() {
               onClick={() => cambiarVista("lista")}
               className={cn(
                 "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-                vista === "lista"
-                  ? "bg-brand text-white shadow-sm"
-                  : "text-ink-3 hover:bg-surface-2 hover:text-ink",
+                vista === "lista" ? "bg-surface-2 text-ink" : "text-ink-3 hover:text-ink",
               )}
               title="Vista en Lista detallada"
             >
@@ -522,104 +560,29 @@ function CandidatosContenido() {
             </button>
           </div>
 
-          {/* Filtro por vacante */}
-          <div className="relative">
-            <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" />
-            <select
-              id="filtro-vacante"
-              value={filtroVacante}
-              onChange={(e) => setFiltroVacante(e.target.value)}
-              className="h-10 min-w-[240px] appearance-none rounded-xl border border-border-soft bg-surface pl-9 pr-8 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
-            >
-              <option value="">Todas las vacantes</option>
-              {vacantes.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.titulo}{v.cliente ? ` · ${v.cliente}` : ""}{v.ubicacion ? ` (${v.ubicacion})` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Búsqueda por nombre o código */}
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" />
-            <input
-              type="text"
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              placeholder="Buscar por nombre o código…"
-              className="h-10 min-w-[220px] rounded-xl border border-border-soft bg-surface pl-9 pr-8 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-            {busqueda && (
-              <button
-                onClick={() => setBusqueda("")}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-3 hover:text-ink"
-                aria-label="Limpiar búsqueda"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          {/* Barra de filtro por estado */}
-          <div className="scroll-x max-w-full items-center gap-1 rounded-xl border border-border-soft bg-surface-2/60 p-1">
-            {FILTROS_ESTADO.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setFiltroEstado(f.key)}
-                className={cn(
-                  "rounded-lg px-2.5 py-1 text-xs font-semibold transition",
-                  filtroEstado === f.key
-                    ? "bg-surface text-brand shadow-sm"
-                    : "text-ink-3 hover:bg-surface/60 hover:text-ink",
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
           {/* Botón desplegable de filtros avanzados */}
           <button
             onClick={() => setFiltrosAvanzados((prev) => !prev)}
             className={cn(
-              "flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition",
+              "flex h-10 items-center gap-1.5 rounded-[10px] border px-3 text-xs font-semibold transition",
               filtrosAvanzados || totalFiltrosAvanzadosActivos > 0
-                ? "border-brand bg-brand-soft text-brand"
-                : "border-border-soft bg-surface text-ink-2 hover:border-brand/40",
+                ? "border-ink-3 bg-surface-2 text-ink"
+                : "border-kb-line-2 bg-kb-card text-ink-2 hover:text-ink",
             )}
           >
             <Filter className="h-3.5 w-3.5" />
             Filtros
             {totalFiltrosAvanzadosActivos > 0 && (
-              <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand px-1 text-[10px] text-white">
+              <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-ink px-1 text-[10px] text-bg">
                 {totalFiltrosAvanzadosActivos}
               </span>
             )}
             <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", filtrosAvanzados && "rotate-180")} />
           </button>
         </div>
-
-        {/* Contador y Orden */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-ink-3">
-            <ArrowUpDown className="h-3.5 w-3.5" />
-            <select
-              value={orden}
-              onChange={(e) => setOrden(e.target.value as typeof orden)}
-              className="rounded-lg border border-border-soft bg-surface px-2 py-1 text-xs font-medium text-ink outline-none focus:border-brand"
-            >
-              <option value="actividad">Última actividad</option>
-              <option value="fecha">Fecha aplicación</option>
-              <option value="score">Mayor Score CV</option>
-              <option value="nombre">Nombre (A-Z)</option>
-            </select>
-          </div>
-          <Badge tone="brand" dot>
-            {datosFiltrados.length} candidato{datosFiltrados.length !== 1 ? "s" : ""}
-          </Badge>
-        </div>
       </div>
+
+      {live && <ChipsAlerta datos={datosBase} activa={alerta} onCambiar={setAlerta} />}
 
       {/* Panel desplegable de Filtros Avanzados (Fase C) */}
       {filtrosAvanzados && (
@@ -685,6 +648,22 @@ function CandidatosContenido() {
             </select>
           </div>
 
+          {/* Estado del prefiltro (antes barra de chips; «No cumple» sirve para revisarlas aparte) */}
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-3">
+              Estado
+            </label>
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value as FiltroEstado)}
+              className="w-full rounded-lg border border-border-soft bg-surface p-2 text-xs outline-none focus:border-brand"
+            >
+              {FILTROS_ESTADO.map((f) => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Apto (Punto 21) */}
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-3">
@@ -705,7 +684,7 @@ function CandidatosContenido() {
           {/* Score CV (Rango) */}
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-3">
-              Score CV (%)
+              Score (%)
             </label>
             <div className="flex items-center gap-1.5">
               <input
@@ -804,14 +783,6 @@ function CandidatosContenido() {
         </div>
       )}
 
-      {live && sinConsentimiento > 0 && (
-        <div className="mt-4">
-          <Aviso tono="warn">
-            {sinConsentimiento} candidato(s) sin consentimiento registrado. Sin él no se puede abrir expediente de
-            contratación (LFPDPPP 2025).
-          </Aviso>
-        </div>
-      )}
 
       {/* Estado de carga: esqueleto neutro (nunca tarjetas de ejemplo) hasta la primera respuesta real */}
       {cargando && (
@@ -825,87 +796,19 @@ function CandidatosContenido() {
         </div>
       )}
 
-      {/* VISTA 1: PIPELINE (Kanban) */}
+      {/* VISTA 1: PIPELINE (Kanban) — rediseño 2026-10-07 (components/dashboard/candidatos/tablero-kanban.tsx).
+          Sin arrastre: la etapa la define la ruta; un intento solo muestra el aviso. */}
       {!cargando && vista === "pipeline" && (
-        <div className={cn("mt-6 grid gap-4", columnaResaltada ? "grid-cols-1 sm:max-w-md" : "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5")}>
-          {etapas.filter((etapa) => !columnaResaltada || etapa === columnaResaltada).map((etapa) => {
-            const cols = datosFiltrados.filter((c) => c.etapa === etapa);
-            const esResaltada = columnaResaltada === etapa;
-
-            return (
-              <div
-                key={etapa}
-                id={`columna-etapa-${etapa.replace(/\s/g, "-")}`}
-                className={cn(
-                  "flex flex-col rounded-2xl border p-3 transition-all duration-300",
-                  esResaltada
-                    ? "border-brand bg-brand/5 ring-2 ring-brand/30 shadow-md"
-                    : "border-border-soft bg-surface-2/40",
-                )}
-              >
-                <div className="mb-3 flex items-center justify-between px-1">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: etapaColor[etapa] }} />
-                    <span className={cn("text-sm font-semibold", esResaltada && "text-brand")}>{nombreEtapa(etapa)}</span>
-                  </div>
-                  <span
-                    className={cn(
-                      "rounded-full px-2 py-0.5 font-mono text-[11px]",
-                      esResaltada ? "bg-brand text-white font-bold" : "bg-surface text-ink-3",
-                    )}
-                  >
-                    {cols.length}
-                  </span>
-                </div>
-
-                <div className="flex flex-col gap-2.5">
-                  {cols.map((c) => {
-                    const sigAct = c.siguienteActividad;
-                    return (
-                      /* UX 2026-10-07: tarjeta limpia y clickeable completa — Nombre (2 líneas), Puesto, Siguiente
-                         actividad y UN resultado relevante. Sin arrastre: la etapa la define la ruta. */
-                      <button
-                        key={c.id}
-                        onClick={() => abrir(c)}
-                        draggable
-                        onDragStart={(e) => {
-                          e.preventDefault();
-                          setAvisoTablero({ tono: "warn", texto: "La etapa la define la ruta. Abre la ficha para continuar." });
-                        }}
-                        className="card-hover group w-full rounded-xl border border-border-soft bg-surface px-3 py-2.5 text-left transition-all hover:border-brand/40 hover:shadow-md"
-                      >
-                        <p className="line-clamp-2 text-sm font-semibold leading-snug group-hover:text-brand">
-                          {c.nombre}
-                          {c.esPrueba && <span className="ml-1 align-middle font-mono text-[9px] font-bold uppercase text-brand">· prueba</span>}
-                        </p>
-                        <p className="truncate text-xs text-ink-3">{c.puesto || "Sin vacante"}</p>
-                        {sigAct && (
-                          <p className="mt-1.5 truncate text-[11px] text-ink-2" title={`${sigAct.nombre} · ${sigAct.estadoTexto}`}>
-                            <span className="text-ink-3">Sigue:</span> {sigAct.nombre}
-                          </p>
-                        )}
-                        <div className="mt-1.5">
-                          {c.activa === false ? (
-                            <span title={c.motivoDescarte || c.motivoCierre || ""} className="rounded bg-bad-soft px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase text-bad">
-                              {c.motivoCierre === "descartado" ? "No cumple" : "Cerrada"}
-                            </span>
-                          ) : c.resultadoIntegral ? (
-                            <BadgeIntegral r={c.resultadoIntegral} compacto />
-                          ) : null}
-                        </div>
-                      </button>
-                    );
-                  })}
-                  {cols.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-border-soft py-8 text-center text-xs text-ink-3">
-                      Sin candidatos
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <TableroKanban
+          etapas={etapas.filter((etapa) => !columnaResaltada || etapa === columnaResaltada)}
+          datos={datosFiltrados}
+          metricas={metricas?.stats ?? []}
+          orden={orden}
+          filtrando={filtrando}
+          columnaResaltada={columnaResaltada}
+          onAbrir={abrir}
+          onIntentoArrastre={() => setAvisoTablero({ tono: "warn", texto: "La etapa la define la ruta. Abre la ficha para continuar." })}
+        />
       )}
 
       {/* VISTA 2: LISTA (Fase C) */}
@@ -919,7 +822,7 @@ function CandidatosContenido() {
                 <th className="px-4 py-3 text-left">Cliente</th>
                 <th className="px-4 py-3 text-left">Etapa</th>
                 <th className="px-4 py-3 text-left">Evaluación integral</th>
-                <th className="px-4 py-3 text-left">Score CV</th>
+                <th className="px-4 py-3 text-left">Score</th>
                 <th className="px-4 py-3 text-left">Fuente</th>
                 <th className="px-4 py-3 text-left">Última Actividad</th>
                 <th className="px-4 py-3 text-right">Acción</th>
@@ -998,7 +901,7 @@ function CandidatosContenido() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs font-semibold text-ink">
-                        {c.score != null ? `${c.score}%` : "—"}
+                        {scoreTarjeta(c) != null ? `${scoreTarjeta(c)}%` : "—"}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-ink-2">
@@ -1011,7 +914,8 @@ function CandidatosContenido() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-ink-3">
-                      {c.ultimaActividadEn ? fechaCorta(c.ultimaActividadEn) : c.aplicado ? fechaCorta(c.aplicado) : "—"}
+                      {c.ultimaActividadEn ? fechaCorta(c.ultimaActividadEn) : fechaCorta(c.creadoEn) ?? "—"}
+                      {diasEnEtapa(c) != null && <span className="block text-[11px]">{diasEnEtapa(c)} d en la etapa</span>}
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       <Button size="sm" variant="secondary" onClick={() => abrir(c)}>
@@ -1561,12 +1465,12 @@ function ModalCandidato({
           c={c}
           etapaActual={c.etapa}
           onClose={() => setActividad(false)}
-          onAgregada={(r) => {
+          onAgregada={(r, aviso) => {
             setActividad(false);
             setSeg(r.proceso);
             setVersionEval((x) => x + 1);
             onCambio(r.candidato);
-            setAviso({ tono: "ok", texto: `«${r.paso.nombre}» se agregó solo a este candidato. La plantilla y la vacante no cambian.` });
+            setAviso(aviso ?? { tono: "ok", texto: `«${r.paso.nombre}» se agregó solo a este candidato. La plantilla y la vacante no cambian.` });
           }}
         />
       )}

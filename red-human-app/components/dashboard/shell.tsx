@@ -226,7 +226,7 @@ function ContadorAgente() {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { usuario, cuentaActualId } = useSesion();
   return (
-    <div className="flex min-h-full flex-col gap-5 p-4 lg:h-full lg:gap-6">
+    <div className="flex min-h-full flex-col gap-5 p-4 lg:gap-6">
       <div className="px-2 pt-1">
         <Link href="/" onClick={onNavigate}>
           <Logo />
@@ -249,7 +249,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <ExternalLink className="h-3.5 w-3.5 text-ink-3 transition group-hover:text-brand" />
       </Link>
 
-      <div className="flex-1 space-y-5 lg:overflow-y-auto">
+      {/* 2026-10-07: el menú ya no se recorta dentro de su propio scroll (la tarjeta «Agente activo» tapaba «Base de
+          conocimiento» en pantallas bajas): crece con su contenido y la barra lateral completa hace scroll. */}
+      <div className="flex-1 space-y-5">
         <div>
           <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-3">Reclutamiento</p>
           <NavList items={navOperacion} onNavigate={onNavigate} />
@@ -267,7 +269,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       {/* Agente card */}
-      <div className="relative overflow-hidden rounded-2xl border border-border-soft bg-gradient-to-br from-brand-soft to-transparent p-4">
+      <div className="relative shrink-0 overflow-hidden rounded-2xl border border-border-soft bg-gradient-to-br from-brand-soft to-transparent p-4">
         <div className="flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-brand-ink">
             <Sparkles className="h-4 w-4" />
@@ -313,7 +315,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-svh bg-bg">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-border-soft bg-surface lg:block">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 overflow-y-auto border-r border-border-soft bg-surface lg:block">
         <SidebarContent />
       </aside>
 

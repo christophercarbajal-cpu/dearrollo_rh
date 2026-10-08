@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_admin
-from ..models import ROLES, Cuenta, Usuario, UsuarioCuenta, registrar
+from ..models import ROLES, Cuenta, Usuario, UsuarioCuenta, psicometria_simple, registrar
 from ..services import auth, masivo
 from ..services.whatsapp import clave_telefono
 
@@ -36,7 +36,9 @@ def usuario_dict(u: Usuario) -> dict:
        # Punto 27: lista de Cuentas activas del usuario para el selector multi-cuenta del
        # frontend. Cuando solo hay una, el selector no aparece (regla de negocio Fase A).
        "cuentas": [
-           {"id": uc.cuenta.id, "nombre": uc.cuenta.nombre_visible, "nombreComercial": uc.cuenta.nombre_comercial}
+           {"id": uc.cuenta.id, "nombre": uc.cuenta.nombre_visible, "nombreComercial": uc.cuenta.nombre_comercial,
+            # 2026-10-07: el frontend decide con el slug qué flujo de psicometría pinta (CUENTAS_PSICOMETRIA_SIMPLE)
+            "slug": uc.cuenta.slug or "", "psicometriaSimple": psicometria_simple(uc.cuenta)}
            for uc in u.cuentas
            if uc.cuenta.estado == "Activa"
        ],

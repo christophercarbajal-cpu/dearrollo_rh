@@ -2045,6 +2045,17 @@ TIPOS_PRUEBA = {"prueba": "Prueba", "bateria": "Batería"}
 # Estado VISIBLE de una psicometría del proveedor integrado: SOLO tres (asignada sin iniciar · inicio confirmado por
 # el proveedor · terminada). Se deriva de `paso_integrada`/`iniciada_en`/`estado`; nunca se guarda aparte.
 ESTADOS_PROVEEDOR_PSICOMETRIA = {"pendiente": "Pendiente", "en_curso": "En curso", "completada": "Completada"}
+# Flujo de psicometría de UN solo modal (2026-10-07, red-human-psicometria.md): AISLADO a estas Cuentas (por slug). El
+# resto conserva el flujo anterior intacto. La API solo AGREGA datos (bloque `psicometria` del paso, alerta del tablero);
+# ninguna regla de negocio cambia por Cuenta.
+CUENTAS_PSICOMETRIA_SIMPLE = {"demo-grupak"}
+# Estados visibles del flujo simple: SOLO tres (derivados de la evaluación; nunca se guardan).
+ESTADOS_PSICOMETRIA_SIMPLE = {"sin_enviar": "Sin enviar", "enviada": "Enviada", "completada": "Completada"}
+
+
+def psicometria_simple(cuenta) -> bool:
+    """¿La Cuenta usa el flujo de psicometría de un solo modal? (`cuenta` = Cuenta o None)."""
+    return bool(cuenta is not None and (getattr(cuenta, "slug", "") or "") in CUENTAS_PSICOMETRIA_SIMPLE)
 # Seguimiento (lo que ve RH). «fallida» = Fallida/Cancelada, siempre con motivo.
 ESTADOS_EVALUACION = {
     "en_espera_consentimiento": "En espera de consentimiento",

@@ -100,6 +100,8 @@ export interface PasoSeguimiento {
   dependeDe: string[];
   reglaTexto: string;
   tipoEntrevista?: string | null;
+  /** Psicométrica: batería predeterminada (ids del catálogo). */
+  pruebas?: number[];
   responsable: string;
   responsableConfig: { tipo?: string; usuario_id?: number | null; nombre?: string };
   estado: EstadoPaso;
@@ -122,10 +124,32 @@ export interface PasoSeguimiento {
   adhoc?: boolean;
   /** Conectada a Psicométricas.mx y sin resultado: «Sincronizar resultado» consulta su API a mano (2026-10-07). */
   sincronizable?: boolean;
+  /** Solo pasos psicométricos: flujo simple de tres estados (red-human-psicometria.md §8). */
+  psicometria?: PsicometriaPaso | null;
   /** UX 2026-10-07: UNA etiqueta visible por actividad (derivada en la API). */
   estadoUnificado?: EstadoUnificado;
   estadoUnificadoTexto?: string;
   accion: AccionPaso | null;
+}
+export interface PsicometriaPaso {
+  status: "sin_enviar" | "enviada" | "completada";
+  statusTexto: string;
+  test_id: number | null;
+  test_name: string | null;
+  is_external: boolean;
+  required: boolean;
+  sent_at: string | null;
+  completed_at: string | null;
+  result_summary: string | null;
+  /** Ruta de la API: construir la URL con `urlArchivo`. */
+  result_file_url: string | null;
+  evaluacion: string | null;
+  simulado: boolean;
+  /** Liga que «Reenviar» manda de nuevo (proveedor | otro_sistema); null = no hay liga del proveedor (simulado). */
+  reenvio: "proveedor" | "otro_sistema" | null;
+  /** Días en «Enviada» por encima del umbral (`psychometric_no_response_days`); null = sin aviso. */
+  dias_sin_respuesta: number | null;
+  umbral_sin_respuesta: number;
 }
 export type EstadoUnificado = "sin_iniciar" | "programada" | "en_curso" | "pendiente_aprobacion" | "completada" | "omitida" | "no_favorable";
 export interface EtapaSeguimiento {
@@ -239,6 +263,20 @@ export interface Candidato {
   resultadoIntegral?: ResultadoIntegral;
   /** UX 2026-10-07: siguiente actividad de la ruta (tarjeta del tablero). */
   siguienteActividad?: { id: string; nombre: string; estado: EstadoUnificado; estadoTexto: string } | null;
+  /* --- Rediseño del tablero (2026-10-07, red-human-kanban-completo.md §3): campos calculados por la API --- */
+  name?: string;
+  role?: string;
+  vacancy_id?: string;
+  stage?: "prefiltro" | "filtro_ia" | "filtro_humano" | "contratacion" | "onboarding";
+  filter_status?: "cumple" | "revisar" | "no_cumple" | null;
+  score_reason?: { fortaleza: string; faltante: string } | null;
+  source_channel?: "whatsapp" | "web" | "referido" | "telegram";
+  next_step?: string | null;
+  stage_entered_at?: string | null;
+  has_consent?: boolean;
+  expediente_pct?: number | null;
+  /** Flujo simple de psicometría (solo Cuentas con `psicometriaSimple`). */
+  psychometric_alert?: "sin_enviar" | "sin_respuesta" | null;
   /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */
   proceso?: SeguimientoProceso;
   tieneProceso?: boolean;
@@ -312,6 +350,7 @@ export interface Candidato {
   /** Fecha ISO de última actividad (cambio de etapa, evaluación, mensaje, etc.). Null si no hay
    * actividad registrada desde el deploy de Fase C (usar aplicado como fallback). */
   ultimaActividadEn?: string | null;
+  creadoEn?: string | null;
   /** True=Apto, False=No apto, null=sin evaluación todavía.
    * La regla "el más reciente gana" se aplica en el backend (_recalcular_resultado_apto). */
   resultadoApto?: boolean | null;

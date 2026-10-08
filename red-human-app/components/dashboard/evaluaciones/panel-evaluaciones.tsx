@@ -17,6 +17,8 @@ import {
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco } from "@/components/dashboard/modulos-rh";
+import { usePsicometriaSimple } from "@/components/sesion";
+import { estadoPsicometriaSimple } from "@/components/dashboard/evaluaciones/psicometria-simple";
 import { LineaNotificar, useNotificarAccion } from "@/components/dashboard/linea-notificar";
 import { FormularioResultado, type ModoResultado } from "@/components/dashboard/evaluaciones/formulario-resultado";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
@@ -389,6 +391,9 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
 }) {
   const principal = e.acciones.principal;
   const secundaria = e.acciones.secundaria;
+  // flujo simple de psicometría (solo Cuentas «demo-grupak»): Sin enviar / Enviada / Completada
+  const simple = usePsicometriaSimple();
+  const estadoSimple = simple ? estadoPsicometriaSimple(e) : null;
   // «Ver resultado» es de solo lectura: también sin permisos de decisión
   const puedePrincipal = principal && (live || principal === "ver_resultado");
   return (
@@ -408,7 +413,9 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* psicometría del proveedor: solo Pendiente / En curso / Completada (la revisión de RH va en su insignia) */}
-          <Badge tone={tonoEstado(e)}>{e.estadoProveedorTexto || e.seguimientoTexto || e.estadoTexto}</Badge>
+          {estadoSimple
+            ? <Badge tone={estadoSimple.tono}>{estadoSimple.texto}</Badge>
+            : <Badge tone={tonoEstado(e)}>{e.estadoProveedorTexto || e.seguimientoTexto || e.estadoTexto}</Badge>}
           {e.conclusionTexto && <Badge tone={tonoConclusion(e.conclusion)} dot>{e.conclusionTexto}</Badge>}
           {e.revision && e.revision.conclusion !== e.conclusion && <Badge tone={tonoConclusion(e.revision.conclusion)} dot>RH: {e.revision.conclusionTexto}</Badge>}
           {e.sinConclusion && <Badge tone="neutral">Resultado recibido · Sin conclusión</Badge>}

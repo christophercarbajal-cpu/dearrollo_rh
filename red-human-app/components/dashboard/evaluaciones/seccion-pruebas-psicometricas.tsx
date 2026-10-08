@@ -35,7 +35,7 @@ export function SeccionPruebasPsicometricas() {
   }
 
   return (
-    <Card className="mt-4 p-5">
+    <Card id="pruebas-psicometricas" className="mt-4 scroll-mt-24 p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><Brain className="h-4 w-4" /></span>

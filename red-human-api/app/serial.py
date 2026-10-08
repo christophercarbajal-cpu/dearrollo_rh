@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from . import fechas
 from .config import settings
-from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
+from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
 from .services.ia import texto_preguntas, texto_util_candidato
 
@@ -351,13 +351,92 @@ def _postulacion_resumen_dict(p: Postulacion) -> dict:
     }
 
 
-def _siguiente_actividad(p: Postulacion, evaluaciones=None) -> Optional[dict]:
+def _siguiente_actividad(p: Postulacion, evaluaciones=None, pasos: Optional[list] = None) -> Optional[dict]:
     from .services import proceso as sproc
 
     if not p.activa:
         return None
     try:
-        return sproc.siguiente_actividad(p, evaluaciones)
+        return sproc.siguiente_actividad(p, evaluaciones, pasos)
+    except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
+        return None
+
+
+# ---------------------------------------------------------------- Tablero de Candidatos (rediseño 2026-10-07)
+# Modelo de datos de red-human-kanban-completo.md §3. Son campos CALCULADOS de lo que ya existe (nada se guarda
+# aparte) y se agregan a la tarjeta sin quitar los anteriores (la ficha y otras pantallas siguen leyendo los suyos).
+ETAPA_TABLERO = {"Prefiltro": "prefiltro", "Entrevista IA": "filtro_ia", "Entrevista Humana": "filtro_humano",
+                 "Contratación": "contratacion", "Onboarding": "onboarding"}
+_FILTRO_TABLERO = {"cumple": "cumple", "revision": "revisar", "no_cumple": "no_cumple"}
+
+
+def _frase_corta(texto, tope: int = 60) -> str:
+    """«4 años en línea de ensamble (CV, Experiencia: …)» → «4 años en línea de ensamble»: la tarjeta lleva una frase."""
+    t = " ".join(str(texto or "").split())
+    for sep in (" (", " — ", " – ", ": ", "; ", ". "):
+        if sep in t:
+            t = t.split(sep, 1)[0]
+    t = t.rstrip(" .,;")
+    return t if len(t) <= tope else t[: tope - 1].rstrip() + "…"
+
+
+def razon_score(p: Postulacion) -> Optional[dict]:
+    """`score_reason` = {fortaleza, faltante} del Análisis de CV (la IA lo escribe al calificar). None sin datos."""
+    a = p.analisis or {}
+    fortaleza = next((x for x in (a.get("fortalezas_cv") or []) + (a.get("requisitos_cumplidos") or []) if str(x).strip()), "")
+    faltante = next((x for x in (a.get("brechas") or []) if str(x).strip()), "")
+    if not fortaleza and not faltante:
+        return None
+    return {"fortaleza": _frase_corta(fortaleza), "faltante": _frase_corta(faltante)}
+
+
+def canal_origen(p: Postulacion) -> str:
+    """`source_channel`: whatsapp | web | referido (telegram si llegó por el bot; nunca se disfraza de otro canal)."""
+    fuente = (p.candidato.fuente or "").strip().lower() if p.candidato is not None else ""
+    if p.origen == "whatsapp" or fuente == "whatsapp":
+        return "whatsapp"
+    if p.origen == "telegram" or fuente == "telegram":
+        return "telegram"
+    if "referid" in fuente or "recomend" in fuente:
+        return "referido"
+    return "web"
+
+
+def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[list]) -> dict:
+    from .services import proceso as sproc
+
+    exp = p.expediente
+    alerta = None
+    if pasos and p.activa and psicometria_simple(p.cuenta):
+        try:
+            alerta = sproc.alerta_psicometria(pasos, p.etapa)
+        except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
+            alerta = None
+    return {
+        "name": p.candidato.nombre if p.candidato is not None else "",
+        "role": p.vacante.titulo if p.vacante is not None else "",
+        "vacancy_id": p.vacante.codigo if p.vacante is not None else "",
+        "stage": ETAPA_TABLERO.get(p.etapa, "prefiltro"),
+        "filter_status": _FILTRO_TABLERO.get(p.estado or ""),
+        "score_reason": razon_score(p),
+        "source_channel": canal_origen(p),
+        "next_step": (siguiente or {}).get("nombre") or None,
+        "stage_entered_at": iso(p.etapa_desde or p.creado_en),
+        "has_consent": bool(p.consentimiento),
+        "expediente_pct": exp.progreso if exp is not None and p.etapa == "Contratación" else None,
+        # flujo simple de psicometría (solo CUENTAS_PSICOMETRIA_SIMPLE): sin_enviar | sin_respuesta | None
+        "psychometric_alert": alerta,
+    }
+
+
+def _pasos_tarjeta(p: Postulacion, evaluaciones=None) -> Optional[list]:
+    """Estado de los pasos de la ruta UNA vez por tarjeta (siguiente actividad + alertas del tablero)."""
+    from .services import proceso as sproc
+
+    if not p.activa:
+        return None
+    try:
+        return sproc.estado_pasos(p, evaluaciones)
     except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
         return None
 
@@ -375,6 +454,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
     exp = p.expediente
     ultima = p.entrevistas[-1] if p.entrevistas else None
     total_postulaciones = len(c.postulaciones)
+    pasos = _pasos_tarjeta(p, evaluaciones)
+    siguiente = _siguiente_actividad(p, evaluaciones, pasos)
 
     base = {
         "id": p.codigo,
@@ -455,11 +536,13 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         # Proceso configurable (2026-10-06): la ficha abre en «Seguimiento» si la postulación tiene proceso
         "tieneProceso": bool((p.proceso or {}).get("pasos")),
         # UX 2026-10-07: la tarjeta del tablero muestra la SIGUIENTE actividad de la ruta (derivada, nunca guardada).
-        "siguienteActividad": _siguiente_actividad(p, evaluaciones),
+        "siguienteActividad": siguiente,
         "clienteVacante": v.cliente.nombre if v and v.cliente else None,
         "clienteIdVacante": v.cliente_id if v else None,  # Fase 7A: para elegir contactos/entrevistador externo
         # --- Persona (maestro) ---
         "candidato": _persona_dict(c),
+        # --- Tablero de Candidatos (rediseño 2026-10-07, red-human-kanban-completo.md §3) ---
+        **campos_tablero(p, siguiente, pasos),
     }
 
     if not detalle:

@@ -322,6 +322,29 @@ async def _recalcular_resultado_apto_y_notificar(db: Session, p: Postulacion, ac
 # ============================================================
 
 
+@router.get("/tablero/etapas")
+def metricas_tablero(
+    vacante: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: Usuario = Depends(usuario_actual),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """Encabezado de las columnas del tablero (rediseño 2026-10-07): por etapa `total`, `conversion_pct` y `avg_days`
+    (`services.conteos.metricas_tablero`), más el subtítulo (en proceso y vacantes abiertas). Solo lectura."""
+    from ..models import ETIQUETA_ETAPA
+    from ..serial import ETAPA_TABLERO
+    from ..services import conteos
+
+    v = _vacante(db, vacante, cuenta.id) if vacante else None
+    stats = conteos.metricas_tablero(db, cuenta.id, v.id if v else None)
+    abiertas = db.query(func.count(Vacante.id)).filter(Vacante.cuenta_id == cuenta.id, Vacante.estado == "Publicada").scalar() or 0
+    return {
+        "stats": [{**x, "stage": ETAPA_TABLERO[x["etapa"]], "nombre": ETIQUETA_ETAPA.get(x["etapa"], x["etapa"])} for x in stats],
+        "en_proceso": sum(x["total"] for x in stats),
+        "vacantes_abiertas": int(abiertas),
+    }
+
+
 @router.get("")
 def listar(
     vacante: Optional[str] = None,

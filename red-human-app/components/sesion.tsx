@@ -152,3 +152,14 @@ export function useModoPrueba() {
 export function useCuentaActualId() {
   return useSesion().cuentaActualId;
 }
+
+/** Flujo de psicometría de UN solo modal (2026-10-07, red-human-psicometria.md): AISLADO a las Cuentas que la API
+ * marca con `psicometriaSimple` (hoy solo el slug «demo-grupak», `models.CUENTAS_PSICOMETRIA_SIMPLE`). El resto de
+ * las Cuentas conserva el flujo anterior tal cual. */
+export const CUENTAS_PSICOMETRIA_SIMPLE = ["demo-grupak"];
+export function usePsicometriaSimple() {
+  const { usuario, cuentaActualId } = useSesion();
+  const cuenta = usuario?.cuentas.find((c) => c.id === cuentaActualId);
+  if (!cuenta) return false;
+  return Boolean(cuenta.psicometriaSimple) || CUENTAS_PSICOMETRIA_SIMPLE.includes(cuenta.slug ?? "");
+}

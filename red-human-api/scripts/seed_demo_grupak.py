@@ -1,4 +1,4 @@
-"""Entorno de demostración «Demo Grupak» (prospecto) — 2026-10-07 (v2).
+"""Entorno de demostración «Demo Grupak» (prospecto) — 2026-10-07 (v3).
 
 Solo DATOS: no toca código, endpoints ni pantallas. Siembra con los modelos y, donde existen, con las MISMAS funciones
 de los endpoints (crear ciclo, evaluar, crear medición, responder…), así cada registro queda idéntico a uno capturado
@@ -23,6 +23,10 @@ libre (la pantalla solo admite avanzar | revision | no_avanzar), le faltaban `ca
 (se formatean con .toFixed) y el transcript usaba roles agente/candidato (el sistema usa assistant/user). Ahora la
 evaluación y el guion se arman con los esquemas reales (`ia.EvaluacionEntrevista`, `ia.GuionEntrevista`), que validan
 cada campo, y la fase de reparación CORRIGE las entrevistas que la v1 ya sembró (no hay que borrar nada).
+
+v3 — canal de origen: los candidatos se siembran (y los ya sembrados se corrigen) con fuente «WhatsApp» / origen
+`whatsapp`, para que el tablero de Candidatos los muestre como llegados por WhatsApp. Es solo la etiqueta del canal:
+siguen sin teléfono ni chat y no se toca la infraestructura de WhatsApp ni de Telegram.
 
 360°: la plataforma no tiene un tipo «360» propio; con datos se representa como TRES evaluaciones de desempeño de la
 misma persona y las mismas competencias, una por perspectiva (Autoevaluación · Jefe directo · Compañeros). Cada una se
@@ -108,6 +112,12 @@ PRUEBAS = {
     "16PF": "Cuestionario de 16 factores de personalidad (Cattell).",
     "MOSS": "Adaptabilidad social para puestos de supervisión: relaciones interpersonales y manejo de personal.",
 }
+# v3 (2026-10-07): los candidatos de la demo se muestran como llegados por WhatsApp en el tablero. Es SOLO la etiqueta
+# del canal (`Candidato.fuente` / `Postulacion.origen`): sin teléfono, sin chat ni ninguna conexión con WhatsApp ni
+# Telegram, así que nada se envía a nadie.
+FUENTE_DEMO = "WhatsApp"
+ORIGEN_DEMO = "whatsapp"
+
 BATERIAS = {
     "Batería Ayudante": ["Cleaver", "Zavic"],
     "Batería Cumplimiento": ["Terman", "Cleaver", "Herrmann", "16PF"],
@@ -787,10 +797,10 @@ def sembrar_candidato(db, cu: Cuenta, d: dict, v: Vacante, catalogo: dict) -> tu
         nota(f"Candidato existente: {c.nombre} · {p.codigo} en {p.etapa}")
     else:
         if c is None:
-            c = _crear_candidato(db, cu.id, d["nombre"], "Formulario", False, correo=d["correo"], telefono="",
+            c = _crear_candidato(db, cu.id, d["nombre"], FUENTE_DEMO, False, correo=d["correo"], telefono="",
                                  ubicacion=d["ubicacion"], experiencia=d["experiencia"],
                                  cv_datos={"resumen": d["experiencia"], "demo": True})
-        p = crear_postulacion(db, c, v, cu.id, "formulario", consentimiento=True)
+        p = crear_postulacion(db, c, v, cu.id, ORIGEN_DEMO, consentimiento=True)
         bateria = catalogo[next(x["bateria"] for x in VACANTES if x["titulo"] == v.titulo)]
         if esc == "prefiltro":
             _nota_historial(p, "Candidato de demostración: postulación recibida, prefiltro pendiente.")
@@ -820,6 +830,10 @@ def sembrar_candidato(db, cu: Cuenta, d: dict, v: Vacante, catalogo: dict) -> tu
                                "aprobada; faltan referencias, consentimiento médico y entrevista con líder.")
         registrar(db, ACTOR, "candidato_demo_sembrado", "postulacion", p.codigo, {"vacante": v.codigo, "etapa": p.etapa, "escenario": esc, "demo": True})
         ok(f"Candidato: {c.nombre} ({c.codigo}) · {p.codigo} · {v.titulo} · etapa {p.etapa}")
+    if c.fuente != FUENTE_DEMO or p.origen != ORIGEN_DEMO:
+        # v3: canal de origen «WhatsApp» en el tablero (también repara lo sembrado antes como «Formulario»)
+        c.fuente, p.origen = FUENTE_DEMO, ORIGEN_DEMO
+        ok(f"{p.codigo}: canal de origen → WhatsApp (solo etiqueta del tablero)")
     for h in _completar_actividades(db, cu, p, esc):
         ok(f"{p.codigo}: {h}")
     return c, p

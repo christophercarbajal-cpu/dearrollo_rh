@@ -646,6 +646,66 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
     }
 
 
+def bloque_psicometria(paso: dict, ev: Optional[Evaluacion], ahora: Optional[datetime] = None) -> dict:
+    """Flujo simple de psicometría (2026-10-07, red-human-psicometria.md §5 y §8): SOLO tres estados derivados de la
+    evaluación ligada al paso — Sin enviar · Enviada · Completada — más el aviso «Sin respuesta en N días». Es un dato
+    ADICIONAL del paso (no cambia `estado`/`resultado`, que siguen usando la compuerta y la evaluación integral); el
+    frontend solo lo pinta en las Cuentas de `CUENTAS_PSICOMETRIA_SIMPLE`."""
+    from ..config import settings
+    from ..models import ESTADOS_PSICOMETRIA_SIMPLE
+
+    umbral = max(int(settings.psicometria_sin_respuesta_dias or 0), 0)
+    vivo = ev is not None and ev.estado != "cancelada"
+    status = "sin_enviar"
+    if vivo and ev.estado == "con_resultado":
+        status = "completada"
+    elif vivo and ev.forma == "integrada":
+        if ev.clave_proveedor or (ev.paso_integrada or "asignada") != "asignada" or ev.estado != "pendiente":
+            status = "enviada"
+    elif vivo and ev.forma != "registro_directo":
+        status = "enviada"  # liga de otro sistema o asignada a una persona: ya salió del sistema
+    enviada_en = _aware((ev.enviada_en or ev.creado_en) if vivo and status != "sin_enviar" else None)
+    dias = None
+    if status == "enviada" and enviada_en is not None:
+        dias = max(((ahora or _ahora()) - enviada_en).days, 0)
+    resumen_txt = None
+    archivo = None
+    if status == "completada":
+        legible = conclusiones_de(ev.tipo).get(ev.conclusion_vigente, "")
+        comentario = " ".join((ev.comentarios or "").split())
+        if len(comentario) > 160:
+            comentario = comentario[:157].rstrip() + "…"
+        resumen_txt = " · ".join(x for x in (legible, comentario) if x) or "Resultado recibido"
+        adj = [a for a in (ev.adjuntos or []) if isinstance(a, dict) and a.get("id")]
+        pdf = next((a for a in adj if "pdf" in (a.get("mime") or "").lower() or (a.get("nombre") or "").lower().endswith(".pdf")), None)
+        elegido = pdf or (adj[0] if adj else None)
+        if elegido:
+            archivo = f"/evaluaciones/{ev.codigo}/adjuntos/{elegido['id']}"
+    reenvio = None
+    if status == "enviada":
+        if ev.forma == "integrada" and ev.clave_proveedor:
+            reenvio = "proveedor"
+        elif ev.forma == "liga_otro_sistema" and ev.liga_externa_candidato:
+            reenvio = "otro_sistema"
+    return {
+        "status": status,
+        "statusTexto": ESTADOS_PSICOMETRIA_SIMPLE[status],
+        "test_id": ev.prueba_id if vivo and ev.forma == "integrada" else None,
+        "test_name": (ev.nombre_visible if vivo else "") or None,
+        "is_external": bool(vivo and ev.forma != "integrada"),
+        "required": bool(paso.get("obligatorio")),
+        "sent_at": enviada_en.isoformat() if enviada_en else None,
+        "completed_at": _aware(ev.registrada_en).isoformat() if status == "completada" and ev.registrada_en else None,
+        "result_summary": resumen_txt,
+        "result_file_url": archivo,
+        "evaluacion": ev.codigo if vivo else None,
+        "simulado": bool(vivo and ev.forma == "integrada" and not ev.clave_proveedor),
+        "reenvio": reenvio,
+        "dias_sin_respuesta": dias if dias is not None and umbral and dias > umbral else None,
+        "umbral_sin_respuesta": umbral,
+    }
+
+
 def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     """Prefiltro (WhatsApp / web), Análisis de CV y Entrevista Red Human: los resuelve Red Human."""
     tipo, regla = paso["tipo"], paso["regla"]
@@ -934,6 +994,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         tipo = paso["tipo"]
         if tipo in TIPOS_PASO_EVALUACION:
             r = _paso_evaluacion(paso, por_paso.get(paso["id"]))
+            if tipo == "psicometrica":
+                r["psicometria"] = bloque_psicometria(paso, por_paso.get(paso["id"]))
         elif tipo in ("prefiltro_whatsapp", "prefiltro_web", "analisis_cv", "entrevista_agente"):
             r = _paso_red_human(paso, p)
         elif tipo == "solicitud_web":
@@ -991,6 +1053,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "plazoDias": paso.get("plazo_dias"), "fechaLimite": limite.isoformat() if limite else None, "vencido": vencido,
             "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
             "sincronizable": bool(r.get("sincronizable")),
+            "psicometria": r.get("psicometria"),  # solo pasos psicométricos (flujo simple, 2026-10-07)
             **_estado_unificado(r),
             "accion": _accion(paso, r, disponible),
             "_terminado_en": r.get("terminado_en"),
@@ -1022,10 +1085,11 @@ def _estado_unificado(r: dict) -> dict:
     return {"estadoUnificado": clave, "estadoUnificadoTexto": ESTADOS_UNIFICADOS[clave]}
 
 
-def siguiente_actividad(p: Postulacion, evaluaciones=None) -> Optional[dict]:
+def siguiente_actividad(p: Postulacion, evaluaciones=None, pasos: Optional[List[dict]] = None) -> Optional[dict]:
     """La actividad que sigue en la ruta (tarjeta del tablero): la primera obligatoria sin cumplir de la etapa actual;
-    si no hay, la primera sin cumplir de esa etapa; si la etapa está lista, la primera pendiente de las siguientes."""
-    pasos = [x for x in estado_pasos(p, evaluaciones) if not x["heredado"]]
+    si no hay, la primera sin cumplir de esa etapa; si la etapa está lista, la primera pendiente de las siguientes.
+    `pasos`: el resultado de `estado_pasos` ya calculado (el tablero lo reutiliza para sus alertas)."""
+    pasos = [x for x in (pasos if pasos is not None else estado_pasos(p, evaluaciones)) if not x["heredado"]]
     if not pasos:
         return None
     pendientes = [x for x in pasos if not _satisfecho(x)]
@@ -1037,6 +1101,21 @@ def siguiente_actividad(p: Postulacion, evaluaciones=None) -> Optional[dict]:
     if x is None:
         return None
     return {"id": x["id"], "nombre": x["nombre"], "estado": x["estadoUnificado"], "estadoTexto": x["estadoUnificadoTexto"]}
+
+
+def alerta_psicometria(pasos: List[dict], etapa: str) -> Optional[str]:
+    """Tablero (flujo simple de psicometría): «sin_enviar» si una psicométrica OBLIGATORIA vigente de la etapa actual (o
+    de una anterior) sigue sin enviarse; «sin_respuesta» si se envió y pasó el umbral sin resultado. None si no aplica.
+    Las de etapas futuras no alertan: todavía no toca enviarlas."""
+    actual = _indice(etapa)
+    vivos = [x for x in pasos if x["tipo"] == "psicometrica" and x["obligatorio"] and not x["heredado"]
+             and _indice(x["etapa"]) <= actual
+             and x["estado"] not in ("omitida", "cancelada") and x.get("psicometria")]
+    if any(x["psicometria"]["status"] == "sin_enviar" for x in vivos):
+        return "sin_enviar"
+    if any(x["psicometria"]["status"] == "enviada" and x["psicometria"].get("dias_sin_respuesta") for x in vivos):
+        return "sin_respuesta"
+    return None
 
 
 def _texto_regla(regla: dict) -> str:

@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     # del proveedor (el saldo se comparte con producción): usa lo que Red Human ya sabe.
     psicometricas_recordatorio_dias: int = 2
     psicometricas_recordatorios_max: int = 2
+    # Flujo simple de psicometría (2026-10-07, `psychometric_no_response_days`): días en «Enviada» sin resultado a
+    # partir de los cuales la fila y el tablero avisan «Sin respuesta en N días». Solo es un aviso: el estado no cambia.
+    psicometria_sin_respuesta_dias: int = 5
 
     cors_origins: str = "http://localhost:3000"
 

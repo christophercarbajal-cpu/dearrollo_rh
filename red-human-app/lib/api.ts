@@ -151,7 +151,7 @@ export interface UsuarioRH {
   ultimoAcceso: string | null;
   /** Lista de Cuentas activas a las que tiene acceso este usuario.
    * Cuando solo hay una, el frontend no muestra ningún selector (regla Fase A). */
-  cuentas: { id: number; nombre: string; nombreComercial: string }[];
+  cuentas: { id: number; nombre: string; nombreComercial: string; slug?: string; psicometriaSimple?: boolean }[];
   /** Fase 2: Cuenta con la que arranca la sesión (null = la primera vinculada). */
   cuentaPredeterminadaId?: number | null;
 }
@@ -1003,6 +1003,25 @@ export interface CargaCV {
   procesados: number;
   fallidos: number;
   resultados: ResultadoCV[];
+}
+
+/** Rediseño del tablero (2026-10-07): encabezado de cada columna — total de activas, % que llega desde la etapa
+ * anterior y días promedio en la etapa — más el subtítulo (en proceso · vacantes abiertas). */
+export interface MetricaEtapaTablero {
+  etapa: EtapaCandidato;
+  stage: string;
+  nombre: string;
+  total: number;
+  conversion_pct: number | null;
+  avg_days: number | null;
+}
+export interface MetricasTablero {
+  stats: MetricaEtapaTablero[];
+  en_proceso: number;
+  vacantes_abiertas: number;
+}
+export function fetchMetricasTablero(vacante?: string) {
+  return get<MetricasTablero>(`/candidatos/tablero/etapas${vacante ? `?vacante=${encodeURIComponent(vacante)}` : ""}`);
 }
 
 export function fetchCandidatos(filtros?: {

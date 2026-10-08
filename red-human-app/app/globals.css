@@ -42,6 +42,25 @@
   --bad-soft: #f8e3e3;
   --ring: #ee4444;
   --glow: rgba(238, 68, 68, 0.16);
+  /* Tablero de Candidatos (rediseño 2026-10-07, red-human-kanban-completo.md §2): niveles de score y superficie */
+  --kb-bg: #f6f5f3;
+  --kb-card: #ffffff;
+  --kb-line: #e7e4df;
+  --kb-line-2: #e2ded8;
+  --kb-ink: #1c1b19;
+  --kb-ink-2: #5e5a54;
+  --kb-ink-3: #6b665f;
+  --kb-green-bg: #e3f2e8;
+  --kb-green: #1e6b43;
+  --kb-amber-bg: #fbefd5;
+  --kb-amber: #8a5300;
+  --kb-red-bg: #fce5e3;
+  --kb-red: #a8261c;
+  --kb-gray-bg: #f0eeea;
+  --kb-gray: #5e5a54;
+  --kb-bar: #edeae5;
+  --kb-bar-ok: #2e8a57;
+  --kb-bar-warn: #c98a12;
 }
 
 .dark {
@@ -69,6 +88,24 @@
   --bad-soft: #2d1919;
   --ring: #f26663;
   --glow: rgba(242, 102, 99, 0.2);
+  --kb-bg: #121214;
+  --kb-card: #19191c;
+  --kb-line: #2a2a2e;
+  --kb-line-2: #323236;
+  --kb-ink: #f2f2f3;
+  --kb-ink-2: #b0b1b5;
+  --kb-ink-3: #94959a;
+  --kb-green-bg: #12291c;
+  --kb-green: #6fd09c;
+  --kb-amber-bg: #2a2210;
+  --kb-amber: #e8b45a;
+  --kb-red-bg: #2d1919;
+  --kb-red: #f08a84;
+  --kb-gray-bg: #232326;
+  --kb-gray: #b0b1b5;
+  --kb-bar: #2a2a2e;
+  --kb-bar-ok: #48b97e;
+  --kb-bar-warn: #d6a44a;
 }
 
 @theme inline {
@@ -94,6 +131,22 @@
   --color-warn-soft: var(--warn-soft);
   --color-bad: var(--bad);
   --color-bad-soft: var(--bad-soft);
+  --color-kb-bg: var(--kb-bg);
+  --color-kb-card: var(--kb-card);
+  --color-kb-line: var(--kb-line);
+  --color-kb-line-2: var(--kb-line-2);
+  --color-kb-ink: var(--kb-ink);
+  --color-kb-ink-2: var(--kb-ink-2);
+  --color-kb-ink-3: var(--kb-ink-3);
+  --color-kb-green-bg: var(--kb-green-bg);
+  --color-kb-green: var(--kb-green);
+  --color-kb-amber-bg: var(--kb-amber-bg);
+  --color-kb-amber: var(--kb-amber);
+  --color-kb-red-bg: var(--kb-red-bg);
+  --color-kb-red: var(--kb-red);
+  --color-kb-gray-bg: var(--kb-gray-bg);
+  --color-kb-gray: var(--kb-gray);
+  --color-kb-bar: var(--kb-bar);
 
   --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;

@@ -9,7 +9,10 @@
         obligatorio), Cancelar y Reactivar.
      4. Fortalezas (máx. 3) y Puntos por validar (máx. 3).
    Las acciones REUTILIZAN lo que ya existe: «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, los
-   documentos o el expediente. Cambiar ruta / agregar actividad / descartar / eliminar viven en el «…» del encabezado. */
+   documentos o el expediente. Cambiar ruta / agregar actividad / descartar / eliminar viven en el «…» del encabezado.
+   2026-10-07 (red-human-psicometria.md): en las Cuentas con flujo simple de psicometría (`usePsicometriaSimple`, hoy solo
+   «demo-grupak») las filas psicométricas muestran SOLO Sin enviar / Enviada / Completada con UNA acción (Enviar prueba /
+   Reenviar / Ver resultado) y un bloqueo de avance por psicometría lo dice claro. El resto de las Cuentas, igual que antes. */
 
 import { useEffect, useState } from "react";
 import {
@@ -18,10 +21,14 @@ import {
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { BadgeIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
-import { useSesion } from "@/components/sesion";
+import { usePsicometriaSimple, useSesion } from "@/components/sesion";
+import {
+  DetalleFilaPsicometria, EstadoFilaPsicometria, ModalActividadSimple, ModalEnviarPrueba, reenviarPsicometria, textoAccionPsicometria,
+  urlResultadoPsicometria,
+} from "@/components/dashboard/evaluaciones/psicometria-simple";
 import {
   agregarActividadProceso, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
-  omitirPasoProceso, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
+  omitirPasoProceso, ordenEtapa, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
 } from "@/lib/api";
 import type { AccionPaso, Candidato, EstadoUnificado, EtapaCandidato, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
 import { textoDia } from "@/lib/fechas";
@@ -59,6 +66,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   setAviso: (a: { tono: "ok" | "error" | "warn"; texto: string } | null) => void;
 }) {
   const puedeAutorizar = Boolean(useSesion().usuario?.puedeAutorizarOmisiones);
+  const simple = usePsicometriaSimple();
+  const [enviarPrueba, setEnviarPrueba] = useState<PasoSeguimiento | null>(null);
+  const [bloqueoPsico, setBloqueoPsico] = useState<PasoSeguimiento | null>(null);
   const [seg, setSegLocal] = useState<Seg | null>(c.proceso ?? null);
   const [ocupado, setOcupado] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
@@ -80,6 +90,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   function ejecutar(paso: PasoSeguimiento | undefined, accion: AccionPaso | null | undefined) {
     if (!accion) return;
     if (paso?.tipo === "alta" && onAlta) return onAlta();
+    if (simple && paso?.tipo === "psicometrica" && paso.psicometria && accion.clave === "iniciar_evaluacion") return setEnviarPrueba(paso);
     if (accion.clave === "iniciar_evaluacion" && paso) {
       const r = paso.responsableConfig;
       return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: r?.tipo === "usuario" ? r.usuario_id : null });
@@ -96,7 +107,17 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     setOcupado("avanzar");
     const r = await moverEtapaCandidato(c.id, etapa);
     setOcupado("");
-    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    if (!r.ok) {
+      // flujo simple: un bloqueo por psicometría obligatoria se dice claro y con la acción que lo resuelve
+      const psico = simple ? pasos.find((x) => x.tipo === "psicometrica" && x.obligatorio && x.psicometria && x.psicometria.status !== "completada"
+        && !x.heredado && x.estado !== "omitida" && x.estado !== "cancelada" && ordenEtapa(x.etapa) < ordenEtapa(etapa)) : undefined;
+      if (psico) {
+        setBloqueoPsico(psico);
+        return setAviso(null);
+      }
+      return setAviso({ tono: "error", texto: r.error });
+    }
+    setBloqueoPsico(null);
     onCambio(r.data);
     setAviso({ tono: "ok", texto: `Continúa en ${nombreEtapa(etapa)}.` });
   }
@@ -138,6 +159,22 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       : { tono: "warn", texto: `Psicométricas.mx todavía no reporta «${paso.nombre}» como terminada.` });
   }
 
+  /** Flujo simple: la ÚNICA acción de la fila psicométrica según su estado. */
+  async function accionPsicometria(paso: PasoSeguimiento) {
+    const ps = paso.psicometria;
+    if (!ps) return;
+    if (ps.status === "sin_enviar") return setEnviarPrueba(paso);
+    if (ps.status === "enviada") {
+      setOcupado(`psi-${paso.id}`);
+      const aviso = await reenviarPsicometria(ps);
+      setOcupado("");
+      return setAviso(aviso);
+    }
+    const url = urlResultadoPsicometria(ps);
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+    else onAbrir("evaluaciones");
+  }
+
   async function reactivar(paso: PasoSeguimiento) {
     const r = await reactivarPasoProceso(c.id, paso.id);
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
@@ -156,14 +193,18 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
   if (live && sig && c.activa !== false) {
     if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
-      principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
+      const enviarPsico = simple && pasoSig?.tipo === "psicometrica" && sig.accion.clave === "iniciar_evaluacion";
+      principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : enviarPsico ? "Enviar prueba" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
     } else if (sig.tipo === "avanzar" && sig.etapa) {
       principal = { texto: `Continuar a ${nombreEtapa(sig.etapa)}`, onClick: () => continuar(sig.etapa!), icono: <ArrowRight className="h-4 w-4" /> };
     } else if (sig.tipo === "esperar" && sig.accion && pasoSig?.estadoUnificado === "pendiente_aprobacion") {
       principal = { texto: `Aprobar: ${pasoSig.nombre}`, onClick: () => ejecutar(pasoSig, sig.accion), icono: <CheckCircle2 className="h-4 w-4" /> };
     }
   }
-  const textoEspera = !principal && sig ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
+  // flujo simple: si la ruta espera una psicométrica obligatoria ya enviada, se dice claro por qué no avanza
+  const pasoBloqueo = bloqueoPsico ?? (simple && !principal && pasoSig?.obligatorio && pasoSig.psicometria?.status === "enviada"
+    && pasoSig.estado !== "omitida" && pasoSig.estado !== "cancelada" ? pasoSig : null);
+  const textoEspera = !principal && !pasoBloqueo && sig ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
 
   return (
     <div className="flex flex-col gap-3">
@@ -194,6 +235,18 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             <span>{textoEspera}</span>
           </p>
         )}
+        {pasoBloqueo?.psicometria && (
+          <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warn/40 bg-warn-soft/50 px-3 py-2">
+            <p className="flex items-center gap-2 text-[13px] font-semibold text-warn">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> No puede avanzar: falta completar la psicométrica.
+            </p>
+            {live && pasoBloqueo.psicometria.status !== "completada" && (
+              <Button size="sm" variant="outline" onClick={() => accionPsicometria(pasoBloqueo)} disabled={Boolean(ocupado)}>
+                {textoAccionPsicometria(pasoBloqueo.psicometria)}
+              </Button>
+            )}
+          </div>
+        )}
         {(seg.alertas ?? []).length > 0 && (
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-bad">
             <AlertTriangle className="h-3.5 w-3.5" /> {seg.alertas!.map((a) => `${a.texto}${a.fechaLimite ? ` (${textoDia(a.fechaLimite)})` : ""}`).join(" · ")}
@@ -220,20 +273,29 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                 {e.pasos.map((p) => {
                   const ab = abierto === p.id;
                   const estadoU = (p.estadoUnificado ?? "sin_iniciar") as EstadoUnificado;
+                  const ps = simple && p.psicometria && p.estado !== "omitida" && p.estado !== "cancelada" && !p.heredado ? p.psicometria : null;
                   return (
                     <li key={p.id} className="border-t border-border-faint first:border-t-0">
-                      <button
-                        className="flex w-full items-center gap-2 px-4 py-1.5 text-left hover:bg-surface-2/60"
-                        onClick={() => setAbierto(ab ? null : p.id)}
-                        aria-expanded={ab}
-                      >
-                        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-ink-3 transition-transform", !ab && "-rotate-90")} />
-                        <span className="min-w-0 flex-1 truncate text-[13px]">
-                          {p.nombre}
-                          {p.obligatorio && <span className="ml-1 text-bad" title="Obligatoria">*</span>}
-                        </span>
-                        <Badge tone={TONO_ESTADO_U[estadoU]}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>
-                      </button>
+                      <div className="flex items-center gap-2 pr-4 hover:bg-surface-2/60">
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-4 text-left"
+                          onClick={() => setAbierto(ab ? null : p.id)}
+                          aria-expanded={ab}
+                        >
+                          <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-ink-3 transition-transform", !ab && "-rotate-90")} />
+                          <span className="min-w-0 flex-1 truncate text-[13px]">
+                            {p.nombre}
+                            {p.obligatorio && <span className="ml-1 text-bad" title="Obligatoria">*</span>}
+                          </span>
+                          {ps ? <EstadoFilaPsicometria ps={ps} /> : <Badge tone={TONO_ESTADO_U[estadoU]}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
+                        </button>
+                        {ps && (live || ps.status === "completada") && c.activa !== false && (
+                          <Button size="sm" variant="outline" className="h-7 shrink-0 px-2.5 text-[12px]" onClick={() => accionPsicometria(p)} disabled={Boolean(ocupado)}>
+                            {textoAccionPsicometria(ps)}
+                          </Button>
+                        )}
+                      </div>
+                      {ps && <div className="px-4 pb-1"><DetalleFilaPsicometria ps={ps} /></div>}
                       {ab && (
                         <div className="flex flex-col gap-2 bg-surface-2/40 px-4 py-2.5 pl-10 text-[12px] text-ink-2">
                           <p>
@@ -250,7 +312,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           {p.vencido && <p className="font-semibold text-bad">Plazo vencido (solo alerta)</p>}
                           {live && (
                             <div className="flex flex-wrap items-center gap-1.5">
-                              {p.accion && (
+                              {p.accion && !ps && (
                                 <Button size="sm" variant="outline" onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>
                                   {p.tipo === "alta" ? "Dar de alta" : p.accion.texto}
                                 </Button>
@@ -291,6 +353,22 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {/* 4. Fortalezas y puntos por validar (máx. 3 cada uno) */}
       <FortalezasYPuntos c={c} />
+
+      {enviarPrueba && (
+        <ModalEnviarPrueba
+          c={c}
+          paso={enviarPrueba}
+          onClose={() => setEnviarPrueba(null)}
+          onListo={async (aviso, candidato) => {
+            setEnviarPrueba(null);
+            setBloqueoPsico(null);
+            setAviso(aviso);
+            const s = await fetchSeguimiento(c.id);
+            if (s) setSeg(s);
+            if (candidato) onCambio(candidato);
+          }}
+        />
+      )}
 
       {decision && (
         <ModalMarco
@@ -390,14 +468,24 @@ function ResumenSinRuta({ c }: { c: Candidato }) {
   );
 }
 
-/** «Agregar actividad a este candidato»: un paso del catálogo SOLO para esta postulación (entrevista, prueba,
- * documentos…). Por defecto no es obligatorio: no frena el avance salvo que RH lo marque. */
-export function ModalActividad({ c, etapaActual, onClose, onAgregada }: {
+type PropsActividad = {
   c: Candidato;
   etapaActual: EtapaCandidato;
   onClose: () => void;
-  onAgregada: (r: { proceso: Seg; candidato: Candidato; paso: { nombre: string } }) => void;
-}) {
+  /** `aviso`: resultado del envío (flujo simple de psicometría); sin él, el aviso de siempre. */
+  onAgregada: (r: { proceso: Seg; candidato: Candidato; paso: { nombre: string } }, aviso?: { tono: "ok" | "warn" | "error"; texto: string }) => void;
+};
+
+/** «Agregar actividad a este candidato». En las Cuentas con flujo simple de psicometría (solo «demo-grupak») es el modal
+ * ÚNICO que también elige y envía la prueba; en las demás, el modal de siempre. */
+export function ModalActividad(props: PropsActividad) {
+  const simple = usePsicometriaSimple();
+  return simple ? <ModalActividadSimple {...props} /> : <ModalActividadClasica {...props} />;
+}
+
+/** Modal de siempre: un paso del catálogo SOLO para esta postulación (entrevista, prueba, documentos…). Por defecto no
+ * es obligatorio: no frena el avance salvo que RH lo marque. */
+function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsActividad) {
   const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");

@@ -627,11 +627,30 @@ def verificar_webhook(
 # Webhook POST — Agente de IA para pre-filtro de candidatos
 # ============================================================
 
+def verificar_firma_whatsapp(cuerpo: bytes, cabecera: str) -> bool:
+    """2026-10-08 (seguridad): el webhook es público y los acuses de entrega ya dictan el estado de las actividades.
+    * Con `META_APP_SECRET` → la firma `X-Hub-Signature-256` (HMAC-SHA256 del cuerpo CRUDO) es OBLIGATORIA siempre.
+    * Sin secreto y `WHATSAPP_PROVIDER=meta` → se rechaza todo (nunca se procesa un webhook de Meta sin verificar).
+    * Sin secreto y otro proveedor (WAHA/Evolution, desarrollo): se aceptan mensajes, pero los acuses NO se procesan
+      (ver `whatsapp_entrante`): sin firma nadie puede marcar un envío como entregado o fallido."""
+    from ..services.whatsapp import firma_valida
+
+    if settings.meta_app_secret:
+        return firma_valida(cuerpo, cabecera)
+    return (settings.whatsapp_provider or "").lower() != "meta"
+
+
 @router.post("/webhooks/whatsapp")
 async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
-    """Agente de reclutamiento IA — recibe webhook de Meta / WAHA / Evolution."""
+    """Agente de reclutamiento IA — recibe webhook de Meta / WAHA / Evolution. La firma se valida ANTES de leer nada."""
+    cuerpo = await request.body()
+    if not verificar_firma_whatsapp(cuerpo, request.headers.get("X-Hub-Signature-256", "")):
+        print("[webhook-post] ❌ Firma X-Hub-Signature-256 ausente o inválida: webhook rechazado.")
+        if not settings.meta_app_secret:
+            raise HTTPException(status_code=503, detail="Webhook de Meta sin META_APP_SECRET configurado: no se puede validar la firma.")
+        raise HTTPException(status_code=403, detail="Firma inválida.")
     try:
-        payload = await request.json()
+        payload = json.loads(cuerpo or b"{}")
     except Exception as e:
         print(f"[webhook-post-error] No se pudo parsear JSON: {e}")
         return {"ok": False, "error": "JSON no válido"}
@@ -641,12 +660,28 @@ async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
     print(f"[webhook-post] Payload: {json.dumps(payload, ensure_ascii=False)}")
     print("=" * 60)
 
+    if settings.meta_app_secret:  # solo acuses con firma VERIFICADA alteran la trazabilidad de envíos
+        _registrar_acuses(db, payload)
     msg = parsear_webhook(payload)
     if not msg:
         print("[webhook-post] Webhook procesado sin mensaje de candidato (estado de entrega o evento ignorado).")
         return {"ok": True, "ignorado": True}
     with en_conversacion("whatsapp", msg["telefono"]):  # la respuesta a esta persona sale por WhatsApp
         return await procesar_entrante(db, msg)
+
+
+def _registrar_acuses(db: Session, payload: dict) -> None:
+    """Acuses de entrega/lectura/falla de Meta → trazabilidad de envíos (entregado / fallido). Nunca rompe el webhook."""
+    from ..services import envios
+    from ..services.whatsapp import acuses_de_entrega
+
+    try:
+        tocadas = sum(envios.actualizar_por_mensaje(db, a["mensaje_id"], a["estado"], a["detalle"]) for a in acuses_de_entrega(payload))
+        if tocadas:
+            db.commit()
+    except Exception as ex:  # noqa: BLE001
+        db.rollback()
+        print(f"[webhook-post] no se pudo registrar el acuse de entrega: {ex}")
 
 
 async def procesar_entrante(db: Session, msg: dict) -> dict:

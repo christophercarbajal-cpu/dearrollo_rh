@@ -29,6 +29,7 @@ from .services.recordatorios_psicometria import revisar_recordatorios_psicometri
 from .routers.entrevistas import cerrar_entrevistas_inactivas
 from .services.clima_cierre import cerrar_mediciones_vencidas
 from .services.motor_ruta import barrido as motor_ruta_barrido
+from .services.sincronizacion_psicometrias import reintentar as reintentar_sincronizaciones
 from .services.avatar import avatar_activo, estado_avatar
 from .services.ia import ia_activa
 from .services.whatsapp import proveedor as whatsapp_proveedor, whatsapp_activo
@@ -143,6 +144,12 @@ async def lifespan(app: FastAPI):
     # max_instances=1 + coalesce: si una corrida se alarga (Meta lento) la siguiente NO se encola
     # encima ni se acumulan disparos perdidos — junto con la reclamación del flag en
     # services/agenda.py evita el aviso de reagendar duplicado (2026-09-15).
+    if settings.whatsapp_provider == "meta" and not settings.meta_app_secret:
+        print(
+            "[whatsapp] ⛔ META_APP_SECRET sin configurar: POST /webhooks/whatsapp responde 503 (la firma "
+            "X-Hub-Signature-256 es obligatoria con WHATSAPP_PROVIDER=meta). Configúralo en el .env del servidor.",
+            flush=True,
+        )
     if settings.whatsapp_provider == "meta" and not settings.meta_plantilla_aviso:
         print(
             "[whatsapp] ⚠️ META_PLANTILLA_AVISO sin configurar: los WhatsApp a números que no han escrito a la "
@@ -191,6 +198,12 @@ async def lifespan(app: FastAPI):
         motor_ruta_barrido, "interval", minutes=5,
         id="motor_ruta", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=120,
+    )
+    # 2026-10-08: reintento de resultados del proveedor SOLO con falla de recuperación confirmada (cuida el saldo).
+    scheduler.add_job(
+        reintentar_sincronizaciones, "interval", minutes=30,
+        id="sincronizacion_psicometrias", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
     )
     scheduler.start()
     try:

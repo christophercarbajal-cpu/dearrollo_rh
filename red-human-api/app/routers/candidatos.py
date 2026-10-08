@@ -463,7 +463,12 @@ def listar(
     if postulaciones:
         for ev in db.query(Evaluacion).filter(Evaluacion.postulacion_id.in_(list(evaluaciones_por_p))).order_by(Evaluacion.id):
             evaluaciones_por_p[ev.postulacion_id].append(ev)
-    return [postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0), evaluaciones=evaluaciones_por_p[p.id]) for p in postulaciones]
+    # 2026-10-08: envíos por destinatario, eventos legados, tareas y responsables de TODAS las tarjetas en bloque
+    from ..services.envios import precarga_tablero
+
+    precargas = precarga_tablero(db, postulaciones, evaluaciones_por_p)
+    return [postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0), evaluaciones=evaluaciones_por_p[p.id], precarga=precargas[p.id])
+            for p in postulaciones]
 
 
 @router.post("/prueba/eliminar")
@@ -2156,7 +2161,7 @@ def mover_por_entrevista_humana(db: Session, p: Postulacion, u: Usuario, codigo_
     AGREGA una nota al historial. No hace commit. Regresa True si movió."""
     if not p.activa or p.etapa not in ("Prefiltro", "Entrevista IA"):
         return False
-    if sproc.tiene_proceso(p) and sproc.faltantes(sproc.estado_pasos(p), p.etapa, "Entrevista Humana"):
+    if sproc.tiene_proceso(p) and sproc.faltantes(sproc.estado_pasos(p), sproc.desde_compuerta(p), "Entrevista Humana"):
         return False  # proceso configurable: no se dejan atrás pasos obligatorios sin cumplir (RH los omite con autorización)
     anterior = p.etapa
     sello = datetime.now(timezone.utc)
@@ -2353,6 +2358,10 @@ async def _disparar_mensaje_onboarding(
         # 2026-09-17: mismo contador de niveles que el recordatorio del expediente y el job automático.
         extra = {"nivel": e.nivel_recordatorio, "pendientes": e.pendientes or None, "puesto": e.puesto or "tu nuevo puesto", "fecha_limite": e.documentos_hasta}
     resultados = await notificaciones.disparar(db, evento, p, u.nombre, liga=liga, override=override, extra=extra)
+    from ..services import envios  # 2026-10-08: trazabilidad por destinatario (liga de documentos)
+
+    envios.registrar(db, p, [r for r in resultados if r.get("destinatario") == "candidato"],
+                     motivo="documentos", actor=u.nombre, destinatario="candidato")
     if evento == "recordatorio_documentos" and e:
         from ..services.recordatorios import registrar_recordatorio_enviado  # import local: recordatorios ↔ candidatos
 

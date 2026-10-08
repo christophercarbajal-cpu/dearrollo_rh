@@ -19,6 +19,7 @@ import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { ModalMarco } from "@/components/dashboard/modulos-rh";
 import { usePsicometriaSimple } from "@/components/sesion";
 import { estadoPsicometriaSimple } from "@/components/dashboard/evaluaciones/psicometria-simple";
+import { ReferenciasDictamen } from "@/components/dashboard/evaluaciones/referencias-dictamen";
 import { LineaNotificar, useNotificarAccion } from "@/components/dashboard/linea-notificar";
 import { FormularioResultado, type ModoResultado } from "@/components/dashboard/evaluaciones/formulario-resultado";
 import { ModalAgregarEvaluacion, type PresetEvaluacion } from "@/components/dashboard/evaluaciones/agregar-evaluacion";
@@ -27,7 +28,7 @@ import {
   validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
 } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import {
-  avanzarEvaluacionIntegrada, cancelarEvaluacion, confirmarInicioEvaluacion, enviarEvaluacionProveedor, enviarLigaEvaluacion, fetchEvaluacion,
+  avanzarEvaluacionIntegrada, cancelarEvaluacion, confirmarInicioEvaluacion, dictaminarReferencia, enviarEvaluacionProveedor, enviarLigaEvaluacion, fetchEvaluacion,
   fetchEvaluaciones, lineasResultados, marcarEvaluacionNoRealizada, marcarEvaluacionRealizada, modificarEvaluacion, recordatorioEvaluacion,
   registrarResultadoEvaluacion, reprogramarEvaluacion, revisarEvaluacion, sincronizarEvaluacion, urlAdjuntoEvaluacion,
   type Evaluacion, type EventoEvaluacion, type LigaEvaluacion, type RespuestaEvaluacion, type Resultado,
@@ -37,7 +38,8 @@ import type { Candidato } from "@/lib/data";
 import { partesLocales, textoCita, textoFechaHora } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
 
-const PASOS: Record<string, string> = { asignada: "Asignada", enviada: "Enviada", iniciada: "Iniciada", completada: "Completada", resultado_recibido: "Resultado recibido" };
+const DESTINATARIO: Record<string, string> = { candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador" };
+const PASOS: Record<string, string> = { asignada: "Asignada", enviada: "Liga generada", iniciada: "Iniciada", completada: "Completada", resultado_recibido: "Resultado recibido" };
 const VIA: Record<string, string> = { sistema: "en el sistema", liga_evaluador: "vía liga del evaluador", proveedor: "vía proveedor", migracion: "migración" };
 
 type Aviso = { tono: "ok" | "warn" | "error"; texto: string } | null;
@@ -178,7 +180,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
     cancelar: { texto: "Cancelar evaluación…", icono: <Ban className="h-4 w-4" /> },
     programar_otra: { texto: "Programar otra entrevista", icono: <CalendarClock className="h-4 w-4" /> },
     enviar_proveedor: { texto: "Enviar al proveedor", icono: <Send className="h-4 w-4" /> },
-    sincronizar: { texto: "Consultar resultado del proveedor", icono: <RefreshCw className="h-4 w-4" /> },
+    sincronizar: { texto: "Reintentar sincronización", icono: <RefreshCw className="h-4 w-4" /> },
     avanzar_paso: { texto: "Simular siguiente paso del proveedor", icono: <SkipForward className="h-4 w-4" /> },
   };
   const etiquetasDe = (e: Evaluacion): Record<string, { texto: string; icono: React.ReactNode }> => ({
@@ -328,7 +330,7 @@ function FilaLiga({ l, live, ocupado, onCopiar, onEnviar }: {
         {!u
           ? (l.puedeEnviar ? `Sin enviar · para ${l.para}` : l.motivoNoEnvio)
           : <>
-              {u.enviado ? "Enviada" : "Envío fallido"} a {l.para}{u.fecha ? ` · ${textoFechaHora(u.fecha)}` : ""}:{" "}
+              {u.enviado ? "Enviado" : "Envío fallido"} a {l.para}{u.fecha ? ` · ${textoFechaHora(u.fecha)}` : ""}:{" "}
               {u.envios.map((x) => `${x.enviado ? "✓" : "✗"} ${CANAL[x.canal] ?? (x.canal || "sin canal")}${!x.enviado && x.detalle ? ` (${x.detalle})` : ""}`).join(" · ")}
               {!u.enviado && " — la liga sigue disponible para abrir o copiar."}
             </>}
@@ -432,6 +434,22 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
             <FilaLiga key={l.clave} l={l} live={live} ocupado={ocupado} onCopiar={() => onCopiar(l)} onEnviar={() => onEnviarLiga(l)} />
           ))}
         </ul>
+      )}
+      {Object.keys(e.envios ?? {}).length > 0 && (
+        // 2026-10-08: trazabilidad por destinatario (último envío a cada quien)
+        <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-ink-3">
+          {Object.entries(e.envios!).map(([d, x]) => (
+            <span key={d}>{DESTINATARIO[d] ?? d}: <b className={x.estado === "fallido" ? "text-bad" : x.estado === "entregado" ? "text-good" : "text-ink-2"}>{x.estadoTexto}</b></span>
+          ))}
+        </p>
+      )}
+      {e.tipo === "referencias" && ((e.referencias?.length ?? 0) > 0 || e.esperandoReferencias) && (
+        <div className="mt-2.5">
+          {e.esperandoReferencias
+            ? <p className="text-[12px] text-ink-3">Esperando a que el candidato capture sus referencias.</p>
+            : <ReferenciasDictamen referencias={e.referencias ?? []} soloLectura={!live || e.estado === "cancelada"}
+                onDictaminar={(rid, datos) => dictaminarReferencia(e.codigo, rid, datos)} />}
+        </div>
       )}
       <ResultadoEnTarjeta e={e} />
       {(puedePrincipal || (live && secundaria) || (live && menu.length > 0)) && (

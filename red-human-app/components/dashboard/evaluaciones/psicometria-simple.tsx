@@ -22,7 +22,7 @@ import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psi
 import { useEsAdmin } from "@/components/sesion";
 import {
   agregarActividadProceso, asignarPsicometria, crearEvaluacion, enviarLigaEvaluacion, esCorreoValido, fetchOpcionesProceso, fetchPruebasPsicometricas,
-  registrarResultadoEvaluacion, urlArchivo, type Evaluacion, type OpcionesProceso, type PruebaPsicometrica,
+  nombreEtapa, registrarResultadoEvaluacion, urlArchivo, type Evaluacion, type OpcionesProceso, type PruebaPsicometrica,
 } from "@/lib/api";
 import type { Candidato, EtapaCandidato, PasoSeguimiento, PsicometriaPaso, SeguimientoProceso as Seg } from "@/lib/data";
 import { cn } from "@/lib/utils";
@@ -38,7 +38,8 @@ export function estadoPsicometriaSimple(e: Evaluacion): { texto: string; tono: "
   const enviada = e.forma === "integrada"
     ? Boolean(e.claveProveedor) || (e.pasoIntegrada ?? "asignada") !== "asignada" || e.estado !== "pendiente"
     : e.forma !== "registro_directo";
-  return enviada ? { texto: "Enviada", tono: "warn" } : { texto: "Sin enviar", tono: "neutral" };
+  // 2026-10-08: «Enviada» ya no es un estado; se dice a quién se espera
+  return enviada ? { texto: "Esperando candidato", tono: "warn" } : { texto: "Sin enviar", tono: "neutral" };
 }
 
 /** Catálogo integrado activo (pruebas y baterías). null mientras carga. */
@@ -166,7 +167,7 @@ async function guardarExterna(c: Candidato, pasoId: string, nombre: string, arch
 }
 
 function textoEnvio(r: { simulado?: boolean; aviso?: string; envioCandidato?: { enviado: boolean; canales?: string[]; detalle?: string } }, nombre: string) {
-  if (r.simulado) return `«${nombre}» quedó Enviada (modo simulado: ${r.aviso ?? "sin conexión con el proveedor"}).`;
+  if (r.simulado) return `«${nombre}» quedó asignada (modo simulado: ${r.aviso ?? "sin conexión con el proveedor"}).`;
   const env = r.envioCandidato;
   return env?.enviado
     ? `«${nombre}» enviada al candidato por ${(env.canales ?? []).join(" y ")}.`
@@ -185,7 +186,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
   const catalogo = useCatalogo();
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
-  const [etapa, setEtapa] = useState<EtapaCandidato>(etapaActual);
+  const etapa = etapaActual; // 2026-10-08: la actividad adicional va en la etapa ACTUAL; nunca regresa al candidato
   const [obligatorio, setObligatorio] = useState(false);
   const [seleccion, setSeleccion] = useState<number[]>([]);
   const [externa, setExterna] = useState(false);
@@ -200,7 +201,6 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
   }, []);
   const tipos = (opciones?.tiposPaso ?? []).filter((t) => !["solicitud_web", "prefiltro_web", "prefiltro_whatsapp", "alta"].includes(t.valor));
   const elegido = tipos.find((t) => t.valor === tipo);
-  const etapas = (opciones?.etapas ?? []).filter((e) => elegido?.etapas.includes(e.valor));
   const psico = tipo === "psicometrica";
 
   function elegir(valor: string) {
@@ -208,7 +208,6 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
     setTipo(valor);
     setExterna(false);
     setError("");
-    if (t) setEtapa(t.etapas.includes(etapaActual) ? etapaActual : t.etapas[t.etapas.length - 1]);
   }
 
   async function agregar(nombreFinal?: string) {
@@ -266,12 +265,7 @@ export function ModalActividadSimple({ c, etapaActual, onClose, onAgregada }: {
               Nombre (opcional)
               <input className={inputRH} value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder={elegido.texto} />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-ink-2">
-              Etapa
-              <select className={cn(inputRH, "h-10")} value={etapa} onChange={(e) => setEtapa(e.target.value as EtapaCandidato)}>
-                {etapas.map((e) => <option key={e.valor} value={e.valor}>{e.texto}</option>)}
-              </select>
-            </label>
+            <p className="text-[12px] text-ink-3">Se agrega en la etapa actual: <b className="text-ink-2">{nombreEtapa(etapa)}</b>.</p>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={obligatorio} onChange={(e) => setObligatorio(e.target.checked)} />
               Obligatoria (el candidato no puede avanzar de etapa sin completarla)

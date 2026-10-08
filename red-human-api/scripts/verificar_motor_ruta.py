@@ -179,7 +179,8 @@ with TestClient(app) as client:
     PC = postular("demo-grupak", "Caro Parcial", "5512347003", "caro@correo.mx", respuestas("Parcial", "Sí", "Sí"))
     s = seg(PC)
     x = paso(s, "prefiltro")
-    check(x["revisarPrefiltro"] and "Revisar prefiltro" in x["espera"] and x["estadoUnificado"] == "en_curso", "Parcial en excluyente → «Revisar prefiltro»")
+    check(x["revisarPrefiltro"] and "Revisar prefiltro" in x["espera"] and x["estadoUnificado"] == "pendiente_revision",
+          "Parcial en excluyente → «Revisar prefiltro» (Pendiente de revisión)")
     check(s["etapaActual"] == "Prefiltro", "sin decisión de RH no avanza")
     r = client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={"comentario": "Validado por teléfono"})
     check(r.status_code == 200 and r.json()["proceso"]["etapaActual"] == "Entrevista IA", "RH aprueba → avanza y la ruta sigue sola")
@@ -198,7 +199,8 @@ with TestClient(app) as client:
     check(paso(s, "entrevista-lider")["espera"].startswith("Se habilita en"), "conserva la habilitación por columna")
 
     print("\n--- 6. Vocabulario único de estados ---")
-    VALIDOS = {"sin_iniciar", "enviada", "en_curso", "completada", "aprobada", "no_aprobada", "omitida", "error"}
+    VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
+               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error"}
     todos = [x for c, h in ((PA, HG), (PB, HG), (PC, HG), (PM, HM)) for e in seg(c, h)["etapas"] for x in e["pasos"]]
     check(all(x["estadoUnificado"] in VALIDOS for x in todos), "toda actividad usa una de las 8 etiquetas")
     db.close()

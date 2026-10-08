@@ -101,12 +101,23 @@ def liga_consentimiento(ev: Evaluacion) -> str:
     return f"{settings.app_url}/consentimiento/{ev.consentimiento_token}" if ev.consentimiento_token else ""
 
 
+def liga_referencias(ev: Evaluacion) -> str:
+    """Liga EXCLUSIVA del candidato para capturar sus referencias laborales (fase 1)."""
+    return f"{settings.app_url}/referencias/{ev.referencias_token}" if ev.referencias_token else ""
+
+
+def esperando_referencias(ev: Evaluacion) -> bool:
+    """Referencias en dos fases: mientras el candidato no capture sus contactos, al evaluador no le sale nada."""
+    return (ev.tipo == "referencias" and ev.forma != "registro_directo" and not ev.referencias_capturadas_en
+            and ev.estado == "pendiente")
+
+
 # ------------------------------------------------------------ ligas externas (2026-10-01)
 # Toda liga externa (consentimiento, evaluador/médico, otro sistema, proveedor) EXISTE aunque su envío automático
 # falle: se genera al crear la evaluación (o la primera vez que se pide, si es un registro viejo) y se REUTILIZA.
 # La interfaz siempre ofrece Abrir / Copiar / Enviar o reenviar, y el estado del último envío viaja aparte.
 
-CLAVES_LIGA = ("consentimiento", "evaluador", "otro_sistema", "proveedor")
+CLAVES_LIGA = ("consentimiento", "referencias", "evaluador", "otro_sistema", "proveedor")
 
 
 def asegurar_ligas(ev: Evaluacion) -> bool:
@@ -118,13 +129,16 @@ def asegurar_ligas(ev: Evaluacion) -> bool:
     if ev.consentimiento == "pendiente" and not ev.consentimiento_token:
         ev.consentimiento_token = secrets.token_urlsafe(24)
         cambio = True
+    if ev.tipo == "referencias" and ev.forma != "registro_directo" and not ev.referencias_token:
+        ev.referencias_token = secrets.token_urlsafe(24)
+        cambio = True
     return cambio
 
 
 def liga_evaluador_disponible(ev: Evaluacion) -> bool:
     """Liga para capturar el resultado: la del evaluador asignado y, en la médica, la «Liga del médico» (cualquier
     forma salvo proveedor integrado). Nunca mientras el consentimiento esté pendiente o rechazado."""
-    if ev.estado == "cancelada" or bloqueo_consentimiento(ev):
+    if ev.estado == "cancelada" or bloqueo_consentimiento(ev) or esperando_referencias(ev):
         return False
     return ev.forma == "asignada" or (ev.tipo == "medica" and ev.forma != "integrada")
 
@@ -187,6 +201,9 @@ def ligas_de(db: Session, ev: Evaluacion) -> List[dict]:
     if ev.consentimiento == "pendiente" and ev.consentimiento_token:
         agregar("consentimiento", "Liga de consentimiento del candidato", liga_consentimiento(ev), "Candidato",
                 contacto_candidato, "El candidato no tiene teléfono ni correo registrados.")
+    if esperando_referencias(ev) and ev.referencias_token:
+        agregar("referencias", "Liga para capturar referencias (candidato)", liga_referencias(ev), "Candidato",
+                contacto_candidato, "El candidato no tiene teléfono ni correo registrados.")
     if liga_evaluador_disponible(ev):
         con_contacto = ev.forma == "asignada" and bool(ev.evaluador_correo or ev.evaluador_whatsapp)
         agregar("evaluador", "Liga del médico" if ev.tipo == "medica" else "Liga del evaluador", liga_evaluador(ev),
@@ -220,7 +237,8 @@ async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, a
                 r = await enviar_mensaje(p.telefono, f"{texto} {liga}")
         except Exception as ex:  # noqa: BLE001
             r = {"enviado": False, "detalle": str(ex)[:200]}
-        resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+        resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")),
+                           "detalle": str(r.get("detalle") or ""), "wa_id": r.get("wa_id", ""), "proveedor": r.get("proveedor", "")})
     if p.correo:
         try:
             asunto_, html = plantillas_correo.html_aviso(asunto, texto, empresa, [], ("Abrir", liga))
@@ -231,7 +249,11 @@ async def enviar_liga_a_candidato(db: Session, ev: Evaluacion, p: Postulacion, a
     if not resultados:
         resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": "El candidato no tiene teléfono ni correo registrados."})
     que = "liga_consentimiento" if clave == "consentimiento" else f"liga_{clave}"
-    evento(db, ev, "envio", actor, usuario_id=usuario_id, que=que, liga=clave, envios=resultados)
+    evento(db, ev, "envio", actor, usuario_id=usuario_id, que=que, liga=clave,
+           envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
+    from . import envios
+
+    envios.registrar(db, p, resultados, motivo=clave, ev=ev, actor=actor, destinatario="candidato")
     if clave in ("otro_sistema", "proveedor"):
         marcar_enviada(ev, resultados)
     return resultados
@@ -274,7 +296,8 @@ async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, act
         except Exception as ex:  # noqa: BLE001
             r = {"enviado": False, "detalle": str(ex)[:200]}
         canal = r.get("proveedor") if r.get("proveedor") == "telegram" else "whatsapp"
-        resultados.append({"destinatario": "candidato", "canal": canal, "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
+        resultados.append({"destinatario": "candidato", "canal": canal, "destino": p.telefono, "enviado": bool(r.get("enviado")),
+                           "detalle": str(r.get("detalle") or ""), "wa_id": r.get("wa_id", "")})
     cascada = psicometria_simple(p.cuenta)
     if p.correo and (canales["correo"] or cascada) and not (cascada and any(x["enviado"] for x in resultados)):
         try:
@@ -291,7 +314,10 @@ async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, act
                    else "El candidato no tiene teléfono ni correo registrados.")
         resultados.append({"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": detalle})
     evento(db, ev, "envio", actor, usuario_id=usuario_id, que="recordatorio_psicometria" if recordatorio else "liga_proveedor",
-           liga="proveedor", envios=resultados)
+           liga="proveedor", envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
+    from . import envios
+
+    envios.registrar(db, p, resultados, motivo="recordatorio" if recordatorio else "proveedor", ev=ev, actor=actor, destinatario="candidato")
     marcar_enviada(ev, resultados)
     return resultados
 
@@ -322,7 +348,8 @@ def seguimiento(ev: Evaluacion) -> tuple:
         if iniciada:
             return "en_curso", etiquetas["en_curso"]
         if ev.enviada_en or ev.clave_proveedor or ev.paso_integrada == "enviada":
-            return "enviada", etiquetas["enviada"]
+            # 2026-10-08: «Enviada» ya no se muestra; se dice a quién se espera (la persona asignada o el candidato)
+            return "enviada", "Esperando evaluador" if ev.forma == "asignada" else etiquetas["enviada"]
         return "pendiente", etiquetas["pendiente"]
     return ("en_proceso", etiquetas["en_proceso"]) if iniciada else ("pendiente", etiquetas["pendiente"])
 
@@ -666,8 +693,8 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         matriz["candidato"] = con_cita or ev.forma == "liga_otro_sistema"
     elif evento_ == "recordatorio_evaluacion":
         matriz["candidato"] = con_cita or ev.forma == "liga_otro_sistema"
-    if bloqueo_consentimiento(ev):
-        matriz["entrevistador"] = False
+    if bloqueo_consentimiento(ev) or esperando_referencias(ev):
+        matriz["entrevistador"] = False  # médica: hasta el consentimiento · referencias: hasta que el candidato capture
     if audiencias is not None:
         matriz = {k: v and k in audiencias for k, v in matriz.items()}
     forzado = dict(override or {})
@@ -686,6 +713,11 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         # también los fallidos: el estado del envío se muestra junto a cada liga (nunca en silencio)
         evento(db, ev, "envio", actor, "sistema", evento=evento_,
                envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
+        from . import envios
+
+        motivo = ("recordatorio" if evento_ == "recordatorio_evaluacion" else "otro_sistema" if ev.forma == "liga_otro_sistema"
+                  else "cita" if con_cita else "aviso")
+        envios.registrar(db, p, resultados, motivo=motivo, ev=ev, actor=actor)
         if evento_ in ("evaluacion_asignada", "evaluacion_reprogramada", "recordatorio_evaluacion"):
             marcar_enviada(ev, resultados, "entrevistador" if ev.forma == "asignada" else "candidato" if ev.forma == "liga_otro_sistema" else "-")
     return resultados
@@ -769,6 +801,60 @@ def estado_proveedor(ev: Evaluacion) -> Optional[tuple]:
     if ev.iniciada_en or ev.paso_integrada == "iniciada":
         return "en_curso", E["en_curso"]
     return "pendiente", E["pendiente"]
+
+
+def resultado_proveedor_posterior(db: Session, ev: Evaluacion, origen: str = "webhook") -> None:
+    """El proveedor avisó un resultado de una evaluación que RH YA capturó a mano: la captura manual tiene prioridad y
+    NUNCA se sobrescribe; queda constancia en el historial (no se consulta su API: el saldo es compartido)."""
+    evento(db, ev, "resultado_proveedor_posterior", "Red Human", "proveedor", origen=origen,
+           nota=f"El proveedor reportó un resultado; se conserva la captura manual de {ev.registrada_por or 'RH'}.")
+
+
+MAX_REINTENTOS_SINCRONIZACION = 4
+ESPERA_REINTENTO_HORAS = (1, 3, 12, 24)
+
+
+def marcar_sincronizacion(db: Session, ev: Evaluacion, ok: bool, error: str = "", por: str = "sistema") -> None:
+    """Estado de la RECUPERACIÓN del resultado del proveedor. `fallida` = el proveedor avisó que terminó (o RH lo
+    pidió) y no se pudo traer: solo entonces aparece «Reintentar sincronización» y el job reintenta con espera."""
+    from datetime import timedelta
+
+    previo = dict(ev.sincronizacion or {})
+    ahora = datetime.now(timezone.utc)
+    if ok:
+        ev.sincronizacion = {"estado": "ok", "intentos": int(previo.get("intentos") or 0), "ultimo_intento_en": fechas.iso(ahora)}
+        return
+    intentos = int(previo.get("intentos") or 0) + 1
+    espera = ESPERA_REINTENTO_HORAS[min(intentos - 1, len(ESPERA_REINTENTO_HORAS) - 1)]
+    ev.sincronizacion = {"estado": "fallida", "intentos": intentos, "ultimo_intento_en": fechas.iso(ahora),
+                         "ultimo_error": (error or "")[:300],
+                         "siguiente_en": fechas.iso(ahora + timedelta(hours=espera)) if intentos < MAX_REINTENTOS_SINCRONIZACION else None}
+    evento(db, ev, "sincronizacion_fallida", por, "proveedor", intento=intentos, error=(error or "")[:300])
+
+
+def recuperar_resultado(db: Session, ev: Evaluacion, por: str = "Psicométricas.mx (automático)", origen: str = "webhook") -> str:
+    """Recuperación del resultado con su trazabilidad: captura manual previa → se conserva (sin llamar al proveedor);
+    terminó y se trajo → ok; terminó según el aviso pero no se pudo traer → `fallida` (reintentos con espera)."""
+    from . import psicometricas as psi
+
+    if ev.estado == "con_resultado":
+        if ev.registrada_via == "sistema" and origen == "webhook":
+            resultado_proveedor_posterior(db, ev, origen)
+        return "ya_estaba"
+    try:
+        r = sincronizar_psicometricas(db, ev, por)
+    except psi.PsicometricasError as ex:
+        marcar_sincronizacion(db, ev, False, str(ex), por)
+        return f"error: {ex}"
+    except Exception as ex:  # noqa: BLE001 — una descarga rota (PDF inválido, disco) también es falla de recuperación
+        marcar_sincronizacion(db, ev, False, f"No se pudo guardar el resultado: {str(ex)[:200]}", por)
+        return f"error: {ex}"
+    if r == "resultado_recibido":
+        marcar_sincronizacion(db, ev, True)
+    elif r == "en_curso" and origen == "webhook":
+        # el proveedor AVISÓ que terminó, pero su API aún no lo confirma: falla confirmada de recuperación → reintento
+        marcar_sincronizacion(db, ev, False, "El proveedor avisó que terminó, pero su API todavía no entrega el resultado.", por)
+    return r
 
 
 def resumen_resultado(datos) -> str:

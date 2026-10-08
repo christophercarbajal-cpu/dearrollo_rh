@@ -14,8 +14,9 @@ import { AlertTriangle, Award, Bot, Briefcase, CalendarClock, CheckCircle2, Chev
 import { Badge, Button, Card, Logo } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { FormularioResultado } from "@/components/dashboard/evaluaciones/formulario-resultado";
+import { ReferenciasDictamen } from "@/components/dashboard/evaluaciones/referencias-dictamen";
 import {
-  enviarResultadoPublico, fetchEvaluacionPublica, urlAdjuntoEvaluacionPublica, urlArchivoEvaluacionPublica, type EvaluacionPublica,
+  dictaminarReferenciaPublica, enviarResultadoPublico, fetchEvaluacionPublica, urlAdjuntoEvaluacionPublica, urlArchivoEvaluacionPublica, type EvaluacionPublica,
 } from "@/lib/api";
 import { textoCita, textoFechaHora } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
@@ -114,6 +115,21 @@ export function EvaluacionPublicaPagina({ token }: { token: string }) {
               <Card className="mt-3 p-5">
                 <p className="text-sm font-semibold">Instrucciones</p>
                 <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-ink-2">{ev.instrucciones}</p>
+              </Card>
+            )}
+            {ev.tipo === "referencias" && (
+              // 2026-10-08 — fase 2: los contactos que capturó el candidato, con dictamen POR contacto
+              <Card className="mt-3 p-5">
+                <p className="text-sm font-semibold">Referencias del candidato</p>
+                {info.esperandoReferencias ? (
+                  <p className="mt-1 text-sm text-ink-2">El candidato aún no comparte sus referencias. Te avisaremos en cuanto las capture.</p>
+                ) : (
+                  <>
+                    <p className="mt-1 mb-3 text-[13px] text-ink-3">Contacta a cada referencia y registra su dictamen. El resultado general va al final.</p>
+                    <ReferenciasDictamen referencias={ev.referencias ?? []} soloLectura={info.cancelada}
+                      onDictaminar={(rid, datos) => dictaminarReferenciaPublica(token, rid, datos)} />
+                  </>
+                )}
               </Card>
             )}
             {(ev.guion?.preguntas?.length ?? 0) > 0 && (

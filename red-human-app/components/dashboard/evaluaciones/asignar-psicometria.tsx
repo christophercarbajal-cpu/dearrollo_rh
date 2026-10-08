@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Brain, ChevronDown, Loader2, Search, Send } from "lucide-react";
 import { Badge, Button } from "@/components/ui";
-import { asignarPsicometria, fetchVistaPsicometria, proveedorVisible, type PruebaPsicometrica, type RespuestaEvaluacion, type VistaPsicometria } from "@/lib/api";
+import { asignarPsicometria, esFallaDeRed, fetchVistaPsicometria, proveedorVisible, type PruebaPsicometrica, type RespuestaEvaluacion, type VistaPsicometria } from "@/lib/api";
 import type { Candidato } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -76,7 +76,8 @@ export function VistaAsignarPsicometria({ c, pasoId, onListo, onExterna, onCance
   onCancelar: () => void;
 }) {
   const [vista, setVista] = useState<VistaPsicometria | null>(null);
-  const [errorCarga, setErrorCarga] = useState("");
+  const [errorCarga, setErrorCarga] = useState<{ red: boolean; texto: string } | null>(null);
+  const [recarga, setRecarga] = useState(0);
   const [seleccion, setSeleccion] = useState<number[]>([]);
   const [cambiando, setCambiando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -85,15 +86,23 @@ export function VistaAsignarPsicometria({ c, pasoId, onListo, onExterna, onCance
 
   useEffect(() => {
     let vivo = true;
-    fetchVistaPsicometria(c.id, pasoId ?? "").then((v) => {
+    setErrorCarga(null);
+    fetchVistaPsicometria(c.id, pasoId ?? "").then((r) => {
       if (!vivo) return;
-      if (!v) return setErrorCarga("No se pudo cargar la configuración de la psicometría.");
+      // 2026-10-08: una falla de RED (sin conexión con la API) ≠ un error del servidor; la configuración incompleta NO es
+      // error: llega en `configuracion.faltantes` y se muestra qué falta y dónde se arregla.
+      if (!r.ok) {
+        return setErrorCarga(esFallaDeRed(r.error)
+          ? { red: true, texto: "Sin conexión con el servidor: no se pudo cargar la psicometría. Revisa tu conexión y reintenta." }
+          : { red: false, texto: r.error });
+      }
+      const v = r.data;
       setVista(v);
       setSeleccion(v.seleccion);
       if (!v.seleccion.length) setCambiando(true);
     });
     return () => { vivo = false; };
-  }, [c.id, pasoId]);
+  }, [c.id, pasoId, recarga]);
 
   const porId = useMemo(() => new Map((vista?.catalogo ?? []).map((p) => [p.id, p])), [vista]);
   const elegidas = seleccion.map((id) => porId.get(id)).filter((p): p is PruebaPsicometrica => Boolean(p));
@@ -123,7 +132,14 @@ export function VistaAsignarPsicometria({ c, pasoId, onListo, onExterna, onCance
     onListo(r.data, texto);
   }
 
-  if (errorCarga) return <p role="alert" className="text-sm font-semibold text-bad">{errorCarga}</p>;
+  if (errorCarga) {
+    return (
+      <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-bad/40 bg-bad-soft px-3 py-2">
+        <p className="text-sm font-semibold text-bad">{errorCarga.texto}</p>
+        {errorCarga.red && <Button size="sm" variant="outline" onClick={() => setRecarga((n) => n + 1)}>Reintentar</Button>}
+      </div>
+    );
+  }
   if (!vista) return <Loader2 className="h-5 w-5 animate-spin text-ink-3" />;
 
   return (
@@ -142,6 +158,17 @@ export function VistaAsignarPsicometria({ c, pasoId, onListo, onExterna, onCance
             )}
             {vista.noDisponibles > 0 && !cambiada && (
               <p className="mt-1 text-[11px] text-warn">{vista.noDisponibles} prueba(s) de la configuración ya no están activas en el catálogo.</p>
+            )}
+            {(vista.noIntegrables ?? []).length > 0 && (
+              <p className="mt-1 text-[11px] text-warn">
+                {vista.noIntegrables!.join(", ")}: no está disponible por API; se aplica con evaluador o registro manual («Agregar prueba externa»).
+              </p>
+            )}
+            {vista.configuracion && !vista.configuracion.completa && (
+              <ul className="mt-1.5 space-y-0.5 rounded-lg border border-warn/40 bg-warn-soft/50 px-2.5 py-1.5 text-[11px] text-ink-2">
+                <li className="font-semibold text-warn">Configuración incompleta:</li>
+                {vista.configuracion.faltantes.map((f) => <li key={f.clave}>· {f.texto}</li>)}
+              </ul>
             )}
             {!vista.asignada && (
               <button type="button" onClick={() => setCambiando((x) => !x)} disabled={enviando}

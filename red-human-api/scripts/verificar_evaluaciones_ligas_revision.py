@@ -253,11 +253,11 @@ with TestClient(app) as client:
     PS = r.json()["evaluacion"]
     check(r.status_code == 201 and PS["nombre"] == "Batería Cleaver + Terman" and PS["proveedor"] == "Evaluatest" and not PS["usaPsicometricas"],
           "psicométrica guarda nombre de prueba/batería y proveedor (texto libre, sin API)")
-    check(PS["seguimientoTexto"] == "Enviada", "liga enviada al candidato → Enviada (no «En curso» sin confirmación)")
+    check(PS["seguimientoTexto"] == "Esperando candidato", "liga enviada al candidato → Esperando candidato (no «En curso» sin confirmación)")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "psicometrica", "forma": "asignada", "nombre": "16PF", "proveedor": "Consultora X",
                                                              "evaluador": {"tipo": "externo", "nombre": "Psic. Ruiz", "correo": "ruiz@consultora.mx"}})
     PA = r.json()["evaluacion"]
-    check(liga(PA, "evaluador") and PA["seguimientoTexto"] == "Enviada", "asignar a una persona: liga para el evaluador y Enviada")
+    check(liga(PA, "evaluador") and PA["seguimientoTexto"] == "Esperando evaluador", "asignar a una persona: liga para el evaluador y «Esperando evaluador»")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "psicometrica", "forma": "registro_directo", "nombre": "DISC"})
     PR = r.json()["evaluacion"]
     check(PR["seguimientoTexto"] == "Pendiente" and not PR["ligas"], "registrar resultado ahora: sin ligas, Pendiente hasta guardar")

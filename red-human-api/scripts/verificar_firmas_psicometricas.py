@@ -336,10 +336,12 @@ with TestClient(app) as client:
     check(psi.url_candidato("1-EUPQ") == "https://evaluacion.psicometrica.mx/?clave=1-EUPQ", "con «{clave}» la URL se combina con la clave")
     settings.psicometricas_url_candidato = PORTAL
     check(client.post(f"/evaluaciones/{ev2['id']}/integracion/avanzar", headers=H).status_code == 409, "conectada al proveedor: ya no se simula a mano")
-    # 2026-10-07: en la ruta del candidato, la psicométrica conectada y sin resultado ofrece «Sincronizar resultado»
+    # 2026-10-08: el resultado llega solo (webhook + reintentos); «Reintentar sincronización» SOLO con falla confirmada
     seg_pe = client.get(f"/procesos/postulaciones/{PE}", headers=H).json()
     paso_psi = next(x for e in seg_pe["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev2["id"])
-    check(paso_psi["sincronizable"] is True and paso_psi["estado"] == "en_curso", "la ruta muestra «Sincronizar resultado» en la psicométrica en curso")
+    check(paso_psi["sincronizable"] is False and paso_psi["estado"] == "en_curso"
+          and all(m["clave"] != "reintentar_sincronizacion" for m in paso_psi["menu"]),
+          "en curso y sin falla de recuperación: NO aparece «Reintentar sincronización»")
     r = client.post(f"/evaluaciones/{ev2['id']}/sincronizar", headers=H)
     check(r.status_code == 200 and r.json()["sincronizacion"] == "en_curso", "sincronizar sin terminar en el proveedor: no guarda nada")
     settings.psicometricas_webhook_secret = "secreto-xyz"
@@ -348,12 +350,19 @@ with TestClient(app) as client:
     db.expire_all()
     e2 = db.query(Evaluacion).filter(Evaluacion.codigo == ev2["id"]).one()
     check(r.status_code == 200 and e2.estado == "pendiente", "aviso NO confirmado por su API (sin fecha_fin): no se guarda nada (anti-falsificación)")
+    check((e2.sincronizacion or {}).get("estado") == "fallida" and (e2.sincronizacion or {}).get("siguiente_en"),
+          "el proveedor avisó que terminó y su API no lo entrega → falla de recuperación CONFIRMADA con reintento programado")
+    seg_pe = client.get(f"/procesos/postulaciones/{PE}", headers=H).json()
+    paso_psi = next(x for e in seg_pe["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev2["id"])
+    check(paso_psi["sincronizable"] is True and any(m["clave"] == "reintentar_sincronizacion" and m["texto"] == "Reintentar sincronización" for m in paso_psi["menu"]),
+          "con la falla confirmada la actividad ofrece «Reintentar sincronización» en su «…»")
     ESTADO["fecha_fin"] = "2026-09-29 10:00:00"
     client.post("/api/webhooks/psicometricas?secreto=secreto-xyz", json={"clave": "1-EUPQ-0116-164", "type": "termina_prueba"})
     db.expire_all()
     e2 = db.query(Evaluacion).filter(Evaluacion.codigo == ev2["id"]).one()
     check(e2.estado == "con_resultado" and e2.paso_integrada == "resultado_recibido" and len(e2.adjuntos) == 1 and e2.resultado_json.get("terman"),
           "confirmado (fecha_fin) → descarga JSON + PDF y queda «Con resultado» (Resultado recibido · Sin conclusión)")
+    check((e2.sincronizacion or {}).get("estado") == "ok", "recuperación exitosa: la falla previa queda resuelta (sincronización ok)")
     check(e2.registrada_por == "Psicométricas.mx (automático)" and e2.registrada_via == "proveedor" and e2.realizada_por
           and db.query(EventoEvaluacion).filter(EventoEvaluacion.evaluacion_id == e2.id, EventoEvaluacion.canal == "proveedor").count() >= 2,
           "trazabilidad: quién/cuándo (autor = proveedor, captura vía proveedor) y pasos en el historial")

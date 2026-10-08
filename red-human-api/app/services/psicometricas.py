@@ -36,6 +36,10 @@ PRUEBAS_PROVEEDOR = {
     "11": "Barsit", "15": "Moss", "16": "Wonderlic",
 }
 TESTS_MAX = 100  # longitud máxima documentada del campo `Tests`
+# 2026-10-08: pruebas PROYECTIVAS / de aplicación presencial que la plataforma NO ofrece por API (no están en el
+# catálogo oficial de `Tests`). «Persona bajo la lluvia» es una de ellas: se aplica con evaluador o se registra a mano.
+PRUEBAS_SIN_API = ("persona bajo la lluvia", "htp", "casa arbol persona", "casa-arbol-persona", "machover", "figura humana",
+                   "dibujo de la familia", "test del arbol", "bender")
 # Texto para RH cuando el ALTA en el proveedor falla (el detalle técnico va al log y a la bitácora).
 MENSAJE_FALLA_ALTA = "No se pudo generar la prueba. Intenta nuevamente."
 # Nombre visible del proveedor en la interfaz y en los mensajes a RH/candidato: la plataforma es de Red Human.
@@ -90,6 +94,25 @@ def _revisar(r: httpx.Response) -> Union[dict, list]:
         msg = ERRORES.get(codigo) or (datos.get("msg") if isinstance(datos, dict) else "") or f"HTTP {r.status_code}"
         raise PsicometricasError(str(msg), r.status_code)
     return datos
+
+
+def _sin_acentos(texto: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", (texto or "").lower()) if unicodedata.category(c) != "Mn")
+
+
+def disponible_por_api(nombre: str, id_proveedor: str) -> bool:
+    """¿Se puede asignar por la API del proveedor? Solo si TODOS sus IDs están en el catálogo oficial y no es una prueba
+    proyectiva/presencial (`PRUEBAS_SIN_API`). Si no, su forma de aplicación es evaluador o registro manual."""
+    n = _sin_acentos(nombre)
+    if any(x in n for x in PRUEBAS_SIN_API):
+        return False
+    try:
+        tests_de(id_proveedor)
+    except PsicometricasError:
+        return False
+    return True
 
 
 def tests_de(id_proveedor: str) -> str:

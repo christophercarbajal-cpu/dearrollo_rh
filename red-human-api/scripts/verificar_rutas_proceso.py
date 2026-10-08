@@ -351,8 +351,9 @@ with TestClient(app) as client:
     print("\n--- 8. Motor de avance + estados visibles ---")
     from app.models import Bitacora
 
-    # 2026-10-08: vocabulario único (Sin iniciar · Enviada · En curso · Completada · Aprobada · No aprobada · Omitida · Error)
-    VALIDOS = {"sin_iniciar", "enviada", "en_curso", "completada", "aprobada", "no_aprobada", "omitida", "error"}
+    # 2026-10-08: vocabulario único con el cuello de botella real («Enviada» ya no es estado)
+    VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
+               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error"}
     P8 = nueva("Elsa Estados", V_SIN)
     s8 = seg(P8)
     check(all(x.get("estadoUnificado") in VALIDOS and x.get("estadoUnificadoTexto") for e in s8["etapas"] for x in e["pasos"]),
@@ -364,8 +365,8 @@ with TestClient(app) as client:
     r = client.post(f"/evaluaciones/postulaciones/{P8}", json={"tipo": "referencias", "forma": "registro_directo"})
     ev8 = r.json()["evaluacion"]["codigo"]
     s8 = seg(P8)
-    check(next(x for e in s8["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev8)["estadoUnificado"] == "sin_iniciar",
-          "evaluación registrada sin envío confirmado → «Sin iniciar» (crear o copiar su liga no la marca «Enviada»)")
+    check(next(x for e in s8["etapas"] for x in e["pasos"] if x.get("evaluacion") == ev8)["estadoUnificado"] == "pendiente_resultado",
+          "registro directo sin resultado → «Pendiente de resultado» (crear o copiar su liga nunca la marca «Enviada»)")
     for e in s8["etapas"]:
         if e["etapa"] == "Prefiltro":
             for x in e["pasos"]:

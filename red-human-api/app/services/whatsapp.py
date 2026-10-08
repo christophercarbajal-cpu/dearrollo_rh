@@ -412,6 +412,25 @@ def _texto_de_meta(m: dict) -> str:
     return (m.get(tipo) or {}).get("caption", "") if isinstance(m.get(tipo), dict) else ""
 
 
+def acuses_de_entrega(payload: dict) -> List[dict]:
+    """Acuses de Meta (`statuses`: sent/delivered/read/failed) → [{mensaje_id, estado, detalle}]. Alimentan la
+    trazabilidad de envíos por destinatario (2026-10-08: «entregado» / «fallido» confirmados por el canal)."""
+    salida: List[dict] = []
+    if payload.get("object") != "whatsapp_business_account":
+        return salida
+    for entrada in payload.get("entry") or []:
+        for cambio in entrada.get("changes") or []:
+            for st in (cambio.get("value") or {}).get("statuses") or []:
+                if not isinstance(st, dict) or not st.get("id"):
+                    continue
+                errores = st.get("errors") or []
+                detalle = ""
+                if errores and isinstance(errores[0], dict):
+                    detalle = f"{errores[0].get('code', '')} {errores[0].get('title') or errores[0].get('message') or ''}".strip()
+                salida.append({"mensaje_id": str(st["id"]), "estado": str(st.get("status") or ""), "detalle": detalle})
+    return salida
+
+
 def parsear_webhook(payload: dict) -> Optional[dict]:
     """Normaliza el webhook de Meta, WAHA o Evolution.
 

@@ -1667,6 +1667,7 @@ TABLAS_MODULOS_RH = (
     "pruebas_psicometricas", "evaluaciones_candidato",  # Evaluaciones y verificaciones (2026-09-28)
     "firmas_documentos",  # Dropbox Sign (2026-09-29)
     "evaluaciones", "eventos_evaluacion",  # Evaluaciones unificadas — Fase 1 (2026-09-29)
+    "envios_actividad",  # Trazabilidad de envíos por destinatario (2026-10-08)
     "plantillas_proceso",  # Proceso configurable (2026-10-06)
     "chats_telegram", "updates_telegram",  # Canal Telegram (2026-10-06)
 )
@@ -2052,7 +2053,9 @@ CUENTAS_PSICOMETRIA_SIMPLE = {"demo-grupak"}
 # Estados visibles del flujo simple: SOLO tres (derivados de la evaluación; nunca se guardan).
 # 2026-10-08: «error_envio» = la prueba SÍ se generó (tiene clave del proveedor) pero la liga no le llegó al candidato
 # por ningún canal; se resuelve con «Reintentar envío» o «Copiar liga».
-ESTADOS_PSICOMETRIA_SIMPLE = {"sin_enviar": "Sin enviar", "enviada": "Enviada", "error_envio": "Error de envío",
+# 2026-10-08 (trazabilidad por destinatario): «Enviada» ya no es un estado genérico; la clave `enviada` se conserva
+# (compatibilidad) pero se muestra como el cuello de botella real: «Esperando candidato».
+ESTADOS_PSICOMETRIA_SIMPLE = {"sin_enviar": "Sin enviar", "enviada": "Esperando candidato", "error_envio": "Error de envío",
                               "completada": "Completada"}
 
 
@@ -2247,12 +2250,14 @@ ACCIONES_EVENTO_EVALUACION = (
     "creada", "modificada", "reprogramada", "envio", "recordatorio", "cambio_estado", "consentimiento",
     "resultado_registrado", "resultado_corregido", "resultado_complementado", "adjunto_agregado", "migrada",
     "inicio_confirmado", "revisada", "revision_reiniciada",
+    # 2026-10-08: referencias en dos fases, sincronización con el proveedor y captura manual con prioridad
+    "referencias_capturadas", "referencia_dictaminada", "sincronizacion_fallida", "resultado_proveedor_posterior",
 )
 # Seguimiento VISIBLE por tipo (2026-10-01). No son estados nuevos: se DERIVAN de los cinco estados + `enviada_en`
 # (envío confirmado de la liga a quien la realiza), `iniciada_en` (confirmación de inicio) y `revisada_en` (revisión
 # de RH) — `services.evaluaciones.seguimiento`. «En curso»/«En proceso» solo con confirmación de inicio.
 SEGUIMIENTO_EVALUACION = {
-    "psicometrica": {"pendiente": "Pendiente", "enviada": "Enviada", "en_curso": "En curso",
+    "psicometrica": {"pendiente": "Pendiente", "enviada": "Esperando candidato", "en_curso": "En curso",
                      "resultado_recibido": "Resultado recibido", "revisada": "Revisada"},
     "socioeconomica": {"pendiente": "Pendiente", "en_proceso": "En proceso",
                        "resultado_recibido": "Resultado recibido", "revisada": "Revisada"},
@@ -2341,6 +2346,16 @@ class Evaluacion(Base):
     resultado_version: Mapped[int] = mapped_column(Integer, default=0)  # «Este resultado cambió mientras lo editabas»
     resultado_visto_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)  # etiqueta «Nuevo resultado»
     recordatorio_enviado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # --- referencias laborales en DOS fases (2026-10-08): 1) el candidato captura sus contactos en su liga exclusiva
+    # (`referencias_token`); 2) el evaluador recibe su liga y dictamina CADA contacto. Mientras el candidato no capture,
+    # al evaluador no le sale nada. Cada contacto: {id, nombre, empresa, puesto, relacion, telefono, correo, contactado,
+    # dictamen, comentario, dictaminado_por, dictaminado_en}.
+    referencias: Mapped[list] = mapped_column(JSON, default=list)
+    referencias_token: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    referencias_capturadas_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # --- recuperación de resultados del proveedor (2026-10-08): {estado: ok|fallida, intentos, ultimo_intento_en,
+    # ultimo_error, siguiente_en}. «Reintentar sincronización» SOLO aparece con una falla CONFIRMADA (`fallida`).
+    sincronizacion: Mapped[dict] = mapped_column(JSON, default=dict)
     # --- seguimiento (2026-10-01): primer envío CONFIRMADO de la liga a quien realiza la evaluación y confirmación de
     # inicio (proveedor «iniciada» o RH). Sin confirmación nunca se muestra «En curso» / «En proceso». ---
     enviada_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
@@ -2392,6 +2407,46 @@ class EventoEvaluacion(Base):
     estado_nuevo: Mapped[str] = mapped_column(String(30), default="")
     anteriores: Mapped[dict] = mapped_column(JSON, default=dict)  # valores previos de lo que cambió
     detalle: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+# --- Trazabilidad de envíos por destinatario (2026-10-08) ---
+# «Enviada» dejó de ser un estado genérico: cada aviso de una actividad (liga de la prueba, consentimiento, liga del
+# evaluador/médico, captura de referencias, sala de la entrevista, documentos) deja una fila POR CANAL con su estado
+# real. Una llamada de envío = un `lote` (todas sus filas comparten el mismo); el último lote de cada destinatario es lo
+# que se muestra. `entregado`/`fallido` también los escribe el acuse de WhatsApp (statuses del webhook, por `mensaje_id`).
+ESTADOS_ENVIO = {"intento": "Intento", "enviado": "Enviado", "entregado": "Entregado", "fallido": "Fallido"}
+DESTINATARIOS_ENVIO = {"candidato": "Candidato", "evaluador": "Evaluador", "entrevistador": "Entrevistador",
+                       "medico": "Médico", "rh": "RH", "cliente": "Cliente"}
+# Qué se envió (la liga o el aviso): define qué reenviar sin reiniciar el avance de la actividad.
+MOTIVOS_ENVIO = {"consentimiento": "Consentimiento", "evaluador": "Liga del evaluador", "otro_sistema": "Liga de otro sistema",
+                 "proveedor": "Liga de la prueba", "referencias": "Captura de referencias", "entrevista": "Sala de la entrevista",
+                 "documentos": "Liga de documentos", "cita": "Cita", "recordatorio": "Recordatorio", "aviso": "Aviso"}
+
+
+class EnvioActividad(Base):
+    """Un intento de envío a UN destinatario por UN canal. Append-only salvo la confirmación de entrega/fallo que llega
+    después (acuse del canal). Enteros sin llave foránea (tabla del paso NO fatal)."""
+
+    __tablename__ = "envios_actividad"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    postulacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    evaluacion_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
+    paso_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    lote: Mapped[str] = mapped_column(String(24), index=True)
+    destinatario: Mapped[str] = mapped_column(String(20))  # DESTINATARIOS_ENVIO
+    destinatario_nombre: Mapped[str] = mapped_column(String(150), default="")
+    motivo: Mapped[str] = mapped_column(String(20), default="aviso")  # MOTIVOS_ENVIO
+    canal: Mapped[str] = mapped_column(String(20), default="")  # whatsapp | telegram | correo | ""
+    destino: Mapped[str] = mapped_column(String(200), default="")
+    estado: Mapped[str] = mapped_column(String(12), default="intento")  # ESTADOS_ENVIO
+    detalle: Mapped[str] = mapped_column(Text, default="")
+    mensaje_id: Mapped[str] = mapped_column(String(120), default="", index=True)  # wamid / id del canal
+    actor: Mapped[str] = mapped_column(String(150), default="")
+    creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, index=True)
+    actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+    entregado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
 
 # --- Firma electrónica incrustada con Dropbox Sign (2026-09-29) ---

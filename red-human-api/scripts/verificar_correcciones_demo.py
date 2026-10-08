@@ -61,7 +61,17 @@ def webhook_meta(client, telefono: str, texto: str = "", tipo: str = "text", med
         "contacts": [{"profile": {"name": "Karla Demo"}, "wa_id": telefono}],
         "messages": [m],
     }}]}]}
-    return client.post("/webhooks/whatsapp", json=payload)
+    # 2026-10-08: con WHATSAPP_PROVIDER=meta la firma X-Hub-Signature-256 es obligatoria (como la manda Meta)
+    import hashlib
+    import hmac
+    import json as _json
+
+    from app.config import settings as _s
+
+    _s.meta_app_secret = _s.meta_app_secret or "secreto-correcciones-demo"
+    cuerpo = _json.dumps(payload).encode()
+    firma = "sha256=" + hmac.new(_s.meta_app_secret.encode(), cuerpo, hashlib.sha256).hexdigest()
+    return client.post("/webhooks/whatsapp", content=cuerpo, headers={"Content-Type": "application/json", "X-Hub-Signature-256": firma})
 
 
 # --- WhatsApp saliente simulado: guarda lo que se manda ---

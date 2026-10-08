@@ -486,19 +486,21 @@ def _descarte_sugerido(p: Postulacion, pasos: Optional[list]) -> Optional[dict]:
         return None
 
 
-def _pasos_tarjeta(p: Postulacion, evaluaciones=None) -> Optional[list]:
-    """Estado de los pasos de la ruta UNA vez por tarjeta (siguiente actividad + alertas del tablero)."""
+def _pasos_tarjeta(p: Postulacion, evaluaciones=None, precarga: Optional[dict] = None) -> Optional[list]:
+    """Estado de los pasos de la ruta UNA vez por tarjeta (siguiente actividad + alertas del tablero). `precarga`: lo
+    que el listado trajo en bloque (`envios.precarga_tablero`) para que una tarjeta no haga consultas propias."""
     from .services import proceso as sproc
 
     if not p.activa:
         return None
     try:
-        return sproc.estado_pasos(p, evaluaciones)
+        return sproc.estado_pasos(p, evaluaciones, precarga=precarga)
     except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
         return None
 
 
-def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional[int] = None, evaluaciones=None) -> dict:
+def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional[int] = None, evaluaciones=None,
+                     precarga: Optional[dict] = None) -> dict:
     """La tarjeta del Kanban (decisión P4: una por Postulación). `id` es el código P-####
     — es lo que el frontend manda a /candidatos/{codigo}/...; los datos de persona vienen
     aplanados (nombre, teléfono…) por compatibilidad y también en `candidato`.
@@ -511,7 +513,7 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
     exp = p.expediente
     ultima = p.entrevistas[-1] if p.entrevistas else None
     total_postulaciones = len(c.postulaciones)
-    pasos = _pasos_tarjeta(p, evaluaciones)
+    pasos = _pasos_tarjeta(p, evaluaciones, precarga)
     siguiente = _siguiente_actividad(p, evaluaciones, pasos)
 
     base = {
@@ -1310,6 +1312,13 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         "consentimientoTexto": CONSENTIMIENTOS.get(ev.consentimiento or "no_requerido", ""),
         "consentimientoEn": iso(ev.consentimiento_en),
         "ligaConsentimiento": sev.liga_consentimiento(ev) if ev.consentimiento == "pendiente" and not publico else None,
+        # 2026-10-08: referencias laborales en dos fases (el candidato captura; el evaluador dictamina CADA contacto)
+        "referencias": [referencia_dict(x) for x in (ev.referencias or []) if isinstance(x, dict)],
+        "referenciasCapturadasEn": iso(ev.referencias_capturadas_en),
+        "esperandoReferencias": sev.esperando_referencias(ev),
+        "ligaReferencias": sev.liga_referencias(ev) if sev.esperando_referencias(ev) and not publico else None,
+        # recuperación de resultados del proveedor: «Reintentar sincronización» solo con `estado == fallida`
+        "sincronizacion": {k: v for k, v in (ev.sincronizacion or {}).items() if k != "ultimo_error" or not publico},
         "evaluador": {
             "tipo": ev.evaluador_tipo, "usuarioId": ev.evaluador_usuario_id, "contactoId": ev.evaluador_contacto_id,
             "nombre": ev.evaluador_nombre or "", "correo": "" if publico else (ev.evaluador_correo or ""),
@@ -1368,6 +1377,11 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
 
         db = object_session(ev)
         salida["ligas"] = sev.ligas_de(db, ev) if db is not None else []
+        # trazabilidad por destinatario (intento · enviado · entregado · fallido) del último envío a cada quien
+        from .services import envios as senv
+
+        salida["envios"] = ({d: {k: v for k, v in x.items() if k != "porMotivo"} for d, x in senv.de_evaluacion(db, ev).items()}
+                            if db is not None else {})
     if not restringido:
         salida["comentarios"] = ev.comentarios or ""
         salida["adjuntos"] = [
@@ -1379,6 +1393,18 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
         salida["comentarios"] = ""
         salida["adjuntos"] = []
     return salida
+
+
+def referencia_dict(x: dict) -> dict:
+    from .models import DICTAMENES_GENERALES
+
+    return {
+        "id": x.get("id"), "nombre": x.get("nombre") or "", "empresa": x.get("empresa") or "", "puesto": x.get("puesto") or "",
+        "relacion": x.get("relacion") or "", "telefono": x.get("telefono") or "", "correo": x.get("correo") or "",
+        "contactado": x.get("contactado"), "dictamen": x.get("dictamen") or None,
+        "dictamenTexto": DICTAMENES_GENERALES.get(x.get("dictamen") or "", ""), "comentario": x.get("comentario") or "",
+        "dictaminadoPor": x.get("dictaminado_por") or "", "dictaminadoEn": x.get("dictaminado_en"),
+    }
 
 
 def sev_siguiente(ev):
@@ -1431,7 +1457,9 @@ def acciones_evaluacion(ev, restringido: bool = False) -> dict:
         menu.append("cancelar")
     if ev.forma == "integrada" and ev.estado in ("pendiente", "realizada_sin_resultado") and not bloqueo:
         if ev.clave_proveedor:
-            menu.insert(0, "sincronizar")
+            # 2026-10-08: el resultado llega solo (webhook + reintentos); el botón solo con una falla CONFIRMADA
+            if (ev.sincronizacion or {}).get("estado") == "fallida":
+                menu.insert(0, "sincronizar")
         elif ev.estado == "pendiente" and (ev.paso_integrada or "asignada") == "asignada":
             menu.insert(0, "enviar_proveedor")
         elif sev_siguiente(ev):
@@ -1448,6 +1476,9 @@ def evento_evaluacion_dict(e) -> dict:
         "resultado_registrado": "Resultado registrado", "resultado_corregido": "Resultado corregido",
         "resultado_complementado": "Resultado complementado", "adjunto_agregado": "Adjunto agregado", "migrada": "Migración al modelo unificado",
         "inicio_confirmado": "Inicio confirmado", "revisada": "Revisada por RH", "revision_reiniciada": "Revisión reiniciada (resultado nuevo)",
+        "referencias_capturadas": "Referencias capturadas por el candidato", "referencia_dictaminada": "Referencia dictaminada",
+        "sincronizacion_fallida": "Falla al recuperar el resultado del proveedor",
+        "resultado_proveedor_posterior": "Resultado del proveedor posterior a la captura manual (se conserva la captura)",
     }
     canales = {"sistema": "Sistema", "liga_evaluador": "Liga del evaluador", "liga_candidato": "Liga del candidato", "proveedor": "Proveedor", "migracion": "Migración"}
     return {

@@ -197,8 +197,10 @@ with TestClient(app) as client:
               "evento «Psicometría enviada»: portal + clave por el canal activo y por correo")
         seg = client.get(f"/procesos/postulaciones/{P1}", headers=H).json()
         paso_ruta = next(x for e in seg["etapas"] for x in e["pasos"] if x["id"] == paso_psi["id"])
-        check(paso_ruta["evaluacion"] == e1["codigo"] and paso_ruta["estadoUnificado"] == "enviada",
-              "Ruta y Evaluaciones leen el MISMO registro («Enviada» en la ruta)")
+        # 2026-10-08: «Enviada» ya no es estado; la ruta dice a quién espera y el envío por destinatario viaja aparte
+        check(paso_ruta["evaluacion"] == e1["codigo"] and paso_ruta["estadoUnificado"] == "esperando_candidato"
+              and paso_ruta["envios"]["candidato"]["estado"] == "enviado",
+              "Ruta y Evaluaciones leen el MISMO registro («Esperando candidato» + envío al candidato confirmado)")
         n = len(LLAMADAS)
         r = client.post(f"/evaluaciones/postulaciones/{P1}/psicometria", headers=H, json={"paso_id": paso_psi["id"]})
         check(r.status_code == 409 and len(LLAMADAS) == n, "doble clic: 409 SIN volver a llamar al proveedor (no gasta saldo ni duplica)")

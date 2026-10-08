@@ -89,10 +89,9 @@ def _procesar_psicometricas(clave: str, tipo: str, datos: dict) -> None:
                 sev.evento(db, ev, "envio", "Psicométricas.mx", "proveedor",
                            nota=f"El candidato terminó la práctica de {datos.get('nombre_prueba') or 'la prueba'}.")
                 continue
-            try:
-                r = sev.sincronizar_psicometricas(db, ev)
-            except psi.PsicometricasError as ex:
-                r = f"error: {ex}"
+            # 2026-10-08: captura manual con prioridad (nunca se sobrescribe) y falla de recuperación CONFIRMADA →
+            # `sincronizacion = fallida` (el job reintenta con espera y RH ve «Reintentar sincronización»).
+            r = sev.recuperar_resultado(db, ev, origen="webhook")
             registrar(db, "psicometricas", "evaluacion_webhook", "evaluaciones", ev.codigo, {"tipo": tipo, "resultado": r})
         db.commit()
         log.info("[PSICOMETRICAS] %s %s → %d evaluación(es)", tipo, clave, len(evs))

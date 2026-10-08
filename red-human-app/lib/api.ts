@@ -9,7 +9,7 @@
    ============================================================ */
 
 import type {
-  Candidato, EtapaCandidato, EtapasProceso, PasoProceso, ProcesoConfig, ReglaPaso, ResponsablePaso, SeguimientoProceso, Vacante,
+  Candidato, EnvioDestinatario, EtapaCandidato, EtapasProceso, PasoProceso, ProcesoConfig, ReglaPaso, ResponsablePaso, SeguimientoProceso, Vacante,
 } from "@/lib/data";
 import type { NuevoIngreso, ResumenTableroOnboarding } from "@/lib/phase2";
 
@@ -3168,9 +3168,20 @@ export interface VistaPsicometria {
   faltaCorreo: boolean;
   consentimiento: boolean;
   asignada: Evaluacion | null;
+  /** 2026-10-08: configuración incompleta (qué falta y dónde se arregla); nunca es un error de carga. */
+  configuracion?: { completa: boolean; faltantes: { clave: string; texto: string }[] };
+  /** Pruebas de la batería que la plataforma no ofrece por API (p. ej. «Persona bajo la lluvia»): van con evaluador. */
+  noIntegrables?: string[];
 }
+/** 2026-10-08: regresa `Resultado` para distinguir una falla de RED (`esFallaDeRed`) de un error del servidor; una
+ * configuración incompleta NO es error: viaja en `configuracion.faltantes`. */
 export function fetchVistaPsicometria(codigoPostulacion: string, pasoId = "") {
-  return get<VistaPsicometria>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria${pasoId ? `?paso_id=${encodeURIComponent(pasoId)}` : ""}`);
+  return enviar<VistaPsicometria>(`/evaluaciones/postulaciones/${codigoPostulacion}/psicometria${pasoId ? `?paso_id=${encodeURIComponent(pasoId)}` : ""}`,
+    { method: "GET", cache: "no-store" });
+}
+/** ¿El error es que no hubo conexión con la API (red caída / servidor apagado)? */
+export function esFallaDeRed(error: string) {
+  return error === SIN_API;
 }
 /** «Asignar y enviar»: alta en el proveedor + clave + aviso por Notificaciones. Si el proveedor falla no queda nada. */
 /** `correo` (2026-10-07, modal de psicometría): se guarda en la ficha ANTES de llamar al proveedor; sin él no se toca. */
@@ -3261,6 +3272,12 @@ export interface Evaluacion {
   creadoPor: string; creadoEn: string | null; actualizadoEn: string | null;
   ligaEvaluador?: string | null;
   ligas?: LigaEvaluacion[];
+  /** 2026-10-08: referencias en dos fases (el candidato captura; el evaluador dictamina cada contacto). */
+  referencias?: Referencia[]; referenciasCapturadasEn?: string | null; esperandoReferencias?: boolean; ligaReferencias?: string | null;
+  /** Recuperación del resultado del proveedor: «Reintentar sincronización» solo con `estado === "fallida"`. */
+  sincronizacion?: { estado?: "ok" | "fallida"; intentos?: number; ultimo_error?: string; siguiente_en?: string | null };
+  /** Trazabilidad del último envío a cada destinatario. */
+  envios?: Record<string, EnvioDestinatario>;
   revision?: { revisadaEn: string | null; revisadaPor: string; conclusion: string | null; conclusionTexto: string; comentario: string } | null;
   acciones: { principal: AccionEvaluacion | null; secundaria: AccionEvaluacion | null; menu: AccionEvaluacion[] };
 }
@@ -3397,6 +3414,8 @@ export interface ExpedienteEvaluador {
 export interface EvaluacionPublica {
   evaluacion: Evaluacion; cancelada: boolean; enEsperaConsentimiento: boolean; yaTieneResultado: boolean; avisoResultadoRh: string;
   expediente: ExpedienteEvaluador; empresa: string;
+  /** Referencias (2026-10-08): el candidato aún no captura sus contactos. */
+  esperandoReferencias?: boolean;
 }
 /** Con motivo de error (la pantalla pública distingue liga inválida de falla de red). */
 export async function fetchEvaluacionPublica(token: string): Promise<Resultado<EvaluacionPublica>> {
@@ -3553,6 +3572,56 @@ export function omitirPasoProceso(codigoPostulacion: string, pasoId: string, mot
 }
 export function cancelarPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/cancelar`, { motivo });
+}
+/** «Iniciar» en UN paso (2026-10-08): ejecuta lo configurado; si falta un dato crítico regresa `faltan` sin crear nada. */
+export type RespuestaIniciar = RespuestaPaso & {
+  iniciada: boolean; faltan?: ("evaluador" | "correo" | "pruebas")[]; mensaje: string; evaluacion?: string;
+  yaExistia?: boolean; simulado?: boolean; advertencias?: string[];
+};
+export function iniciarActividad(codigoPostulacion: string, pasoId: string, datos: {
+  forma?: string; evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; nombre?: string; correo?: string; whatsapp?: string } | null;
+  correo?: string; prueba_ids?: number[];
+} = {}) {
+  return post<RespuestaIniciar>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/iniciar`, datos);
+}
+/** Reenvío GRANULAR: la liga que le toca a ese destinatario; no cambia el estado de la actividad. */
+export function reenviarActividad(codigoPostulacion: string, pasoId: string, a: string) {
+  return post<RespuestaPaso & { ok: boolean; enviado: boolean; resultados: { canal: string; enviado: boolean; detalle: string }[] }>(
+    `/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reenviar`, { a });
+}
+/** «Registrar resultado» de algo hecho fuera del sistema (dictamen + quién la aplicó; quién capturó = la sesión). */
+export function registrarResultadoActividad(codigoPostulacion: string, pasoId: string, datos: {
+  conclusion: string; comentarios: string; realizadaPor: string; archivos?: File[];
+}) {
+  const form = new FormData();
+  form.append("conclusion", datos.conclusion);
+  form.append("comentarios", datos.comentarios);
+  form.append("realizada_por", datos.realizadaPor);
+  (datos.archivos ?? []).forEach((f) => form.append("archivos", f));
+  return subir<RespuestaPaso & { evaluacion: string }>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/resultado`, form);
+}
+/** Referencias en dos fases: liga EXCLUSIVA del candidato para capturar sus contactos (fase 1). */
+export interface ReferenciaCaptura { nombre: string; empresa: string; puesto: string; relacion: string; telefono: string; correo: string }
+export interface VistaReferencias {
+  candidato: string; empresa: string; puesto: string; cancelada: boolean; capturadas: boolean; capturadasEn: string | null;
+  minimo: number; maximo: number; referencias: (ReferenciaCaptura & { id: string })[];
+}
+export function fetchReferenciasPublicas(token: string) {
+  return enviar<VistaReferencias>(`/evaluaciones/publica/referencias/${encodeURIComponent(token)}`, { method: "GET", cache: "no-store" });
+}
+export function capturarReferencias(token: string, referencias: ReferenciaCaptura[]) {
+  return post<{ ok: boolean; total: number }>(`/evaluaciones/publica/referencias/${encodeURIComponent(token)}`, { referencias });
+}
+/** Fase 2: dictamen de UNA referencia (evaluador por su liga o RH desde el sistema). */
+export interface Referencia extends ReferenciaCaptura {
+  id: string; contactado: boolean | null; dictamen: string | null; dictamenTexto: string; comentario: string;
+  dictaminadoPor: string; dictaminadoEn: string | null;
+}
+export function dictaminarReferenciaPublica(token: string, rid: string, datos: { contactado: boolean; dictamen: string; comentario: string }) {
+  return post<{ ok: boolean; referencia: Referencia }>(`/evaluaciones/publica/${encodeURIComponent(token)}/referencias/${rid}`, datos);
+}
+export function dictaminarReferencia(codigoEvaluacion: string, rid: string, datos: { contactado: boolean; dictamen: string; comentario: string }) {
+  return post<{ ok: boolean; referencia: Referencia; evaluacion: Evaluacion }>(`/evaluaciones/${codigoEvaluacion}/referencias/${rid}`, datos);
 }
 export function reactivarPasoProceso(codigoPostulacion: string, pasoId: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reactivar`);

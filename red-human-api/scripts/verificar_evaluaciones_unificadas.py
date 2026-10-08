@@ -273,8 +273,9 @@ with TestClient(app) as client:
     client.post(f"/evaluaciones/publica/consentimiento/{tok_c2}/rechazar")
     r = client.get(f"/evaluaciones/postulaciones/{P}").json()
     m2 = next(x for x in r if x["codigo"] == M2)
-    check(m2["consentimiento"] == "rechazado" and m2["acciones"]["menu"] == ["cancelar"] and m2["acciones"]["principal"] is None,
-          "consentimiento rechazado: la única acción es Cancelar")
+    # 2026-10-08 (médica estricta): rechazar el consentimiento CANCELA la evaluación médica (al médico nunca le sale nada)
+    check(m2["consentimiento"] == "rechazado" and m2["estado"] == "cancelada" and m2["acciones"]["principal"] is None,
+          "consentimiento rechazado: la evaluación médica se cancela sola")
 
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
                                                              "cita": {"fecha": "2026-10-07", "hora": "10:00", "modalidad": "Teléfono", "telefono": "5512345678"}})

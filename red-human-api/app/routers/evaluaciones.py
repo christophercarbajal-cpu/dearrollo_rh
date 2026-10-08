@@ -127,6 +127,12 @@ def _validar_prueba(db: Session, cuenta_id: int, pr: PruebaPsicometrica) -> None
         raise HTTPException(400, "El modo «Enlace externo» necesita la liga de la prueba (https://…).")
     if pr.modo == "integrada" and not (pr.proveedor or "").strip():
         raise HTTPException(400, "El modo «Integrada» necesita el proveedor.")
+    from ..services import psicometricas as psi
+
+    if pr.modo == "integrada" and psi.es_psicometricas(pr.proveedor) and not psi.disponible_por_api(pr.nombre, pr.id_proveedor):
+        # 2026-10-08: no existe en la API del proveedor (p. ej. «Persona bajo la lluvia», proyectiva): se aplica con
+        # evaluador o se registra a mano. Se guarda como «Carga manual», nunca como integrada.
+        pr.modo = "manual"
     pr.puestos = [p.strip()[:200] for p in (pr.puestos or []) if p and p.strip()]
     otra = (
         db.query(PruebaPsicometrica)
@@ -389,6 +395,13 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     resultados: list = []
     if datos.forma != "registro_directo":
         resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
+    # 2026-10-08 — flujos de DOS fases, fase 1 automática al crear (la fase 2, al evaluador/médico, sale sola después):
+    #   médica: la solicitud de consentimiento va al candidato; el médico NO recibe nada hasta que acepte.
+    #   referencias: el candidato recibe su liga exclusiva para capturar contactos; el evaluador, hasta que capture.
+    if ev.consentimiento == "pendiente":
+        resultados += await _enviar_liga_candidato(db, ev, p, u, "consentimiento", cuenta)
+    elif sev.esperando_referencias(ev):
+        resultados += await _enviar_liga_candidato(db, ev, p, u, "referencias", cuenta)
     registrar(db, u.nombre, "evaluacion_creada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "tipo": ev.tipo, "forma": ev.forma, "evaluador": ev.evaluador_nombre,
                "cita": fechas.iso(ev.cita_fecha_hora), "etapa": p.etapa, "movida_a_filtro_humano": movida,
@@ -778,9 +791,21 @@ def _candado_psicometria(postulacion_id: int) -> asyncio.Lock:
 
 
 def _catalogo_integrado(db: Session, cuenta_id: int) -> List[PruebaPsicometrica]:
-    return (db.query(PruebaPsicometrica)
-            .filter(PruebaPsicometrica.cuenta_id == cuenta_id, PruebaPsicometrica.activa.is_(True), PruebaPsicometrica.modo == "integrada")
-            .order_by(PruebaPsicometrica.nombre).all())
+    """Pruebas que SÍ se asignan por la API del proveedor. Las que no existen ahí (proyectivas como «Persona bajo la
+    lluvia») quedan fuera aunque una captura vieja las tenga como integradas: van por evaluador / registro manual."""
+    from ..services import psicometricas as psi
+
+    filas = (db.query(PruebaPsicometrica)
+             .filter(PruebaPsicometrica.cuenta_id == cuenta_id, PruebaPsicometrica.activa.is_(True), PruebaPsicometrica.modo == "integrada")
+             .order_by(PruebaPsicometrica.nombre).all())
+    return [x for x in filas if not psi.es_psicometricas(x.proveedor) or psi.disponible_por_api(x.nombre, x.id_proveedor or "")]
+
+
+def _sin_api(db: Session, cuenta_id: int) -> List[PruebaPsicometrica]:
+    from ..services import psicometricas as psi
+
+    return [x for x in db.query(PruebaPsicometrica).filter(PruebaPsicometrica.cuenta_id == cuenta_id, PruebaPsicometrica.activa.is_(True)).all()
+            if psi.es_psicometricas(x.proveedor) and not psi.disponible_por_api(x.nombre, x.id_proveedor or "")]
 
 
 def _pruebas_de_ruta(proc: dict, paso_id: str = "") -> List[int]:
@@ -837,7 +862,24 @@ def vista_psicometria(codigo: str, paso_id: str = "", db: Session = Depends(get_
     seleccion = [por_id[i] for i in ids if i in por_id]
     tests = _tests(",".join(x.id_proveedor or "" for x in seleccion)) if seleccion else ""
     vigente = _ya_asignada(_psicometrias_vivas(db, p), tests) if tests else None
+    sin_api = {x.id: x for x in _sin_api(db, cuenta.id)}
+    no_integrables = [sin_api[i].nombre for i in ids if i in sin_api]
+    # 2026-10-08: «No se pudo cargar la configuración» se separa en DOS: una falla de red (la pinta el navegador) y una
+    # configuración INCOMPLETA (esta lista, con qué falta y dónde se arregla). Nunca se responde error por configuración.
+    faltantes = []
+    if not catalogo:
+        faltantes.append({"clave": "catalogo", "texto": "No hay pruebas conectadas al proveedor en el catálogo (Configuración → Pruebas psicométricas)."})
+    elif not seleccion:
+        faltantes.append({"clave": "bateria", "texto": "La actividad no tiene batería configurada: elige las pruebas con «Cambiar selección»."})
+    if ids and len([i for i in ids if i not in por_id and i not in sin_api]):
+        faltantes.append({"clave": "inactivas", "texto": "Alguna prueba de la batería ya no está activa en el catálogo."})
+    if not p.consentimiento:
+        faltantes.append({"clave": "consentimiento", "texto": "Falta el consentimiento de privacidad del candidato (LFPDPPP)."})
+    if psi.configurado() and not (p.correo or "").strip():
+        faltantes.append({"clave": "correo", "texto": "Falta el correo del candidato: ahí recibe su prueba."})
     return {
+        "configuracion": {"completa": not faltantes, "faltantes": faltantes},
+        "noIntegrables": no_integrables,
         "paso": {"id": paso["id"], "nombre": paso["nombre"]} if paso else None,
         "seleccion": [x.id for x in seleccion],
         "origen": origen,
@@ -887,6 +929,20 @@ async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Sess
         if not ids:
             raise HTTPException(400, "Elige la batería o las pruebas del catálogo («Cambiar selección»).")
         por_id = {x.id: x for x in _catalogo_integrado(db, cuenta.id)}
+        sin_api = {x.id: x for x in _sin_api(db, cuenta.id)}
+        if any(i in sin_api for i in ids):
+            from ..services import psicometricas as psi_
+
+            def _motivo(x: PruebaPsicometrica) -> str:
+                try:
+                    psi_.tests_de(x.id_proveedor or "")
+                    return f"{x.nombre} (prueba de aplicación presencial)"
+                except psi_.PsicometricasError:
+                    return f"{x.nombre} (el ID «{x.id_proveedor}» no existe en la plataforma)"
+
+            nombres = "; ".join(_motivo(sin_api[i]) for i in ids if i in sin_api)
+            raise HTTPException(400, f"No disponible por API: {nombres}. Se aplica con un evaluador o se registra a mano "
+                                     "(«Agregar prueba externa»).")
         if any(i not in por_id for i in ids):
             raise HTTPException(400, "Alguna prueba elegida ya no está activa en el catálogo; vuelve a elegir con «Cambiar selección».")
         pruebas = [por_id[i] for i in ids]
@@ -999,13 +1055,12 @@ async def sincronizar(codigo: str, db: Session = Depends(get_db), u: Usuario = D
     ev = _ev(db, codigo, cuenta.id)
     if not ev.clave_proveedor:
         raise HTTPException(409, "Esta evaluación no está conectada a la plataforma de evaluación.")
-    try:
-        with _negocio():
-            r = sev.sincronizar_psicometricas(db, ev)
-    except psi.PsicometricasError as ex:
-        raise HTTPException(502, str(ex))
+    with _negocio():
+        r = sev.recuperar_resultado(db, ev, u.nombre, "rh")
     registrar(db, u.nombre, "evaluacion_sincronizada", "evaluaciones", ev.codigo, {"resultado": r, "correo_rh": u.correo})
     db.commit()
+    if r.startswith("error:"):
+        raise HTTPException(502, f"No se pudo recuperar el resultado: {r[6:].strip()[:240]}. Se reintentará automáticamente.")
     if r == "resultado_recibido":
         try:
             await sproc.avanzar_seguro(db, sev.postulacion_de(db, ev))
@@ -1063,6 +1118,15 @@ async def _enviar_liga_candidato(db: Session, ev: Evaluacion, p: Postulacion, u:
         texto = (f"Hola {p.nombre}. Para continuar con tu proceso en {empresa} necesitamos tu consentimiento por escrito para la "
                  "evaluación médica. Léelo y, si estás de acuerdo, acéptalo aquí:")
         accion_bitacora = "consentimiento_medico_solicitado"
+    elif clave == "referencias":
+        sev.asegurar_ligas(ev)
+        liga = sev.liga_referencias(ev)
+        if not liga:
+            raise HTTPException(409, "Esta evaluación no pide referencias al candidato.")
+        asunto = "Comparte tus referencias laborales"
+        texto = (f"Hola {p.nombre}. Como parte de tu proceso en {empresa}, comparte los datos de contacto de tus referencias "
+                 "laborales (jefes o compañeros anteriores) en esta liga:")
+        accion_bitacora = "referencias_solicitadas"
     elif clave == "proveedor" and sev.usa_psicometricas(ev) and ev.clave_proveedor:
         # Psicométricas.mx: mismo aviso que al enviar (portal + clave + pasos, por canal activo y correo).
         resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id)
@@ -1205,6 +1269,7 @@ def publica(token: str, db: Session = Depends(get_db)):
         "avisoResultadoRh": (f"RH ya registró un resultado el {fechas.local(ev.registrada_en).strftime('%d/%m/%Y')}" if registrada_por_rh and ev.registrada_en else ""),
         "expediente": _expediente_para_evaluador(db, ev, p),
         "empresa": nombre_empresa_candidato(p.vacante) if p.vacante else "",
+        "esperandoReferencias": sev.esperando_referencias(ev),
     }
 
 
@@ -1325,8 +1390,9 @@ async def aceptar_consentimiento(token: str, datos: AceptarConsentimientoIn, req
 
 
 @router.post("/publica/consentimiento/{token}/rechazar")
-def rechazar_consentimiento(token: str, request: Request, db: Session = Depends(get_db)):
-    """El candidato no otorga su consentimiento. La evaluación conserva su estado; la única acción de RH es Cancelar."""
+async def rechazar_consentimiento(token: str, request: Request, db: Session = Depends(get_db)):
+    """El candidato no otorga su consentimiento (2026-10-08, médica estricta): la evaluación médica se CANCELA sola y
+    al médico nunca le sale nada. La actividad queda «No aprobada»: RH decide (descartar u omitirla con motivo)."""
     ev = _por_token_consentimiento(db, token)
     if ev.estado == "cancelada":
         raise HTTPException(409, "Esta evaluación fue cancelada.")
@@ -1338,6 +1404,160 @@ def rechazar_consentimiento(token: str, request: Request, db: Session = Depends(
     ev.consentimiento = "rechazado"
     sev.evento(db, ev, "consentimiento", p.nombre or "Candidato", "liga_candidato", anteriores={"consentimiento": anterior}, valor="rechazado",
                ip=(request.client.host if request.client else "")[:64])
-    registrar(db, "candidato", "consentimiento_medico_rechazado", "postulacion", p.codigo, {"evaluacion": ev.codigo})
+    if ev.estado in ("pendiente", "no_realizada"):
+        with _negocio():
+            sev.cambiar_estado(db, ev, "cancelada", p.nombre or "Candidato", "liga_candidato",
+                               "El candidato rechazó el consentimiento para la evaluación médica.")
+    registrar(db, "candidato", "consentimiento_medico_rechazado", "postulacion", p.codigo, {"evaluacion": ev.codigo, "cancelada": ev.estado == "cancelada"})
+    _recalcular_indicador(p)
     db.commit()
+    await sproc.avanzar_seguro(db, p)  # nunca avanza (No aprobada): en ruta automática deja el «Descarte sugerido»
     return {"ok": True, "rechazado": True}
+
+
+# ---------------- Referencias laborales en DOS fases (2026-10-08) ----------------
+# Fase 1: el candidato abre su liga EXCLUSIVA (`/referencias/{token}`) y captura sus contactos. Fase 2: en cuanto los
+# guarda, al evaluador asignado le sale su liga (`/evaluacion/{token}`) y dictamina CADA contacto; el resultado general
+# usa el formulario único de siempre. Nada de esto mueve la etapa.
+
+REFERENCIAS_MIN, REFERENCIAS_MAX = 1, 5
+
+
+def _por_token_referencias(db: Session, token: str) -> Evaluacion:
+    ev = db.query(Evaluacion).filter(Evaluacion.referencias_token == token).first() if token else None
+    if not ev:
+        raise HTTPException(404, "Esta liga no es válida.")
+    return ev
+
+
+@router.get("/publica/referencias/{token}")
+def ver_referencias(token: str, db: Session = Depends(get_db)):
+    ev = _por_token_referencias(db, token)
+    with _negocio():
+        p = sev.postulacion_de(db, ev)
+    from ..serial import referencia_dict
+
+    return {
+        "candidato": p.nombre or "", "empresa": nombre_empresa_candidato(p.vacante) if p.vacante else "",
+        "puesto": p.vacante.titulo if p.vacante else "", "cancelada": ev.estado == "cancelada",
+        "capturadas": bool(ev.referencias_capturadas_en), "capturadasEn": fechas.iso(ev.referencias_capturadas_en),
+        "minimo": REFERENCIAS_MIN, "maximo": REFERENCIAS_MAX,
+        # el candidato solo ve lo que él capturó (nunca el dictamen del evaluador)
+        "referencias": [{k: v for k, v in referencia_dict(x).items() if k in ("id", "nombre", "empresa", "puesto", "relacion", "telefono", "correo")}
+                        for x in (ev.referencias or []) if isinstance(x, dict)],
+    }
+
+
+class ReferenciaIn(BaseModel):
+    nombre: str
+    empresa: str = ""
+    puesto: str = ""
+    relacion: str = ""
+    telefono: str = ""
+    correo: str = ""
+
+
+class CapturaReferenciasIn(BaseModel):
+    referencias: List[ReferenciaIn]
+
+
+def _limpiar_referencia(r: ReferenciaIn, i: int) -> dict:
+    from ..services.telegram import telefono_10 as normalizar_telefono_mx
+
+    nombre = " ".join((r.nombre or "").split())[:150]
+    if len(nombre) < 3:
+        raise HTTPException(400, f"Referencia {i}: escribe el nombre completo.")
+    empresa = (r.empresa or "").strip()[:150]
+    if not empresa:
+        raise HTTPException(400, f"Referencia {i}: escribe la empresa donde trabajaron juntos.")
+    correo = (r.correo or "").strip().lower()[:200]
+    telefono = normalizar_telefono_mx(r.telefono or "") if (r.telefono or "").strip() else ""
+    if correo and not re.match(sev.RE_CORREO_SIMPLE, correo):
+        raise HTTPException(400, f"Referencia {i}: el correo no tiene un formato válido.")
+    if (r.telefono or "").strip() and len(telefono) != 10:
+        raise HTTPException(400, f"Referencia {i}: el teléfono debe tener 10 dígitos.")
+    if not correo and not telefono:
+        raise HTTPException(400, f"Referencia {i}: agrega un teléfono o un correo para poder contactarla.")
+    return {"id": secrets.token_hex(4), "nombre": nombre, "empresa": empresa, "puesto": (r.puesto or "").strip()[:150],
+            "relacion": (r.relacion or "").strip()[:100], "telefono": telefono, "correo": correo,
+            "contactado": None, "dictamen": "", "comentario": ""}
+
+
+@router.post("/publica/referencias/{token}")
+async def capturar_referencias(token: str, datos: CapturaReferenciasIn, request: Request, db: Session = Depends(get_db)):
+    """Fase 1 → fase 2: guarda los contactos del candidato y, en el mismo momento, manda al evaluador su liga."""
+    ev = _por_token_referencias(db, token)
+    if ev.estado == "cancelada":
+        raise HTTPException(409, "Esta solicitud de referencias fue cancelada.")
+    if ev.referencias_capturadas_en:
+        raise HTTPException(409, "Ya compartiste tus referencias. Gracias.")
+    if not (REFERENCIAS_MIN <= len(datos.referencias) <= REFERENCIAS_MAX):
+        raise HTTPException(400, f"Comparte entre {REFERENCIAS_MIN} y {REFERENCIAS_MAX} referencias.")
+    with _negocio():
+        p = sev.postulacion_de(db, ev)
+    ev.referencias = [_limpiar_referencia(r, i + 1) for i, r in enumerate(datos.referencias)]
+    ev.referencias_capturadas_en = datetime.now(timezone.utc)
+    sev.evento(db, ev, "referencias_capturadas", p.nombre or "Candidato", "liga_candidato", total=len(ev.referencias),
+               ip=(request.client.host if request.client else "")[:64])
+    resultados: list = []
+    if ev.forma == "asignada" and ev.estado == "pendiente":
+        resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", "sistema", audiencias={"entrevistador"})
+    registrar(db, "candidato", "referencias_capturadas", "postulacion", p.codigo,
+              {"evaluacion": ev.codigo, "total": len(ev.referencias), "aviso_evaluador": resultados})
+    db.commit()
+    return {"ok": True, "total": len(ev.referencias)}
+
+
+class DictamenReferenciaIn(BaseModel):
+    contactado: bool = True
+    dictamen: str = ""  # favorable | con_observaciones | desfavorable
+    comentario: str = ""
+
+
+def _dictaminar(db: Session, ev: Evaluacion, rid: str, datos: DictamenReferenciaIn, actor: str, canal: str) -> dict:
+    from ..models import DICTAMENES_GENERALES
+
+    if ev.estado == "cancelada":
+        raise HTTPException(409, "Esta evaluación fue cancelada.")
+    lista = [dict(x) for x in (ev.referencias or []) if isinstance(x, dict)]
+    ref = next((x for x in lista if x.get("id") == rid), None)
+    if ref is None:
+        raise HTTPException(404, "Referencia no encontrada.")
+    dictamen = (datos.dictamen or "").strip()
+    if datos.contactado and dictamen not in DICTAMENES_GENERALES:
+        raise HTTPException(400, f"Elige el dictamen de la referencia: {', '.join(DICTAMENES_GENERALES.values())}.")
+    if not datos.contactado and not (datos.comentario or "").strip():
+        raise HTTPException(400, "Si no se pudo contactar, escribe qué pasó (comentario).")
+    anteriores = {k: ref.get(k) for k in ("contactado", "dictamen", "comentario")}
+    ref.update({"contactado": bool(datos.contactado), "dictamen": dictamen if datos.contactado else "",
+                "comentario": (datos.comentario or "").strip()[:2000], "dictaminado_por": actor[:150],
+                "dictaminado_en": fechas.iso(datetime.now(timezone.utc))})
+    ev.referencias = lista
+    sev.evento(db, ev, "referencia_dictaminada", actor, canal, anteriores=anteriores, referencia=ref["nombre"],
+               contactado=ref["contactado"], dictamen=ref["dictamen"])
+    return ref
+
+
+@router.post("/publica/{token}/referencias/{rid}")
+def dictaminar_referencia_publica(token: str, rid: str, datos: DictamenReferenciaIn, db: Session = Depends(get_db)):
+    """Fase 2 desde la liga del evaluador: dictamen de UN contacto (no cierra la evaluación)."""
+    ev = _por_token(db, token)
+    if sev.esperando_referencias(ev):
+        raise HTTPException(409, "El candidato aún no comparte sus referencias.")
+    ref = _dictaminar(db, ev, rid, datos, ev.evaluador_nombre or "Evaluador vía liga", "liga_evaluador")
+    db.commit()
+    from ..serial import referencia_dict
+
+    return {"ok": True, "referencia": referencia_dict(ref)}
+
+
+@router.post("/{codigo}/referencias/{rid}")
+def dictaminar_referencia(codigo: str, rid: str, datos: DictamenReferenciaIn, db: Session = Depends(get_db),
+                          u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Lo mismo desde el sistema (RH hizo la llamada). Mismo registro, mismo historial."""
+    ev = _ev(db, codigo, cuenta.id)
+    ref = _dictaminar(db, ev, rid, datos, u.nombre, "sistema")
+    db.commit()
+    from ..serial import referencia_dict
+
+    return {"ok": True, "referencia": referencia_dict(ref), "evaluacion": evaluacion_dict(ev, u)}

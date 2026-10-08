@@ -4,46 +4,55 @@
    compuerta + avance automático); aquí no hay botones para mover de etapa. Orden fijo:
      1. Recomendación + UN ÚNICO botón principal = la siguiente acción concreta de la ruta (`siguienteAccion` de la API).
      2. Resultados clave (un dato, un lugar).
-     3. Avance de la ruta: una línea por actividad con UNA sola etiqueta de estado (`estadoUnificado`, vocabulario único:
-        Sin iniciar · Enviada · En curso · Completada · Aprobada · No aprobada · Omitida · Error); el detalle se despliega
-        y ahí viven las acciones: ejecutar (solo actividades manuales o con Error), sincronizar, la liga REAL de la
-        actividad (Abrir / Copiar: copiarla no marca nada como enviado), «Omitir actividad» (motivo obligatorio; recalcula
-        el avance sin borrar nada) y Reactivar.
+     3. Avance de la ruta: una línea por actividad con UNA sola etiqueta de estado (`estadoUnificado`). 2026-10-08:
+        «Enviada» ya no existe; la etiqueta dice a QUIÉN espera (Esperando candidato / referencias / consentimiento /
+        médico·entrevistador·evaluador, Pendiente de revisión) y el detalle muestra cada envío por destinatario
+        (Intento · Enviado · Entregado · Fallido). Ninguna fila tiene botones: TODO va al «…» de la actividad con nombres
+        estandarizados (la acción propia, Abrir liga, Copiar liga, Reenviar al candidato / al médico / al entrevistador,
+        Registrar resultado, Reintentar sincronización, Omitir actividad, Reactivar), armado por la API (`menu`) para que
+        Resumen, Ruta y Acción principal lean la MISMA fuente. La única acción visible es el botón principal de arriba.
    2026-10-08 (ruta automática, solo demo-grupak): «Descarte sugerido» (RH confirma el descarte; nunca es automático) y
    «Revisar prefiltro» (RH aprueba) arriba, junto a la recomendación.
      4. Fortalezas (máx. 3) y Puntos por validar (máx. 3).
    Las acciones REUTILIZAN lo que ya existe: «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, los
    documentos o el expediente. Cambiar ruta / agregar actividad / descartar / eliminar viven en el «…» del encabezado.
    2026-10-07 (red-human-psicometria.md): en las Cuentas con flujo simple de psicometría (`usePsicometriaSimple`, hoy solo
-   «demo-grupak») las filas psicométricas muestran SOLO Sin enviar / Enviada / Completada con UNA acción (Enviar prueba /
-   Reenviar / Ver resultado) y un bloqueo de avance por psicometría lo dice claro. El resto de las Cuentas, igual que antes. */
+   «demo-grupak») las filas psicométricas muestran SOLO Sin enviar / Esperando candidato / Completada; su acción (Enviar prueba /
+   Reenviar / Ver resultado) vive en el «…» y un bloqueo de avance por psicometría lo dice claro. */
 
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Clock, Copy, ExternalLink, Play, RefreshCw, RotateCcw, SkipForward, Sparkles,
-  ThumbsDown, XCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ClipboardCheck, Clock, Copy, ExternalLink, FileText, Play, RefreshCw, RotateCcw, Send,
+  SkipForward, Sparkles, ThumbsDown, XCircle,
 } from "lucide-react";
+import { MenuAcciones, type AccionMenu } from "@/components/dashboard/menu-acciones";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { BadgeIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
 import { usePsicometriaSimple, useSesion } from "@/components/sesion";
 import {
-  DetalleFilaPsicometria, EstadoFilaPsicometria, ModalActividadSimple, ModalEnviarPrueba, reenviarPsicometria, textoAccionPsicometria,
+  DetalleFilaPsicometria, EstadoFilaPsicometria, ModalActividadSimple, ModalEnviarPrueba, textoAccionPsicometria,
   urlResultadoPsicometria,
 } from "@/components/dashboard/evaluaciones/psicometria-simple";
 import {
-  agregarActividadProceso, aprobarPrefiltro, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
-  omitirPasoProceso, ordenEtapa, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
+  agregarActividadProceso, aprobarPrefiltro, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
+  moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
+  sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
 } from "@/lib/api";
-import type { AccionPaso, Candidato, EstadoUnificado, EtapaCandidato, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
-import { textoDia } from "@/lib/fechas";
+import type { AccionPaso, Candidato, EnvioDestinatario, EstadoUnificado, EtapaCandidato, ItemMenuPaso, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
+import { textoDia, textoFechaHora } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
 
-/** Una etiqueta por actividad (vocabulario único, 2026-10-08). */
+/** Una etiqueta por actividad (vocabulario único, 2026-10-08): dice a QUIÉN espera, nunca «Enviada». */
 export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human" | "good" | "warn" | "bad"> = {
-  sin_iniciar: "neutral", enviada: "human", en_curso: "brand", completada: "good", aprobada: "good",
-  no_aprobada: "bad", omitida: "neutral", error: "bad",
+  sin_iniciar: "neutral", esperando_candidato: "human", esperando_referencias: "human", esperando_consentimiento: "human",
+  esperando_evaluador: "human", pendiente_resultado: "warn", en_curso: "brand", pendiente_revision: "warn", completada: "good",
+  aprobada: "good", no_aprobada: "bad", omitida: "neutral", error: "bad",
 };
+const TEXTO_DESTINATARIO: Record<string, string> = {
+  candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador", rh: "RH", cliente: "Cliente",
+};
+const TONO_ENVIO: Record<EnvioDestinatario["estado"], string> = { intento: "text-ink-3", enviado: "text-human", entregado: "text-good", fallido: "text-bad" };
 
 export type PresetPaso = { tipo: string; pasoId: string; titulo: string; usuarioId?: number | null };
 type Pestana = NonNullable<AccionPaso["pestana"]>;
@@ -81,6 +90,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const [abierto, setAbierto] = useState<string | null>(null);
   // «Omitir actividad» unifica Omitir y Cancelar (2026-10-08): motivo obligatorio; recalcula el avance sin borrar nada.
   const [decision, setDecision] = useState<{ tipo: "omitir"; paso: PasoSeguimiento; motivo: string } | null>(null);
+  // «Iniciar» en un paso: si la API dice que falta un dato crítico, se pide SOLO ese dato
+  const [faltan, setFaltan] = useState<{ paso: PasoSeguimiento; faltan: NonNullable<RespuestaIniciar["faltan"]>; mensaje: string } | null>(null);
+  const [registrar, setRegistrar] = useState<PasoSeguimiento | null>(null);
 
   function setSeg(s: Seg) {
     setSegLocal(s);
@@ -99,15 +111,78 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (!accion) return;
     if (paso?.tipo === "alta" && onAlta) return onAlta();
     if (simple && paso?.tipo === "psicometrica" && paso.psicometria && accion.clave === "iniciar_evaluacion") return setEnviarPrueba(paso);
-    if (accion.clave === "iniciar_evaluacion" && paso) {
-      const r = paso.responsableConfig;
-      return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: r?.tipo === "usuario" ? r.usuario_id : null });
-    }
+    if (accion.clave === "iniciar_evaluacion" && paso) return void iniciar(paso);
     if (accion.clave === "consultar_evaluacion") return onAbrir("evaluaciones");
     if (accion.clave === "solicitar_documentos") return onSolicitarDocumentos();
     if (accion.clave === "validar_documentos") return onAbrir("documentos");
     if (paso?.tipo === "documentos" && accion.clave === "abrir" && c.etapa === "Contratación") return onSolicitarDocumentos();
     if (accion.pestana) onAbrir(accion.pestana);
+  }
+
+  /** «Iniciar» (2026-10-08): ejecuta lo configurado en la ruta en UN paso; si falta un dato crítico se pide solo ese. */
+  async function iniciar(paso: PasoSeguimiento, datos: Parameters<typeof iniciarActividad>[2] = {}) {
+    setOcupado(`ini-${paso.id}`);
+    const r = await iniciarActividad(c.id, paso.id, datos);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setSeg(r.data.proceso);
+    onCambio(r.data.candidato);
+    if (!r.data.iniciada && r.data.faltan?.length) {
+      if (r.data.faltan.includes("pruebas")) {
+        // la batería no está configurada: se elige en la vista de psicometría de siempre (selección + envío)
+        const rc = paso.responsableConfig;
+        return onIniciarEvaluacion({ tipo: paso.tipo, pasoId: paso.id, titulo: `Iniciar: ${paso.nombre}`, usuarioId: rc?.tipo === "usuario" ? rc.usuario_id : null });
+      }
+      return setFaltan({ paso, faltan: r.data.faltan, mensaje: r.data.mensaje });
+    }
+    setFaltan(null);
+    const adv = r.data.advertencias?.length ? ` ${r.data.advertencias.join(" ")}` : "";
+    setAviso({ tono: r.data.yaExistia || adv ? "warn" : "ok", texto: `${r.data.mensaje}${adv}` });
+  }
+
+  /** Reenvío granular: SU liga a ese destinatario; nunca cambia el estado de la actividad. */
+  async function reenviar(paso: PasoSeguimiento, a: string) {
+    setOcupado(`env-${paso.id}`);
+    const r = await reenviarActividad(c.id, paso.id, a);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setSeg(r.data.proceso);
+    onCambio(r.data.candidato);
+    const quien = (TEXTO_DESTINATARIO[a] ?? a).toLowerCase();
+    const ok = (r.data.resultados ?? []).filter((x) => x.enviado).map((x) => x.canal).filter(Boolean);
+    setAviso(r.data.enviado
+      ? { tono: "ok", texto: `Enviado al ${quien}${ok.length ? ` por ${ok.join(" y ")}` : ""}.` }
+      : { tono: "warn", texto: `No salió el envío al ${quien}: ${(r.data.resultados ?? []).map((x) => x.detalle).filter(Boolean).join("; ") || "sin canal disponible"}. Copia la liga y compártela tú.` });
+  }
+
+  /** Submenú «…» de la actividad, tal como lo arma la API (sin duplicados ni la acción principal de la ficha). */
+  function accionesDe(p: PasoSeguimiento): AccionMenu[] {
+    const items: ItemMenuPaso[] = p.menu ?? [];
+    const lista: AccionMenu[] = [];
+    const ps = simple ? p.psicometria : null;
+    for (const m of items) {
+      if (m.clave === "accion" && m.accion) {
+        const texto = ps && m.accion.clave === "iniciar_evaluacion" ? "Enviar prueba" : m.texto;
+        lista.push({ etiqueta: texto, icono: <Play />, onClick: () => ejecutar(p, m.accion), disabled: Boolean(ocupado) || c.activa === false });
+      } else if (m.clave === "abrir_liga" && p.liga) {
+        lista.push({ etiqueta: m.texto, icono: <ExternalLink />, onClick: () => window.open(p.liga!.url, "_blank", "noopener,noreferrer") });
+      } else if (m.clave === "copiar_liga" && p.liga) {
+        lista.push({ etiqueta: m.texto, icono: <Copy />, onClick: () => void copiarLiga(p.liga!, p) });
+      } else if (m.clave.startsWith("reenviar_") && m.a) {
+        lista.push({ etiqueta: m.texto, icono: <Send />, onClick: () => void reenviar(p, m.a!), disabled: Boolean(ocupado) || c.activa === false });
+      } else if (m.clave === "registrar_resultado") {
+        lista.push({ etiqueta: m.texto, icono: <ClipboardCheck />, onClick: () => setRegistrar(p), disabled: c.activa === false });
+      } else if (m.clave === "reintentar_sincronizacion") {
+        lista.push({ etiqueta: m.texto, icono: <RefreshCw />, onClick: () => void sincronizar(p), disabled: Boolean(ocupado) });
+      } else if (m.clave === "omitir") {
+        lista.push({ etiqueta: m.texto, icono: <SkipForward />, onClick: () => setDecision({ tipo: "omitir", paso: p, motivo: "" }), disabled: c.activa === false });
+      } else if (m.clave === "reactivar") {
+        lista.push({ etiqueta: m.texto, icono: <RotateCcw />, onClick: () => void reactivar(p) });
+      }
+    }
+    const url = ps?.status === "completada" ? urlResultadoPsicometria(ps) : null;
+    if (url) lista.unshift({ etiqueta: "Ver resultado", icono: <FileText />, onClick: () => window.open(url, "_blank", "noopener,noreferrer") });
+    return lista;
   }
 
   /** Solo cuando la ruta lo permite (todos los obligatorios de la etapa cumplidos y su avance automático apagado). */
@@ -164,7 +239,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     setAviso({ tono: "ok", texto: "Prefiltro aprobado: la ruta continúa sola." });
   }
 
-  /** Psicométricas.mx sin webhook (desarrollo): consulta su API, trae JSON + PDF y la actividad queda Completada. */
+  /** «Reintentar sincronización»: solo existe tras una falla CONFIRMADA de recuperación (el resultado llega solo). */
   async function sincronizar(paso: PasoSeguimiento) {
     if (!paso.evaluacion) return;
     setOcupado(`sync-${paso.id}`);
@@ -175,24 +250,15 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (s) setSeg(s);
     setAviso(r.data.sincronizacion === "resultado_recibido"
       ? { tono: "ok", texto: `Resultado de «${paso.nombre}» recibido (JSON y PDF).` }
-      : { tono: "warn", texto: `La plataforma de evaluación todavía no reporta «${paso.nombre}» como terminada.` });
+      : { tono: "warn", texto: `La plataforma de evaluación todavía no entrega el resultado de «${paso.nombre}»; se reintentará automáticamente.` });
   }
 
-  /** Flujo simple: la ÚNICA acción de la fila psicométrica según su estado. */
+  /** Flujo simple: la acción que resuelve un bloqueo por psicometría (enviar o reenviar al candidato). */
   async function accionPsicometria(paso: PasoSeguimiento) {
     const ps = paso.psicometria;
     if (!ps) return;
     if (ps.status === "sin_enviar") return setEnviarPrueba(paso);
-    if (ps.status === "enviada" || ps.status === "error_envio") {
-      // «Reenviar» / «Reintentar envío» (2026-10-08): misma liga; si ahora sí salió, la fila pasa de Error de envío a Enviada
-      setOcupado(`psi-${paso.id}`);
-      const aviso = await reenviarPsicometria(ps);
-      setOcupado("");
-      setAviso(aviso);
-      const s = await fetchSeguimiento(c.id);
-      if (s) setSeg(s);
-      return;
-    }
+    if (ps.status === "enviada" || ps.status === "error_envio") return void reenviar(paso, "candidato");
     const url = urlResultadoPsicometria(ps);
     if (url) window.open(url, "_blank", "noopener,noreferrer");
     else onAbrir("evaluaciones");
@@ -320,9 +386,10 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                   const ab = abierto === p.id;
                   const estadoU = (p.estadoUnificado ?? "sin_iniciar") as EstadoUnificado;
                   const ps = simple && p.psicometria && p.estado !== "omitida" && p.estado !== "cancelada" && !p.heredado ? p.psicometria : null;
+                  const menu = live && !soloEstado(p) ? accionesDe(p) : [];
                   return (
                     <li key={p.id} className="border-t border-border-faint first:border-t-0">
-                      <div className="flex items-center gap-2 pr-4 hover:bg-surface-2/60">
+                      <div className="flex items-center gap-2 pr-2 hover:bg-surface-2/60">
                         <button
                           className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-4 text-left"
                           onClick={() => setAbierto(ab ? null : p.id)}
@@ -331,22 +398,22 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-ink-3 transition-transform", !ab && "-rotate-90")} />
                           <span className="min-w-0 flex-1 truncate text-[13px]">
                             {p.nombre}
-                            {p.obligatorio && <span className="ml-1 text-bad" title="Obligatoria">*</span>}
+                            {p.condicion && p.condicion !== "opcional" && (
+                              <span className="ml-1 text-bad" title={p.condicionTexto}>*</span>
+                            )}
                           </span>
-                          {ps ? <EstadoFilaPsicometria ps={ps} /> : <Badge tone={TONO_ESTADO_U[estadoU]}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
+                          {ps && ps.status === "error_envio" ? <EstadoFilaPsicometria ps={ps} />
+                            : <Badge tone={TONO_ESTADO_U[estadoU] ?? "neutral"}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
                         </button>
-                        {ps && (live || ps.status === "completada") && c.activa !== false
-                          && !(soloEstado(p) && ps.status !== "completada" && ps.status !== "error_envio") && (
-                          <Button size="sm" variant="outline" className="h-7 shrink-0 px-2.5 text-[12px]" onClick={() => accionPsicometria(p)} disabled={Boolean(ocupado)}>
-                            {textoAccionPsicometria(ps)}
-                          </Button>
-                        )}
+                        {menu.length > 0 ? (
+                          <MenuAcciones acciones={menu} etiqueta={`Acciones de «${p.nombre}»`} className="shrink-0" />
+                        ) : <span className="w-8 shrink-0" aria-hidden />}
                       </div>
                       {ps && <div className="px-4 pb-1"><DetalleFilaPsicometria ps={ps} /></div>}
                       {ab && (
                         <div className="flex flex-col gap-2 bg-surface-2/40 px-4 py-2.5 pl-10 text-[12px] text-ink-2">
                           <p>
-                            <b className="text-ink">Responsable:</b> {p.responsable || "—"} · {p.reglaTexto}
+                            <b className="text-ink">{p.condicionTexto ?? (p.obligatorio ? "Obligatoria" : "Opcional")}</b> · Responsable: {p.responsable || "—"} · {p.reglaTexto}
                             {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : " · en paralelo"}
                             {p.plazoDias != null && ` · plazo ${p.plazoDias} día(s)`}
                             {p.adhoc && " · solo este candidato"}
@@ -357,37 +424,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                             <p>{p.resultadoTexto ? <b className="text-ink">{p.resultadoTexto}. </b> : null}{p.detalle}{p.revisadoPor && p.estado === "completada" ? ` · ${p.revisadoPor}` : ""}</p>
                           )}
                           {p.vencido && <p className="font-semibold text-bad">Plazo vencido (solo alerta)</p>}
-                          {live && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {p.accion && !ps && !soloEstado(p) && (
-                                <Button size="sm" variant="outline" onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>
-                                  {p.tipo === "alta" ? "Dar de alta" : p.accion.texto}
-                                </Button>
-                              )}
-                              {p.sincronizable && (
-                                <Button size="sm" variant="outline" onClick={() => sincronizar(p)} disabled={Boolean(ocupado)}>
-                                  <RefreshCw className={cn("h-3.5 w-3.5", ocupado === `sync-${p.id}` && "animate-spin")} /> Sincronizar resultado
-                                </Button>
-                              )}
-                              {p.liga?.url && (
-                                <>
-                                  <a href={p.liga.url} target="_blank" rel="noopener noreferrer"
-                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink">
-                                    <ExternalLink className="h-3.5 w-3.5" /> {p.liga.texto}
-                                  </a>
-                                  <Button size="sm" variant="ghost" onClick={() => copiarLiga(p.liga!, p)}><Copy className="h-3.5 w-3.5" /> Copiar liga</Button>
-                                </>
-                              )}
-                              {(p.estado === "pendiente" || p.estado === "en_curso" || (p.estado === "completada" && p.resultado === "no_favorable")) && !p.heredado && (
-                                <Button size="sm" variant="ghost" onClick={() => setDecision({ tipo: "omitir", paso: p, motivo: "" })}>
-                                  <SkipForward className="h-3.5 w-3.5" /> Omitir actividad
-                                </Button>
-                              )}
-                              {(p.estado === "omitida" || p.estado === "cancelada") && (
-                                <Button size="sm" variant="ghost" onClick={() => reactivar(p)}><RotateCcw className="h-3.5 w-3.5" /> Reactivar</Button>
-                              )}
-                            </div>
-                          )}
+                          {p.liga?.url && <p className="truncate"><b className="text-ink">{p.liga.texto}:</b> {p.liga.url}{p.liga.clave ? ` · clave ${p.liga.clave}` : ""}</p>}
+                          <EnviosPorDestinatario envios={p.envios} />
                         </div>
                       )}
                     </li>
@@ -414,6 +452,32 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             const s = await fetchSeguimiento(c.id);
             if (s) setSeg(s);
             if (candidato) onCambio(candidato);
+          }}
+        />
+      )}
+
+      {faltan && (
+        <ModalDatosFaltantes
+          c={c}
+          paso={faltan.paso}
+          faltan={faltan.faltan}
+          mensaje={faltan.mensaje}
+          ocupado={Boolean(ocupado)}
+          onClose={() => setFaltan(null)}
+          onEnviar={(datos) => void iniciar(faltan.paso, datos)}
+        />
+      )}
+
+      {registrar && (
+        <ModalRegistrarResultado
+          c={c}
+          paso={registrar}
+          onClose={() => setRegistrar(null)}
+          onListo={(r) => {
+            setRegistrar(null);
+            setSeg(r.proceso);
+            onCambio(r.candidato);
+            setAviso({ tono: "ok", texto: `Resultado de «${registrar.nombre}» registrado.` });
           }}
         />
       )}
@@ -447,6 +511,183 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         </ModalMarco>
       )}
     </div>
+  );
+}
+
+/** Último envío a cada destinatario de la actividad: Intento · Enviado · Entregado · Fallido (con canal y fecha). */
+function EnviosPorDestinatario({ envios }: { envios?: Record<string, EnvioDestinatario> }) {
+  const filas = Object.entries(envios ?? {});
+  if (!filas.length) return null;
+  return (
+    <ul className="space-y-0.5">
+      {filas.map(([dest, e]) => (
+        <li key={dest} className="flex flex-wrap items-baseline gap-x-1.5">
+          <b className="text-ink">{TEXTO_DESTINATARIO[dest] ?? dest}{e.nombre && dest !== "candidato" ? ` (${e.nombre})` : ""}:</b>
+          <span className={cn("font-semibold", TONO_ENVIO[e.estado])}>{e.estadoTexto}</span>
+          {e.fecha && <span className="text-ink-3">· {textoFechaHora(e.fecha)}</span>}
+          {e.canales.length > 0 && (
+            <span className="text-ink-3">· {e.canales.map((x) => `${x.canal || "sin canal"} ${x.estado === "fallido" ? "✗" : "✓"}`).join(", ")}</span>
+          )}
+          {e.intentos > 1 && <span className="text-ink-3">· {e.intentos} envíos</span>}
+          {e.estado === "fallido" && e.canales.some((x) => x.detalle) && (
+            <span className="w-full text-bad">{e.canales.map((x) => x.detalle).filter(Boolean).join("; ")}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** «Iniciar» pidió un dato crítico: se captura SOLO ese (evaluador / correo) y se reintenta sin duplicar nada. */
+function ModalDatosFaltantes({ c, paso, faltan, mensaje, ocupado, onClose, onEnviar }: {
+  c: Candidato;
+  paso: PasoSeguimiento;
+  faltan: NonNullable<RespuestaIniciar["faltan"]>;
+  mensaje: string;
+  ocupado: boolean;
+  onClose: () => void;
+  onEnviar: (datos: Parameters<typeof iniciarActividad>[2]) => void;
+}) {
+  const [usuarios, setUsuarios] = useState<Entrevistador[]>([]);
+  const [tipo, setTipo] = useState<"interno" | "externo">(paso.tipo === "entrevista_humana" ? "interno" : "externo");
+  const [usuarioId, setUsuarioId] = useState<number | "">("");
+  const [externo, setExterno] = useState({ nombre: "", correo: "", whatsapp: "" });
+  const [correo, setCorreo] = useState(c.correo ?? "");
+  const [error, setError] = useState("");
+  const pideEvaluador = faltan.includes("evaluador");
+  const pideCorreo = faltan.includes("correo");
+  const quien = paso.tipo === "medica" ? "Médico" : paso.tipo === "entrevista_humana" ? "Entrevistador" : "Quién la aplica";
+  useEffect(() => {
+    if (pideEvaluador) fetchEntrevistadores().then((x) => setUsuarios(x ?? []));
+  }, [pideEvaluador]);
+
+  function enviar() {
+    setError("");
+    const datos: Parameters<typeof iniciarActividad>[2] = {};
+    if (pideEvaluador) {
+      if (tipo === "interno") {
+        if (!usuarioId) return setError(`Elige al ${quien.toLowerCase()}.`);
+        datos.evaluador = { tipo: "interno", usuario_id: Number(usuarioId) };
+      } else {
+        if (externo.nombre.trim().length < 3) return setError("Escribe el nombre.");
+        if (!externo.correo.trim() && !externo.whatsapp.trim()) return setError("Escribe un correo o un WhatsApp para enviarle su liga.");
+        datos.evaluador = { tipo: "externo", nombre: externo.nombre.trim(), correo: externo.correo.trim(), whatsapp: externo.whatsapp.trim() };
+      }
+    }
+    if (pideCorreo) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo.trim())) return setError("Escribe un correo válido del candidato.");
+      datos.correo = correo.trim();
+    }
+    onEnviar(datos);
+  }
+
+  return (
+    <ModalMarco titulo={`Iniciar «${paso.nombre}»`} subtitulo={mensaje} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        {pideEvaluador && (
+          <>
+            <div className="flex gap-2 text-sm">
+              {(["interno", "externo"] as const).map((t) => (
+                <label key={t} className="flex items-center gap-1.5">
+                  <input type="radio" className="accent-brand" checked={tipo === t} onChange={() => setTipo(t)} />
+                  {t === "interno" ? "Usuario de la Cuenta" : "Externo"}
+                </label>
+              ))}
+            </div>
+            {tipo === "interno" ? (
+              <label className="flex flex-col gap-1 text-xs text-ink-2">
+                {quien}
+                <select className={cn(inputRH, "h-10")} value={usuarioId} onChange={(e) => setUsuarioId(e.target.value ? Number(e.target.value) : "")}>
+                  <option value="">Elegir…</option>
+                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+                </select>
+              </label>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input className={inputRH} placeholder="Nombre" value={externo.nombre} onChange={(e) => setExterno({ ...externo, nombre: e.target.value })} />
+                <input className={inputRH} placeholder="Correo" value={externo.correo} onChange={(e) => setExterno({ ...externo, correo: e.target.value })} />
+                <input className={inputRH} placeholder="WhatsApp (10 dígitos)" value={externo.whatsapp} onChange={(e) => setExterno({ ...externo, whatsapp: e.target.value })} />
+              </div>
+            )}
+          </>
+        )}
+        {pideCorreo && (
+          <label className="flex flex-col gap-1 text-xs text-ink-2">
+            Correo del candidato (ahí recibe su prueba)
+            <input className={inputRH} type="email" value={correo} onChange={(e) => setCorreo(e.target.value)} />
+          </label>
+        )}
+        {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={ocupado}>Cancelar</Button>
+          <Button size="sm" onClick={enviar} disabled={ocupado}>{ocupado ? "Iniciando…" : "Iniciar"}</Button>
+        </div>
+      </div>
+    </ModalMarco>
+  );
+}
+
+/** «Registrar resultado» de algo hecho FUERA del sistema: dictamen, quién la aplicó y comentarios (quién captura = tu
+ * sesión). Se guarda en la evaluación de la actividad, sin duplicados; un resultado tardío del proveedor no la pisa. */
+function ModalRegistrarResultado({ c, paso, onClose, onListo }: {
+  c: Candidato;
+  paso: PasoSeguimiento;
+  onClose: () => void;
+  onListo: (r: { proceso: Seg; candidato: Candidato }) => void;
+}) {
+  const { usuario } = useSesion();
+  const [opciones, setOpciones] = useState<{ valor: string; texto: string }[]>([]);
+  const [conclusion, setConclusion] = useState("");
+  const [realizadaPor, setRealizadaPor] = useState("");
+  const [comentarios, setComentarios] = useState("");
+  const [archivos, setArchivos] = useState<File[]>([]);
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  useEffect(() => {
+    fetchOpcionesProceso().then((o) => setOpciones(o?.tiposPaso.find((t) => t.valor === paso.tipo)?.dictamenes ?? []));
+  }, [paso.tipo]);
+
+  async function guardar() {
+    if (paso.tipo === "entrevista_humana" && !conclusion) return setError("Elige la conclusión de la entrevista.");
+    if (!conclusion && !comentarios.trim() && !archivos.length) return setError("Elige el dictamen o agrega un comentario o un archivo.");
+    setGuardando(true);
+    setError("");
+    const r = await registrarResultadoActividad(c.id, paso.id, { conclusion, comentarios, realizadaPor, archivos });
+    setGuardando(false);
+    if (!r.ok) return setError(r.error);
+    onListo(r.data);
+  }
+
+  return (
+    <ModalMarco titulo={`Registrar resultado: ${paso.nombre}`} subtitulo="Para lo que se hizo fuera del sistema (presencial, por teléfono, en papel)." onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          Dictamen
+          <select className={cn(inputRH, "h-10")} value={conclusion} onChange={(e) => setConclusion(e.target.value)}>
+            <option value="">{paso.tipo === "entrevista_humana" ? "Elegir…" : "Sin dictamen (solo comentario o archivo)"}</option>
+            {opciones.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          ¿Quién la aplicó?
+          <input className={inputRH} value={realizadaPor} onChange={(e) => setRealizadaPor(e.target.value)} placeholder="Nombre de quien la realizó (opcional)" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          Comentarios
+          <textarea className={cn(inputRH, "h-20 py-2")} value={comentarios} onChange={(e) => setComentarios(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          Archivo (PDF, imagen o Word)
+          <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" onChange={(e) => setArchivos(Array.from(e.target.files ?? []))} />
+        </label>
+        <p className="text-[12px] text-ink-3">Captura: <b className="text-ink-2">{usuario?.nombre ?? "tu usuario"}</b> · queda en el historial con fecha y hora.</p>
+        {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={guardando}>Cancelar</Button>
+          <Button size="sm" onClick={guardar} disabled={guardando}>{guardando ? "Guardando…" : "Registrar resultado"}</Button>
+        </div>
+      </div>
+    </ModalMarco>
   );
 }
 
@@ -538,7 +779,7 @@ function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsAct
   const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
-  const [etapa, setEtapa] = useState<EtapaCandidato>(etapaActual);
+  const etapa = etapaActual; // 2026-10-08: la actividad adicional va en la etapa ACTUAL; nunca regresa al candidato
   const [obligatorio, setObligatorio] = useState(false);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -547,13 +788,11 @@ function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsAct
   }, []);
   const tipos = (opciones?.tiposPaso ?? []).filter((t) => !["solicitud_web", "prefiltro_web", "prefiltro_whatsapp", "alta"].includes(t.valor));
   const elegido = tipos.find((t) => t.valor === tipo);
-  const etapas = (opciones?.etapas ?? []).filter((e) => elegido?.etapas.includes(e.valor));
 
   function elegir(valor: string) {
     const t = tipos.find((x) => x.valor === valor);
     setTipo(valor);
     setNombre(t?.texto ?? "");
-    if (t) setEtapa(t.etapas.includes(etapaActual) ? etapaActual : t.etapas[t.etapas.length - 1]);
   }
 
   async function guardar() {
@@ -582,12 +821,7 @@ function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsAct
               Nombre
               <input className={inputRH} value={nombre} onChange={(e) => setNombre(e.target.value)} />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-ink-2">
-              Etapa
-              <select className={cn(inputRH, "h-10")} value={etapa} onChange={(e) => setEtapa(e.target.value as EtapaCandidato)}>
-                {etapas.map((e) => <option key={e.valor} value={e.valor}>{e.texto}</option>)}
-              </select>
-            </label>
+            <p className="text-[12px] text-ink-3">Se agrega en la etapa actual: <b className="text-ink-2">{nombreEtapa(etapa)}</b>.</p>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={obligatorio} onChange={(e) => setObligatorio(e.target.checked)} />
               Obligatoria (el candidato no avanza de etapa sin cumplirla)

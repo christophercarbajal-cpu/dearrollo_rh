@@ -140,6 +140,34 @@ export interface PasoSeguimiento {
   /** URL REAL de la actividad (sala, prueba, liga del evaluador, consentimiento, documentos). Abrirla/copiarla no marca nada. */
   liga?: { url: string; texto: string; clave?: string } | null;
   accion: AccionPaso | null;
+  /** 2026-10-08: «Requiere completarse» / «Requiere aprobación» / «Opcional» (solo las dos primeras detienen el avance). */
+  condicion?: "opcional" | "completarse" | "aprobacion";
+  condicionTexto?: string;
+  /** Cuello de botella real: a quién espera la actividad. */
+  esperando?: { clave: EstadoUnificado; texto: string; quien: string | null } | null;
+  /** Trazabilidad del último envío a cada destinatario (candidato, médico, entrevistador, evaluador). */
+  envios?: Record<string, EnvioDestinatario>;
+  /** Reenvíos granulares disponibles («Reenviar al candidato», «Reenviar al médico»…). */
+  reenvios?: { a: string; motivo: string; texto: string }[];
+  /** Submenú «…» estandarizado (sin la acción que ya es el botón principal de la ficha). */
+  menu?: ItemMenuPaso[];
+}
+export type EstadoEnvio = "intento" | "enviado" | "entregado" | "fallido";
+export interface EnvioDestinatario {
+  estado: EstadoEnvio;
+  estadoTexto: string;
+  fecha: string | null;
+  motivo: string;
+  nombre: string;
+  intentos: number;
+  por: string;
+  canales: { canal: string; destino: string; estado: EstadoEnvio; detalle: string }[];
+}
+export interface ItemMenuPaso {
+  clave: "accion" | "abrir_liga" | "copiar_liga" | "registrar_resultado" | "reintentar_sincronizacion" | "omitir" | "reactivar" | `reenviar_${string}`;
+  texto: string;
+  a?: string;
+  accion?: AccionPaso;
 }
 export interface PsicometriaPaso {
   /** «error_envio» (2026-10-08): la prueba se generó (tiene clave) pero la liga no le llegó al candidato. */
@@ -166,7 +194,10 @@ export interface PsicometriaPaso {
   umbral_sin_respuesta: number;
 }
 /** Vocabulario ÚNICO de estados de actividad (2026-10-08). */
-export type EstadoUnificado = "sin_iniciar" | "enviada" | "en_curso" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error";
+/** 2026-10-08: «Enviada» dejó de ser un estado; la actividad dice a QUIÉN espera (cuello de botella real). */
+export type EstadoUnificado =
+  | "sin_iniciar" | "esperando_candidato" | "esperando_referencias" | "esperando_consentimiento" | "esperando_evaluador"
+  | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error";
 /** Ruta automática: una obligatoria «No aprobada» detiene el funnel; RH confirma el descarte (nunca es automático). */
 export interface DescarteSugerido {
   paso: string;

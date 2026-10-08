@@ -9,7 +9,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -373,6 +373,65 @@ def agregar_actividad(codigo: str, datos: ActividadAdHocIn, db: Session = Depend
         raise _error(e)
     db.commit()
     return {**_salida(p), "paso": paso}
+
+
+# ------------------------------------------------------------ operación de UNA actividad (2026-10-08)
+
+class IniciarIn(BaseModel):
+    """Solo lo que falte (la API dice qué con `faltan`); vacío = ejecutar lo configurado en la ruta."""
+    forma: str = ""
+    evaluador: Optional[dict] = None
+    correo: str = ""
+    prueba_ids: List[int] = []
+    cita: Optional[dict] = None
+    instrucciones: str = ""
+    liga_externa_candidato: str = ""
+
+
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/iniciar")
+async def iniciar_actividad(codigo: str, paso_id: str, datos: IniciarIn, db: Session = Depends(get_db),
+                            u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Iniciar» en UN paso: ejecuta lo configurado; si falta un dato crítico regresa `faltan` sin crear nada."""
+    from ..services import actividades
+
+    p = _postulacion(db, codigo, cuenta.id)
+    r = await actividades.iniciar(db, p, paso_id, u, cuenta, datos.model_dump())
+    db.refresh(p)
+    return {**r, **_salida(p)}
+
+
+class ReenviarIn(BaseModel):
+    a: str  # candidato | entrevistador | medico | evaluador
+
+
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/reenviar")
+async def reenviar_actividad(codigo: str, paso_id: str, datos: ReenviarIn, db: Session = Depends(get_db),
+                             u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Reenvío GRANULAR (su propia liga a ese destinatario). No cambia el estado ni reinicia la actividad."""
+    from ..services import actividades
+
+    p = _postulacion(db, codigo, cuenta.id)
+    r = await actividades.reenviar(db, p, paso_id, datos.a, u, cuenta)
+    db.refresh(p)
+    return {**r, **_salida(p)}
+
+
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/resultado")
+async def registrar_resultado_actividad(
+    codigo: str, paso_id: str,
+    conclusion: str = Form(""), comentarios: str = Form(""), realizada_por: str = Form(""),
+    archivos: Optional[List[UploadFile]] = File(None),
+    db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """«Registrar resultado» de algo hecho fuera del sistema: dictamen + quién la aplicó (quién capturó = la sesión).
+    Se guarda en la evaluación de la actividad, sin duplicados; tiene prioridad sobre un resultado tardío del proveedor."""
+    from ..services import actividades
+
+    p = _postulacion(db, codigo, cuenta.id)
+    r = await actividades.registrar_resultado(db, p, paso_id, u, conclusion=conclusion, comentarios=comentarios,
+                                              realizada_por=realizada_por, archivos=archivos)
+    db.refresh(p)
+    return {**r, **_salida(p)}
 
 
 @router.post("/postulaciones/{codigo}/aplicar-vigente")

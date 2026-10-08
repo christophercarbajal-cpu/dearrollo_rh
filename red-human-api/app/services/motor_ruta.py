@@ -139,36 +139,50 @@ def _marcar(p: Postulacion, paso_id: str, datos: dict) -> None:
     flag_modified(p, "analisis")
 
 
-async def _avisar(db: Session, p: Postulacion, texto: str, asunto: str, liga: str) -> Tuple[bool, str]:
-    """Canal del candidato en cascada: mensajería activa (WhatsApp o Telegram, la fachada decide) → correo."""
+async def _avisar(db: Session, p: Postulacion, texto: str, asunto: str, liga: str, *, motivo: str = "aviso", paso_id: str = "",
+                  actor: str = ACTOR) -> Tuple[bool, str]:
+    """Canal del candidato en cascada: mensajería activa (WhatsApp o Telegram, la fachada decide) → correo. Cada canal
+    intentado queda trazado por destinatario (`envios_actividad`, 2026-10-08)."""
+    from . import envios
     from .correo import enviar_correo
     from .mensajeria import de_cuenta
     from .whatsapp import enviar_mensaje
 
     detalles = []
+    resultados: List[dict] = []
+    salida: Tuple[bool, str] = (False, "")
     if p.telefono:
         try:
             with de_cuenta(p.cuenta_id):
                 r = await enviar_mensaje(p.telefono, texto)
+            resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, **r})
             if r.get("enviado"):
                 from ..routers.candidatos import guardar_mensaje
 
                 guardar_mensaje(db, p, "assistant", texto, "whatsapp", r)
-                return True, r.get("proveedor") or "whatsapp"
-            detalles.append(f"mensaje: {r.get('detalle') or 'no salió'}")
+                salida = (True, r.get("proveedor") or "whatsapp")
+            else:
+                detalles.append(f"mensaje: {r.get('detalle') or 'no salió'}")
         except Exception as ex:  # noqa: BLE001
+            resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": False, "detalle": str(ex)[:200]})
             detalles.append(f"mensaje: {str(ex)[:120]}")
-    if p.correo:
+    if p.correo and not salida[0]:
         try:
             from .notificaciones import _html
 
             asunto_html, html = _html(asunto, texto)
             r = await enviar_correo(p.correo, asunto_html or asunto, html)
+            resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, **r})
             if r.get("enviado"):
-                return True, "correo"
-            detalles.append(f"correo: {r.get('detalle') or 'no salió'}")
+                salida = (True, "correo")
+            else:
+                detalles.append(f"correo: {r.get('detalle') or 'no salió'}")
         except Exception as ex:  # noqa: BLE001
+            resultados.append({"destinatario": "candidato", "canal": "correo", "destino": p.correo, "enviado": False, "detalle": str(ex)[:200]})
             detalles.append(f"correo: {str(ex)[:120]}")
+    envios.registrar(db, p, resultados, motivo=motivo, paso_id=paso_id, actor=actor, destinatario="candidato")
+    if salida[0]:
+        return salida
     return False, "; ".join(detalles) or "El candidato no tiene teléfono ni correo registrados."
 
 
@@ -199,7 +213,7 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
     texto = (f"¡Hola{(' ' + nombre) if nombre else ''}! 👋 Avanzaste en tu proceso para {vacante}. El siguiente paso es tu "
              f"entrevista con Red Human: entra cuando gustes desde tu celular o computadora (dura unos 10 minutos): {liga}")
     db.flush()
-    entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", liga)
+    entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", liga, motivo="entrevista", paso_id=paso["id"])
     return True, (f"Liga enviada por {detalle}" if entregado else f"Liga creada; el aviso no salió ({detalle})"), entregado
 
 

@@ -45,6 +45,7 @@ export default function ExpedientePublico() {
   const [firmas, setFirmas] = useState<Awaited<ReturnType<typeof fetchFirmasPublicas>>>(null);
   const [firmando, setFirmando] = useState<number | null>(null);
   const [avisoFirma, setAvisoFirma] = useState("");
+  const [reintentar, setReintentar] = useState<number | null>(null);
   const cargarFirmas = useCallback(() => {
     fetchFirmasPublicas(token).then(setFirmas);
   }, [token]);
@@ -55,9 +56,18 @@ export default function ExpedientePublico() {
   async function firmar(id: number) {
     setFirmando(id);
     setAvisoFirma("");
+    setReintentar(null);
     const r = await signUrlFirmaCandidato(token, id);
     setFirmando(null);
-    if (!r.ok) return setAvisoFirma(r.error);
+    if (!r.ok) {
+      // 2026-10-08: mensaje limpio (el detalle técnico vive solo en los logs del servidor) + reintento lógico
+      setReintentar(id);
+      return setAvisoFirma(r.error);
+    }
+    if (!r.data.signUrl) {
+      setAvisoFirma(r.data.mensaje || "Ya firmaste este documento. ¡Gracias!");
+      return cargarFirmas();
+    }
     await abrirFirmaEmbebida({
       clientId: r.data.clientId,
       signUrl: r.data.signUrl,
@@ -150,7 +160,7 @@ export default function ExpedientePublico() {
                       <span className="text-sm">{f.documento}</span>
                       {f.yoFirme || f.estado === "firmada" || f.estado === "descargada" ? (
                         <Badge tone="good" dot>Firmado</Badge>
-                      ) : f.estado === "enviada" ? (
+                      ) : f.puedoFirmar ?? f.estado === "enviada" ? (
                         <button
                           onClick={() => void firmar(f.id)}
                           disabled={firmando !== null}
@@ -164,7 +174,15 @@ export default function ExpedientePublico() {
                     </li>
                   ))}
                 </ul>
-                {avisoFirma && <p className="mt-3 text-[13px] text-ink-2">{avisoFirma}</p>}
+                {avisoFirma && (
+                  <p className="mt-3 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
+                    {avisoFirma}
+                    {reintentar !== null && (
+                      <button onClick={() => void firmar(reintentar)} disabled={firmando !== null}
+                        className="text-[13px] font-semibold text-brand hover:underline disabled:opacity-60">Reintentar</button>
+                    )}
+                  </p>
+                )}
               </Card>
             )}
 

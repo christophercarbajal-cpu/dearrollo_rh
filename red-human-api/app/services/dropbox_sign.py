@@ -36,6 +36,40 @@ def _cliente():
     return dropbox_sign, dropbox_sign.ApiClient(dropbox_sign.Configuration(username=settings.dropbox_sign_api_key))
 
 
+# 2026-10-08: respuestas de REDUNDANCIA del proveedor («This request has already been signed», firmante que ya firmó,
+# solicitud ya completa). No son errores para el usuario: se consulta el estado real y se actualiza lo local.
+_YA_FIRMADO = ("already been signed", "already signed", "has been signed", "signature_request_already_signed",
+               "already complete", "is complete", "already_signed")
+
+
+def es_ya_firmado(ex: Exception) -> bool:
+    texto = str(ex).lower()
+    return any(x in texto for x in _YA_FIRMADO)
+
+
+def es_falla_de_red(ex: Exception) -> bool:
+    """Sin respuesta del proveedor o 5xx: se puede reintentar (al candidato se le ofrece «Reintentar»)."""
+    status = getattr(ex, "status", None)
+    return status is None or (isinstance(status, int) and status >= 500)
+
+
+def consultar_solicitud(signature_request_id: str) -> dict:
+    """Estado REAL de la solicitud en Dropbox Sign: {completa, cancelada, firmados: [signature_id]}."""
+    ds, cliente = _cliente()
+    try:
+        with cliente as api_client:
+            resp = ds.apis.SignatureRequestApi(api_client).signature_request_get(signature_request_id)
+    except Exception as ex:  # noqa: BLE001
+        raise _error_sdk(ex)
+    sr = resp.signature_request
+    firmas = list(sr.signatures or [])
+    return {
+        "completa": bool(getattr(sr, "is_complete", False)),
+        "cancelada": bool(getattr(sr, "is_declined", False)),
+        "firmados": [s.signature_id for s in firmas if (getattr(s, "status_code", "") or "") == "signed"],
+    }
+
+
 def _error_sdk(ex: Exception) -> FirmaError:
     status = getattr(ex, "status", None)
     cuerpo = str(getattr(ex, "body", "") or ex)[:300]

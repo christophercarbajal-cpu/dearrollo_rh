@@ -326,8 +326,12 @@ with TestClient(app) as client:
     avisos = {a["destinatario"]: a for a in out["avisosResponsables"]}
     check(admin_nombre in avisos and avisos[admin_nombre]["destino"] == admin.correo and "RESEND" in avisos[admin_nombre]["detalle"],
           "avisa por correo al responsable interno que es usuario de la Cuenta (sin Resend: queda visible que no salió)")
-    check(avisos.get("Jurídico", {}).get("enviado") is False and "usuario de la Cuenta" in avisos["Jurídico"]["detalle"],
+    check(avisos.get("Jefe de patio", {}).get("enviado") is False and "usuario de la Cuenta" in avisos["Jefe de patio"]["detalle"],
           "un responsable que no es usuario se reporta, nunca en silencio")
+    # 2026-10-08: la carta/contrato se omitió con autorización al iniciar → la tarea «Contrato firmado» (misma actividad)
+    # queda «Omitida» y a su responsable (Jurídico) ya no se le avisa de una tarea pendiente.
+    tarea_contrato = next(t for t in out["tareas"] if t["clave"] == "contrato_firmado")
+    check(tarea_contrato["omitida"] and "Jurídico" not in avisos, "contrato omitido en Contratación → tarea «Omitida», sin aviso")
     check(isinstance(out["solicitudDocumentos"], list) and out["solicitudDocumentos"], "hace la primera solicitud de documentos al candidato")
     check(out["cursoInduccion"] and out["cursoInduccion"]["curso"] == "Inducción general", "asigna el curso de inducción")
     check(client.post(f"/onboarding/expedientes/{EXP2}/iniciar", json=seleccion).status_code == 409, "no se inicia dos veces")
@@ -475,7 +479,8 @@ with TestClient(app) as client:
     check(client.post(f"/onboarding/expedientes/{EXP5}/no-ingreso", json={}).status_code == 400, "«No ingresó» exige motivo")
     r = client.post(f"/onboarding/expedientes/{EXP5}/no-ingreso", json={"motivo": "Aceptó otra oferta"})
     check(r.status_code == 200 and r.json()["noIngreso"]["motivo"] == "Aceptó otra oferta", "«No ingresó» registrado con motivo")
-    check(all(t["estado"] == "cancelada" and t["motivoCancelacion"].startswith("No ingresó") for t in r.json()["listaTareas"]),
+    # (el contrato ya venía «Omitida» por la omisión autorizada de la ruta: conserva su motivo; las abiertas se cancelan)
+    check(all(t["estado"] == "cancelada" and (t["motivoCancelacion"].startswith("No ingresó") or t["omitida"]) for t in r.json()["listaTareas"]),
           "cancela TODAS las tareas abiertas (también las fijas) con el motivo")
     check(any(a["destino"] == admin.correo for a in r.json()["avisosResponsables"]), "avisa a los responsables")
     db.expire_all()

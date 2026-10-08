@@ -65,7 +65,7 @@ export function diasEnEtapa(c: Candidato): number | null {
 export const estaAtorado = (c: Candidato) => c.activa !== false && (diasEnEtapa(c) ?? 0) > umbralAtorado(c.etapa);
 export const sinConsentimiento = (c: Candidato) => c.activa !== false && (c.has_consent ?? c.consentimiento) === false;
 export const expedienteIncompleto = (c: Candidato) =>
-  c.etapa === "Contratación" && c.expediente_pct != null && c.expediente_pct < 100;
+  (c.etapa === "Contratación" || c.etapa === "Onboarding") && c.expediente_pct != null && c.expediente_pct < 100;
 
 function tonoScore(s: number | null): string {
   if (s == null) return "bg-kb-gray-bg text-kb-gray";
@@ -147,7 +147,8 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
   const porque = [razon?.fortaleza?.trim() ? `Fuerte: ${razon.fortaleza.trim()}` : "", razon?.faltante?.trim() ? `Falta: ${razon.faltante.trim()}` : ""]
     .filter(Boolean)
     .join(" · ");
-  const pct = c.etapa === "Contratación" && c.expediente_pct != null ? Math.max(0, Math.min(100, c.expediente_pct)) : null;
+  // 2026-10-08: el MISMO % (obligatorios Aprobados) en Contratación y Onboarding que en la ficha y el tablero de Onboarding
+  const pct = (c.etapa === "Contratación" || c.etapa === "Onboarding") && c.expediente_pct != null ? Math.max(0, Math.min(100, c.expediente_pct)) : null;
   const filtro = c.filter_status ? FILTRO[c.filter_status] : null;
   const cerrada = c.activa === false;
   const motivo = c.motivoDescarte || c.motivoCierre || "";

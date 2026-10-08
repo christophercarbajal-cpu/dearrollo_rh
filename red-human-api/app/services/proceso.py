@@ -1725,6 +1725,9 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
     falta_actual = faltantes(pasos, desde_compuerta(p), sig) if sig else []
     bloqueo = bloqueo_no_aprobada(p, pasos)
     accion_principal = _siguiente_accion(p, pasos, sig, falta_actual)
+    onboarding = accion_onboarding(p)
+    if onboarding is not None:
+        accion_principal = onboarding  # 2026-10-08: en Onboarding manda la tarea pendiente (o el alta / cierre)
     if bloqueo:
         accion_principal = {"tipo": "bloqueo", "paso": bloqueo["paso"], "texto": f"Decisión de RH: {bloqueo['nombre']}",
                             "detalle": bloqueo["motivo"]}
@@ -1749,7 +1752,7 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         # 2026-10-08 (todas las Cuentas): una obligatoria «No aprobada» detiene la ruta → «Confirmar descarte» o
         # «Continuar por decisión de RH». La recomendación de la ficha sale de ESTE mismo cálculo.
         "bloqueo": bloqueo,
-        "recomendacion": _recomendacion_ruta(bloqueo, accion_principal),
+        "recomendacion": _recomendacion_ruta(bloqueo, accion_principal, p),
         "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
         "version": int(p.proceso.get("vacante_version") or p.proceso.get("version") or 1),
@@ -1764,16 +1767,64 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
     }
 
 
-def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict) -> Optional[dict]:
+def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict, p: Optional[Postulacion] = None) -> Optional[dict]:
     """Recomendación derivada de la RUTA (misma fuente que la acción principal y los avisos). None = la ficha muestra
-    la recomendación de Red Human (CV + entrevista)."""
+    la recomendación de Red Human (CV + entrevista). 2026-10-08: en Contratación y Onboarding la recomendación es SIEMPRE
+    el pendiente actual (nunca «Avanzar a contratación» de la entrevista humana, que ya quedó atrás)."""
     if bloqueo:
         return {"texto": "Decisión de RH pendiente", "motivo": f"{bloqueo['motivo']}. Confirma el descarte o continúa por decisión de RH.",
                 "tono": "bad"}
     if accion.get("accion", {}) and (accion.get("accion") or {}).get("clave") == "agregar_correo":
         return {"texto": "Falta un dato para continuar", "motivo": "Agrega el correo del candidato: la prueba se envía sola al guardarlo.",
                 "tono": "warn"}
+    if p is None or p.etapa not in ("Contratación", "Onboarding"):
+        return None
+    tipo = accion.get("tipo")
+    if tipo == "tarea":
+        return {"texto": accion["detalle"], "motivo": f"Resuélvelo aquí mismo con «{accion['texto']}».", "tono": "warn"}
+    if tipo == "alta":
+        return {"texto": "Lista para dar de alta", "motivo": accion.get("detalle") or "", "tono": "good"}
+    if tipo == "cerrar_onboarding":
+        return {"texto": "Colaborador dado de alta", "motivo": "Cierra el Onboarding para terminar el proceso.", "tono": "good"}
+    if tipo == "fin":
+        return {"texto": accion.get("texto") or "Proceso completo", "motivo": accion.get("detalle") or "", "tono": "good"}
+    if tipo in ("paso", "abrir", "avanzar", "esperar") and accion.get("texto"):
+        return {"texto": accion["texto"], "motivo": accion.get("detalle") or "", "tono": "warn" if tipo == "esperar" else "good"}
     return None
+
+
+def accion_onboarding(p: Postulacion) -> Optional[dict]:
+    """Acción principal en Onboarding (2026-10-08), resuelta DESDE LA FICHA: la primera tarea obligatoria pendiente
+    (Confirmar ingreso, Registrar alta IMSS / nómina, contrato…) → con todo resuelto, «Dar de alta como colaborador»
+    sobre el MISMO expediente → con el alta hecha, «Cerrar Onboarding». None fuera de Onboarding o sin tareas."""
+    exp = p.expediente
+    db = object_session(p)
+    if p.etapa != "Onboarding" or exp is None or db is None:
+        return None
+    from . import onboarding as onb
+
+    try:
+        tareas = onb.tareas_de(db, exp)
+    except Exception:  # noqa: BLE001 — sin tablas de módulos la ruta sigue como antes
+        return None
+    if exp.estado == "alta":
+        if exp.onboarding_cerrado_en:
+            return {"tipo": "fin", "texto": "Proceso completo", "detalle": f"Colaborador dado de alta y Onboarding cerrado por {exp.onboarding_cerrado_por}."}
+        faltan = onb.pendientes_cierre(exp, tareas)
+        if faltan:
+            return {"tipo": "esperar", "texto": "Cerrar Onboarding", "detalle": "; ".join(faltan[:3])}
+        return {"tipo": "cerrar_onboarding", "texto": "Cerrar Onboarding", "detalle": "Alta registrada y todas las tareas resueltas."}
+    if not p.activa or not tareas:
+        return None
+    pendientes = onb.pendientes_obligatorias(tareas)
+    if pendientes:
+        t = pendientes[0]
+        a = onb.accion_tarea(t)
+        return {"tipo": "tarea", "tarea": t.id, "clave": t.clave, "texto": a["texto"], "detalle": a["falta"], "accionTarea": a}
+    if exp.no_aprobados:
+        return {"tipo": "esperar", "texto": "Documentos por aprobar", "detalle": _texto_falta(exp.no_aprobados)}
+    return {"tipo": "alta", "texto": "Dar de alta como colaborador",
+            "detalle": "Todas las tareas obligatorias de Onboarding están resueltas (realizadas u omitidas con autorización)."}
 
 
 def _siguiente_accion(p: Postulacion, pasos: List[dict], sig: Optional[str], falta: List[dict]) -> dict:

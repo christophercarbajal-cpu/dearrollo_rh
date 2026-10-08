@@ -193,7 +193,9 @@ with TestClient(app) as client:
     db.expire_all()
     f = db.query(FirmaDocumento).filter(FirmaDocumento.signature_request_id == "sr-1").one()
     check(r.text == "Hello API Event Received" and {x["rol"]: x["estado"] for x in f.firmantes} == {"rh": "pendiente", "candidato": "firmado"}, "signature_request_signed marca al firmante")
-    check(client.post(f"/firmas/publica/{tok}/{F['id']}/sign-url").status_code == 409, "quien ya firmó no vuelve a firmar")
+    r = client.post(f"/firmas/publica/{tok}/{F['id']}/sign-url")
+    # 2026-10-08: estado limpio para quien ya firmó (antes 409); nunca se le da otra liga de firma
+    check(r.status_code == 200 and r.json()["yaFirmado"] and r.json()["signUrl"] is None, "quien ya firmó no vuelve a firmar")
     todos = [{"signature_id": "sig-1-0", "status_code": "signed"}, {"signature_id": "sig-1-1", "status_code": "signed"}]
     client.post("/api/webhooks/dropbox", data={"json": json.dumps(evento("signature_request_all_signed", "sr-1", todos))})
     db.expire_all()

@@ -2959,6 +2959,16 @@ export interface TareaOnboarding {
   canceladaPor: string;
   canceladaEn: string | null;
   cierreConAccion: string;
+  /** 2026-10-08: el contrato se omitió con autorización en Contratación (misma actividad) → «Omitida». */
+  omitida?: boolean;
+  /** 2026-10-08: acción directa desde la ficha (solo pendientes). */
+  accion?: AccionTareaOnboarding | null;
+}
+export interface AccionTareaOnboarding {
+  clave: "confirmar_ingreso" | "registrar_tarea" | "contrato_firmado";
+  texto: string;
+  falta: string;
+  tarea: number;
 }
 export function fetchPlantillasOnboarding(incluirInactivas = false) {
   return get<PlantillaOnboarding[]>(`/onboarding/plantillas${incluirInactivas ? "?incluir_inactivas=true" : ""}`);
@@ -2979,7 +2989,7 @@ export function fetchTareasOnboarding(expedienteId: number) {
   return get<TareaOnboarding[]>(`/onboarding/expedientes/${expedienteId}/tareas`);
 }
 export function cambiarTareaOnboarding(id: number, datos: { estado?: TareaOnboarding["estado"]; motivo?: string; responsable?: string; notas?: string }) {
-  return patch<TareaOnboarding>(`/onboarding/tareas/${id}`, datos);
+  return patch<TareaOnboarding & { avisoResponsable?: AvisoOnboarding | null }>(`/onboarding/tareas/${id}`, datos);
 }
 
 /* Fase 2 (2026-09-28): de Contratación a Onboarding. «Iniciar Onboarding» es el ÚNICO gatillo del cambio de etapa. */
@@ -3031,7 +3041,7 @@ export function iniciarOnboarding(expedienteId: number, datos: {
 export function subirContratoFirmado(expedienteId: number, archivo: File) {
   const form = new FormData();
   form.append("archivo", archivo);
-  return subir<{ tarea: TareaOnboarding; documento: { tipo: string; archivo: string; cargadoPor: string; cargadoEn: string } }>(
+  return subir<{ tarea: TareaOnboarding | null; documento: { tipo: string; archivo: string; cargadoPor: string; cargadoEn: string } }>(
     `/onboarding/expedientes/${expedienteId}/contrato-firmado`, form,
   );
 }
@@ -3066,6 +3076,8 @@ export interface FirmaDocumento {
   firmantes: { rol: "rh" | "candidato"; nombre: string; estado: "pendiente" | "firmado" }[];
   firmadoPdf: boolean; error: string; creadoPor: string; creadoEn: string | null; firmadaEn: string | null;
   signUrl?: string | null; reutilizada?: boolean;
+  /** 2026-10-08: el proveedor dijo «already signed» y el estado se sincronizó (nunca es error). */
+  yaFirmado?: boolean;
 }
 export function fetchEstadoFirmas() {
   return get<{ configurado: boolean; clientId: string | null; testMode: boolean }>("/firmas/estado");
@@ -3080,12 +3092,12 @@ export function signUrlFirmaRH(firmaId: number) {
   return post<FirmaDocumento>(`/firmas/${firmaId}/sign-url`, {});
 }
 export function fetchFirmasPublicas(token: string) {
-  return get<{ configurado: boolean; clientId: string | null; testMode: boolean; firmas: { id: number; documento: string; estado: string; yoFirme: boolean }[] }>(
+  return get<{ configurado: boolean; clientId: string | null; testMode: boolean; firmas: { id: number; documento: string; estado: string; yoFirme: boolean; puedoFirmar?: boolean }[] }>(
     `/firmas/publica/${token}`,
   );
 }
 export function signUrlFirmaCandidato(token: string, firmaId: number) {
-  return post<{ signUrl: string; clientId: string; testMode: boolean }>(`/firmas/publica/${token}/${firmaId}/sign-url`, {});
+  return post<{ signUrl: string | null; yaFirmado?: boolean; mensaje?: string; clientId: string; testMode: boolean }>(`/firmas/publica/${token}/${firmaId}/sign-url`, {});
 }
 /** Red de seguridad (2026-09-29): abre el expediente de una postulación en Contratación/Onboarding que no lo tenga. */
 export function asegurarExpediente(codigo: string) {

@@ -469,7 +469,8 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "next_step": (siguiente or {}).get("nombre") or None,
         "stage_entered_at": iso(p.etapa_desde or p.creado_en),
         "has_consent": bool(p.consentimiento),
-        "expediente_pct": exp.progreso if exp is not None and p.etapa == "Contratación" else None,
+        # 2026-10-08: el MISMO % (obligatorios Aprobados) en tablero, Onboarding y ficha
+        "expediente_pct": exp.progreso if exp is not None and p.etapa in ("Contratación", "Onboarding") else None,
         # flujo simple de psicometría (solo CUENTAS_PSICOMETRIA_SIMPLE): sin_enviar | sin_respuesta | error_envio | None
         "psychometric_alert": alerta,
         # ruta automática (2026-10-08): {paso, nombre, motivo} cuando un obligatorio quedó «No aprobada»; RH confirma
@@ -1224,6 +1225,9 @@ def tarea_onboarding_dict(t) -> dict:
         "canceladaPor": t.cancelada_por or "",
         "canceladaEn": iso(t.cancelada_en),
         "cierreConAccion": onb.CIERRE_CON_ACCION.get(t.clave, ""),
+        # 2026-10-08: omitida en Contratación (misma actividad de contrato) · acción directa desde la ficha
+        "omitida": onb.es_omitida(t),
+        "accion": onb.accion_tarea(t) if t.estado == "pendiente" else None,
     }
 
 

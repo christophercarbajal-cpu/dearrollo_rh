@@ -121,7 +121,7 @@ import type { SeguimientoProceso as SeguimientoProcesoData } from "@/lib/data";
 import { evaluadorVacio } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
-import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, type FirmaDocumento } from "@/lib/api";
+import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, subirContratoFirmado, type FirmaDocumento } from "@/lib/api";
 import { Toast, type ToastMsg } from "@/components/dashboard/toast";
 import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
@@ -2866,6 +2866,7 @@ function PanelContratacion({
   const [firmaCfg, setFirmaCfg] = useState<{ configurado: boolean; clientId: string | null; testMode: boolean } | null>(null);
   const [firmas, setFirmas] = useState<FirmaDocumento[]>([]);
   const [firmando, setFirmando] = useState<"" | "carta" | "contrato">("");
+  const archivoContrato = useRef<HTMLInputElement>(null);
   const [enviandoDoc, setEnviandoDoc] = useState<"" | "whatsapp" | "correo">("");
   const [resultadoDoc, setResultadoDoc] = useState<{ ok: boolean; texto: string } | null>(null);
   const condicionesListas = Boolean(cond?.completas);
@@ -2920,6 +2921,31 @@ function PanelContratacion({
     fetchEstadoFirmas().then((x) => setFirmaCfg(x ?? { configurado: false, clientId: null, testMode: false }));
     void cargarFirmas();
   }, [cargarFirmas]);
+
+  /** 2026-10-08: la solicitud de firma viva (o completa) de un documento y si la persona de RH ya firmó: entonces el
+   * botón deja de decir «Firmar/Generar» y solo informa el estado (nunca se ofrece firmar dos veces). */
+  function firmaDe(doc: "carta" | "contrato") {
+    return firmas.find((f) => f.documento === doc && f.estado !== "cancelada" && f.estado !== "error");
+  }
+  function textoFirmado(doc: "carta" | "contrato"): string | null {
+    const f = firmaDe(doc);
+    if (!firmaCfg?.configurado || !f) return null;
+    if (f.estado !== "enviada") return doc === "carta" ? "Carta firmada" : "Contrato firmado";
+    const rh = f.firmantes.find((x) => x.rol === "rh");
+    return rh?.estado === "firmado" ? `${doc === "carta" ? "Carta" : "Contrato"}: falta la firma del candidato` : null;
+  }
+
+  /** Firma física / manual del contrato desde Contratación: es el MISMO contrato que ve la tarea de Onboarding. */
+  async function adjuntarContrato(f: File | undefined) {
+    if (archivoContrato.current) archivoContrato.current.value = "";
+    if (!f || c.expedienteId == null) return;
+    const r = await subirContratoFirmado(c.expedienteId, f);
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setAviso({ tono: "ok", texto: "Contrato firmado guardado en el expediente. En Onboarding ya no se vuelve a pedir." });
+    void cargarFirmas();
+    const ficha = await fetchCandidato(c.id);
+    if (ficha) onCambio(ficha);
+  }
 
   /** «Generar carta de intención» / «Generar contrato»: con Dropbox Sign configurado crea la solicitud y abre el modal
    * de firma incrustado (RH firma aquí; el candidato, en su liga de expediente). Sin él, vista previa del PDF. */
@@ -3102,9 +3128,9 @@ function PanelContratacion({
       {/* 2026-09-19 (Bloque 3): flujo lineal — con condiciones guardadas aparecen aquí mismo las acciones */}
       {live && condicionesListas && c.expedienteId != null && (
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-border-soft bg-surface p-3">
-          <Button size="sm" variant="outline" onClick={() => void firmarOVer("carta")} disabled={firmando !== ""}
+          <Button size="sm" variant="outline" onClick={() => void firmarOVer("carta")} disabled={firmando !== "" || Boolean(textoFirmado("carta"))}
             title={firmaCfg?.configurado ? "Se firma aquí mismo (firma electrónica); el candidato firma desde su liga" : "Vista previa del PDF"}>
-            <FileText className="h-4 w-4" /> {firmando === "carta" ? "Preparando firma…" : "Generar carta de intención"}
+            <FileText className="h-4 w-4" /> {firmando === "carta" ? "Preparando firma…" : textoFirmado("carta") ?? "Generar carta de intención"}
           </Button>
           {/* Onboarding v2: «Solicitar documentos» ya no vive en Contratación — la primera solicitud la hace «Iniciar Onboarding» */}
           {onDocumentos && c.etapa === "Onboarding" && (
@@ -3116,19 +3142,23 @@ function PanelContratacion({
             size="sm"
             variant="outline"
             onClick={() => void firmarOVer("contrato")}
-            disabled={(!documentosListos && !modoPrueba) || firmando !== ""}
+            disabled={(!documentosListos && !modoPrueba) || firmando !== "" || Boolean(textoFirmado("contrato"))}
             title={documentosListos || modoPrueba ? "Borrador del contrato con las condiciones finales (el firmado se carga en el Onboarding)" : `Se habilita cuando el expediente tenga el 100 % de documentos Aprobados (hoy ${c.expedienteProgreso ?? 0} %)`}
           >
-            <FileCheck2 className="h-4 w-4" /> {firmando === "contrato" ? "Preparando firma…" : firmaCfg?.configurado ? "Generar contrato" : "Generar contrato (borrador)"}
+            <FileCheck2 className="h-4 w-4" /> {firmando === "contrato" ? "Preparando firma…" : textoFirmado("contrato") ?? (firmaCfg?.configurado ? "Generar contrato" : "Generar contrato (borrador)")}
           </Button>
-          {firmaCfg?.configurado && (
-            <MenuAcciones
-              acciones={[
-                { etiqueta: "Ver PDF de la carta (enviar por WhatsApp / correo)", icono: <FileText className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("carta"); } },
-                { etiqueta: "Ver PDF del contrato", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("contrato"); }, disabled: !documentosListos && !modoPrueba },
-              ]}
-            />
-          )}
+          <input ref={archivoContrato} type="file" accept="application/pdf" className="hidden" onChange={(e) => void adjuntarContrato(e.target.files?.[0])} />
+          <MenuAcciones
+            acciones={[
+              ...(firmaCfg?.configurado
+                ? [
+                  { etiqueta: "Ver PDF de la carta (enviar por WhatsApp / correo)", icono: <FileText className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("carta"); } },
+                  { etiqueta: "Ver PDF del contrato", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("contrato"); }, disabled: !documentosListos && !modoPrueba },
+                ]
+                : []),
+              { etiqueta: "Adjuntar contrato firmado (firma física / PDF)", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => archivoContrato.current?.click() },
+            ]}
+          />
           {c.etapa === "Contratación" && (
             <Button
               size="sm"

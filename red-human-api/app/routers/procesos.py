@@ -252,6 +252,19 @@ def guardar_proceso_vacante(codigo: str, datos: dict, db: Session = Depends(get_
 
 # ------------------------------------------------------------ seguimiento del candidato
 
+def _sincronizar_contrato(db: Session, p) -> None:
+    """2026-10-08: la tarea «Contrato firmado» de Onboarding refleja la actividad de contrato de Contratación (firmada,
+    omitida o reactivada). No hace commit; nunca rompe la acción."""
+    if p is None or p.expediente is None:
+        return
+    try:
+        from ..services import onboarding as onb
+
+        onb.sincronizar_contrato(db, p.expediente)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _postulacion(db: Session, codigo: str, cuenta_id: int):
     from .candidatos import _por_codigo
 
@@ -267,6 +280,14 @@ def _salida(p) -> dict:
 @router.get("/postulaciones/{codigo}")
 def seguimiento(codigo: str, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
     p = _postulacion(db, codigo, cuenta.id)
+    if p.expediente is not None:
+        from ..services import onboarding as onb
+
+        try:
+            if onb.sincronizar_contrato(db, p.expediente):
+                db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
     salida = sproc.resumen(p)
     # Canal Telegram (2026-10-06): deep links de la postulación y de cada paso, solo si la Cuenta atiende por Telegram
     from ..services.canal_proceso import ligas_telegram
@@ -294,6 +315,7 @@ async def omitir_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session = 
         sproc.omitir(db, p, paso_id, u, datos.motivo, "omitida")
     except sproc.ErrorProceso as e:
         raise _error(e)
+    _sincronizar_contrato(db, p)  # omitir el contrato en Contratación → «Omitida» en Onboarding
     db.commit()
     await sproc.avanzar_seguro(db, p)  # la etapa la define la ruta: si quedó lista, avanza sola
     return _salida(p)
@@ -308,6 +330,7 @@ async def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session 
         sproc.omitir(db, p, paso_id, u, datos.motivo, "cancelada")
     except sproc.ErrorProceso as e:
         raise _error(e)
+    _sincronizar_contrato(db, p)
     db.commit()
     await sproc.avanzar_seguro(db, p)
     return _salida(p)
@@ -342,6 +365,7 @@ def reactivar_paso(codigo: str, paso_id: str, db: Session = Depends(get_db), u: 
         sproc.reactivar(db, p, paso_id, u)
     except sproc.ErrorProceso as e:
         raise _error(e)
+    _sincronizar_contrato(db, p)
     db.commit()
     return _salida(p)
 

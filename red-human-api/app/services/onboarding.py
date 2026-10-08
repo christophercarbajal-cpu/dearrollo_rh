@@ -35,6 +35,15 @@ CIERRE_CON_ACCION = {
     "contrato_firmado": "Se marca como realizada al cargar el contrato firmado (PDF final).",
     "confirmar_ingreso": "Se marca con «Confirmar ingreso» (registra la fecha real de llegada).",
 }
+# 2026-10-08: «Contrato firmado» refleja la MISMA actividad de Contratación (`carta_contrato`). Si RH la omitió con
+# autorización allá, aquí queda «Omitida» (cancelada con este prefijo) y no vuelve a bloquear.
+PREFIJO_OMITIDA = "Omitida en Contratación"
+# Acción directa de cada tarea fija desde la ficha (2026-10-08) y cómo se dice lo que falta.
+ACCION_TAREA = {
+    "confirmar_ingreso": ("confirmar_ingreso", "Confirmar ingreso", "Falta confirmar el ingreso"),
+    "alta_imss_nomina": ("registrar_tarea", "Registrar alta IMSS / nómina", "Falta registrar el alta IMSS / nómina"),
+    "contrato_firmado": ("contrato_firmado", "Adjuntar contrato firmado", "Falta el contrato firmado"),
+}
 
 
 def fecha_base(e: Expediente) -> Optional[datetime]:
@@ -184,9 +193,6 @@ def generar_tareas(db: Session, e: Expediente, cuenta_id: int, config: dict, por
             cuenta_id=cuenta_id, expediente_id=e.id, clave=clave, nombre=nombre, tipo="fija", fija=True, obligatoria=True,
             responsable=responsables.get(clave, ""), dias_relativos=dias, fecha_limite=fecha_limite(fecha_base(e), dias), creada_por=por,
         )
-        if clave == "contrato_firmado" and contrato_ya_firmado(e):
-            # el contrato se firmó (Dropbox Sign o carga manual) antes de iniciar el Onboarding
-            t.estado, t.realizada_por, t.realizada_en, t.notas = "realizada", por, datetime.now(timezone.utc), "Contrato firmado antes de iniciar el Onboarding."
         db.add(t)
     for r in normalizar_recursos(config.get("recursos") or []):
         if norm(r["nombre"]) in recursos:
@@ -196,6 +202,7 @@ def generar_tareas(db: Session, e: Expediente, cuenta_id: int, config: dict, por
             responsable=r["responsable"], dias_relativos=r["dias"], fecha_limite=fecha_limite(fecha_base(e), r["dias"]), creada_por=por,
         ))
     db.flush()
+    sincronizar_contrato(db, e)  # el contrato firmado (u omitido) en Contratación ya cuenta aquí
     return tareas_de(db, e)
 
 
@@ -380,7 +387,10 @@ def resumen_tablero(e: Expediente, tareas: List[TareaOnboarding]) -> dict:
             "faltantes": [{"tipo": d.tipo, "estado": estado_documento_onboarding(d), "obligatorio": d.obligatorio} for d in aplicables if not d.aprobado],
             "noAplica": [{"tipo": d.tipo, "motivo": d.motivo_no_aplica or "", "por": d.no_aplica_por or ""} for d in e.documentos if d.estado == "no_aplica" and not d.interno],
             "total": len(aplicables),
-            "pct": round(len(aprobados) / len(aplicables) * 100) if aplicables else 0,
+            # 2026-10-08: UN solo porcentaje en tablero, Onboarding y ficha = `Expediente.progreso` (obligatorios Aprobados)
+            "pct": e.progreso,
+            "obligatoriosAprobados": sum(1 for d in e.obligatorios if d.aprobado),
+            "obligatorios": len(e.obligatorios),
         },
         "tareas": {
             "realizadas": len(realizadas),
@@ -446,3 +456,80 @@ def contrato_ya_firmado(e: Expediente) -> bool:
     from ..models import TIPO_CONTRATO_FIRMADO
 
     return any(d.interno and d.tipo == TIPO_CONTRATO_FIRMADO and d.archivo for d in e.documentos)
+
+
+# ---------- 2026-10-08: contrato ÚNICO, expediente reutilizable, tareas desde la ficha ----------
+
+def firma_contrato(db: Session, e: Expediente):
+    """La solicitud de firma electrónica del contrato ya firmada por todos (aunque el PDF siga descargándose)."""
+    try:
+        from ..models import FirmaDocumento
+
+        return (db.query(FirmaDocumento).filter(FirmaDocumento.expediente_id == e.id, FirmaDocumento.documento == "contrato",
+                                               FirmaDocumento.estado.in_(("firmada", "descargada")))
+                .order_by(FirmaDocumento.id.desc()).first())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def omision_contrato(e: Expediente) -> Optional[dict]:
+    """La decisión de RH de omitir la actividad de contrato en Contratación (ruta de la postulación)."""
+    p = e.postulacion
+    pasos = ((p.proceso or {}).get("pasos") or []) if p is not None else []
+    for paso in pasos:
+        if paso.get("tipo") == "carta_contrato":
+            d = ((p.proceso_estado or {}).get(paso["id"]) or {})
+            if d.get("omitida") or d.get("cancelada"):
+                return d.get("omitida") or d.get("cancelada")
+    return None
+
+
+def sincronizar_contrato(db: Session, e: Expediente) -> bool:
+    """«Contrato firmado» apunta a la MISMA entidad de Contratación: PDF firmado (manual o Dropbox Sign) o solicitud
+    de firma completa → Realizada; actividad omitida con autorización → «Omitida» (no bloquea); si RH reactiva la
+    actividad, la tarea vuelve a Pendiente. Idempotente; no hace commit. Regresa True si cambió algo."""
+    tarea = next((t for t in tareas_de(db, e) if t.fija and t.clave == "contrato_firmado"), None)
+    if tarea is None or tarea.estado == "realizada":
+        return False
+    ahora = datetime.now(timezone.utc)
+    firma = None if contrato_ya_firmado(e) else firma_contrato(db, e)
+    if contrato_ya_firmado(e) or firma is not None:
+        tarea.estado, tarea.realizada_por, tarea.realizada_en = "realizada", "Firma electrónica" if firma else "Contratación", ahora
+        tarea.cancelada_por, tarea.cancelada_en, tarea.motivo_cancelacion = "", None, ""
+        tarea.notas = "Contrato firmado en Contratación." if firma is None else "Contrato firmado electrónicamente en Contratación."
+        sincronizar_legado(db, e)
+        return True
+    omision = omision_contrato(e)
+    omitida = tarea.estado == "cancelada" and (tarea.motivo_cancelacion or "").startswith(PREFIJO_OMITIDA)
+    if omision and not omitida:
+        tarea.estado, tarea.cancelada_por, tarea.cancelada_en = "cancelada", omision.get("por") or "RH", ahora
+        tarea.motivo_cancelacion = f"{PREFIJO_OMITIDA}: {omision.get('motivo') or 'sin motivo'}"[:1000]
+        sincronizar_legado(db, e)
+        return True
+    if omitida and not omision:
+        tarea.estado = "pendiente"
+        tarea.cancelada_por, tarea.cancelada_en, tarea.motivo_cancelacion = "", None, ""
+        sincronizar_legado(db, e)
+        return True
+    return False
+
+
+def es_omitida(t: TareaOnboarding) -> bool:
+    return t.estado == "cancelada" and (t.motivo_cancelacion or "").startswith(PREFIJO_OMITIDA)
+
+
+def documentos_por_solicitar(e: Expediente) -> List[Documento]:
+    """Lo que de verdad hay que pedirle al candidato: obligatorios sin entregar (Pendiente o Rechazado). Lo Aprobado o
+    ya Recibido (aunque esté en revisión) NUNCA se vuelve a pedir."""
+    return [d for d in e.obligatorios if d.estado in ("pendiente", "rechazado") and not d.entregado]
+
+
+def pendientes_obligatorias(tareas: List[TareaOnboarding]) -> List[TareaOnboarding]:
+    """Tareas que faltan para el alta, en orden (las fijas primero)."""
+    return [t for t in tareas if t.estado == "pendiente" and t.obligatoria]
+
+
+def accion_tarea(t: TareaOnboarding) -> dict:
+    """Acción directa (botón en la fila de la ficha) y texto de lo que falta."""
+    clave, texto, falta = ACCION_TAREA.get(t.clave, ("registrar_tarea", f"Marcar realizada: {t.nombre}", f"Falta: {t.nombre}"))
+    return {"clave": clave, "texto": texto, "falta": falta, "tarea": t.id}

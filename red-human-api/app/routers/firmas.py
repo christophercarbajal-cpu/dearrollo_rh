@@ -56,14 +56,86 @@ def _firmante(f: FirmaDocumento, rol: str) -> Optional[dict]:
     return next((x for x in (f.firmantes or []) if x.get("rol") == rol), None)
 
 
-def _sign_url(f: FirmaDocumento, rol: str) -> Optional[str]:
+MENSAJE_RED = "No pudimos conectar con el servicio de firma. Intenta de nuevo en un momento."
+MENSAJE_NO_DISPONIBLE = "Este documento ya no está disponible para firma. Si lo necesitas, pide a Recursos Humanos una nueva solicitud."
+
+
+def _log_tecnico(db: Session, f: FirmaDocumento, donde: str, ex: Exception) -> None:
+    """El detalle técnico del proveedor va SOLO a los logs internos (consola + bitácora), nunca a la pantalla."""
+    print(f"[firmas] {donde} · firma {f.id} ({f.signature_request_id}): {ex}", flush=True)
+    try:
+        registrar(db, "dropbox-sign", "firma_error_tecnico", "expediente", str(f.expediente_id),
+                  {"firma": f.id, "donde": donde, "status": getattr(ex, "status", None), "detalle": str(ex)[:500]})
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+
+def aplicar_estado(db: Session, f: FirmaDocumento, firmados: set, completa: bool = False, cancelada: bool = False,
+                   origen: str = "") -> str:
+    """UNA sola regla para el webhook y la consulta directa: marca a cada firmante, cierra la solicitud completa y
+    guarda el PDF final en el expediente (contrato → tarea «Contrato firmado»). Idempotente; no hace commit."""
+    from ..models import TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO
+    from ..services import onboarding as onb
+
+    f.firmantes = [{**x, "estado": "firmado" if x.get("signature_id") in firmados else x.get("estado", "pendiente")} for x in (f.firmantes or [])]
+    if cancelada:
+        f.estado = "cancelada"
+    elif completa and f.estado in ("enviada", "firmada", "error"):
+        f.estado = "firmada"
+        f.firmada_en = f.firmada_en or datetime.now(timezone.utc)
+        f.firmantes = [{**x, "estado": "firmado"} for x in f.firmantes]
+        e = db.get(Expediente, f.expediente_id)
+        if not f.documento_id:
+            # el PDF final puede no estar listo con all_signed; con `downloadable` sí (se reintenta ahí)
+            try:
+                pdf = dsign.descargar_pdf(f.signature_request_id)
+                tipo_doc = TIPO_CONTRATO_FIRMADO if f.documento == "contrato" else TIPO_CARTA_FIRMADA
+                doc = onb.guardar_documento_firmado(db, e, tipo_doc, pdf, f"{f.documento}-firmado-{e.id}.pdf", "Dropbox Sign (firma electrónica)", canal="firma_electronica")
+                f.documento_id = doc.id
+                f.estado, f.error = "descargada", ""
+                registrar(db, "dropbox-sign", "documento_firmado_guardado", "expediente", str(e.id),
+                          {"documento": f.documento, "signature_request_id": f.signature_request_id, "evento": origen})
+            except Exception as ex:  # noqa: BLE001
+                f.error = str(ex)[:500]
+        if e is not None and f.documento == "contrato":
+            onb.sincronizar_contrato(db, e)  # firmado por todos = contrato firmado, aunque el PDF siga descargándose
+    return f.estado
+
+
+def sincronizar_con_proveedor(db: Session, f: FirmaDocumento, rol: str = "") -> None:
+    """Respuesta de redundancia del proveedor («already signed»): consulta el estado REAL y actualiza lo local. Si
+    la consulta falla, al menos se confía en lo que dijo el proveedor sobre ESE firmante. Nunca lanza."""
+    try:
+        estado = dsign.consultar_solicitud(f.signature_request_id)
+        aplicar_estado(db, f, set(estado["firmados"]), estado["completa"], estado["cancelada"], origen="consulta")
+    except Exception as ex:  # noqa: BLE001
+        _log_tecnico(db, f, "consulta de estado", ex)
+        x = _firmante(f, rol) if rol else None
+        if x is not None:
+            aplicar_estado(db, f, {x.get("signature_id")} | {y.get("signature_id") for y in f.firmantes or [] if y.get("estado") == "firmado"})
+    f.eventos = list(f.eventos or []) + [{"fecha": datetime.now(timezone.utc).isoformat(), "tipo": "sincronizada_por_redundancia"}]
+    registrar(db, "dropbox-sign", "firma_sincronizada", "expediente", str(f.expediente_id), {"firma": f.id, "estado": f.estado})
+    db.commit()
+
+
+def _sign_url(db: Session, f: FirmaDocumento, rol: str) -> Optional[str]:
+    """URL de firma para `rol`, o None si ese firmante ya firmó / la solicitud ya no está viva. «Already signed» del
+    proveedor NO es un error: se sincroniza el estado real y se regresa None. Fallas de red → 503 limpio (reintentar);
+    el detalle técnico queda solo en los logs."""
     x = _firmante(f, rol)
     if not x or x.get("estado") == "firmado" or f.estado != "enviada":
         return None
     try:
         return dsign.sign_url(x["signature_id"])
     except dsign.FirmaError as ex:
-        raise HTTPException(502 if (ex.status or 500) >= 500 or ex.status is None else 409, str(ex))
+        if dsign.es_ya_firmado(ex):
+            sincronizar_con_proveedor(db, f, rol)
+            return None
+        _log_tecnico(db, f, f"sign_url ({rol})", ex)
+        if dsign.es_falla_de_red(ex):
+            raise HTTPException(503, MENSAJE_RED)
+        raise HTTPException(409, MENSAJE_NO_DISPONIBLE)
 
 
 # Orden de `signers` en la solicitud: 0 = representante de RH (empresa), 1 = candidato. Los campos usan este índice.
@@ -103,7 +175,8 @@ def crear_firma(exp_id: int, datos: CrearFirmaIn, db: Session = Depends(get_db),
         .first()
     )
     if viva:
-        return {**firma_dict(viva), "signUrl": _sign_url(viva, "rh"), "reutilizada": True}
+        url = _sign_url(db, viva, "rh")
+        return {**firma_dict(viva), "signUrl": url, "reutilizada": True}
 
     prueba = modo_prueba_activo(db)
     if not (e.puesto and e.sueldo and e.tipo_contratacion and e.fecha_ingreso) and not prueba:
@@ -135,7 +208,10 @@ def crear_firma(exp_id: int, datos: CrearFirmaIn, db: Session = Depends(get_db),
             zonas=zonas, indice_por_rol=INDICE_FIRMANTE,
         )
     except dsign.FirmaError as ex:
-        raise HTTPException(503 if ex.status == 503 else 502, str(ex))
+        print(f"[firmas] crear solicitud · expediente {e.id}: {ex}", flush=True)
+        registrar(db, u.nombre, "firma_error_tecnico", "expediente", str(e.id), {"donde": "crear", "status": ex.status, "detalle": str(ex)[:500]})
+        db.commit()
+        raise HTTPException(503, str(ex) if ex.status == 503 else MENSAJE_RED)
     por_correo = {s["correo"]: s for s in sr["signatures"]}
     firmantes = []
     for rol, nombre, correo in (("rh", u.nombre, u.correo), ("candidato", nombre_cand, correo_cand)):
@@ -150,7 +226,7 @@ def crear_firma(exp_id: int, datos: CrearFirmaIn, db: Session = Depends(get_db),
     registrar(db, u.nombre, "firma_solicitada", "expediente", str(e.id),
               {"documento": datos.documento, "signature_request_id": f.signature_request_id, "test_mode": f.test_mode, "correo_rh": u.correo})
     db.commit()
-    return {**firma_dict(f), "signUrl": _sign_url(f, "rh"), "reutilizada": False}
+    return {**firma_dict(f), "signUrl": _sign_url(db, f, "rh"), "reutilizada": False}
 
 
 @router.get("/expedientes/{exp_id}")
@@ -170,7 +246,8 @@ def sign_url_rh(firma_id: int, db: Session = Depends(get_db), u: Usuario = Depen
     rh = _firmante(f, "rh")
     if rh and (rh.get("correo") or "").lower() != (u.correo or "").lower():
         raise HTTPException(403, f"Esta firma la debe hacer {rh.get('nombre')} (representante registrado).")
-    return {**firma_dict(f), "signUrl": _sign_url(f, "rh")}
+    url = _sign_url(db, f, "rh")
+    return {**firma_dict(f), "signUrl": url, "yaFirmado": url is None and (_firmante(f, "rh") or {}).get("estado") == "firmado"}
 
 
 # ---------------- Pública: el candidato firma en su liga de expediente ----------------
@@ -188,8 +265,10 @@ def firmas_publicas(token: str, db: Session = Depends(get_db)):
     salida = []
     for f in db.query(FirmaDocumento).filter(FirmaDocumento.expediente_id == e.id).order_by(FirmaDocumento.id.desc()).all():
         c = _firmante(f, "candidato")
+        yo = bool(c and c.get("estado") == "firmado")
+        # 2026-10-08: solo «Firmar» si ESTE firmante no ha firmado y la solicitud sigue viva
         salida.append({"id": f.id, "documento": DOCUMENTOS_FIRMA.get(f.documento, f.documento),
-                       "estado": f.estado, "yoFirme": bool(c and c.get("estado") == "firmado")})
+                       "estado": f.estado, "yoFirme": yo, "puedoFirmar": f.estado == "enviada" and not yo})
     return {"configurado": dsign.configurado(), "clientId": settings.dropbox_sign_client_id if dsign.configurado() else None,
             "testMode": bool(settings.dropbox_sign_test_mode), "firmas": salida}
 
@@ -200,17 +279,18 @@ def sign_url_candidato(token: str, firma_id: int, db: Session = Depends(get_db))
     f = db.query(FirmaDocumento).filter(FirmaDocumento.id == firma_id, FirmaDocumento.expediente_id == e.id).first()
     if not f:
         raise HTTPException(404, "Documento no encontrado.")
-    url = _sign_url(f, "candidato")
+    url = _sign_url(db, f, "candidato")
     if not url:
-        raise HTTPException(409, "Este documento ya está firmado o ya no está disponible para firma.")
-    return {"signUrl": url, "clientId": settings.dropbox_sign_client_id, "testMode": bool(settings.dropbox_sign_test_mode)}
+        if (_firmante(f, "candidato") or {}).get("estado") == "firmado":
+            # ya firmó (aquí o según el proveedor): estado limpio, nunca un error
+            return {"signUrl": None, "yaFirmado": True, "mensaje": "Ya firmaste este documento. ¡Gracias!",
+                    "clientId": settings.dropbox_sign_client_id, "testMode": bool(settings.dropbox_sign_test_mode)}
+        raise HTTPException(409, MENSAJE_NO_DISPONIBLE)
+    return {"signUrl": url, "yaFirmado": False, "clientId": settings.dropbox_sign_client_id, "testMode": bool(settings.dropbox_sign_test_mode)}
 
 
 def procesar_evento_firma(db: Session, evento: dict) -> str:
     """Aplica un evento YA VERIFICADO de Dropbox Sign. Idempotente (Dropbox reintenta)."""
-    from ..models import TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO
-    from ..services import onboarding as onb
-
     ev = evento.get("event") or {}
     tipo = ev.get("event_type") or ""
     sr = evento.get("signature_request") or {}
@@ -226,25 +306,9 @@ def procesar_evento_firma(db: Session, evento: dict) -> str:
     relacionado = ((ev.get("event_metadata") or {}).get("related_signature_id")) or ""
     if tipo == "signature_request_signed" and relacionado:
         firmados.add(relacionado)
-    f.firmantes = [{**x, "estado": "firmado" if x.get("signature_id") in firmados else x.get("estado", "pendiente")} for x in (f.firmantes or [])]
-    if tipo in ("signature_request_declined", "signature_request_canceled", "signature_request_expired"):
-        f.estado = "cancelada"
-    elif tipo in ("signature_request_all_signed", "signature_request_downloadable") and f.estado in ("enviada", "firmada", "error"):
-        f.estado = "firmada"
-        f.firmada_en = f.firmada_en or datetime.now(timezone.utc)
-        f.firmantes = [{**x, "estado": "firmado"} for x in f.firmantes]
-        if not f.documento_id:
-            # el PDF final puede no estar listo con all_signed; con `downloadable` sí (se reintenta ahí)
-            try:
-                pdf = dsign.descargar_pdf(sr_id)
-                e = db.get(Expediente, f.expediente_id)
-                tipo_doc = TIPO_CONTRATO_FIRMADO if f.documento == "contrato" else TIPO_CARTA_FIRMADA
-                doc = onb.guardar_documento_firmado(db, e, tipo_doc, pdf, f"{f.documento}-firmado-{e.id}.pdf", "Dropbox Sign (firma electrónica)", canal="firma_electronica")
-                f.documento_id = doc.id
-                f.estado, f.error = "descargada", ""
-                registrar(db, "dropbox-sign", "documento_firmado_guardado", "expediente", str(e.id),
-                          {"documento": f.documento, "signature_request_id": sr_id, "evento": tipo})
-            except Exception as ex:  # noqa: BLE001
-                f.error = str(ex)[:500]
+    aplicar_estado(db, f, firmados,
+                   completa=tipo in ("signature_request_all_signed", "signature_request_downloadable"),
+                   cancelada=tipo in ("signature_request_declined", "signature_request_canceled", "signature_request_expired"),
+                   origen=tipo)
     db.commit()
     return f.estado

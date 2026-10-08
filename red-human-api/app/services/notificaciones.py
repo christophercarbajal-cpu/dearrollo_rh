@@ -352,6 +352,9 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
 
     if evento == "instrucciones_ingreso" and audiencia == "candidato":
         # Fase 5: bienvenida + instrucciones de ingreso, automático al dar de alta como colaborador.
+        # 2026-10-08 (`momento="onboarding"`): misma bienvenida al entrar a Onboarding con el expediente completo,
+        # sin decir que el alta ya se autorizó y sin ligas de documentos.
+        en_onboarding = extra.get("momento") == "onboarding"
         e = c.expediente
         empresa = extra.get("empresa") or (nombre_empresa_candidato(v) if v else "") or "la empresa"
         fecha = extra.get("fecha_ingreso")
@@ -369,8 +372,11 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
         contacto = extra.get("contacto_rh") or ""
         if canal == "whatsapp":
             lineas = "\n".join(f"• {k}: {val}" for k, val in datos)
+            encabezado = (f"¡Bienvenido(a), {primer_nombre}! 🎉 Tu expediente para {empresa} está completo: ya no necesitas enviar "
+                          "más documentos." if en_onboarding else
+                          f"¡Bienvenido(a) al equipo, {primer_nombre}! 🎉 Tu alta como colaborador(a) en {empresa} ya está autorizada.")
             texto = (
-                f"¡Bienvenido(a) al equipo, {primer_nombre}! 🎉 Tu alta como colaborador(a) en {empresa} ya está autorizada.\n\n"
+                f"{encabezado}\n\n"
                 f"Estos son tus datos de ingreso:\n{lineas}"
                 + (f"\n\nInstrucciones para tu primer día:\n{instrucciones}" if instrucciones else "")
                 + (f"\n\nCualquier duda, escríbenos: {contacto}" if contacto else "")
@@ -379,9 +385,11 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
             return texto
         filas = "".join(f"<tr><td style=\"padding:6px 12px 6px 0;font-weight:bold\">{k}</td><td style=\"padding:6px 0\">{val}</td></tr>" for k, val in datos)
         html = (
-            f"<p>¡Bienvenido(a) al equipo, <strong>{primer_nombre}</strong>! 🎉</p>"
-            f"<p>Tu alta como colaborador(a) en <strong>{empresa}</strong> ya está autorizada. Estos son tus datos de ingreso:</p>"
-            f"<table style=\"border-collapse:collapse\">{filas}</table>"
+            (f"<p>¡Bienvenido(a), <strong>{primer_nombre}</strong>! 🎉</p><p>Tu expediente para <strong>{empresa}</strong> está "
+             "completo: ya no necesitas enviar más documentos. Estos son tus datos de ingreso:</p>" if en_onboarding else
+             f"<p>¡Bienvenido(a) al equipo, <strong>{primer_nombre}</strong>! 🎉</p>"
+             f"<p>Tu alta como colaborador(a) en <strong>{empresa}</strong> ya está autorizada. Estos son tus datos de ingreso:</p>")
+            + f"<table style=\"border-collapse:collapse\">{filas}</table>"
             + (f"<p><strong>Instrucciones para tu primer día:</strong><br>{instrucciones.replace(chr(10), '<br>')}</p>" if instrucciones else "")
             + (f"<p>Cualquier duda, escríbenos: {contacto}</p>" if contacto else "")
             + "<p>¡Nos vemos pronto!<br>Red Human AI</p>"

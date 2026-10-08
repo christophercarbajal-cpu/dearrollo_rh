@@ -35,7 +35,10 @@ import {
   DetalleFilaPsicometria, EstadoFilaPsicometria, ModalActividadSimple, ModalEnviarPrueba, textoAccionPsicometria,
   urlResultadoPsicometria,
 } from "@/components/dashboard/evaluaciones/psicometria-simple";
+import { ModalAccionTarea } from "@/components/dashboard/onboarding/accion-tarea";
+import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-onboarding";
 import {
+  cerrarOnboarding, fetchCandidato, fetchTareasOnboarding, type TareaOnboarding,
   actualizarContactoCandidato, agregarActividadProceso, aprobarPrefiltro, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
   moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
   sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
@@ -98,6 +101,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   // 2026-10-08: «Agregar correo» (psicometría detenida por falta de correo) y «Continuar por decisión de RH»
   const [pedirCorreo, setPedirCorreo] = useState<PasoSeguimiento | null>(null);
   const [excepcion, setExcepcion] = useState<{ paso: string; nombre: string; detalle: string; motivo: string } | null>(null);
+  // 2026-10-08: tareas de Onboarding resueltas DESDE LA FICHA (botón principal o fila)
+  const [tareaAbierta, setTareaAbierta] = useState<TareaOnboarding | null>(null);
+  const [versionTareas, setVersionTareas] = useState(0);
 
   function setSeg(s: Seg) {
     setSegLocal(s);
@@ -125,6 +131,32 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (accion.clave === "validar_documentos") return onAbrir("documentos");
     if (paso?.tipo === "documentos" && accion.clave === "abrir" && c.etapa === "Contratación") return onSolicitarDocumentos();
     if (accion.pestana) onAbrir(accion.pestana);
+  }
+
+  /** Tras resolver una tarea / el alta / el cierre: ruta, ficha y tareas se vuelven a leer (una sola fuente). */
+  async function refrescarTodo(mensaje = "") {
+    const s = await fetchSeguimiento(c.id);
+    if (s) setSeg(s);
+    const ficha = await fetchCandidato(c.id);
+    if (ficha) onCambio(ficha);
+    setVersionTareas((v) => v + 1);
+    if (mensaje) setAviso({ tono: "ok", texto: mensaje });
+  }
+
+  async function abrirTarea(id: number) {
+    if (c.expedienteId == null) return;
+    const t = (await fetchTareasOnboarding(c.expedienteId))?.find((x) => x.id === id);
+    if (t?.accion) setTareaAbierta(t);
+    else void refrescarTodo();
+  }
+
+  async function cerrarOnb() {
+    if (c.expedienteId == null) return;
+    setOcupado("cerrar-onboarding");
+    const r = await cerrarOnboarding(c.expedienteId);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    await refrescarTodo("Onboarding cerrado: el proceso de esta persona terminó.");
   }
 
   /** «Iniciar» (2026-10-08): ejecuta lo configurado en la ruta en UN paso; si falta un dato crítico se pide solo ese. */
@@ -314,12 +346,20 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
   // UN botón principal: la siguiente acción concreta que define la ruta.
   let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
-  if (live && vigente && descarte) {
+  if (live && sig?.tipo === "cerrar_onboarding" && c.expedienteId != null) {
+    // 2026-10-08: con el alta hecha (postulación ya cerrada como «contratado») el último paso es cerrar el Onboarding
+    principal = { texto: "Cerrar Onboarding", onClick: () => void cerrarOnb(), icono: <CheckCircle2 className="h-4 w-4" /> };
+  } else if (live && vigente && descarte) {
     principal = null; // el bloqueo trae SUS dos decisiones (abajo): Confirmar descarte · Continuar por decisión de RH
   } else if (live && c.activa !== false && pasoPrefiltro) {
     principal = { texto: "Aprobar prefiltro", onClick: () => void aprobarPrefiltroRH(), icono: <CheckCircle2 className="h-4 w-4" /> };
   } else if (live && sig && c.activa !== false) {
-    if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
+    if (sig.tipo === "tarea" && sig.tarea != null) {
+      // Onboarding: la tarea pendiente se resuelve aquí mismo (Confirmar ingreso, Registrar alta IMSS…)
+      principal = { texto: sig.texto, onClick: () => void abrirTarea(sig.tarea!), icono: <Play className="h-4 w-4" /> };
+    } else if (sig.tipo === "alta" && onAlta) {
+      principal = { texto: "Dar de alta como colaborador", onClick: onAlta, icono: <CheckCircle2 className="h-4 w-4" /> };
+    } else if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
       const enviarPsico = simple && pasoSig?.tipo === "psicometrica" && sig.accion.clave === "iniciar_evaluacion";
       principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : enviarPsico ? "Enviar prueba" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
     } else if (sig.tipo === "avanzar" && sig.etapa) {
@@ -416,6 +456,20 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {/* 2. Resultados clave */}
       <ResultadosClave c={c} />
+
+      {/* 2026-10-08: tareas de Onboarding en la ficha, cada una con su acción directa */}
+      {c.etapa === "Onboarding" && c.expedienteId != null && (
+        <Card className="p-4">
+          <Eyebrow>Tareas de Onboarding</Eyebrow>
+          <div className="mt-3">
+            <PanelTareasOnboarding expedienteId={c.expedienteId} live={live} recargar={versionTareas} onCambio={() => void refrescarTodo()} />
+          </div>
+        </Card>
+      )}
+      {tareaAbierta && c.expedienteId != null && (
+        <ModalAccionTarea expedienteId={c.expedienteId} tarea={tareaAbierta} onClose={() => setTareaAbierta(null)}
+          onHecho={(m) => { setTareaAbierta(null); void refrescarTodo(m); }} />
+      )}
 
       {/* 3. Avance de la ruta */}
       <Card className="p-0">

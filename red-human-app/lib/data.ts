@@ -232,12 +232,15 @@ export interface EtapaSeguimiento {
   pasos: PasoSeguimiento[];
 }
 export interface SiguienteAccionProceso {
-  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada" | "bloqueo";
+  /** 2026-10-08: en Onboarding `tarea` (resolver una tarea desde la ficha) → `alta` → `cerrar_onboarding`. */
+  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada" | "bloqueo" | "tarea" | "alta" | "cerrar_onboarding";
   texto: string;
   detalle?: string;
   paso?: string;
   etapa?: EtapaCandidato;
   accion?: AccionPaso | null;
+  /** Solo `tipo: "tarea"`: id de la tarea de Onboarding a resolver. */
+  tarea?: number;
 }
 export interface SeguimientoProceso {
   tieneProceso: boolean;

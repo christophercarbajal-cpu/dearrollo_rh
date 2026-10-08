@@ -257,6 +257,8 @@ def eliminar_plantilla(pid: int, db: Session = Depends(get_db), u: Usuario = Dep
 @router.get("/expedientes/{exp_id}/tareas")
 def listar_tareas(exp_id: int, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
     e = _expediente(db, exp_id, cuenta.id)
+    if onb.sincronizar_contrato(db, e):  # 2026-10-08: el contrato de Contratación (firmado u omitido) se refleja aquí
+        db.commit()
     return [tarea_onboarding_dict(t) for t in onb.tareas_de(db, e)]
 
 
@@ -298,8 +300,12 @@ class EditarTareaIn(BaseModel):
 
 
 @router.patch("/tareas/{tid}")
-def editar_tarea(tid: int, datos: EditarTareaIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+async def editar_tarea(tid: int, datos: EditarTareaIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Cambiar estado, responsable, notas o plazo de UNA tarea (también desde la ficha del candidato). Las tareas
+    internas (Alta IMSS / nómina, recursos) son un registro MANUAL: no hay integración con IMSS ni nómina. Asignar un
+    responsable le avisa por correo SOLO a esa persona (si es usuario de la Cuenta)."""
     t = _tarea(db, tid, cuenta.id)
+    responsable_previo = (t.responsable or "").strip()
     e = db.get(Expediente, t.expediente_id)
     if e and e.estado == "alta" and datos.estado and datos.estado != t.estado:
         # tras el alta solo se permite cerrar lo pendiente, nunca reabrir
@@ -323,7 +329,14 @@ def editar_tarea(tid: int, datos: EditarTareaIn, db: Session = Depends(get_db), 
     registrar(db, u.nombre, "tarea_onboarding_actualizada", "expediente", str(t.expediente_id),
               {"tarea": t.nombre, "de": anterior, "a": t.estado, "motivo": t.motivo_cancelacion[:300], "correo_rh": u.correo})
     db.commit()
-    return tarea_onboarding_dict(t)
+    aviso = None
+    nuevo = (t.responsable or "").strip()
+    if e and nuevo and nuevo != responsable_previo and t.estado == "pendiente":
+        avisos = await _avisar_responsables(db, e, cuenta, [t], titulo=f"Tarea asignada: {t.nombre}",
+                                            parrafo=f"Se te asignó esta tarea del Onboarding de {e.candidato.nombre if e.candidato else 'la persona'}:")
+        db.commit()
+        aviso = avisos[0] if avisos else None
+    return {**tarea_onboarding_dict(t), "avisoResponsable": aviso}
 
 
 # ---------- Fase 2: de Contratación a Onboarding ----------
@@ -463,13 +476,19 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
     else:
         db.commit()
 
+    # 2026-10-08 (expediente reutilizable): solo se piden los obligatorios SIN entregar. Lo Aprobado o Recibido en
+    # Contratación nunca se vuelve a pedir; con nada por pedir, la transición solo manda bienvenida + instrucciones.
     solicitud: List[dict] = []
-    if datos.solicitar_documentos and any(not d.aprobado for d in e.obligatorios):
+    bienvenida: List[dict] = []
+    por_pedir = onb.documentos_por_solicitar(e)
+    if datos.solicitar_documentos and por_pedir:
         try:
             r = await rcand._disparar_mensaje_onboarding(db, p, "solicitud_documentos", "documentos_solicitados", rcand._liga_documentos(p), u)
             solicitud = r.get("resultados") or []
         except Exception as ex:  # noqa: BLE001
             solicitud = [{"destinatario": "Candidato", "canal": "whatsapp/correo", "destino": "", "enviado": False, "detalle": str(ex)[:200]}]
+    elif not por_pedir:
+        bienvenida = await _bienvenida_onboarding(db, e, p, cuenta, u)
 
     avisos: List[dict] = []
     if datos.notificar_responsables:
@@ -488,9 +507,29 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
         "documentosNoAplica": no_aplica,
         "documentosConservados": conservados,
         "solicitudDocumentos": solicitud,
+        "documentosPorSolicitar": [d.tipo for d in por_pedir],
+        "bienvenida": bienvenida,
         "avisosResponsables": avisos,
         "cursoInduccion": curso,
     }
+
+
+async def _bienvenida_onboarding(db: Session, e: Expediente, p, cuenta: Cuenta, u: Usuario) -> List[dict]:
+    """Expediente completo al entrar a Onboarding: bienvenida + datos e instrucciones de ingreso (evento
+    `instrucciones_ingreso` en su variante de Onboarding), sin ligas de documentos. Nunca bloquea."""
+    from ..serial import nombre_empresa_candidato
+    from ..services import notificaciones
+
+    vac = p.vacante
+    extra = {"momento": "onboarding", "fecha_ingreso": e.fecha_ingreso, "puesto": e.puesto or (vac.titulo if vac else ""),
+             "empresa": e.empresa or (nombre_empresa_candidato(vac) if vac else ""),
+             "contacto_rh": " · ".join(x for x in [cuenta.correo_comunicacion, cuenta.whatsapp_comunicacion] if x)}
+    try:
+        resultados = await notificaciones.disparar(db, "instrucciones_ingreso", p, u.nombre, extra=extra)
+    except Exception as ex:  # noqa: BLE001
+        resultados = [{"destinatario": "candidato", "canal": "whatsapp/correo", "destino": "", "enviado": False, "detalle": str(ex)[:200]}]
+    registrar(db, u.nombre, "bienvenida_onboarding_enviada", "expediente", str(e.id), {"resultados": resultados, "correo_rh": u.correo})
+    return resultados
 
 
 async def _avisar_responsables(
@@ -562,9 +601,9 @@ async def cargar_contrato_firmado(
     e = _expediente(db, exp_id, cuenta.id)
     if e.estado == "alta":
         raise HTTPException(409, "El colaborador ya fue dado de alta; el expediente no admite cambios.")
+    # 2026-10-08: el contrato es UNO solo. Se puede capturar (firma física / manual) desde la actividad de Contratación
+    # o desde la tarea de Onboarding: es el mismo documento interno, y la tarea (si ya existe) queda Realizada.
     tarea = next((t for t in onb.tareas_de(db, e) if t.fija and t.clave == "contrato_firmado"), None)
-    if not tarea:
-        raise HTTPException(409, "Primero inicia el Onboarding («Enviar a Onboarding»).")
     validado = await fs.validar(archivo, "contrato firmado")
     if validado.extension != "pdf":
         raise HTTPException(400, "El contrato firmado debe ser un PDF.")
@@ -572,12 +611,17 @@ async def cargar_contrato_firmado(
     ahora = datetime.now(timezone.utc)
     doc = onb.guardar_documento_firmado(db, e, TIPO_CONTRATO_FIRMADO, validado.contenido, validado.nombre, u.nombre, canal="rh")
     doc.notas_ia = f"Cargado manualmente por {u.nombre}."
-    tarea.notas = f"Contrato firmado cargado por {u.nombre}."
+    if tarea is not None:
+        tarea.notas = f"Contrato firmado cargado por {u.nombre}."
     registrar(db, u.nombre, "contrato_firmado_cargado", "expediente", str(e.id),
               {"archivo": validado.nombre, "reemplazo": reemplazo, "correo_rh": u.correo})
     db.commit()
+    if e.postulacion is not None:
+        from ..services import proceso as sproc
+
+        await sproc.avanzar_seguro(db, e.postulacion)
     return {
-        "tarea": tarea_onboarding_dict(tarea),
+        "tarea": tarea_onboarding_dict(tarea) if tarea is not None else None,
         "documento": {"tipo": doc.tipo, "archivo": doc.nombre_archivo, "cargadoPor": u.nombre, "cargadoEn": ahora.isoformat()},
     }
 
@@ -620,6 +664,8 @@ def estado_onboarding(exp_id: int, db: Session = Depends(get_db), _: Usuario = D
     """Estado completo para el tablero: documentos aprobados vs faltantes, «No aplica» aparte con motivo,
     tareas realizadas/pendientes/atrasadas, canceladas aparte con motivo, ingreso, alta y cierre."""
     e = _expediente(db, exp_id, cuenta.id)
+    if onb.sincronizar_contrato(db, e):
+        db.commit()
     tareas = onb.tareas_de(db, e)
     return {**onb.resumen_tablero(e, tareas), "listaTareas": [tarea_onboarding_dict(t) for t in tareas]}
 

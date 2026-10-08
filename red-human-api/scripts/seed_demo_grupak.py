@@ -28,6 +28,12 @@ v3 — canal de origen: los candidatos se siembran (y los ya sembrados se corrig
 `whatsapp`, para que el tablero de Candidatos los muestre como llegados por WhatsApp. Es solo la etiqueta del canal:
 siguen sin teléfono ni chat y no se toca la infraestructura de WhatsApp ni de Telegram.
 
+v4 (2026-10-08) — motor de ruta automática en PAUSA para los candidatos sembrados (`analisis.motor_ruta.pausado`):
+el motor nunca les dispara envíos. IDs REALES de Psicométricas.mx (catálogo oficial de su API: Cleaver 1, Zavic 5, Terman 7, 16PF 10,
+Moss 15). Herrmann NO existe en la plataforma: era la causa del rechazo al enviar la «Batería Gerente» (y la de
+Cumplimiento). Queda en el catálogo como prueba EXTERNA (modo manual, sin identificador) y sale de las baterías; correr
+el script de nuevo corrige los registros ya sembrados.
+
 360°: la plataforma no tiene un tipo «360» propio; con datos se representa como TRES evaluaciones de desempeño de la
 misma persona y las mismas competencias, una por perspectiva (Autoevaluación · Jefe directo · Compañeros). Cada una se
 abre, compara y cierra en Desempeño como cualquier otra.
@@ -51,7 +57,7 @@ Opciones:
     --publicar                 deja las vacantes Publicadas
     --admin CORREO             (repetible) usuario EXISTENTE que podrá ver la Cuenta (default: todos los Administradores)
     --crear-usuario CORREO     crea (si no existe) un Administrador vinculado SOLO a «Demo Grupak»
-    --ids-proveedor "N=ID,…"   identificadores reales de Psicométricas.mx (los de abajo son de EJEMPLO)
+    --ids-proveedor "N=ID,…"   cambia los identificadores de Psicométricas.mx (por defecto los REALES de su catálogo)
 """
 
 import argparse
@@ -91,6 +97,7 @@ from app.services import clima_resultados, ia, rag  # noqa: E402
 from app.services import desempeno_calculo as calc  # noqa: E402
 from app.services import evaluaciones as sev  # noqa: E402
 from app.services import proceso as sproc  # noqa: E402
+from app.services import psicometricas as psi  # noqa: E402
 
 ACTOR = "script:seed_demo_grupak"
 NOMBRE_CUENTA = "Demo Grupak"
@@ -102,8 +109,10 @@ PASO_BATERIA = "bateria-psicometrica"
 AZAR = random.Random(2026)  # respuestas simuladas reproducibles
 
 # ============================================================ catálogo psicométrico
-# Identificadores de EJEMPLO en Psicométricas.mx (se reemplazan con --ids-proveedor).
-IDS_PROVEEDOR = {"Cleaver": "101", "Zavic": "102", "Terman": "103", "Herrmann": "104", "16PF": "105", "MOSS": "106"}
+# Identificadores REALES en Psicométricas.mx (`services.psicometricas.PRUEBAS_PROVEEDOR`; --ids-proveedor los cambia).
+# Herrmann no lo ofrece la plataforma: se aplica fuera (prueba externa) y nunca entra en una batería integrada.
+IDS_PROVEEDOR = {"Cleaver": "1", "Zavic": "5", "Terman": "7", "16PF": "10", "MOSS": "15"}
+PRUEBAS_EXTERNAS = {"Herrmann"}
 PRUEBAS = {
     "Cleaver": "Perfil conductual DISC: estilo de trabajo bajo condiciones normales, de presión y motivación.",
     "Zavic": "Valores (moral, legalidad, indiferencia, corrupción) e intereses (económico, político, social, religioso).",
@@ -120,8 +129,8 @@ ORIGEN_DEMO = "whatsapp"
 
 BATERIAS = {
     "Batería Ayudante": ["Cleaver", "Zavic"],
-    "Batería Cumplimiento": ["Terman", "Cleaver", "Herrmann", "16PF"],
-    "Batería Gerente": ["Terman", "MOSS", "Cleaver", "Herrmann", "16PF"],
+    "Batería Cumplimiento": ["Terman", "Cleaver", "16PF"],
+    "Batería Gerente": ["Terman", "MOSS", "Cleaver", "16PF"],
 }
 
 
@@ -354,8 +363,8 @@ DOCUMENTOS = [
      "1. Prefiltro: el candidato se postula en el portal y responde preguntas cerradas (Sí / No / Parcial) sobre los "
      "requisitos indispensables. Red Human solo recomienda; RH decide.\n"
      "2. Filtro Red Human: se aplican la prueba proyectiva Persona bajo la lluvia, la batería psicométrica del puesto "
-     "(Ayudante: Cleaver y Zavic; Cumplimiento: Terman, Cleaver, Herrmann y 16PF; Gerente: Terman, MOSS, Cleaver, "
-     "Herrmann y 16PF) y la Entrevista profunda Red Human.\n"
+     "(Ayudante: Cleaver y Zavic; Cumplimiento: Terman, Cleaver y 16PF; Gerente: Terman, MOSS, Cleaver y 16PF; "
+     "Herrmann se aplica aparte como prueba externa) y la Entrevista profunda Red Human.\n"
      "3. Filtro humano: referencias laborales y revisión documental, entrevista con el sindicato, examen médico (con "
      "consentimiento expreso por escrito del candidato) y entrevista con el líder del área.\n"
      "4. Contratación: propuesta y aceptación de condiciones, documentos de ingreso y firma del contrato.\n"
@@ -434,8 +443,8 @@ def leer_ids_proveedor(texto: str) -> dict:
         nombre = next((n for n in PRUEBAS if n.lower() == nombre.lower()), None)
         if nombre is None:
             raise Abortar(f"--ids-proveedor: prueba desconocida. Usa: {', '.join(PRUEBAS)}.")
-        if not valor.isdigit():
-            raise Abortar(f"--ids-proveedor: el identificador de {nombre} debe ser numérico.")
+        if valor not in psi.PRUEBAS_PROVEEDOR:
+            raise Abortar(f"--ids-proveedor: {nombre}={valor} no es una prueba de la plataforma. Disponibles: {psi.disponibles_texto()}.")
         ids[nombre] = valor
     return ids
 
@@ -517,17 +526,25 @@ def actor_rh(db, cu: Cuenta) -> Usuario:
 
 def asegurar_prueba(db, cu: Cuenta, nombre: str, tipo: str, id_proveedor: str, descripcion: str) -> PruebaPsicometrica:
     clave = clave_prueba(nombre)
+    modo = "integrada" if id_proveedor else "manual"  # sin ID en la plataforma = prueba externa
     pr = db.query(PruebaPsicometrica).filter(PruebaPsicometrica.cuenta_id == cu.id, PruebaPsicometrica.clave == clave).first()
     if pr is None:
-        pr = PruebaPsicometrica(cuenta_id=cu.id, clave=clave, nombre=nombre, descripcion=descripcion, modo="integrada",
-                                proveedor=PROVEEDOR, id_proveedor=id_proveedor, tipo=tipo, activa=True, creado_por=ACTOR)
+        pr = PruebaPsicometrica(cuenta_id=cu.id, clave=clave, nombre=nombre, descripcion=descripcion, modo=modo,
+                                proveedor=PROVEEDOR if id_proveedor else "", id_proveedor=id_proveedor, tipo=tipo, activa=True,
+                                creado_por=ACTOR)
         db.add(pr)
         db.flush()
         ok(f"{'Batería' if tipo == 'bateria' else 'Prueba'}: {nombre} (id {pr.id}, proveedor «{id_proveedor}»)")
     else:
         if pr.id_proveedor != id_proveedor:
-            nota(f"{nombre}: identificador en el proveedor {pr.id_proveedor or '—'} → {id_proveedor}")
+            nota(f"{nombre}: identificador en el proveedor {pr.id_proveedor or '—'} → {id_proveedor or '— (prueba externa)'}")
             pr.id_proveedor = id_proveedor
+        if pr.modo != modo:
+            nota(f"{nombre}: modo {pr.modo} → {modo}")
+            pr.modo = modo
+            pr.proveedor = PROVEEDOR if id_proveedor else ""
+        if tipo == "bateria" and pr.descripcion != descripcion:
+            pr.descripcion = descripcion
         if not pr.activa:
             pr.activa = True
             nota(f"{nombre}: reactivada")
@@ -535,7 +552,7 @@ def asegurar_prueba(db, cu: Cuenta, nombre: str, tipo: str, id_proveedor: str, d
 
 
 def asegurar_catalogo(db, cu: Cuenta, ids: dict) -> dict:
-    catalogo = {n: asegurar_prueba(db, cu, n, "prueba", ids[n], d) for n, d in PRUEBAS.items()}
+    catalogo = {n: asegurar_prueba(db, cu, n, "prueba", "" if n in PRUEBAS_EXTERNAS else ids[n], d) for n, d in PRUEBAS.items()}
     for nombre, pruebas in BATERIAS.items():
         catalogo[nombre] = asegurar_prueba(db, cu, nombre, "bateria", ",".join(dict.fromkeys(ids[p] for p in pruebas)),
                                            "Incluye: " + ", ".join(pruebas) + ".")
@@ -701,7 +718,7 @@ def evaluacion_red_human(match: int) -> dict:
                     "Comunicación clara y con ejemplos concretos."],
         riesgos=["Validar el manejo de equipos de más de 10 personas.", "Confirmar disponibilidad para viajar."],
         areas_desarrollo=["Formación de líderes de segundo nivel."],
-        calif_experiencia=8.4, calif_comunicacion=8.8, match_perfil=match, recomendacion="avanzar",
+        calif_experiencia=8.4, calif_comunicacion=8.8, match_perfil=match, score_entrevista=86, recomendacion="avanzar",
         evidencia="«Crecimos la cartera 18 % en un año con un proceso de seguimiento semanal.»",
         perfil=None, faltante=[],
     ).model_dump()
@@ -836,6 +853,13 @@ def sembrar_candidato(db, cu: Cuenta, d: dict, v: Vacante, catalogo: dict) -> tu
         ok(f"{p.codigo}: canal de origen → WhatsApp (solo etiqueta del tablero)")
     for h in _completar_actividades(db, cu, p, esc):
         ok(f"{p.codigo}: {h}")
+    if not ((p.analisis or {}).get("motor_ruta") or {}).get("pausado"):
+        # v4: los candidatos sembrados son DATOS de demostración: el motor de ruta automática (2026-10-08) nunca les
+        # dispara envíos ni llama al proveedor (se ve su estado, pero «Cero comunicaciones» se mantiene).
+        a = dict(p.analisis or {})
+        a["motor_ruta"] = {**(a.get("motor_ruta") or {}), "pausado": True, "motivo": "Candidato de demostración sembrado"}
+        p.analisis = a
+        ok(f"{p.codigo}: motor de ruta automática en pausa (candidato de demostración)")
     return c, p
 
 
@@ -1038,9 +1062,8 @@ def armar_resumen(db, args, cu, vacantes, postulaciones, medicion, semestral, ci
     for correo, password in accesos:
         L.append(f"  {correo}  contraseña temporal: {password}   (se muestra UNA sola vez; se pide cambiarla al entrar)"
                  if password else f"  {correo}  (usa su contraseña de siempre)")
-    if not args.ids_proveedor:
-        L.append("\n⚠ Los identificadores de Psicométricas.mx son de EJEMPLO (101-106). Si este servidor tiene las llaves "
-                 "del proveedor, vuelve a correr con --ids-proveedor y los reales antes de usar «Asignar y enviar».")
+    L.append("\nBaterías con los IDs REALES de Psicométricas.mx (Cleaver 1, Zavic 5, Terman 7, 16PF 10, Moss 15). "
+             "Herrmann no existe en la plataforma: queda como prueba externa, fuera de las baterías.")
     return L
 
 

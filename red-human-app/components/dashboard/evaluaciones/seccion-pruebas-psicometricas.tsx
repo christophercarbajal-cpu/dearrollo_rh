@@ -125,7 +125,7 @@ function ModalPrueba({ prueba, onClose, onGuardada }: { prueba: PruebaPsicometri
             {TIPOS_PRUEBA.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
           </select>
         </CampoRH>
-        <CampoRH label="Identificador en el proveedor" ayuda="ID numérico en Psicométricas.mx; varios separados por coma (1,7).">
+        <CampoRH label="Identificador en el proveedor" ayuda="ID numérico de la plataforma de evaluación: 1 Cleaver, 2 Kostick, 3 IPV, 4 LIFO, 5 Zavic, 7 Terman, 9 Inglés, 10 16PF, 11 Barsit, 15 Moss, 16 Wonderlic. Varios separados por coma (1,7).">
           <input value={idProveedor} onChange={(e) => setIdProveedor(e.target.value)} className={inputRH} placeholder="1,7" inputMode="numeric" />
         </CampoRH>
         <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">

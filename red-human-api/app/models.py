@@ -2050,7 +2050,37 @@ ESTADOS_PROVEEDOR_PSICOMETRIA = {"pendiente": "Pendiente", "en_curso": "En curso
 # ninguna regla de negocio cambia por Cuenta.
 CUENTAS_PSICOMETRIA_SIMPLE = {"demo-grupak"}
 # Estados visibles del flujo simple: SOLO tres (derivados de la evaluación; nunca se guardan).
-ESTADOS_PSICOMETRIA_SIMPLE = {"sin_enviar": "Sin enviar", "enviada": "Enviada", "completada": "Completada"}
+# 2026-10-08: «error_envio» = la prueba SÍ se generó (tiene clave del proveedor) pero la liga no le llegó al candidato
+# por ningún canal; se resuelve con «Reintentar envío» o «Copiar liga».
+ESTADOS_PSICOMETRIA_SIMPLE = {"sin_enviar": "Sin enviar", "enviada": "Enviada", "error_envio": "Error de envío",
+                              "completada": "Completada"}
+
+
+# Motor de ruta AUTOMATIZADO (2026-10-08): SOLO estas Cuentas (slug). Las actividades se habilitan al completarse las
+# anteriores (no por columna), las automáticas se disparan solas por el canal del candidato (sin duplicar), el prefiltro
+# web se resuelve contra la vacante y el tablero avanza solo en Prefiltro / Filtro Red Human / Filtro humano. Un
+# resultado excluyente NUNCA descarta: deja «Descarte sugerido» y RH confirma (LFPDPPP, human-in-the-loop). Las demás
+# Cuentas conservan su avance manual. Motor: `services/motor_ruta.py`.
+CUENTAS_RUTA_AUTOMATICA = {"demo-grupak"}
+
+
+def ruta_automatica(cuenta) -> bool:
+    """¿La Cuenta usa el motor de ruta automatizado? (`cuenta` = Cuenta o None)."""
+    return bool(cuenta is not None and (getattr(cuenta, "slug", "") or "") in CUENTAS_RUTA_AUTOMATICA)
+
+
+def score_de_entrevista(evaluacion: Optional[dict]) -> Optional[int]:
+    """Score PROPIO de la Entrevista Red Human (2026-10-08), sin el CV: `score_entrevista` de la evaluación; las
+    evaluaciones previas (sin ese campo) lo derivan de sus calificaciones de la entrevista (experiencia y comunicación,
+    0-10). `match_perfil` NUNCA: es la afinidad integral (CV + entrevista). None sin datos."""
+    ev = evaluacion or {}
+    valor = ev.get("score_entrevista")
+    if isinstance(valor, (int, float)):
+        return max(0, min(100, int(round(valor))))
+    exp, com = ev.get("calif_experiencia"), ev.get("calif_comunicacion")
+    if isinstance(exp, (int, float)) and isinstance(com, (int, float)):
+        return max(0, min(100, int(round((exp + com) * 5))))
+    return None
 
 
 def psicometria_simple(cuenta) -> bool:

@@ -177,7 +177,7 @@ with TestClient(app) as client:
     _correo.enviar_correo, _wa.enviar_con_boton = _correo_falso, _boton_falso
     try:
         r = client.post(f"/evaluaciones/postulaciones/{P1}/psicometria", headers=H, json={"paso_id": paso_psi["id"]})
-        check(r.status_code == 502 and "1001" in r.json()["detail"], "API rechaza → 502 con el motivo del proveedor (claro para RH)")
+        check(r.status_code == 502 and r.json()["detail"] == psi.MENSAJE_FALLA_ALTA, "API rechaza → 502 «No se pudo generar la prueba. Intenta nuevamente.» (el detalle va a log y bitácora)")
         db.expire_all()
         check(len(LLAMADAS) == 1 and not [x for x in client.get(f"/evaluaciones/postulaciones/{P1}", headers=H).json() if x["tipo"] == "psicometrica"]
               and not MENSAJES and not CORREOS, "…y NO queda registro «Asignada/Enviada» ni se avisa al candidato")
@@ -197,8 +197,8 @@ with TestClient(app) as client:
               "evento «Psicometría enviada»: portal + clave por el canal activo y por correo")
         seg = client.get(f"/procesos/postulaciones/{P1}", headers=H).json()
         paso_ruta = next(x for e in seg["etapas"] for x in e["pasos"] if x["id"] == paso_psi["id"])
-        check(paso_ruta["evaluacion"] == e1["codigo"] and paso_ruta["estadoUnificado"] == "programada",
-              "Ruta y Evaluaciones leen el MISMO registro (Programada / Enviada en la ruta)")
+        check(paso_ruta["evaluacion"] == e1["codigo"] and paso_ruta["estadoUnificado"] == "enviada",
+              "Ruta y Evaluaciones leen el MISMO registro («Enviada» en la ruta)")
         n = len(LLAMADAS)
         r = client.post(f"/evaluaciones/postulaciones/{P1}/psicometria", headers=H, json={"paso_id": paso_psi["id"]})
         check(r.status_code == 409 and len(LLAMADAS) == n, "doble clic: 409 SIN volver a llamar al proveedor (no gasta saldo ni duplica)")

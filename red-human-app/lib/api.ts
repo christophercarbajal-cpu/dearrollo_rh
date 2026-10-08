@@ -3180,6 +3180,13 @@ export function asignarPsicometria(codigoPostulacion: string, datos: { pruebaIds
   });
 }
 
+/** Nombre visible del proveedor psicométrico (2026-10-08): en la interfaz la plataforma es SIEMPRE «Red Human».
+ * El valor crudo (`proveedor`) se conserva en la API: es lo que conecta la integración y nunca se reescribe al editar. */
+export function proveedorVisible(nombre?: string | null): string {
+  const t = (nombre ?? "").trim();
+  return /psicom[eé]tricas/i.test(t) ? "Red Human" : t;
+}
+
 /** Formato de correo que acepta la API (`candidatos.CORREO_VALIDO`, el mismo que exige Psicométricas.mx). */
 export const esCorreoValido = (v: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim());
 
@@ -3537,6 +3544,10 @@ export function fetchSeguimiento(codigoPostulacion: string) {
   return get<SeguimientoProceso>(`/procesos/postulaciones/${codigoPostulacion}`);
 }
 type RespuestaPaso = { proceso: SeguimientoProceso; candidato: Candidato };
+/** Ruta automática (2026-10-08): RH resuelve un «Revisar prefiltro» a favor; el descarte va por «Descartar». */
+export function aprobarPrefiltro(codigoPostulacion: string, comentario = "") {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/prefiltro/aprobar`, { comentario });
+}
 export function omitirPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/omitir`, { motivo });
 }

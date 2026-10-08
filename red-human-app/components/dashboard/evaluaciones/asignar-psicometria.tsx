@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Brain, ChevronDown, Loader2, Search, Send } from "lucide-react";
 import { Badge, Button } from "@/components/ui";
-import { asignarPsicometria, fetchVistaPsicometria, type PruebaPsicometrica, type RespuestaEvaluacion, type VistaPsicometria } from "@/lib/api";
+import { asignarPsicometria, fetchVistaPsicometria, proveedorVisible, type PruebaPsicometrica, type RespuestaEvaluacion, type VistaPsicometria } from "@/lib/api";
 import type { Candidato } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +56,7 @@ export function SelectorPruebas({ catalogo, seleccion, onChange, deshabilitado =
               </div>
               {abierta === p.id && (
                 <p className="pb-1.5 pl-6 text-[11px] leading-relaxed text-ink-3">
-                  {p.tipoTexto} · Identificador en el proveedor: {p.idProveedor || "—"}{p.proveedor ? ` · ${p.proveedor}` : ""}
+                  {p.tipoTexto} · Identificador en el proveedor: {p.idProveedor || "—"}{p.proveedor ? ` · ${proveedorVisible(p.proveedor)}` : ""}
                   {p.descripcion ? <><br />{p.descripcion}</> : null}
                 </p>
               )}

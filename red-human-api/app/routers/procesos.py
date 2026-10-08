@@ -313,6 +313,27 @@ async def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session 
     return _salida(p)
 
 
+class AprobarPrefiltroIn(BaseModel):
+    comentario: str = ""
+
+
+@router.post("/postulaciones/{codigo}/prefiltro/aprobar")
+async def aprobar_prefiltro(codigo: str, datos: AprobarPrefiltroIn, db: Session = Depends(get_db),
+                            u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Ruta automática (2026-10-08): RH resuelve un «Revisar prefiltro» a favor; el motor sigue solo. El descarte va
+    por «Descartar» (motivo obligatorio). Queda con su nombre en bitácora."""
+    from ..services import motor_ruta
+
+    p = _postulacion(db, codigo, cuenta.id)
+    try:
+        motor_ruta.aprobar_prefiltro(db, p, u, datos.comentario)
+    except sproc.ErrorProceso as e:
+        raise _error(e)
+    db.commit()
+    await sproc.avanzar_seguro(db, p)
+    return _salida(p)
+
+
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/reactivar")
 def reactivar_paso(codigo: str, paso_id: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
                    cuenta: Cuenta = Depends(cuenta_actual)):

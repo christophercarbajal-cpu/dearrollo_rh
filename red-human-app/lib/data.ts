@@ -129,10 +129,21 @@ export interface PasoSeguimiento {
   /** UX 2026-10-07: UNA etiqueta visible por actividad (derivada en la API). */
   estadoUnificado?: EstadoUnificado;
   estadoUnificadoTexto?: string;
+  /** Terminó pero falta la revisión/validación de RH (botón «Aprobar: …»). */
+  pendienteAprobacion?: boolean;
+  /** 2026-10-08: la resuelve Red Human sola (o la dispara el motor de ruta automática): la ficha solo muestra su estado. */
+  automatica?: boolean;
+  /** Motivo del estado «Error» (envío fallido, disparo automático fallido…). */
+  error?: string | null;
+  /** Ruta automática: el prefiltro quedó en «Revisar prefiltro» (decide RH). */
+  revisarPrefiltro?: boolean;
+  /** URL REAL de la actividad (sala, prueba, liga del evaluador, consentimiento, documentos). Abrirla/copiarla no marca nada. */
+  liga?: { url: string; texto: string; clave?: string } | null;
   accion: AccionPaso | null;
 }
 export interface PsicometriaPaso {
-  status: "sin_enviar" | "enviada" | "completada";
+  /** «error_envio» (2026-10-08): la prueba se generó (tiene clave) pero la liga no le llegó al candidato. */
+  status: "sin_enviar" | "enviada" | "error_envio" | "completada";
   statusTexto: string;
   test_id: number | null;
   test_name: string | null;
@@ -147,11 +158,21 @@ export interface PsicometriaPaso {
   simulado: boolean;
   /** Liga que «Reenviar» manda de nuevo (proveedor | otro_sistema); null = no hay liga del proveedor (simulado). */
   reenvio: "proveedor" | "otro_sistema" | null;
+  /** Liga REAL del candidato para «Copiar liga» (copiarla no marca nada como enviado) y su clave de acceso. */
+  liga?: string | null;
+  clave?: string | null;
   /** Días en «Enviada» por encima del umbral (`psychometric_no_response_days`); null = sin aviso. */
   dias_sin_respuesta: number | null;
   umbral_sin_respuesta: number;
 }
-export type EstadoUnificado = "sin_iniciar" | "programada" | "en_curso" | "pendiente_aprobacion" | "completada" | "omitida" | "no_favorable";
+/** Vocabulario ÚNICO de estados de actividad (2026-10-08). */
+export type EstadoUnificado = "sin_iniciar" | "enviada" | "en_curso" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error";
+/** Ruta automática: una obligatoria «No aprobada» detiene el funnel; RH confirma el descarte (nunca es automático). */
+export interface DescarteSugerido {
+  paso: string;
+  nombre: string;
+  motivo: string;
+}
 export interface EtapaSeguimiento {
   etapa: EtapaCandidato;
   texto: string;
@@ -189,6 +210,9 @@ export interface SeguimientoProceso {
   etapas?: EtapaSeguimiento[];
   /** Canal Telegram (2026-10-06): deep links de la postulación y de cada paso (solo si la Cuenta atiende por Telegram). */
   telegram?: { disponible: boolean; liga: string; pasos: Record<string, string> };
+  /** 2026-10-08: motor de ruta automatizado (solo demo-grupak). */
+  rutaAutomatica?: boolean;
+  descarteSugerido?: DescarteSugerido | null;
 }
 
 export interface RespuestaPrefiltro {
@@ -278,7 +302,9 @@ export interface Candidato {
   has_consent?: boolean;
   expediente_pct?: number | null;
   /** Flujo simple de psicometría (solo Cuentas con `psicometriaSimple`). */
-  psychometric_alert?: "sin_enviar" | "sin_respuesta" | null;
+  psychometric_alert?: "sin_enviar" | "sin_respuesta" | "error_envio" | null;
+  /** Ruta automática: actividad obligatoria «No aprobada» → RH confirma el descarte. */
+  suggested_discard?: DescarteSugerido | null;
   /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */
   proceso?: SeguimientoProceso;
   tieneProceso?: boolean;
@@ -389,6 +415,8 @@ export interface Candidato {
   /** true solo cuando la Evaluación Integral (CV + Entrevista Red Human válida) existe. */
   evaluacionIntegral?: boolean;
   afinidadGlobal?: number | null;
+  /** Score PROPIO de la Entrevista Red Human (sin el CV), 2026-10-08. */
+  scoreEntrevista?: number | null;
   sintesisAfinidad?: string;
   fortalezasPrincipales?: string[];
   puntosPorValidar?: string[];

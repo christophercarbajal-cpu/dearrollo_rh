@@ -31,6 +31,7 @@ import {
   fetchEvaluaciones, lineasResultados, marcarEvaluacionNoRealizada, marcarEvaluacionRealizada, modificarEvaluacion, recordatorioEvaluacion,
   registrarResultadoEvaluacion, reprogramarEvaluacion, revisarEvaluacion, sincronizarEvaluacion, urlAdjuntoEvaluacion,
   type Evaluacion, type EventoEvaluacion, type LigaEvaluacion, type RespuestaEvaluacion, type Resultado,
+  proveedorVisible,
 } from "@/lib/api";
 import type { Candidato } from "@/lib/data";
 import { partesLocales, textoCita, textoFechaHora } from "@/lib/fechas";
@@ -406,7 +407,7 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
           </p>
           <p className="truncate text-[12px] text-ink-3">
             {e.responsable}
-            {e.tipo === "psicometrica" && e.proveedor && e.responsable !== e.proveedor ? ` · Proveedor: ${e.proveedor}` : ""}
+            {e.tipo === "psicometrica" && e.proveedor && e.responsable !== e.proveedor ? ` · Proveedor: ${proveedorVisible(e.proveedor)}` : ""}
             {e.cita?.fechaHora ? ` · ${textoCita(e.cita.fechaHora, { dateStyle: "medium", timeStyle: "short" })}` : ""}
             {e.pasoIntegrada && e.forma === "integrada" && e.estado !== "con_resultado" && !e.estadoProveedorTexto ? ` · Proveedor: ${PASOS[e.pasoIntegrada] ?? e.pasoIntegrada}` : ""}
           </p>
@@ -424,7 +425,7 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
         </div>
       </div>
       {(e.motivoEstado && (e.estado === "no_realizada" || e.estado === "cancelada")) && <p className="mt-1.5 text-[12px] text-ink-3">Motivo: {e.motivoEstado}</p>}
-      {e.claveProveedor && <p className="mt-1.5 text-[12px] text-ink-3">Proveedor {e.proveedor} · clave <span className="font-mono">{e.claveProveedor}</span></p>}
+      {e.claveProveedor && <p className="mt-1.5 text-[12px] text-ink-3">Proveedor {proveedorVisible(e.proveedor)} · clave <span className="font-mono">{e.claveProveedor}</span></p>}
       {(e.ligas?.length ?? 0) > 0 && (
         <ul className="mt-2.5 flex flex-col gap-1.5">
           {e.ligas!.map((l) => (

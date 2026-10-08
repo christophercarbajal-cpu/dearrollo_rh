@@ -4,9 +4,13 @@
    compuerta + avance automático); aquí no hay botones para mover de etapa. Orden fijo:
      1. Recomendación + UN ÚNICO botón principal = la siguiente acción concreta de la ruta (`siguienteAccion` de la API).
      2. Resultados clave (un dato, un lugar).
-     3. Avance de la ruta: una línea por actividad con UNA sola etiqueta de estado (`estadoUnificado`); el detalle se
-        despliega y ahí viven las acciones de la actividad: ejecutar, sincronizar, liga de Telegram, Omitir (motivo
-        obligatorio), Cancelar y Reactivar.
+     3. Avance de la ruta: una línea por actividad con UNA sola etiqueta de estado (`estadoUnificado`, vocabulario único:
+        Sin iniciar · Enviada · En curso · Completada · Aprobada · No aprobada · Omitida · Error); el detalle se despliega
+        y ahí viven las acciones: ejecutar (solo actividades manuales o con Error), sincronizar, la liga REAL de la
+        actividad (Abrir / Copiar: copiarla no marca nada como enviado), «Omitir actividad» (motivo obligatorio; recalcula
+        el avance sin borrar nada) y Reactivar.
+   2026-10-08 (ruta automática, solo demo-grupak): «Descarte sugerido» (RH confirma el descarte; nunca es automático) y
+   «Revisar prefiltro» (RH aprueba) arriba, junto a la recomendación.
      4. Fortalezas (máx. 3) y Puntos por validar (máx. 3).
    Las acciones REUTILIZAN lo que ya existe: «Agregar evaluación» precargada, las tarjetas de evaluación, el chat, los
    documentos o el expediente. Cambiar ruta / agregar actividad / descartar / eliminar viven en el «…» del encabezado.
@@ -16,7 +20,8 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowRight, Ban, CheckCircle2, ChevronDown, Clock, Link2, Play, RefreshCw, RotateCcw, SkipForward, Sparkles, XCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Clock, Copy, ExternalLink, Play, RefreshCw, RotateCcw, SkipForward, Sparkles,
+  ThumbsDown, XCircle,
 } from "lucide-react";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
@@ -27,17 +32,17 @@ import {
   urlResultadoPsicometria,
 } from "@/components/dashboard/evaluaciones/psicometria-simple";
 import {
-  agregarActividadProceso, cancelarPasoProceso, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
+  agregarActividadProceso, aprobarPrefiltro, fetchOpcionesProceso, fetchSeguimiento, moverEtapaCandidato, nombreEtapa,
   omitirPasoProceso, ordenEtapa, reactivarPasoProceso, sincronizarEvaluacion, type OpcionesProceso,
 } from "@/lib/api";
 import type { AccionPaso, Candidato, EstadoUnificado, EtapaCandidato, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
 import { textoDia } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
 
-/** Una etiqueta por actividad (los 7 estados visibles). */
+/** Una etiqueta por actividad (vocabulario único, 2026-10-08). */
 export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human" | "good" | "warn" | "bad"> = {
-  sin_iniciar: "neutral", programada: "human", en_curso: "brand", pendiente_aprobacion: "warn",
-  completada: "good", omitida: "neutral", no_favorable: "bad",
+  sin_iniciar: "neutral", enviada: "human", en_curso: "brand", completada: "good", aprobada: "good",
+  no_aprobada: "bad", omitida: "neutral", error: "bad",
 };
 
 export type PresetPaso = { tipo: string; pasoId: string; titulo: string; usuarioId?: number | null };
@@ -51,7 +56,7 @@ const TONO_RECOMENDACION: Record<string, { texto: string; icon: typeof CheckCirc
   "No avanzar": { texto: "text-bad", icon: XCircle },
 };
 
-export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvaluacion, onAbrir, onSolicitarDocumentos, onAlta, onSeg, setAviso }: {
+export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvaluacion, onAbrir, onSolicitarDocumentos, onAlta, onDescartar, onSeg, setAviso }: {
   c: Candidato;
   live: boolean;
   version: number;
@@ -61,6 +66,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   onSolicitarDocumentos: () => void;
   /** «Alta como colaborador»: abre la confirmación del alta (la misma de siempre). */
   onAlta?: () => void;
+  /** «Confirmar descarte» (ruta automática): abre el descarte de siempre con el motivo sugerido precargado. */
+  onDescartar?: (motivo: string) => void;
   /** El encabezado de la ficha usa el seguimiento para su menú «…» (cambiar ruta, liga de Telegram). */
   onSeg?: (s: Seg) => void;
   setAviso: (a: { tono: "ok" | "error" | "warn"; texto: string } | null) => void;
@@ -72,7 +79,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const [seg, setSegLocal] = useState<Seg | null>(c.proceso ?? null);
   const [ocupado, setOcupado] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
-  const [decision, setDecision] = useState<{ tipo: "omitir" | "cancelar"; paso: PasoSeguimiento; motivo: string } | null>(null);
+  // «Omitir actividad» unifica Omitir y Cancelar (2026-10-08): motivo obligatorio; recalcula el avance sin borrar nada.
+  const [decision, setDecision] = useState<{ tipo: "omitir"; paso: PasoSeguimiento; motivo: string } | null>(null);
 
   function setSeg(s: Seg) {
     setSegLocal(s);
@@ -125,24 +133,35 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   async function confirmarDecision() {
     if (!decision) return;
     setOcupado("decision");
-    const fn = decision.tipo === "omitir" ? omitirPasoProceso : cancelarPasoProceso;
-    const r = await fn(c.id, decision.paso.id, decision.motivo);
+    const r = await omitirPasoProceso(c.id, decision.paso.id, decision.motivo);
     setOcupado("");
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     setSeg(r.data.proceso);
     onCambio(r.data.candidato);
     const movida = r.data.candidato.etapa !== c.etapa;
     setDecision(null);
-    setAviso({ tono: "ok", texto: `«${decision.paso.nombre}» quedó ${decision.tipo === "omitir" ? "omitida" : "cancelada"}.${movida ? ` La ruta continúa en ${nombreEtapa(r.data.candidato.etapa)}.` : ""}` });
+    setAviso({ tono: "ok", texto: `«${decision.paso.nombre}» quedó omitida.${movida ? ` La ruta continúa en ${nombreEtapa(r.data.candidato.etapa)}.` : ""}` });
   }
 
-  async function copiarLigaTelegram(liga: string, paso: PasoSeguimiento) {
+  /** «Copiar liga»: SOLO copia la URL real de la actividad; nunca la marca como enviada. */
+  async function copiarLiga(liga: NonNullable<PasoSeguimiento["liga"]>, paso: PasoSeguimiento) {
+    const texto = liga.clave ? `${liga.url}\nClave de acceso: ${liga.clave}` : liga.url;
     try {
-      await navigator.clipboard.writeText(liga);
-      setAviso({ tono: "ok", texto: `Liga de Telegram de «${paso.nombre}» copiada. Solo funciona desde el Telegram con el número del candidato.` });
+      await navigator.clipboard.writeText(texto);
+      setAviso({ tono: "ok", texto: `Liga de «${paso.nombre}» copiada.` });
     } catch {
-      setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
+      setAviso({ tono: "warn", texto: `Copia la liga: ${liga.url}` });
     }
+  }
+
+  async function aprobarPrefiltroRH() {
+    setOcupado("prefiltro");
+    const r = await aprobarPrefiltro(c.id);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setSeg(r.data.proceso);
+    onCambio(r.data.candidato);
+    setAviso({ tono: "ok", texto: "Prefiltro aprobado: la ruta continúa sola." });
   }
 
   /** Psicométricas.mx sin webhook (desarrollo): consulta su API, trae JSON + PDF y la actividad queda Completada. */
@@ -156,7 +175,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (s) setSeg(s);
     setAviso(r.data.sincronizacion === "resultado_recibido"
       ? { tono: "ok", texto: `Resultado de «${paso.nombre}» recibido (JSON y PDF).` }
-      : { tono: "warn", texto: `Psicométricas.mx todavía no reporta «${paso.nombre}» como terminada.` });
+      : { tono: "warn", texto: `La plataforma de evaluación todavía no reporta «${paso.nombre}» como terminada.` });
   }
 
   /** Flujo simple: la ÚNICA acción de la fila psicométrica según su estado. */
@@ -164,11 +183,15 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     const ps = paso.psicometria;
     if (!ps) return;
     if (ps.status === "sin_enviar") return setEnviarPrueba(paso);
-    if (ps.status === "enviada") {
+    if (ps.status === "enviada" || ps.status === "error_envio") {
+      // «Reenviar» / «Reintentar envío» (2026-10-08): misma liga; si ahora sí salió, la fila pasa de Error de envío a Enviada
       setOcupado(`psi-${paso.id}`);
       const aviso = await reenviarPsicometria(ps);
       setOcupado("");
-      return setAviso(aviso);
+      setAviso(aviso);
+      const s = await fetchSeguimiento(c.id);
+      if (s) setSeg(s);
+      return;
     }
     const url = urlResultadoPsicometria(ps);
     if (url) window.open(url, "_blank", "noopener,noreferrer");
@@ -185,19 +208,24 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const sig = seg.siguienteAccion;
   const pasos = (seg.etapas ?? []).flatMap((e) => e.pasos);
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
-  const tg = seg.telegram?.disponible ? seg.telegram : null;
+  const descarte = seg.descarteSugerido ?? null;
+  const pasoPrefiltro = pasos.find((p) => p.revisarPrefiltro && p.estado !== "omitida" && p.estado !== "cancelada");
   const rec = c.recomendacionRedHuman ? TONO_RECOMENDACION[c.recomendacionRedHuman] : null;
   const RecIcon = rec?.icon ?? Sparkles;
 
   // UN botón principal: la siguiente acción concreta que define la ruta.
   let principal: { texto: string; onClick: () => void; icono: React.ReactNode } | null = null;
-  if (live && sig && c.activa !== false) {
+  if (live && c.activa !== false && descarte && onDescartar) {
+    principal = { texto: "Confirmar descarte", onClick: () => onDescartar(descarte.motivo), icono: <ThumbsDown className="h-4 w-4" /> };
+  } else if (live && c.activa !== false && pasoPrefiltro) {
+    principal = { texto: "Aprobar prefiltro", onClick: () => void aprobarPrefiltroRH(), icono: <CheckCircle2 className="h-4 w-4" /> };
+  } else if (live && sig && c.activa !== false) {
     if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
       const enviarPsico = simple && pasoSig?.tipo === "psicometrica" && sig.accion.clave === "iniciar_evaluacion";
       principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : enviarPsico ? "Enviar prueba" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
     } else if (sig.tipo === "avanzar" && sig.etapa) {
       principal = { texto: `Continuar a ${nombreEtapa(sig.etapa)}`, onClick: () => continuar(sig.etapa!), icono: <ArrowRight className="h-4 w-4" /> };
-    } else if (sig.tipo === "esperar" && sig.accion && pasoSig?.estadoUnificado === "pendiente_aprobacion") {
+    } else if (sig.tipo === "esperar" && sig.accion && pasoSig?.pendienteAprobacion) {
       principal = { texto: `Aprobar: ${pasoSig.nombre}`, onClick: () => ejecutar(pasoSig, sig.accion), icono: <CheckCircle2 className="h-4 w-4" /> };
     }
   }
@@ -205,6 +233,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const pasoBloqueo = bloqueoPsico ?? (simple && !principal && pasoSig?.obligatorio && pasoSig.psicometria?.status === "enviada"
     && pasoSig.estado !== "omitida" && pasoSig.estado !== "cancelada" ? pasoSig : null);
   const textoEspera = !principal && !pasoBloqueo && sig ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
+  /** Actividad automática sin error: solo se muestra su estado (sin botón). */
+  const soloEstado = (p: PasoSeguimiento) => Boolean(p.automatica) && !p.error;
 
   return (
     <div className="flex flex-col gap-3">
@@ -229,7 +259,23 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             </Button>
           )}
         </div>
-        {textoEspera && (
+        {descarte && c.activa !== false && (
+          <div role="alert" className="mt-3 rounded-lg border border-bad/40 bg-bad-soft/50 px-3 py-2">
+            <p className="flex items-center gap-2 text-[13px] font-semibold text-bad">
+              <XCircle className="h-4 w-4 shrink-0" /> Descarte sugerido: {descarte.motivo}
+            </p>
+            <p className="mt-0.5 pl-6 text-[12px] text-ink-2">
+              La ruta se detuvo. Confirma el descarte o, si RH decide continuar, omite la actividad con un motivo.
+            </p>
+          </div>
+        )}
+        {pasoPrefiltro && !descarte && (
+          <p className="mt-3 flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/50 px-3 py-2 text-[12px] text-ink-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
+            <span><b className="text-ink">Revisar prefiltro.</b> {pasoPrefiltro.espera.replace(/^Revisar prefiltro:\s*/, "")} Apruébalo o descarta al candidato desde «…».</span>
+          </p>
+        )}
+        {textoEspera && !descarte && !pasoPrefiltro && (
           <p className={cn("mt-3 flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[12px]", sig?.tipo === "fin" ? "bg-good-soft/50" : "bg-surface-2", "text-ink-2")}>
             {sig?.tipo === "fin" ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" /> : <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />}
             <span>{textoEspera}</span>
@@ -289,7 +335,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           </span>
                           {ps ? <EstadoFilaPsicometria ps={ps} /> : <Badge tone={TONO_ESTADO_U[estadoU]}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
                         </button>
-                        {ps && (live || ps.status === "completada") && c.activa !== false && (
+                        {ps && (live || ps.status === "completada") && c.activa !== false
+                          && !(soloEstado(p) && ps.status !== "completada" && ps.status !== "error_envio") && (
                           <Button size="sm" variant="outline" className="h-7 shrink-0 px-2.5 text-[12px]" onClick={() => accionPsicometria(p)} disabled={Boolean(ocupado)}>
                             {textoAccionPsicometria(ps)}
                           </Button>
@@ -305,14 +352,14 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                             {p.adhoc && " · solo este candidato"}
                             {p.heredado && " · fuera de la ruta vigente"}
                           </p>
-                          {p.espera && <p className="font-medium text-warn">{p.espera}</p>}
+                          {p.espera && <p className={cn("font-medium", p.error ? "text-bad" : "text-warn")}>{p.espera}</p>}
                           {(p.resultadoTexto || p.detalle) && (
                             <p>{p.resultadoTexto ? <b className="text-ink">{p.resultadoTexto}. </b> : null}{p.detalle}{p.revisadoPor && p.estado === "completada" ? ` · ${p.revisadoPor}` : ""}</p>
                           )}
                           {p.vencido && <p className="font-semibold text-bad">Plazo vencido (solo alerta)</p>}
                           {live && (
                             <div className="flex flex-wrap items-center gap-1.5">
-                              {p.accion && !ps && (
+                              {p.accion && !ps && !soloEstado(p) && (
                                 <Button size="sm" variant="outline" onClick={() => ejecutar(p, p.accion)} disabled={Boolean(ocupado) || c.activa === false}>
                                   {p.tipo === "alta" ? "Dar de alta" : p.accion.texto}
                                 </Button>
@@ -322,18 +369,19 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                                   <RefreshCw className={cn("h-3.5 w-3.5", ocupado === `sync-${p.id}` && "animate-spin")} /> Sincronizar resultado
                                 </Button>
                               )}
-                              {tg?.pasos[p.id] && (p.estado === "pendiente" || p.estado === "en_curso") && (
-                                <Button size="sm" variant="ghost" onClick={() => copiarLigaTelegram(tg.pasos[p.id], p)}><Link2 className="h-3.5 w-3.5" /> Liga de Telegram</Button>
-                              )}
-                              {(p.estado === "pendiente" || p.estado === "en_curso") && !p.heredado && (
+                              {p.liga?.url && (
                                 <>
-                                  <Button size="sm" variant="ghost" onClick={() => setDecision({ tipo: "omitir", paso: p, motivo: "" })}>
-                                    <SkipForward className="h-3.5 w-3.5" /> Omitir actividad
-                                  </Button>
-                                  <Button size="sm" variant="ghost" className="text-bad hover:bg-bad-soft" onClick={() => setDecision({ tipo: "cancelar", paso: p, motivo: "" })}>
-                                    <Ban className="h-3.5 w-3.5" /> Cancelar
-                                  </Button>
+                                  <a href={p.liga.url} target="_blank" rel="noopener noreferrer"
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink">
+                                    <ExternalLink className="h-3.5 w-3.5" /> {p.liga.texto}
+                                  </a>
+                                  <Button size="sm" variant="ghost" onClick={() => copiarLiga(p.liga!, p)}><Copy className="h-3.5 w-3.5" /> Copiar liga</Button>
                                 </>
+                              )}
+                              {(p.estado === "pendiente" || p.estado === "en_curso" || (p.estado === "completada" && p.resultado === "no_favorable")) && !p.heredado && (
+                                <Button size="sm" variant="ghost" onClick={() => setDecision({ tipo: "omitir", paso: p, motivo: "" })}>
+                                  <SkipForward className="h-3.5 w-3.5" /> Omitir actividad
+                                </Button>
                               )}
                               {(p.estado === "omitida" || p.estado === "cancelada") && (
                                 <Button size="sm" variant="ghost" onClick={() => reactivar(p)}><RotateCcw className="h-3.5 w-3.5" /> Reactivar</Button>
@@ -372,7 +420,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {decision && (
         <ModalMarco
-          titulo={`${decision.tipo === "omitir" ? "Omitir" : "Cancelar"} «${decision.paso.nombre}»`}
+          titulo={`Omitir «${decision.paso.nombre}»`}
           subtitulo={decision.paso.obligatorio ? "Actividad obligatoria: requiere motivo y el permiso «Autorizar omisiones»." : "Escribe el motivo; queda en el historial con tu nombre."}
           onClose={() => setDecision(null)}
         >
@@ -392,7 +440,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
               <Button variant="outline" size="sm" onClick={() => setDecision(null)}>Cerrar</Button>
               <Button size="sm" onClick={confirmarDecision}
                 disabled={Boolean(ocupado) || decision.motivo.trim().length < 10 || (decision.paso.obligatorio && !puedeAutorizar)}>
-                {ocupado ? "Guardando…" : decision.tipo === "omitir" ? "Omitir actividad" : "Cancelar actividad"}
+                {ocupado ? "Guardando…" : "Omitir actividad"}
               </Button>
             </div>
           </div>
@@ -409,7 +457,8 @@ function ResultadosClave({ c }: { c: Candidato }) {
   const items: { k: string; v: React.ReactNode; tono?: string }[] = [
     { k: "Prefiltro", v: prefiltro, tono: prefiltro === "Cumple" ? "text-good" : prefiltro === "No cumple" ? "text-bad" : "text-ink-3" },
     ...(c.score != null ? [{ k: "CV", v: `${c.score}/100` }] : []),
-    ...(c.afinidadGlobal != null ? [{ k: "Entrevista Red Human", v: `${c.afinidadGlobal}/100` }] : []),
+    // 2026-10-08: el score de la entrevista es el SUYO (antes se mostraba la afinidad integral CV + entrevista)
+    ...(c.scoreEntrevista != null ? [{ k: "Entrevista Red Human", v: `${c.scoreEntrevista}/100` }] : []),
     ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),
   ];
   return (

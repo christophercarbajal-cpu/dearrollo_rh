@@ -28,7 +28,7 @@ agregadas fuera del proceso cuentan como no obligatorias. Mismas reglas de resul
 
 from typing import Iterable, List, Optional
 
-from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, Evaluacion, Postulacion, conclusiones_de
+from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, Evaluacion, Postulacion, conclusiones_de, score_de_entrevista
 
 RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
@@ -131,7 +131,7 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
     validaciones.append(_validacion_red_human("analisis_cv", "Análisis de CV", score_cv,
                                               "" if score_cv is not None else "Aún no hay CV analizado."))
     ent = next((e for e in reversed(p.entrevistas or []) if e.estado == "evaluada" and e.evaluacion), None)
-    match = (ent.evaluacion or {}).get("match_perfil") if ent else None
+    match = score_de_entrevista(ent.evaluacion) if ent else None  # score propio de la entrevista (no el CV)
     if match is not None or not _entrevista_ia_omitida(p):
         detalle = ""
         if ent is None:
@@ -175,6 +175,10 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
                 continue
             v = _validacion_red_human(x["id"], x["nombre"], score, "" if score is not None else x["espera"])
             v["obligatoria"] = x["obligatorio"]
+            if x["resultado"] == "no_favorable":
+                # 2026-10-08: bajo la calificación mínima de su actividad = «No aprobada» (antes contaba como aprobada)
+                v["estado"] = "no_apto"
+                v["resultado"] = f"{x['detalle']} · No aprobada" if x.get("detalle") else "No aprobada"
             validaciones.append(v)
             continue
         ev = asignadas.get(x["id"])

@@ -15,7 +15,7 @@
    resultado, envío de ligas): la API no cambia de comportamiento por Cuenta. */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, FileUp, Loader2, Mail, Send } from "lucide-react";
+import { AlertTriangle, Copy, FileUp, Loader2, Mail, Send } from "lucide-react";
 import { Badge, Button } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
@@ -27,8 +27,8 @@ import {
 import type { Candidato, EtapaCandidato, PasoSeguimiento, PsicometriaPaso, SeguimientoProceso as Seg } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
-export const TONO_PSICOMETRIA: Record<PsicometriaPaso["status"], "neutral" | "warn" | "good"> = {
-  sin_enviar: "neutral", enviada: "warn", completada: "good",
+export const TONO_PSICOMETRIA: Record<PsicometriaPaso["status"], "neutral" | "warn" | "good" | "bad"> = {
+  sin_enviar: "neutral", enviada: "warn", error_envio: "bad", completada: "good",
 };
 
 /** Las mismas tres etiquetas para la tarjeta de la evaluación (pestaña «Evaluación integral»). */
@@ -170,7 +170,7 @@ function textoEnvio(r: { simulado?: boolean; aviso?: string; envioCandidato?: { 
   const env = r.envioCandidato;
   return env?.enviado
     ? `«${nombre}» enviada al candidato por ${(env.canales ?? []).join(" y ")}.`
-    : `«${nombre}» quedó Enviada, pero el aviso al candidato no salió${env?.detalle ? `: ${env.detalle}` : ""}. Usa «Reenviar».`;
+    : `«${nombre}» se generó, pero no se pudo enviar al candidato${env?.detalle ? ` (${env.detalle})` : ""}. Queda en «Error de envío»: usa «Reintentar envío» o «Copiar liga».`;
 }
 
 /* ================================================================ Modal «Agregar actividad a este candidato» */
@@ -419,14 +419,51 @@ export function EstadoFilaPsicometria({ ps }: { ps: PsicometriaPaso }) {
   return <Badge tone={TONO_PSICOMETRIA[ps.status]}>{ps.statusTexto}</Badge>;
 }
 
+/** «Copiar liga»: la URL REAL de la prueba (+ clave). Solo copia: nunca marca la actividad como enviada. */
+function CopiarLiga({ ps }: { ps: PsicometriaPaso }) {
+  const [copiada, setCopiada] = useState(false);
+  if (!ps.liga) return null;
+  const texto = ps.clave ? `${ps.liga}\nClave de acceso: ${ps.clave}` : ps.liga;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(texto);
+          setCopiada(true);
+          setTimeout(() => setCopiada(false), 2000);
+        } catch {
+          window.prompt("Copia la liga:", texto);
+        }
+      }}
+      className="inline-flex items-center gap-1 font-semibold text-brand hover:underline"
+      title={ps.clave ? `Copia la liga y la clave ${ps.clave}` : "Copia la liga de la prueba"}
+    >
+      <Copy className="h-3 w-3" /> {copiada ? "Copiada" : "Copiar liga"}
+    </button>
+  );
+}
+
 export function DetalleFilaPsicometria({ ps }: { ps: PsicometriaPaso }) {
+  if (ps.status === "error_envio") {
+    return (
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[22px] text-[11px] font-semibold text-bad">
+        <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> La prueba se generó, pero no le llegó al candidato.</span>
+        <CopiarLiga ps={ps} />
+      </p>
+    );
+  }
+  if (ps.status === "enviada" && ps.liga && ps.dias_sin_respuesta == null) {
+    return <p className="pl-[22px] text-[11px]"><CopiarLiga ps={ps} /></p>;
+  }
   if (ps.status === "completada" && ps.result_summary) {
     return <p className="truncate pl-[22px] text-[11px] text-ink-2" title={ps.result_summary}>{ps.result_summary}</p>;
   }
   if (ps.status === "enviada" && ps.dias_sin_respuesta != null) {
     return (
-      <p className="flex items-center gap-1 pl-[22px] text-[11px] font-semibold text-warn">
-        <AlertTriangle className="h-3 w-3" /> Sin respuesta en {ps.dias_sin_respuesta} días
+      <p className="flex flex-wrap items-center gap-x-2 pl-[22px] text-[11px] font-semibold text-warn">
+        <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Sin respuesta en {ps.dias_sin_respuesta} días</span>
+        <CopiarLiga ps={ps} />
       </p>
     );
   }
@@ -435,7 +472,7 @@ export function DetalleFilaPsicometria({ ps }: { ps: PsicometriaPaso }) {
 
 /** Texto de la única acción de la fila según el estado (null = sin acción). */
 export function textoAccionPsicometria(ps: PsicometriaPaso): string {
-  return ps.status === "sin_enviar" ? "Enviar prueba" : ps.status === "enviada" ? "Reenviar" : "Ver resultado";
+  return ps.status === "sin_enviar" ? "Enviar prueba" : ps.status === "enviada" ? "Reenviar" : ps.status === "error_envio" ? "Reintentar envío" : "Ver resultado";
 }
 
 /** «Reenviar»: manda de nuevo la MISMA liga al candidato (portal del proveedor o liga del otro sistema). */
@@ -443,7 +480,7 @@ export async function reenviarPsicometria(ps: PsicometriaPaso): Promise<{ tono: 
   if (!ps.evaluacion) return { tono: "error", texto: "La prueba ya no tiene una asignación vigente." };
   if (!ps.reenvio) {
     return { tono: "warn", texto: ps.simulado
-      ? "Modo simulado: este servidor no está conectado a Psicométricas.mx, así que no hay liga que reenviar."
+      ? "Modo simulado: este servidor no está conectado a la plataforma de evaluación, así que no hay liga que reenviar."
       : "Esta prueba no tiene una liga para el candidato que se pueda reenviar." };
   }
   const r = await enviarLigaEvaluacion(ps.evaluacion, ps.reenvio);
@@ -451,7 +488,7 @@ export async function reenviarPsicometria(ps: PsicometriaPaso): Promise<{ tono: 
   const ok = (r.data.resultados ?? []).filter((x) => x.enviado).map((x) => x.canal);
   return ok.length
     ? { tono: "ok", texto: `Prueba reenviada al candidato por ${ok.join(" y ")}.` }
-    : { tono: "warn", texto: "No se pudo reenviar por ningún canal: revisa el teléfono y el correo del candidato." };
+    : { tono: "warn", texto: "No se pudo enviar por ningún canal: revisa el teléfono y el correo del candidato, o usa «Copiar liga»." };
 }
 
 /** «Ver resultado»: el PDF de resultados (externa o del proveedor); sin archivo, la evaluación en su pestaña. */

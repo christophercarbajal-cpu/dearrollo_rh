@@ -39,7 +39,7 @@ from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
     ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_EVALUACION, Evaluacion, PlantillaProceso, Postulacion, Usuario,
-    conclusiones_de, nombre_etapa, registrar,
+    conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
 )
 
 ACTOR_AUTOMATICO = "Red Human (avance automático)"
@@ -594,6 +594,41 @@ def _resultado_conclusion(conclusion: str) -> Optional[str]:
     return "favorable"
 
 
+def liga_actividad(paso: dict, p: Postulacion, ev: Optional[Evaluacion], r: dict) -> Optional[dict]:
+    """La URL REAL de la actividad (2026-10-08, reemplaza la «Liga de Telegram» genérica): {url, texto}. Abrirla o
+    copiarla NUNCA marca nada como enviado. None si la actividad no tiene liga propia."""
+    from ..config import settings
+
+    tipo = paso["tipo"]
+    if r["estado"] in ("omitida", "cancelada"):
+        return None
+    if tipo == "entrevista_agente":
+        e = next((x for x in reversed(list(p.entrevistas or [])) if x.estado != "evaluada"), None)
+        return {"url": f"{settings.app_url}/entrevista/{e.token}", "texto": "Sala de la entrevista"} if e is not None and e.token else None
+    if tipo in TIPOS_PASO_EVALUACION and ev is not None and ev.estado != "cancelada":
+        from . import evaluaciones as sev
+
+        if ev.consentimiento == "pendiente" and ev.consentimiento_token:
+            return {"url": sev.liga_consentimiento(ev), "texto": "Liga del consentimiento"}
+        if ev.forma == "integrada" and ev.clave_proveedor:
+            ps = r.get("psicometria") or {}
+            url = ps.get("liga") or sev._url_proveedor(ev)
+            return {"url": url, "texto": "Liga de la prueba", "clave": ev.clave_proveedor} if url else None
+        if ev.forma == "liga_otro_sistema" and ev.liga_externa_candidato:
+            return {"url": ev.liga_externa_candidato, "texto": "Liga de la prueba"}
+        if ev.token_evaluador and sev.liga_evaluador_disponible(ev):
+            return {"url": sev.liga_evaluador(ev), "texto": "Liga del médico" if ev.tipo == "medica" else "Liga del evaluador"}
+        return None
+    if tipo in ("solicitud_documentos", "documentos") and p.expediente is not None and p.expediente.token:
+        return {"url": f"{settings.app_url}/expediente/{p.expediente.token}", "texto": "Liga de documentos"}
+    return None
+
+
+def _proveedor_visible(nombre: str) -> str:
+    """En la interfaz la plataforma psicométrica es «Red Human» (2026-10-08); el valor crudo sigue en la base."""
+    return "Red Human" if "psicom" in (nombre or "").lower() else (nombre or "")
+
+
 def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
     regla = paso["regla"]
     if ev is None:
@@ -614,7 +649,7 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
     elif ev.estado == "no_realizada":
         espera = "No se realizó: falta reprogramar"
     elif ev.estado in ("pendiente", "realizada_sin_resultado"):
-        quien = ev.evaluador_nombre or ev.proveedor or ""
+        quien = ev.evaluador_nombre or _proveedor_visible(ev.proveedor)
         espera = f"Falta el resultado{' de ' + quien if quien else ''}"
     elif conclusion == "requiere_otra_entrevista":
         espera = "Requiere otra entrevista"
@@ -642,7 +677,10 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         # 2026-10-07: conectada a Psicométricas.mx y sin resultado → «Sincronizar resultado» (consulta su API a mano;
         # sirve cuando el webhook del proveedor apunta a otro servidor, p. ej. desarrollo).
         "sincronizable": bool(ev.clave_proveedor) and ev.estado in ("pendiente", "realizada_sin_resultado"),
-        "programada": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None),
+        # 2026-10-08: «Enviada» SOLO con un envío CONFIRMADO de la liga (`enviada_en`); crear la evaluación, abrir o
+        # copiar su liga no la marcan. Asignada sin enviar ni iniciar = «Sin iniciar».
+        "programada": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None) and bool(ev.enviada_en),
+        "sin_iniciar_visible": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None) and not ev.enviada_en,
     }
 
 
@@ -664,6 +702,9 @@ def bloque_psicometria(paso: dict, ev: Optional[Evaluacion], ahora: Optional[dat
             status = "enviada"
     elif vivo and ev.forma != "registro_directo":
         status = "enviada"  # liga de otro sistema o asignada a una persona: ya salió del sistema
+    if status == "enviada" and ev.forma == "integrada" and ev.clave_proveedor and not ev.enviada_en:
+        # transacción 1 OK (clave generada) pero la 2 no confirmó ningún envío al candidato
+        status = "error_envio"
     enviada_en = _aware((ev.enviada_en or ev.creado_en) if vivo and status != "sin_enviar" else None)
     dias = None
     if status == "enviada" and enviada_en is not None:
@@ -682,11 +723,16 @@ def bloque_psicometria(paso: dict, ev: Optional[Evaluacion], ahora: Optional[dat
         if elegido:
             archivo = f"/evaluaciones/{ev.codigo}/adjuntos/{elegido['id']}"
     reenvio = None
-    if status == "enviada":
+    liga = None
+    if status in ("enviada", "error_envio"):
         if ev.forma == "integrada" and ev.clave_proveedor:
+            from . import psicometricas as psi
+
             reenvio = "proveedor"
+            liga = (ev.liga_externa_candidato or "").strip() or psi.url_candidato(ev.clave_proveedor) or psi.PORTAL_SUSTENTANTE
         elif ev.forma == "liga_otro_sistema" and ev.liga_externa_candidato:
             reenvio = "otro_sistema"
+            liga = ev.liga_externa_candidato
     return {
         "status": status,
         "statusTexto": ESTADOS_PSICOMETRIA_SIMPLE[status],
@@ -701,6 +747,9 @@ def bloque_psicometria(paso: dict, ev: Optional[Evaluacion], ahora: Optional[dat
         "evaluacion": ev.codigo if vivo else None,
         "simulado": bool(vivo and ev.forma == "integrada" and not ev.clave_proveedor),
         "reenvio": reenvio,
+        # liga REAL del candidato para «Copiar liga» (copiarla nunca marca nada como enviado) + su clave de acceso
+        "liga": liga,
+        "clave": ev.clave_proveedor if vivo and ev.forma == "integrada" and ev.clave_proveedor else None,
         "dias_sin_respuesta": dias if dias is not None and umbral and dias > umbral else None,
         "umbral_sin_respuesta": umbral,
     }
@@ -712,6 +761,18 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     a = p.analisis or {}
     base = {"estado": "pendiente", "resultado": None, "cumple": False, "espera": "", "detalle": "",
             "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
+    if tipo == "prefiltro_web" and isinstance(a.get("prefiltro_web"), dict) and a["prefiltro_web"].get("resultado"):
+        # Motor de ruta automatizado (2026-10-08): el prefiltro web ya se resolvió contra la vacante (o RH lo decidió)
+        pw = a["prefiltro_web"]
+        res = pw["resultado"]
+        if res == "revision":
+            return {**base, "estado": "en_curso", "espera": "Revisar prefiltro: " + (pw.get("motivo") or "respuesta no concluyente"),
+                    "detalle": "Revisar prefiltro", "revisar_prefiltro": True}
+        cumple = res == "cumple"
+        por = pw.get("decidido_por") or "Red Human"
+        return {**base, "estado": "completada", "resultado": "favorable" if cumple else "no_favorable", "cumple": cumple,
+                "detalle": "Cumple" if cumple else ("No cumple: " + (pw.get("motivo") or "criterio excluyente")),
+                "revisadoPor": f"Revisado por: {por}", "terminado_en": _aware_iso(pw.get("en"))}
     if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
         web = bool(a.get("respuestas_web"))
         hecho = bool(p.prefiltro_completo) if tipo == "prefiltro_whatsapp" else (web or bool(p.prefiltro_completo))
@@ -733,8 +794,9 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     # entrevista_agente
     entrevistas = list(p.entrevistas or [])
     evaluada = next((e for e in reversed(entrevistas) if e.estado == "evaluada" and e.evaluacion), None)
-    if evaluada is not None and (evaluada.evaluacion or {}).get("match_perfil") is not None:
-        r = _con_score(base, regla, int(evaluada.evaluacion["match_perfil"]))
+    puntaje = score_de_entrevista(evaluada.evaluacion) if evaluada is not None else None
+    if puntaje is not None:
+        r = _con_score(base, regla, puntaje)  # score PROPIO de la entrevista (2026-10-08), nunca el del CV
         r["terminado_en"] = _aware(evaluada.finalizada_en)
         return r
     if evaluada is not None:
@@ -750,6 +812,13 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     if p.videollamada_agendada_en:
         return {**base, "estado": "en_curso", "espera": "Videollamada agendada con el candidato"}
     return {**base, "espera": "Falta agendar la entrevista con el candidato"}
+
+
+def _aware_iso(texto) -> Optional[datetime]:
+    try:
+        return _aware(datetime.fromisoformat(texto)) if texto else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _paso_solicitud(paso: dict, p: Postulacion) -> dict:
@@ -965,7 +1034,7 @@ def _texto_responsable(paso: dict, p: Postulacion, usuarios: Dict[int, str]) -> 
     if t == "usuario":
         return usuarios.get(r.get("usuario_id") or 0) or r.get("nombre") or "Usuario por asignar"
     if t == "externo":
-        return r.get("nombre") or "Externo"
+        return _proveedor_visible(r.get("nombre") or "") or "Externo"
     v = p.vacante
     return (v.responsable.nombre if v is not None and v.responsable else "") or "RH"
 
@@ -989,6 +1058,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         usuarios = {u.id: u.nombre for u in db.query(Usuario).filter(Usuario.id.in_(ids_u)).all()}
 
     actual = _indice(p.etapa)
+    auto = ruta_automatica(p.cuenta)
+    disparos = ((p.analisis or {}).get("motor_ruta") or {}).get("envios") or {} if auto else {}
     calculados: Dict[str, dict] = {}
     for paso in pasos:
         tipo = paso["tipo"]
@@ -996,6 +1067,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             r = _paso_evaluacion(paso, por_paso.get(paso["id"]))
             if tipo == "psicometrica":
                 r["psicometria"] = bloque_psicometria(paso, por_paso.get(paso["id"]))
+                if r["psicometria"]["status"] == "error_envio":
+                    r["error"] = "Error de envío: la prueba se generó, pero no le llegó al candidato"
+                    r["espera"] = r["error"]
         elif tipo in ("prefiltro_whatsapp", "prefiltro_web", "analisis_cv", "entrevista_agente"):
             r = _paso_red_human(paso, p)
         elif tipo == "solicitud_web":
@@ -1011,7 +1085,21 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
                          "detalle": f"{ESTADOS_PASO[clave]} por {d.get('por', '')}: {d.get('motivo', '')}".strip(": "),
                          "decision": d}
                     break
+        disparo = disparos.get(paso["id"]) or {}
+        if r["estado"] == "en_curso" and disparo.get("entregado") is False and not r.get("error"):
+            # la actividad se creó (p. ej. la liga de la Entrevista Red Human) pero el aviso no le llegó al candidato
+            r = {**r, "error": "La liga no le llegó al candidato: " + (disparo.get("detalle") or ""),
+                 "espera": "Error de envío: " + (disparo.get("detalle") or "reenvía la liga")}
+        if r["estado"] == "pendiente" and disparo and disparo.get("ok") is False:
+            # el motor intentó dispararla sola y no pudo: «Error» con el motivo (RH reintenta con su acción)
+            r = {**r, "error": disparo.get("detalle") or "No se pudo enviar automáticamente",
+                 "espera": "Error al enviar: " + (disparo.get("detalle") or "intenta de nuevo")}
         r["responsableTexto"] = r.pop("responsable", "") or _texto_responsable(paso, p, usuarios)
+        if not solo_evaluables:
+            try:
+                r["liga"] = liga_actividad(paso, p, por_paso.get(paso["id"]), r)
+            except Exception:  # noqa: BLE001 — una liga nunca tumba el seguimiento
+                r["liga"] = None
         calculados[paso["id"]] = r
 
     salida = []
@@ -1022,12 +1110,20 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         faltan_deps = [x["nombre"] for x in pasos if x["id"] in paso.get("depende_de", [])
                        and calculados[x["id"]]["estado"] not in ("completada", "omitida", "cancelada")]
         etapa_alcanzada = _indice(paso["etapa"]) <= actual
+        previos_pendientes: List[str] = []
+        if auto and not etapa_alcanzada:
+            # Ruta automática (2026-10-08): la actividad se habilita cuando las OBLIGATORIAS de las etapas anteriores
+            # quedan cumplidas (las de una misma etapa corren en paralelo), no cuando la tarjeta cambia de columna.
+            previos_pendientes = [x["nombre"] for x in pasos if x["obligatorio"] and not x.get("heredado")
+                                  and _indice(x["etapa"]) < _indice(paso["etapa"]) and not _cumplido(calculados[x["id"]])]
+            etapa_alcanzada = not previos_pendientes
         disponible = deps_listas and etapa_alcanzada and r["estado"] in ("pendiente", "en_curso")
         espera = r["espera"]
         if r["estado"] == "pendiente" and not deps_listas:
             espera = f"Falta completar: {', '.join(faltan_deps)}"
         elif r["estado"] == "pendiente" and not etapa_alcanzada:
-            espera = f"Se habilita en {nombre_etapa(paso['etapa'])}"
+            espera = (f"Falta completar: {', '.join(previos_pendientes)}" if previos_pendientes
+                      else f"Se habilita en {nombre_etapa(paso['etapa'])}")
         # plazo: corre desde que el paso quedó disponible (entrada a la etapa o la última dependencia cumplida)
         limite = None
         vencido = False
@@ -1054,35 +1150,56 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
             "sincronizable": bool(r.get("sincronizable")),
             "psicometria": r.get("psicometria"),  # solo pasos psicométricos (flujo simple, 2026-10-07)
-            **_estado_unificado(r),
+            "automatica": paso["tipo"] in TIPOS_AUTOMATICOS or (auto and paso["tipo"] in TIPOS_DISPARABLES),
+            "liga": r.get("liga"),
+            "error": r.get("error"),
+            "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
+            **_estado_unificado(r, paso["regla"]),
             "accion": _accion(paso, r, disponible),
             "_terminado_en": r.get("terminado_en"),
         })
     return salida
 
 
-# Estados VISIBLES unificados (UX 2026-10-07): UNA sola etiqueta por actividad, derivada del estado + resultado +
-# regla. No reemplaza `estado`/`resultado` (la compuerta y la evaluación integral siguen leyéndolos).
+# Estados VISIBLES unificados — vocabulario ÚNICO (2026-10-08): Sin iniciar · Enviada · En curso · Completada ·
+# Aprobada · No aprobada · Omitida · Error. «Completada» = terminó (sin regla, o falta la revisión de RH:
+# `pendienteAprobacion`); «Aprobada» = cumplió su condición (calificación mínima, dictamen o validación); «No aprobada»
+# = no la cumplió (p. ej. 68/100 con mínimo 70). Omitida y Cancelada se muestran igual («Omitida»). No reemplaza
+# `estado`/`resultado` (la compuerta y la evaluación integral siguen leyéndolos).
 ESTADOS_UNIFICADOS = {
-    "sin_iniciar": "Sin iniciar", "programada": "Programada / Enviada", "en_curso": "En curso",
-    "pendiente_aprobacion": "Pendiente de aprobación", "completada": "Completada", "omitida": "Omitida",
-    "no_favorable": "No favorable",
+    "sin_iniciar": "Sin iniciar", "enviada": "Enviada", "en_curso": "En curso", "completada": "Completada",
+    "aprobada": "Aprobada", "no_aprobada": "No aprobada", "omitida": "Omitida", "error": "Error",
 }
+# Las resuelve Red Human solas (el candidato las responde o la IA las califica): la ficha solo muestra su estado.
+TIPOS_AUTOMATICOS = ("solicitud_web", "prefiltro_whatsapp", "prefiltro_web", "analisis_cv")
+# Ruta automática: el motor las DISPARA solas al habilitarse (services/motor_ruta.py). Las que piden agendar,
+# aplicar en persona, revisar o aprobar (entrevistas humanas, médica, referencias, condiciones…) siguen manuales.
+TIPOS_DISPARABLES = ("psicometrica", "entrevista_agente", "solicitud_documentos")
 
 
-def _estado_unificado(r: dict) -> dict:
+def _cumplido(r: dict) -> bool:
+    return r["estado"] in ("omitida", "cancelada") or (r["estado"] == "completada" and bool(r.get("cumple")))
+
+
+def _estado_unificado(r: dict, regla: Optional[dict] = None) -> dict:
     estado, resultado = r["estado"], r.get("resultado")
+    pendiente_aprobacion = False
     if estado in ("omitida", "cancelada"):
         clave = "omitida"
+    elif r.get("error"):
+        clave = "error"
     elif resultado == "no_favorable":
-        clave = "no_favorable"
+        clave = "no_aprobada"
     elif estado == "completada":
-        clave = "completada" if r.get("cumple") else "pendiente_aprobacion"
+        if not r.get("cumple"):
+            clave, pendiente_aprobacion = "completada", True
+        else:
+            clave = "aprobada" if (regla or {}).get("tipo", "ninguna") != "ninguna" else "completada"
     elif estado == "en_curso":
-        clave = "programada" if r.get("programada") else "en_curso"
+        clave = "enviada" if r.get("programada") else "sin_iniciar" if r.get("sin_iniciar_visible") else "en_curso"
     else:
         clave = "sin_iniciar"
-    return {"estadoUnificado": clave, "estadoUnificadoTexto": ESTADOS_UNIFICADOS[clave]}
+    return {"estadoUnificado": clave, "estadoUnificadoTexto": ESTADOS_UNIFICADOS[clave], "pendienteAprobacion": pendiente_aprobacion}
 
 
 def siguiente_actividad(p: Postulacion, evaluaciones=None, pasos: Optional[List[dict]] = None) -> Optional[dict]:
@@ -1103,6 +1220,21 @@ def siguiente_actividad(p: Postulacion, evaluaciones=None, pasos: Optional[List[
     return {"id": x["id"], "nombre": x["nombre"], "estado": x["estadoUnificado"], "estadoTexto": x["estadoUnificadoTexto"]}
 
 
+def descarte_sugerido(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[dict]:
+    """Ruta automática (2026-10-08): una actividad OBLIGATORIA calificada «No aprobada» (prefiltro con criterio
+    excluyente, calificación bajo el mínimo, dictamen desfavorable) deja la postulación en «Descarte sugerido». NUNCA
+    descarta sola (LFPDPPP): el funnel se detiene en la compuerta y RH confirma el descarte u omite la actividad."""
+    if not pasos or not p.activa or not ruta_automatica(p.cuenta):
+        return None
+    x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
+              and y["estado"] not in ("omitida", "cancelada")), None)
+    if x is None:
+        return None
+    detalle = x.get("detalle") or ""
+    motivo = f"{x['nombre']}: {detalle}" if detalle and detalle != x["nombre"] else f"{x['nombre']}: No aprobada"
+    return {"paso": x["id"], "nombre": x["nombre"], "motivo": motivo}
+
+
 def alerta_psicometria(pasos: List[dict], etapa: str) -> Optional[str]:
     """Tablero (flujo simple de psicometría): «sin_enviar» si una psicométrica OBLIGATORIA vigente de la etapa actual (o
     de una anterior) sigue sin enviarse; «sin_respuesta» si se envió y pasó el umbral sin resultado. None si no aplica.
@@ -1111,6 +1243,8 @@ def alerta_psicometria(pasos: List[dict], etapa: str) -> Optional[str]:
     vivos = [x for x in pasos if x["tipo"] == "psicometrica" and x["obligatorio"] and not x["heredado"]
              and _indice(x["etapa"]) <= actual
              and x["estado"] not in ("omitida", "cancelada") and x.get("psicometria")]
+    if any(x["psicometria"]["status"] == "error_envio" for x in vivos):
+        return "error_envio"  # 2026-10-08: generada pero la liga no le llegó al candidato
     if any(x["psicometria"]["status"] == "sin_enviar" for x in vivos):
         return "sin_enviar"
     if any(x["psicometria"]["status"] == "enviada" and x["psicometria"].get("dias_sin_respuesta") for x in vivos):
@@ -1218,6 +1352,9 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         })
     return {
         "tieneProceso": True,
+        # ruta automática (2026-10-08): el motor dispara y avanza solo; el descarte SIEMPRE lo confirma RH
+        "rutaAutomatica": ruta_automatica(p.cuenta),
+        "descarteSugerido": descarte_sugerido(p, pasos),
         "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
         "version": int(p.proceso.get("vacante_version") or p.proceso.get("version") or 1),
@@ -1438,7 +1575,8 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
     movidas: List[str] = []
     for _ in range(len(ETAPAS_CANDIDATO)):
         cfg = normalizar_etapas(p.proceso.get("etapas"))
-        if p.etapa in ETAPAS_SIN_AVANCE_AUTOMATICO or not cfg.get(p.etapa, {}).get("avance_automatico"):
+        encendido = cfg.get(p.etapa, {}).get("avance_automatico") or ruta_automatica(p.cuenta)
+        if p.etapa in ETAPAS_SIN_AVANCE_AUTOMATICO or not encendido:
             break
         sig, falta = etapa_lista(p)
         if not sig or falta or sig == "Onboarding":
@@ -1465,6 +1603,10 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
     if p is None:
         return []
     try:
+        if ruta_automatica(p.cuenta):
+            from . import motor_ruta
+
+            return await motor_ruta.procesar(db, p)
         return await avanzar_si_corresponde(db, p)
     except Exception as ex:  # noqa: BLE001
         # Sin rollback: la acción que lo disparó (un turno del prefiltro, un resultado…) puede traer cambios sin guardar.

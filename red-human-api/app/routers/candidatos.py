@@ -906,6 +906,12 @@ async def postular(
     if nueva_postulacion and canal_cuenta != "telegram":
         await _disparar_plantilla_inicio(db, p)
     db.commit()
+    # 2026-10-08 (motor de ruta automatizado, SOLO CUENTAS_RUTA_AUTOMATICA): el prefiltro web se resuelve contra la
+    # vacante al instante y, si cumple, la ruta sigue sola (dispara lo que se habilite).
+    from ..models import ruta_automatica
+
+    if ruta_automatica(p.cuenta):
+        await sproc.avanzar_seguro(db, p)
 
     return {
         "ok": True,

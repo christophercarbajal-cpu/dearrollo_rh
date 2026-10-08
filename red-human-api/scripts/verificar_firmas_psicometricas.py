@@ -388,7 +388,7 @@ with TestClient(app) as client:
     psi.httpx.post = lambda url, data=None, timeout=None: R(401, {"code": "1001", "msg": "Token inválido"})
     ev3 = client.post(f"/evaluaciones/postulaciones/{PE}", headers=H, json=NUEVA).json()["evaluacion"]
     r = client.post(f"/evaluaciones/{ev3['id']}/enviar", headers=H)
-    check(r.status_code == 502 and "1001" in r.json()["detail"], "credencial rechazada → 502 con el motivo del proveedor")
+    check(r.status_code == 502 and r.json()["detail"] == psi.MENSAJE_FALLA_ALTA, "credencial rechazada → 502 con el mensaje único para RH (detalle en el log)")
     e3 = ev_de(ev3["id"])
     check(e3["estado"] == "pendiente" and e3["pasoIntegrada"] == "asignada" and not e3["claveProveedor"], "…y la evaluación no cambió")
     try:

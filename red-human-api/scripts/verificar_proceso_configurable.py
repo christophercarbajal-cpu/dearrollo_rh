@@ -265,7 +265,7 @@ with TestClient(app) as client:
           "con Entrevista Red Human en el proceso se invita al candidato a agendarla")
     p2 = post(P2)
     db.add(Entrevista(codigo="ENT-P2", candidato_id=p2.candidato_id, postulacion_id=p2.id, token="tok-p2", estado="evaluada",
-                      evaluacion={"match_perfil": 82, "recomendacion": "Avanzar"}, finalizada_en=datetime.now(timezone.utc)))
+                      evaluacion={"match_perfil": 82, "score_entrevista": 82, "recomendacion": "Avanzar"}, finalizada_en=datetime.now(timezone.utc)))
     db.commit()
     s = seg(P2)
     check(paso(s, "entrevista_agente")["estado"] == "completada" and paso(s, "entrevista_agente")["cumpleRegla"]
@@ -319,7 +319,7 @@ with TestClient(app) as client:
     db.commit()
     client.patch(f"/candidatos/{P2b}/etapa", json={"etapa": "Entrevista IA"})
     db.add(Entrevista(codigo="ENT-P2B", candidato_id=pb.candidato_id, postulacion_id=pb.id, token="tok-p2b", estado="evaluada",
-                      evaluacion={"match_perfil": 75}, finalizada_en=datetime.now(timezone.utc)))
+                      evaluacion={"match_perfil": 75, "score_entrevista": 75}, finalizada_en=datetime.now(timezone.utc)))
     db.commit()
     client.patch(f"/candidatos/{P2b}/etapa", json={"etapa": "Entrevista Humana"})
     e = evaluar(P2b, "psicometrica", "psicometria")["evaluacion"]

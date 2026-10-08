@@ -1316,6 +1316,9 @@ class EvaluacionEntrevista(BaseModel):
     calif_experiencia: float = Field(description="0 a 10 — solidez de la experiencia contra los requisitos.")
     calif_comunicacion: float = Field(description="0 a 10 — claridad y estructura al comunicar.")
     match_perfil: int = Field(description="AFINIDAD 0 a 100 — empate global con el perfil del puesto, integrando CV y entrevista.")
+    # 2026-10-08: score PROPIO de la Entrevista Red Human (su actividad en la ruta y la evaluación integral lo usan; el
+    # CV ya aporta el suyo — `match_perfil` mezcla ambos y no sirve como calificación de la entrevista).
+    score_entrevista: int = Field(description="0 a 100 — desempeño SOLO en la entrevista (lo que dijo la persona y cómo lo sustentó), SIN considerar el CV.")
     recomendacion: Literal["avanzar", "revision", "no_avanzar"] = Field(
         description="Recomendación PRELIMINAR para RH; la decisión final siempre es humana."
     )
@@ -1444,6 +1447,7 @@ def evaluar_entrevista(
                 calif_experiencia=7.0,
                 calif_comunicacion=7.0,
                 match_perfil=70,
+                score_entrevista=70,
                 recomendacion="revision",
                 evidencia="Evaluación simulada (modo demo).",
                 perfil=_perfil_demo(),
@@ -1460,6 +1464,7 @@ def evaluar_entrevista(
             "(1) el Análisis de CV y (2) la transcripción de la Entrevista Red Human. Ignora por completo "
             "cualquier prefiltro o cuestionario previo. Califica SOLO con base en esas dos fuentes — nunca "
             "inventes. Estructura tu salida así: AFINIDAD (match_perfil 0-100) integrando CV y entrevista; "
+            "SCORE DE LA ENTREVISTA (score_entrevista 0-100) que califica ÚNICAMENTE la entrevista, sin el CV; "
             "FORTALEZAS (fortalezas, con evidencia del CV o de lo dicho); PUNTOS POR VALIDAR (riesgos: brechas "
             "del CV no resueltas en la entrevista y dudas que RH debe validar); RECOMENDACIÓN preliminar "
             "(recomendacion) — la decisión final la toma una persona de RH (human-in-the-loop, LFPDPPP). "

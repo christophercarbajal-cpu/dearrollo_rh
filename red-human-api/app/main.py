@@ -28,6 +28,7 @@ from .services.recordatorios_entrevista import revisar_recordatorios_entrevista
 from .services.recordatorios_psicometria import revisar_recordatorios_psicometria
 from .routers.entrevistas import cerrar_entrevistas_inactivas
 from .services.clima_cierre import cerrar_mediciones_vencidas
+from .services.motor_ruta import barrido as motor_ruta_barrido
 from .services.avatar import avatar_activo, estado_avatar
 from .services.ia import ia_activa
 from .services.whatsapp import proveedor as whatsapp_proveedor, whatsapp_activo
@@ -182,6 +183,13 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         cerrar_mediciones_vencidas, "interval", minutes=5,
         id="clima_cierre", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=120,
+    )
+    # 2026-10-08: motor de ruta automatizado (SOLO CUENTAS_RUTA_AUTOMATICA): resuelve prefiltros, dispara actividades
+    # habilitadas y avanza etapas que hayan quedado listas sin un evento que las empujara.
+    scheduler.add_job(
+        motor_ruta_barrido, "interval", minutes=5,
+        id="motor_ruta", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=120,
     )
     scheduler.start()

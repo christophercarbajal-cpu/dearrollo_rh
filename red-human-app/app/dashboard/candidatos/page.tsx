@@ -44,7 +44,6 @@ import {
   ClipboardCheck,
   Route,
   Plus,
-  Link2,
   Upload,
 } from "lucide-react";
 import { Card, Badge, Button, Avatar, Eyebrow, Progress } from "@/components/ui";
@@ -1022,6 +1021,15 @@ function resumenEnvio(r: { ok: boolean; data?: { resultados?: { enviado: boolean
   return enviados === 0 ? `${base} Ningún envío se completó (revisa los datos de contacto).` : `${base} ${enviados} envío(s) realizados.`;
 }
 
+/** ¿El «dato faltante» que reportó la IA en el CV ya está en la ficha? (correo / teléfono capturados aparte). */
+function datoYaCapturado(dato: string, c: Candidato): boolean {
+  const t = dato.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const correo = /correo|e-?mail|mail/.test(t);
+  const telefono = /telefono|celular|whatsapp|movil|numero de contacto/.test(t);
+  if (/contacto/.test(t) && !correo && !telefono) return Boolean(c.correo && c.telefono);
+  return (correo && Boolean(c.correo)) || (telefono && Boolean(c.telefono));
+}
+
 function ModalCandidato({
   c,
   live,
@@ -1149,17 +1157,6 @@ function ModalCandidato({
     setAviso({ tono: "ok", texto: "Postulación reabierta." });
   }
 
-  async function copiarLigaTelegram() {
-    const liga = seg?.telegram?.liga;
-    if (!liga) return;
-    try {
-      await navigator.clipboard.writeText(liga);
-      setAviso({ tono: "ok", texto: "Liga de Telegram copiada. Solo funciona desde el Telegram con el número del candidato." });
-    } catch {
-      setAviso({ tono: "warn", texto: `Copia la liga: ${liga}` });
-    }
-  }
-
   const notificarAltaRef = useRef<NotificarAccion | undefined>(undefined);
 
   /** Onboarding · Zero-Touch fase 2 — RH detona, la IA da seguimiento por WhatsApp. */
@@ -1225,16 +1222,17 @@ function ModalCandidato({
     if (data) onCambio(data);
   }
 
+  // 2026-10-08: menú «…» simplificado. «Cambiar ruta» solo aparece cuando hay una versión más nueva de la ruta (aplica la
+  // vigente conservando lo hecho); la «Liga de Telegram» genérica se retiró — cada actividad trae su liga REAL en
+  // «Avance de la ruta»; «Reiniciar postulación» solo existe con Modo Prueba activo.
   const accionesFicha: AccionMenu[] = !(live && puedeDecidir) ? [] : [
-    {
-      etiqueta: "Cambiar ruta…", icono: <Route />, onClick: () => setCambiarRuta(true), disabled: Boolean(ocupado) || !seg?.desactualizado,
-      title: seg?.desactualizado ? "Hay una versión más nueva de la ruta" : "El candidato ya tiene la versión vigente de su ruta",
-    },
+    ...(seg?.desactualizado
+      ? [{ etiqueta: "Cambiar ruta…", icono: <Route />, onClick: () => setCambiarRuta(true), disabled: Boolean(ocupado),
+           title: "Hay una versión más nueva de la ruta" }] : []),
     ...(c.activa !== false ? [{ etiqueta: "Agregar actividad a este candidato…", icono: <Plus />, onClick: () => setActividad(true) }] : []),
-    ...(seg?.telegram?.disponible && seg.telegram.liga ? [{ etiqueta: "Copiar liga de Telegram", icono: <Link2 />, onClick: () => void copiarLigaTelegram() }] : []),
     ...(c.activa === false && c.motivoCierre !== "contratado"
       ? [{ etiqueta: "Reabrir postulación…", icono: <RotateCw />, onClick: () => setReabrir({ motivo: "" }), disabled: Boolean(ocupado) }] : []),
-    ...(modoPrueba || c.esPrueba
+    ...(modoPrueba
       ? [{ etiqueta: "Prueba · Reiniciar postulación", icono: <FlaskConical />, onClick: () => void reiniciarPrueba(), disabled: Boolean(ocupado),
            title: "Cierra la postulación actual y crea una limpia para volver a probar desde cero (solo Modo Prueba)." }] : []),
     ...(c.activa !== false ? [{ etiqueta: "Descartar candidato…", icono: <ThumbsDown />, peligrosa: true, onClick: descartar, disabled: Boolean(ocupado) }] : []),
@@ -1411,6 +1409,7 @@ function ModalCandidato({
               onAbrir={(p) => setTab(p)}
               onSolicitarDocumentos={() => setConfirmacion("solicitar")}
               onAlta={() => setConfirmacion("alta")}
+              onDescartar={(motivo) => (live ? setConfirmarDescartar({ motivo }) : descartar())}
               onIniciarEvaluacion={(p) => setAgregarEval({
                 tipo: p.tipo as PresetEvaluacion["tipo"], pasoId: p.pasoId, titulo: p.titulo,
                 evaluador: p.usuarioId ? { ...evaluadorVacio, usuarioId: p.usuarioId } : undefined,
@@ -2196,7 +2195,8 @@ function PestanaDocumentos({
   const idiomas = (cv.idiomas as string[]) || [];
   const a = c.analisis ?? {};
   const alertas = (cv.alertas as string[]) || (a.alertas || []);
-  const faltantes = (cv.datos_faltantes as string[]) || (a.datos_faltantes || []);
+  // 2026-10-08: un «dato faltante» del CV que la ficha YA tiene (correo, teléfono) no es un foco de atención.
+  const faltantes = ((cv.datos_faltantes as string[]) || (a.datos_faltantes || [])).filter((df) => !datoYaCapturado(df, c));
   const listaArchivos = c.listaArchivos ?? [];
 
   const [tipoNuevo, setTipoNuevo] = useState<string | null>(null);

@@ -148,6 +148,7 @@ def _evaluacion_demo(vacante_titulo: str, recomendacion: str, match: int, calif:
         calif_experiencia=calif,
         calif_comunicacion=min(10.0, calif + 0.5),
         match_perfil=match,
+        score_entrevista=max(0, min(100, round(calif * 10))),
         recomendacion=recomendacion,
         evidencia="Transcripción: describió su experiencia reciente y cómo resolvió un reto de carga de trabajo elevada.",
     )

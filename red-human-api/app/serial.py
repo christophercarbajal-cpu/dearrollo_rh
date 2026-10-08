@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from . import fechas
 from .config import settings
-from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
+from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
 from .services.ia import texto_preguntas, texto_util_candidato
 
@@ -305,6 +305,8 @@ def _sintesis_global(p: Postulacion) -> dict:
         "entrevistaStatus": entrevista_status,
         "evaluacionIntegral": bool(match_ia is not None or (score and hay_cv and entrevista_valida)),
         "afinidadGlobal": afinidad,
+        # 2026-10-08: score PROPIO de la Entrevista Red Human (sin el CV); «Resultados clave» lo muestra como tal
+        "scoreEntrevista": score_de_entrevista(eval_ia) if eval_ia else None,
         "sintesisAfinidad": " · ".join(fuentes),
         "fortalezasPrincipales": fortalezas,
         "puntosPorValidar": puntos_por_validar,
@@ -403,14 +405,15 @@ def _entrevista_ia(p: Postulacion) -> dict:
 
 def score_tablero(p: Postulacion) -> Optional[int]:
     """`card_score` (2026-10-07): el score del agente IA leído de la base — Análisis de CV REAL (`Postulacion.score`)
-    y/o afinidad de la Entrevista Red Human evaluada (`match_perfil`), promediados como en la evaluación integral.
+    y/o el score PROPIO de la Entrevista Red Human evaluada (`models.score_de_entrevista`), promediados como en la
+    evaluación integral.
     None si no hay ninguna evaluación real (un 60 del modo demo o un 0 sin CV no es una calificación)."""
     valores = []
     if p.score is not None and _cv_real(p):
         valores.append(p.score)
-    match = _entrevista_ia(p).get("match_perfil")
-    if isinstance(match, (int, float)):
-        valores.append(match)
+    propio = score_de_entrevista(_entrevista_ia(p))  # 2026-10-08: score propio de la entrevista, no la afinidad
+    if propio is not None:
+        valores.append(propio)
     if not valores:
         return None
     return max(0, min(100, round(sum(valores) / len(valores))))
@@ -467,9 +470,20 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "stage_entered_at": iso(p.etapa_desde or p.creado_en),
         "has_consent": bool(p.consentimiento),
         "expediente_pct": exp.progreso if exp is not None and p.etapa == "Contratación" else None,
-        # flujo simple de psicometría (solo CUENTAS_PSICOMETRIA_SIMPLE): sin_enviar | sin_respuesta | None
+        # flujo simple de psicometría (solo CUENTAS_PSICOMETRIA_SIMPLE): sin_enviar | sin_respuesta | error_envio | None
         "psychometric_alert": alerta,
+        # ruta automática (2026-10-08): {paso, nombre, motivo} cuando un obligatorio quedó «No aprobada»; RH confirma
+        "suggested_discard": _descarte_sugerido(p, pasos),
     }
+
+
+def _descarte_sugerido(p: Postulacion, pasos: Optional[list]) -> Optional[dict]:
+    from .services import proceso as sproc
+
+    try:
+        return sproc.descarte_sugerido(p, pasos)
+    except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
+        return None
 
 
 def _pasos_tarjeta(p: Postulacion, evaluaciones=None) -> Optional[list]:

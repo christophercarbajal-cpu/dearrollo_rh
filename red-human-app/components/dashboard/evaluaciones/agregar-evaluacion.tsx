@@ -29,6 +29,7 @@ import {
 import {
   TIPOS_EVALUACION, crearEvaluacion, fetchPruebasPsicometricas, registrarResultadoEvaluacion, urlPreviewCorreo,
   type DatosResultado, type FormaEvaluacion, type PruebaPsicometrica, type RespuestaEvaluacion, type TipoEvaluacion,
+  proveedorVisible,
 } from "@/lib/api";
 import type { Candidato } from "@/lib/data";
 import { cn } from "@/lib/utils";
@@ -84,7 +85,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
     const asignada = { valor: "asignada" as const, texto: "Asignar a una persona", ayuda: "Recibe su liga para registrar el resultado" };
     const directo = { valor: "registro_directo" as const, texto: "Registrar resultado ahora", ayuda: "Ya se hizo; lo capturas tú (carga manual)" };
     const otro = { valor: "liga_otro_sistema" as const, texto: "Enviar liga de otro sistema", ayuda: "El candidato la realiza fuera (externo)" };
-    const integrada = hayIntegradas ? [{ valor: "integrada" as const, texto: "Usar proveedor integrado", ayuda: "Psicométricas.mx u otro conectado" }] : [];
+    const integrada = hayIntegradas ? [{ valor: "integrada" as const, texto: "Usar proveedor integrado", ayuda: "Plataforma de evaluación de Red Human" }] : [];
     // psicométrica externa: liga del otro sistema (lo más común), asignar o registrar ahora; el proveedor integrado
     // ya es la vista limpia («Asignar y enviar»)
     return tipo === "psicometrica" ? [otro, asignada, directo] : [asignada, directo, otro, ...integrada];
@@ -248,7 +249,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
             <Campo etiqueta={<>Prueba del proveedor <span className="text-bad">*</span></>} className="mt-3">
               <select value={pruebaId ?? ""} onChange={(e) => setPruebaId(e.target.value ? Number(e.target.value) : null)} className={inputEv}>
                 <option value="">Elige una prueba…</option>
-                {(pruebas ?? []).map((p) => <option key={p.id} value={p.id}>{p.nombre} · {p.proveedor}{p.sugerida ? " · sugerida para el puesto" : ""}</option>)}
+                {(pruebas ?? []).map((p) => <option key={p.id} value={p.id}>{p.nombre} · {proveedorVisible(p.proveedor)}{p.sugerida ? " · sugerida para el puesto" : ""}</option>)}
               </select>
             </Campo>
           )}

@@ -686,7 +686,7 @@ def _activar_psicometria(db: Session, ev: Evaluacion, p) -> str:
     if ev.clave_proveedor:
         return ev.clave_proveedor
     if not (p.correo or "").strip():
-        raise HTTPException(409, "Psicométricas.mx necesita el correo del candidato para mandarle su liga.")
+        raise HTTPException(409, "Falta el correo del candidato: escríbelo para poder generar su prueba.")
     previa = (
         db.query(Evaluacion)
         .filter(Evaluacion.postulacion_id == ev.postulacion_id, Evaluacion.id != ev.id, Evaluacion.tipo == "psicometrica",
@@ -700,10 +700,18 @@ def _activar_psicometria(db: Session, ev: Evaluacion, p) -> str:
         registrar(db, "sistema", "psicometria_clave_reutilizada", "evaluaciones", ev.codigo,
                   {"clave_proveedor": previa.clave_proveedor, "de": previa.codigo})
         return ev.clave_proveedor
+    vacante = p.vacante.titulo if p.vacante else ev.nombre_visible
     try:
-        alta = psi.asignar_candidato(p.nombre, p.correo, p.vacante.titulo if p.vacante else ev.nombre_visible, tests)
+        psi.payload_agrega_candidato(p.nombre, p.correo, vacante, tests)  # datos del candidato: se corrigen en la ficha
     except psi.PsicometricasError as ex:
-        raise HTTPException(400 if ex.status == 400 else 502, str(ex))
+        raise HTTPException(400, str(ex))
+    try:
+        alta = psi.asignar_candidato(p.nombre, p.correo, vacante, tests)
+    except psi.PsicometricasError as ex:
+        # 2026-10-08 (transacción 1 = CREACIÓN): RH ve un solo mensaje; el detalle técnico queda en el log y en la
+        # bitácora (`psicometria_alta_fallida`, la escribe quien hace el rollback).
+        print(f"[psicometricas] alta fallida {ev.codigo or 'nueva'} ({p.codigo}): {ex}", flush=True)
+        raise HTTPException(502, psi.MENSAJE_FALLA_ALTA, headers={"X-Detalle-Proveedor": str(ex)[:180].encode("ascii", "ignore").decode()})
     ev.clave_proveedor = alta["clave"]
     if alta["liga"]:
         ev.liga_externa_candidato = alta["liga"][:500]
@@ -729,7 +737,7 @@ async def enviar_proveedor(codigo: str, db: Session = Depends(get_db), u: Usuari
     real = sev.usa_psicometricas(ev) and psi.configurado()
     if real:
         _activar_psicometria(db, ev, p)
-        sev.aplicar_paso(db, ev, "enviada", u.nombre, "Psicométricas.mx")
+        sev.aplicar_paso(db, ev, "enviada", u.nombre, psi.NOMBRE_VISIBLE, confirma_envio=False)
     else:
         sev.aplicar_paso(db, ev, "enviada", u.nombre)
     registrar(db, u.nombre, "evaluacion_enviada", "postulacion", p.codigo,
@@ -867,7 +875,7 @@ async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Sess
         from .candidatos import actualizar_contacto  # import tardío (evita el ciclo entre routers)
 
         if not datos.correo.strip():
-            raise HTTPException(400, "Escribe el correo del candidato: Psicométricas.mx le manda ahí su liga.")
+            raise HTTPException(400, "Escribe el correo del candidato: ahí recibe su prueba.")
         if actualizar_contacto(db, p, u.nombre, correo=datos.correo, correo_rh=u.correo, origen="psicometria"):
             db.commit()  # el correo queda guardado aunque después falle el proveedor (su rollback no lo deshace)
     async with _candado_psicometria(p.id):
@@ -921,19 +929,26 @@ async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Sess
             for k, v in campos.items():
                 setattr(ev, k, v)
             sev.evento(db, ev, "modificada", u.nombre, usuario_id=u.id, anteriores=anteriores, pruebas=ids)
+        if psi.es_psicometricas(proveedor):
+            # IDs del catálogo oficial SIEMPRE (también en modo simulado): un ID que la plataforma no ofrece se detecta
+            # aquí y no en el proveedor (incidente «Batería Gerente», 2026-10-08).
+            try:
+                psi.tests_de(",".join(x.id_proveedor for x in pruebas))
+            except psi.PsicometricasError as ex:
+                db.rollback()
+                raise HTTPException(400, f"{', '.join(x.nombre for x in pruebas)}: {ex}")
         real = psi.es_psicometricas(proveedor) and psi.configurado()
         if real:
             try:
-                psi.tests_de(tests)
-            except psi.PsicometricasError as ex:
-                db.rollback()
-                raise HTTPException(400, str(ex))
-            try:
                 _activar_psicometria(db, ev, p)
-            except HTTPException:
+            except HTTPException as ex:
                 db.rollback()  # sin clave del proveedor no queda NADA guardado: ni la evaluación ni «Enviada»
+                if ex.status_code == 502:
+                    registrar(db, u.nombre, "psicometria_alta_fallida", "postulacion", p.codigo,
+                              {"tests": tests, "detalle": (ex.headers or {}).get("X-Detalle-Proveedor", ""), "correo_rh": u.correo})
+                    db.commit()
                 raise
-            sev.aplicar_paso(db, ev, "enviada", u.nombre, "Psicométricas.mx")
+            sev.aplicar_paso(db, ev, "enviada", u.nombre, psi.NOMBRE_VISIBLE, confirma_envio=False)
         else:
             sev.aplicar_paso(db, ev, "enviada", u.nombre)  # proveedor sin llaves: modo integrado simulado
         if nueva and not paso_id:
@@ -948,7 +963,7 @@ async def asignar_psicometria(codigo: str, datos: AsignarPsicometriaIn, db: Sess
         db.commit()
     if not real:
         return _respuesta(db, ev, u, p, simulado=True,
-                          aviso="Psicométricas.mx sin llaves en este servidor: asignación simulada (no se llamó a su API ni se avisó al candidato).")
+                          aviso="la plataforma de evaluación no está conectada en este servidor: asignación simulada (no se generó clave ni se avisó al candidato).")
     resultados = await sev.notificar_psicometria(db, ev, p, u.nombre, usuario_id=u.id)
     registrar(db, "sistema", "psicometria_notificada", "evaluaciones", ev.codigo, {"clave_proveedor": ev.clave_proveedor, "envios": resultados})
     db.commit()
@@ -983,7 +998,7 @@ async def sincronizar(codigo: str, db: Session = Depends(get_db), u: Usuario = D
 
     ev = _ev(db, codigo, cuenta.id)
     if not ev.clave_proveedor:
-        raise HTTPException(409, "Esta evaluación no está conectada a Psicométricas.mx.")
+        raise HTTPException(409, "Esta evaluación no está conectada a la plataforma de evaluación.")
     try:
         with _negocio():
             r = sev.sincronizar_psicometricas(db, ev)

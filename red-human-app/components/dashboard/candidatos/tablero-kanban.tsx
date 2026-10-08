@@ -42,7 +42,9 @@ const FILTRO: Record<string, [string, string]> = {
   revisar: ["Revisar", "bg-kb-amber-bg text-kb-amber"],
   no_cumple: ["No cumple", "bg-kb-red-bg text-kb-red"],
 };
-const ALERTA_PSICO: Record<string, string> = { sin_enviar: "Psicométrica sin enviar", sin_respuesta: "Psicométrica sin respuesta" };
+const ALERTA_PSICO: Record<string, string> = {
+  sin_enviar: "Psicométrica sin enviar", sin_respuesta: "Psicométrica sin respuesta", error_envio: "Psicométrica: error de envío",
+};
 
 /** Score protagonista = `card_score` de la API (evaluación REAL del agente IA: Análisis de CV + Entrevista Red Human).
  * null sin evaluación real (un 0 sin CV o el 60 del modo demo no son calificaciones). Una API previa sin
@@ -205,9 +207,13 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
       <div className="flex flex-wrap items-center gap-1.5">
         {filtro && <Chip clase={filtro[1]} title={c.filter_status === "no_cumple" && motivo ? motivo : undefined}>{filtro[0]}</Chip>}
         {cerrada && c.motivoCierre !== "descartado" && <Chip clase="bg-kb-gray-bg text-kb-gray" title={motivo}>Cerrada</Chip>}
+        {/* ruta automática (2026-10-08): una obligatoria «No aprobada» detiene la ruta; RH confirma el descarte en la ficha */}
+        {!cerrada && c.suggested_discard && (
+          <Chip clase="bg-kb-red-bg text-kb-red" title={c.suggested_discard.motivo}>Descarte sugerido</Chip>
+        )}
         {sinConsentimiento(c) && <Chip clase="bg-kb-red-bg text-kb-red">Sin consentimiento</Chip>}
         {c.psychometric_alert && ALERTA_PSICO[c.psychometric_alert] && (
-          <Chip clase="bg-kb-amber-bg text-kb-amber">{ALERTA_PSICO[c.psychometric_alert]}</Chip>
+          <Chip clase={c.psychometric_alert === "error_envio" ? "bg-kb-red-bg text-kb-red" : "bg-kb-amber-bg text-kb-amber"}>{ALERTA_PSICO[c.psychometric_alert]}</Chip>
         )}
         {dias != null && (
           <span

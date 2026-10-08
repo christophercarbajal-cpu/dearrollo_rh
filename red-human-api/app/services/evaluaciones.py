@@ -244,7 +244,12 @@ async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, act
     URL del portal del sustentante, la clave de agregaCandidato y los pasos. Nunca lanza; cada resultado queda en el
     historial y marca «Enviada» con el primer envío confirmado.
     2026-10-07: los canales los decide la regla de la Cuenta (Configuración → Notificaciones): «Psicometría enviada» o
-    «Recordatorio de psicometría pendiente» (`evento_notificacion`)."""
+    «Recordatorio de psicometría pendiente» (`evento_notificacion`).
+    2026-10-08 (transacción 2 = ENVÍO, solo `CUENTAS_PSICOMETRIA_SIMPLE`): CASCADA — primero el canal de mensajería
+    activo (WhatsApp o Telegram, lo resuelve la fachada); el correo solo si el mensaje no salió. Si nada sale, la prueba
+    sigue guardada con su clave y su bloque queda «Error de envío» (`proceso.bloque_psicometria`). Las demás Cuentas
+    conservan el envío por todos los canales de la regla."""
+    from ..models import psicometria_simple
     from ..serial import nombre_empresa_candidato
     from .notificaciones import canales_candidato
     from . import plantillas_correo
@@ -270,7 +275,8 @@ async def notificar_psicometria(db: Session, ev: Evaluacion, p: Postulacion, act
             r = {"enviado": False, "detalle": str(ex)[:200]}
         canal = r.get("proveedor") if r.get("proveedor") == "telegram" else "whatsapp"
         resultados.append({"destinatario": "candidato", "canal": canal, "destino": p.telefono, "enviado": bool(r.get("enviado")), "detalle": str(r.get("detalle") or "")})
-    if p.correo and canales["correo"]:
+    cascada = psicometria_simple(p.cuenta)
+    if p.correo and (canales["correo"] or cascada) and not (cascada and any(x["enviado"] for x in resultados)):
         try:
             asunto, html = plantillas_correo.html_psicometria({
                 "nombre": nombre, "empresa": empresa, "vacante": vacante, "prueba": ev.nombre_visible,
@@ -733,11 +739,13 @@ def siguiente_paso(ev: Evaluacion) -> Optional[str]:
     return PASOS_INTEGRADA[i + 1] if i + 1 < len(PASOS_INTEGRADA) else None
 
 
-def aplicar_paso(db: Session, ev: Evaluacion, paso: str, actor: str, origen: str = "simulado") -> None:
+def aplicar_paso(db: Session, ev: Evaluacion, paso: str, actor: str, origen: str = "simulado", confirma_envio: bool = True) -> None:
     """Paso del modo integrado. «completada» → Realizada · Resultado pendiente; el resultado entra con
-    `registrar_resultado` (canal proveedor). Los pasos intermedios solo quedan en el historial."""
+    `registrar_resultado` (canal proveedor). Los pasos intermedios solo quedan en el historial.
+    `confirma_envio=False` (2026-10-08, alta REAL en el proveedor): «enviada» solo registra la clave generada; el
+    envío al candidato lo confirma `marcar_enviada` cuando el aviso SÍ sale (si no, la psicometría queda «Error de envío»)."""
     ev.paso_integrada = paso
-    if paso == "enviada" and not ev.enviada_en:
+    if paso == "enviada" and confirma_envio and not ev.enviada_en:
         ev.enviada_en = datetime.now(timezone.utc)
     if paso in ("iniciada", "completada") and not ev.iniciada_en:
         ev.iniciada_en = datetime.now(timezone.utc)  # confirmación de inicio del proveedor
@@ -785,7 +793,7 @@ def sincronizar_psicometricas(db: Session, ev: Evaluacion, por: str = "Psicomét
     if not psi.terminado(filas):
         # 2026-10-07: si el proveedor ya registra el inicio de alguna prueba → «En curso» (una sola vez, con historial)
         if psi.iniciado(filas) and not ev.iniciada_en and ev.estado == "pendiente":
-            aplicar_paso(db, ev, "iniciada", por, "Psicométricas.mx")
+            aplicar_paso(db, ev, "iniciada", por, "Red Human")
         return "en_curso"
     datos = psi.resultado_json(ev.clave_proveedor)
     pdf = psi.resultado_pdf(ev.clave_proveedor)
@@ -796,7 +804,7 @@ def sincronizar_psicometricas(db: Session, ev: Evaluacion, por: str = "Psicomét
         ruta = fs.guardar(validado, f"evaluaciones/{ev.id}", f"informe_{ev.codigo}_{secrets.token_hex(3)}")
         adjuntos.append(adjunto_de(validado, ruta, por, "proveedor"))
     if ev.paso_integrada != "completada":
-        aplicar_paso(db, ev, "completada", por, "Psicométricas.mx")
+        aplicar_paso(db, ev, "completada", por, "Red Human")
     ev.paso_integrada = "resultado_recibido"
     registrar_resultado(db, ev, actor=por, canal="proveedor", conclusion="", comentarios=resumen_resultado(datos),
                         realizada_por=ev.proveedor or "Psicométricas.mx", adjuntos=adjuntos, version=None, modo="registrar")

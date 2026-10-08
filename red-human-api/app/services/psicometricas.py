@@ -28,6 +28,24 @@ ERRORES = {
 }
 
 
+# Catálogo OFICIAL de pruebas que acepta `Tests` en agregaCandidato (https://psicometricas.mx/api, consultado 2026-10-08).
+# Un ID fuera de esta lista hace que el proveedor rechace el alta (incidente «Batería Gerente»: incluía Herrmann, que la
+# plataforma NO ofrece). Se valida ANTES de llamar para no gastar el saldo compartido con producción.
+PRUEBAS_PROVEEDOR = {
+    "1": "Cleaver", "2": "Kostick", "3": "IPV", "4": "LIFO", "5": "Zavic", "7": "Terman", "9": "Inglés", "10": "16PF",
+    "11": "Barsit", "15": "Moss", "16": "Wonderlic",
+}
+TESTS_MAX = 100  # longitud máxima documentada del campo `Tests`
+# Texto para RH cuando el ALTA en el proveedor falla (el detalle técnico va al log y a la bitácora).
+MENSAJE_FALLA_ALTA = "No se pudo generar la prueba. Intenta nuevamente."
+# Nombre visible del proveedor en la interfaz y en los mensajes a RH/candidato: la plataforma es de Red Human.
+NOMBRE_VISIBLE = "Red Human"
+
+
+def disponibles_texto() -> str:
+    return ", ".join(f"{k} {v}" for k, v in PRUEBAS_PROVEEDOR.items())
+
+
 class PsicometricasError(Exception):
     def __init__(self, mensaje: str, status: Optional[int] = None):
         super().__init__(mensaje)
@@ -58,6 +76,11 @@ def _url(ruta: str) -> str:
 
 
 def _revisar(r: httpx.Response) -> Union[dict, list]:
+    if 300 <= r.status_code < 400:
+        # p. ej. 301: la URL base cambió o le falta/sobra la diagonal. No se sigue la redirección (un POST redirigido
+        # llega como GET y sin datos): se reporta con su destino para corregir PSICOMETRICAS_BASE_URL.
+        raise PsicometricasError(f"El proveedor respondió una redirección {r.status_code} hacia «{r.headers.get('location', '')}»: "
+                                 "revisa PSICOMETRICAS_BASE_URL.", r.status_code)
     try:
         datos = r.json()
     except ValueError:
@@ -70,11 +93,20 @@ def _revisar(r: httpx.Response) -> Union[dict, list]:
 
 
 def tests_de(id_proveedor: str) -> str:
-    """«1, 7» → «1,7» (IDs numéricos de sus pruebas: 1 Cleaver, 2 Kostick, 7 Terman, 10 16PF…)."""
-    ids = [x.strip() for x in (id_proveedor or "").split(",") if x.strip()]
+    """«1, 7, 1» → «1,7»: IDs numéricos SIN repetir, todos del catálogo oficial (`PRUEBAS_PROVEEDOR`) y dentro del largo
+    documentado. Cualquier otro valor → 400 SIN llamar al proveedor."""
+    ids = list(dict.fromkeys(x.strip().lstrip("0") or "0" for x in (id_proveedor or "").split(",") if x.strip()))
     if not ids or not all(x.isdigit() for x in ids):
-        raise PsicometricasError("El «identificador en el proveedor» debe ser el ID numérico de la prueba en Psicométricas.mx (p. ej. 1 = Cleaver, 7 = Terman; varios: 1,7).", 400)
-    return ",".join(ids)
+        raise PsicometricasError("El «identificador en el proveedor» debe ser el ID numérico de la prueba (p. ej. 1 = Cleaver, "
+                                 "7 = Terman; varios: 1,7).", 400)
+    invalidos = [x for x in ids if x not in PRUEBAS_PROVEEDOR]
+    if invalidos:
+        raise PsicometricasError(f"El identificador {', '.join(invalidos)} no corresponde a ninguna prueba disponible en la "
+                                 f"plataforma de evaluación. Disponibles: {disponibles_texto()}.", 400)
+    tests = ",".join(ids)
+    if len(tests) > TESTS_MAX:
+        raise PsicometricasError(f"Demasiadas pruebas en una sola asignación (máximo {TESTS_MAX} caracteres).", 400)
+    return tests
 
 
 CORREO_VALIDO = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -93,7 +125,7 @@ def payload_agrega_candidato(nombre: str, correo: str, vacante: str, tests: str,
     de relleno («Candidato WhatsApp») hace que el proveedor registre al candidato pero no le entregue su correo."""
     correo = (correo or "").strip().lower()
     if not CORREO_VALIDO.match(correo):
-        raise PsicometricasError(f"El correo del candidato no es válido para Psicométricas.mx: «{correo}».", 400)
+        raise PsicometricasError(f"El correo del candidato no es válido: «{correo}».", 400)
     nombre = " ".join((nombre or "").split())
     if not nombre or nombre.startswith("Candidato") or nombre == "TMP":
         raise PsicometricasError("El candidato no tiene nombre real en su ficha; captúralo antes de enviar la psicometría.", 400)
@@ -155,7 +187,7 @@ def asignar_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: 
         r = httpx.post(_url("agregaCandidato"), data=payload, timeout=30)
     except httpx.HTTPError as ex:
         print(f"[psicometricas] sin conexión: {ex}", flush=True)
-        raise PsicometricasError(f"No se pudo conectar con Psicométricas.mx: {ex}")
+        raise PsicometricasError(f"No se pudo conectar con la plataforma de evaluación: {ex}")
     try:
         crudo = json.dumps(r.json(), ensure_ascii=False)
     except ValueError:
@@ -164,7 +196,7 @@ def asignar_candidato(nombre: str, correo: str, vacante: str, tests: str, lang: 
     datos = _revisar(r)
     clave = str((datos or {}).get("clave") or "") if isinstance(datos, dict) else ""
     if not clave:
-        raise PsicometricasError(f"Psicométricas.mx no regresó la clave del candidato: {str(datos)[:200]}")
+        raise PsicometricasError(f"La plataforma de evaluación no regresó la clave del candidato: {str(datos)[:200]}")
     liga = _buscar_liga(datos) or (url_candidato(clave) or "")
     return {"clave": clave, "liga": liga, "respuesta": datos}
 
@@ -177,7 +209,7 @@ def consultar_candidato(clave: str) -> List[dict]:
     try:
         r = httpx.get(_url("consultaCandidato"), params={**_cred(), "Clave": clave}, timeout=30)
     except httpx.HTTPError as ex:
-        raise PsicometricasError(f"No se pudo conectar con Psicométricas.mx: {ex}")
+        raise PsicometricasError(f"No se pudo conectar con la plataforma de evaluación: {ex}")
     datos = _revisar(r)
     filas = datos if isinstance(datos, list) else [datos]
     return [f for f in filas if isinstance(f, dict) and str(f.get("clave") or clave) == clave]
@@ -203,7 +235,7 @@ def resultado_json(clave: str) -> Union[dict, list]:
     try:
         r = httpx.get(_url("consultaResultado"), params={**_cred(), "Clave": clave, "Pdf": "false"}, timeout=60)
     except httpx.HTTPError as ex:
-        raise PsicometricasError(f"No se pudo conectar con Psicométricas.mx: {ex}")
+        raise PsicometricasError(f"No se pudo conectar con la plataforma de evaluación: {ex}")
     return _revisar(r)
 
 
@@ -211,7 +243,7 @@ def resultado_pdf(clave: str) -> Optional[bytes]:
     try:
         r = httpx.get(_url("consultaResultado"), params={**_cred(), "Clave": clave, "Pdf": "true"}, timeout=60)
     except httpx.HTTPError as ex:
-        raise PsicometricasError(f"No se pudo conectar con Psicométricas.mx: {ex}")
+        raise PsicometricasError(f"No se pudo conectar con la plataforma de evaluación: {ex}")
     if r.status_code >= 400:
         raise PsicometricasError(f"Psicométricas.mx respondió {r.status_code} al pedir el PDF.", r.status_code)
     return r.content if r.content.startswith(b"%PDF") else None

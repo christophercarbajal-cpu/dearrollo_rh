@@ -212,10 +212,20 @@ async def _disparar_psicometria(db: Session, p: Postulacion, paso: dict) -> Tupl
 
 async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple[bool, str, Optional[bool]]:
     from ..config import settings
-    from .entrevistas import crear_entrevista_para_candidato
+    from .entrevistas import crear_entrevista_para_candidato, iniciar_whatsapp
 
-    e, _ = crear_entrevista_para_candidato(db, p, ACTOR)
+    if paso["tipo"] == "entrevista_whatsapp":  # 2026-10-09: por texto en el chat, sin liga
+        ok, detalle, entregado, _e = await iniciar_whatsapp(db, p, ACTOR, paso_id=paso["id"])
+        return ok, detalle, entregado
+    e, _ = crear_entrevista_para_candidato(db, p, ACTOR, paso_tipo=paso["tipo"])
     liga = f"{settings.app_url}/entrevista/{e.token}"
+    if paso["tipo"] == "llamada_agente":
+        vacante = p.vacante.titulo if p.vacante else "la vacante"
+        texto = (f"El siguiente paso de tu proceso para {vacante} es una llamada con Red Human: una conversación por voz de unos "
+                 f"10 minutos. Ábrela desde tu celular o computadora cuando estés en un lugar tranquilo: {liga}")
+        db.flush()
+        entregado, detalle = await _avisar(db, p, texto, f"Tu llamada para {vacante}", liga, motivo="entrevista", paso_id=paso["id"])
+        return True, (f"Liga enviada por {detalle}" if entregado else f"Liga creada; el aviso no salió ({detalle})"), entregado
     nombre = (p.nombre or "").split(" ")[0] if p.nombre and not p.nombre.startswith("Candidato") else ""
     vacante = p.vacante.titulo if p.vacante else "la vacante"
     saludo = f"¡{nombre}! " if nombre else ""
@@ -264,8 +274,8 @@ def _paso_prefiltro(p: Postulacion) -> str:
     return next((x["id"] for x in (p.proceso or {}).get("pasos", []) if x["tipo"] in ("prefiltro_web", "prefiltro_whatsapp")), "")
 
 
-DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista, "referencias": _disparar_referencias,
-                "solicitud_documentos": _disparar_documentos}
+DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista, "entrevista_whatsapp": _disparar_entrevista,
+                "llamada_agente": _disparar_entrevista, "referencias": _disparar_referencias, "solicitud_documentos": _disparar_documentos}
 
 
 async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:

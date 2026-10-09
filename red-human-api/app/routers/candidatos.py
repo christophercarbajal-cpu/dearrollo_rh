@@ -1488,6 +1488,24 @@ def _texto_aclaracion(nombre: str, inc: dict) -> str:
     )
 
 
+def _asegurar_guion_prefiltro(db: Session, p: Postulacion) -> None:
+    """JIT de los guiones de prefiltro de la ruta de ESTA postulación (lo guarda en la vacante; no fatal)."""
+    v = p.vacante
+    if v is None or p.prefiltro_completo:
+        return
+    from ..services import guiones as sgui
+
+    tipos = set(sgui.tipos_de_ruta((p.proceso or {}).get("pasos"))) or set(sgui.tipos_de_ruta(sgui.pasos_de_vacante(db, v)))
+    try:
+        if tipos & {"prefiltro_web", "solicitud_web"} and not v.preguntas_filtro:
+            sgui.asegurar(db, v, "prefiltro_web", motivo=f"prefiltro de {p.codigo}")
+        if "prefiltro_whatsapp" in tipos and not v.preguntas_filtro_whatsapp and not v.preguntas_filtro:
+            sgui.asegurar(db, v, "prefiltro_whatsapp", motivo=f"prefiltro de {p.codigo}")
+        db.flush()
+    except Exception as ex:  # noqa: BLE001 — el JIT nunca tumba el turno: sin él se usa lo que haya
+        print(f"[guiones] JIT de prefiltro falló para {p.codigo}: {str(ex)[:200]}", flush=True)
+
+
 async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str, wa_id: str = "", reconexion: bool = False) -> dict:
     """Registra el mensaje del candidato en ESTA postulación, corre un turno del agente y
     responde. El historial que ve el modelo es solo el de esta postulación: las preguntas de
@@ -1507,6 +1525,17 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     # prefiltro_completo=True y estado="cumple") caería en "ya tienes tu videollamada agendada".
     if p.etapa == "Onboarding":
         return await _procesar_turno_onboarding(db, p, historial, canal)
+
+    # 2026-10-09: Entrevista Red Human por WhatsApp en curso — el agente conduce la entrevista con el guion de la vacante
+    from ..services import entrevistas as sent
+
+    e_wa = sent.entrevista_whatsapp_activa(p)
+    if e_wa is not None:
+        return await sent.turno_whatsapp(db, p, e_wa, texto, canal)
+
+    # Seguro de ejecución (2026-10-09): el bot NUNCA arranca un prefiltro sin guion. Si la vacante (p. ej. de un candidato
+    # antiguo) no tiene el de las actividades de prefiltro de SU ruta, se genera Just-In-Time antes del primer mensaje.
+    _asegurar_guion_prefiltro(db, p)
 
     # 2026-10-08 (ruta automática): prefiltro CONVERSACIONAL — una sola entidad con lo del formulario web, una pregunta
     # por mensaje, reconexión = la pregunta pendiente exacta, resolución al vuelo. Ya resuelto → el flujo de siempre.

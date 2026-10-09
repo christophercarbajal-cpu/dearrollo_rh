@@ -13,6 +13,11 @@ cualquier reconexión repite la pregunta pendiente EXACTA. Una respuesta ambigua
 (hasta `MAX_ACLARACIONES`; después decide RH con «Revisar prefiltro»). Un «Parcial» o una respuesta faltante del
 formulario web NUNCA aprueba: se pregunta en el chat.
 
+Reconfirmación (2026-10-09): si la vacante trae en «Prefiltro · WhatsApp» preguntas que RECONFIRMAN un indispensable
+del web (`reconfirma`), después de un «Sí» del formulario se pide el DATO CONCRETO (cuánto tiempo, cuál opción). Si el dato
+contradice el «Sí» es una INCONSISTENCIA: nunca cierra la postulación — queda «Revisar prefiltro» para RH y la
+contradicción entra a «Puntos por validar».
+
 Resolución al vuelo (sin esperar a RH):
   * Cumple → prefiltro aprobado; el motor de ruta avanza y manda la liga de la Entrevista Red Human por el canal
     conectado (`motor_ruta._disparar_entrevista`). Con la entrevista por liga NUNCA se pide agendar videollamada.
@@ -73,7 +78,70 @@ def criterios_de(v) -> List[dict]:
             "chat": chat, "indispensable": bool(pv.get("descarta")),
             "esperada": "no" if _norm(pv.get("respuesta_esperada") or "Sí") == "no" else "si",
         })
+    # 2026-10-09: reconfirmaciones de WhatsApp (dato concreto) de los indispensables del web
+    por_criterio = {_norm(c["criterio"]): c for c in salida if c["indispensable"]}
+    for pw in (v.preguntas_filtro_whatsapp if v is not None else None) or []:
+        if not isinstance(pw, dict) or not pw.get("reconfirma") or not str(pw.get("pregunta", "")).strip():
+            continue
+        base = por_criterio.get(_norm(pw["reconfirma"]))
+        if base is None or f"rc-{base['id']}" in usados:
+            continue
+        usados.add(f"rc-{base['id']}")
+        opciones = [str(o) for o in pw.get("opciones") or [] if str(o).strip()]
+        chat = str(pw["pregunta"]).strip() + ("\n" + "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1)) if opciones else "")
+        salida.append({
+            "id": f"rc-{base['id']}", "clave": "reconfirma", "criterio": base["criterio"], "pregunta": str(pw["pregunta"]).strip(),
+            "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
+            "opciones": opciones, "opciones_validas": [str(o) for o in pw.get("opciones_validas") or []], "minimo": pw.get("minimo"),
+        })
     return salida
+
+
+_NUMEROS = {"un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9,
+            "diez": 10, "medio": 0.5}
+
+
+def _anos(t: str) -> Optional[float]:
+    """Años de experiencia de una respuesta libre («3 años», «menos de un año», «más de 4», «6 meses»)."""
+    m = re.search(r"(\d+(?:[.,]\d+)?)|\b(" + "|".join(_NUMEROS) + r")\b", t)
+    if not m:
+        return None
+    n = float(m.group(1).replace(",", ".")) if m.group(1) else float(_NUMEROS[m.group(2)])
+    if re.search(r"\bmes(es)?\b", t) and not re.search(r"\bano", t):
+        n = n / 12
+    if re.search(r"\bmenos de\b", t):
+        n = max(0.0, n - 0.5)
+    elif re.search(r"\b(mas de|arriba de)\b", t):
+        n = n + 0.5
+    return n
+
+
+def clasificar_dato(c: dict, texto: str) -> Optional[str]:
+    """Reconfirmación con dato concreto: «si» si el dato cumple, «no» si lo contradice, None si no se entiende."""
+    t = _norm(texto)
+    if not t:
+        return None
+    opciones = c.get("opciones") or []
+    validas = {_norm(o) for o in c.get("opciones_validas") or []}
+    elegida = None
+    if re.fullmatch(r"\d", t) and 1 <= int(t) <= len(opciones) and c.get("tipo") != "numero":
+        elegida = opciones[int(t) - 1]
+    if elegida is None:
+        elegida = next((o for o in opciones if _norm(o) == t), None) or next((o for o in sorted(opciones, key=len, reverse=True)
+                                                                              if _norm(o) and _norm(o) in t), None)
+    if elegida is not None and validas:
+        return "si" if _norm(elegida) in validas else "no"
+    if c.get("tipo") == "numero" and c.get("minimo") not in (None, ""):
+        n = _anos(t)
+        if n is not None:
+            return "si" if n >= float(c["minimo"]) else "no"
+        return None
+    if validas:
+        if _RE_NO.match(t):
+            return "no" if not any(x.startswith("no") for x in validas) else "si"
+        if _RE_SI.match(t) and any(x.startswith("si") for x in validas):
+            return "si"
+    return None
 
 
 def aplica(p: Optional[Postulacion]) -> bool:
@@ -174,7 +242,21 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         r = respuestas.get(c["id"])
         if r and c["indispensable"] and r.get("valor") and r["valor"] != c["esperada"]:
             return "no_cumple", c, None
-    siguiente = next((c for c in criterios if c["id"] not in respuestas), None)
+    for c in criterios:
+        r = respuestas.get(c["id"])
+        if c.get("reconfirma") and r and r.get("valor") == "no":
+            return "inconsistencia", c, None  # el dato concreto contradice el «Sí» del formulario: nunca descarta
+
+    def falta(c: dict) -> bool:
+        if c["id"] in respuestas:
+            return False
+        if c.get("reconfirma"):
+            # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
+            base = respuestas.get(c["reconfirma"]) or {}
+            return base.get("valor") == "si" and base.get("fuente") == "web"
+        return True
+
+    siguiente = next((c for c in criterios if falta(c)), None)
     return (None, None, siguiente) if siguiente else ("cumple", None, None)
 
 
@@ -189,8 +271,11 @@ def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
             veredicto = "registrado"
         else:
             veredicto = "cumple" if r.get("valor") == c["esperada"] else "no_cumple"
-        salida.append({"criterio": c["criterio"], "pregunta": c["chat"], "respuesta": r.get("respuesta", ""), "valor": r.get("valor"),
-                       "excluyente": c["indispensable"], "veredicto": veredicto, "fuente": r.get("fuente", "")})
+        if c.get("reconfirma") and r:
+            veredicto = "cumple" if r.get("valor") == "si" else "inconsistencia"
+        salida.append({"criterio": c["criterio"], "pregunta": c["pregunta"] if c.get("reconfirma") else c["chat"],
+                       "respuesta": r.get("respuesta", ""), "valor": r.get("valor"), "excluyente": c["indispensable"],
+                       "veredicto": veredicto, "fuente": r.get("fuente", ""), **({"reconfirma": True} if c.get("reconfirma") else {})})
     return salida
 
 
@@ -248,6 +333,22 @@ def _resolver(db: Session, p: Postulacion, criterios: List[dict], e: dict, resul
     p.prefiltro_completo = True  # «revision» también: el chat ya no pregunta, decide RH («Revisar prefiltro»)
     registrar(db, ACTOR, "prefiltro_conversacional_resuelto", "postulacion", p.codigo,
               {"resultado": resultado, "motivo": motivo, "criterios": resueltos})
+
+
+def registrar_inconsistencia(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> None:
+    """El dato concreto contradice lo que contestó en el formulario: «Inconsistencia» para RH (Puntos por validar) y
+    «Revisar prefiltro» — la postulación sigue activa (nunca se descarta por una contradicción). No hace commit."""
+    respuestas = e.get("respuestas") or {}
+    web = (respuestas.get(c["reconfirma"]) or {}).get("respuesta", "")
+    chat = (respuestas.get(c["id"]) or {}).get("respuesta", "")
+    a = dict(p.analisis or {})
+    a["inconsistencias"] = list(a.get("inconsistencias") or []) + [{
+        "criterio": c["criterio"], "web": web, "whatsapp": chat, "aclarada": False, "fuente": "reconfirmacion", "en": _ahora()}]
+    p.analisis = a
+    flag_modified(p, "analisis")
+    _resolver(db, p, criterios, e, "revision", f"Inconsistencia en «{c['criterio']}»: el formulario dice «{web}» y el chat «{chat}»")
+    registrar(db, ACTOR, "prefiltro_inconsistencia_detectada", "postulacion", p.codigo,
+              {"criterio": c["criterio"], "web": web, "chat": chat})
 
 
 def _texto_cierre(c: dict) -> str:
@@ -354,8 +455,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
         return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
     if pendiente is not None:
-        valor = clasificar(pendiente, texto)
-        if valor is None and pendiente["indispensable"]:
+        valor = clasificar_dato(pendiente, texto) if pendiente.get("reconfirma") else clasificar(pendiente, texto)
+        if valor is None and (pendiente["indispensable"] or pendiente.get("reconfirma")):
             n = aclaraciones.get(pendiente["id"], 0) + 1
             if n > MAX_ACLARACIONES:
                 e["respuestas"] = {**(e.get("respuestas") or {}),
@@ -367,7 +468,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             e["aclaraciones"] = aclaraciones
             registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                       {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
-            return await responder(f"Para no equivocarme: {pendiente['chat']} Respóndeme *Sí* o *No*, por favor. 🙂", aclaracion=True)
+            pide = "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor."
+            return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
         e["respuestas"] = {**(e.get("respuestas") or {}),
                            pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
         e["pendiente"] = None
@@ -376,12 +478,18 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if resultado == "no_cumple":
         mensaje = cerrar_no_aprobado(db, p, criterios, e, incumple)
         return await responder(mensaje, clasificacion_final="no_cumple")
+    if resultado == "inconsistencia":
+        registrar_inconsistencia(db, p, criterios, e, incumple)
+        return await responder(f"Gracias, {nombre_ficha(p).split(' ')[0]}. Una persona del equipo de RH revisará tus respuestas y "
+                               "te escribirá por este medio. 🙌", clasificacion_final="revision")
     if siguiente is not None:
         primera = not e.get("preguntadas")
         e["pendiente"] = siguiente["id"]
         e["preguntadas"] = list(e.get("preguntadas") or []) + [siguiente["id"]]
         if primera:
-            faltan = sum(1 for c in criterios if c["id"] not in (e.get("respuestas") or {}))
+            resp = e.get("respuestas") or {}
+            faltan = sum(1 for c in criterios if c["id"] not in resp and (not c.get("reconfirma") or (
+                (resp.get(c["reconfirma"]) or {}).get("valor") == "si" and (resp.get(c["reconfirma"]) or {}).get("fuente") == "web")))
             web = any((r or {}).get("fuente") == "web" for r in (e.get("respuestas") or {}).values())
             intro = (f"Ya tengo las respuestas de tu formulario; solo me falta confirmar {faltan} dato{'s' if faltan != 1 else ''}."
                      if web else f"Para continuar con tu postulación a *{vacante}* te haré {faltan} "

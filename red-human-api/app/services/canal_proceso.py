@@ -36,8 +36,10 @@ def _ultima_pregunta(p: Postulacion) -> str:
     return previas[-1] if previas else ""
 
 
-def _liga_entrevista_agente(p: Postulacion) -> str:
-    vivas = [e for e in (p.entrevistas or []) if e.estado not in ("evaluada", "cancelada") and e.token]
+def _liga_entrevista_agente(p: Postulacion, tipo: str = "entrevista_agente") -> str:
+    from .proceso import entrevistas_de_paso
+
+    vivas = [e for e in entrevistas_de_paso(p, tipo) if e.estado not in ("evaluada", "cancelada") and e.token]
     return f"{settings.app_url}/entrevista/{vivas[-1].token}" if vivas else ""
 
 
@@ -80,11 +82,15 @@ def accion_candidato(db: Session, p: Postulacion, paso: dict) -> Optional[dict]:
             return None
         texto = "Completa el formulario de la vacante" if tipo == "prefiltro_web" else "Comparte tu CV en el formulario de la vacante"
         return _respuesta(f"{texto} *{v.titulo}*.", "Abrir formulario", f"{settings.app_url}/aplicar/{v.slug}")
-    if tipo == "entrevista_agente":
-        url = _liga_entrevista_agente(p)
+    if tipo in ("entrevista_agente", "llamada_agente"):
+        url = _liga_entrevista_agente(p, tipo)
+        if url and tipo == "llamada_agente":
+            return _respuesta("Tu llamada con Red Human está lista. Ábrela cuando estés en un lugar tranquilo.", "Iniciar llamada", url)
         if url:
             return _respuesta("Tu Entrevista Red Human está lista. Ábrela cuando tengas unos minutos en un lugar tranquilo.", "Iniciar entrevista", url)
         return None
+    if tipo == "entrevista_whatsapp":
+        return None  # se conduce en este mismo chat: el turno lo atiende la entrevista
     if tipo == "documentos":
         url = _liga_documentos(p)
         if not url:

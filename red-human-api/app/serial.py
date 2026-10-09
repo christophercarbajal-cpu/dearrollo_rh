@@ -251,8 +251,14 @@ def _sintesis_global(p: Postulacion) -> dict:
          *(a.get("requisitos_cumplidos") or [])],
         4,
     )
+    # 2026-10-09: una contradicción entre respuestas (formulario, chat, entrevista, CV) es «Inconsistencia» — va primero
+    inconsistencias_txt = [
+        f"Inconsistencia: {i.get('criterio')} — formulario «{i.get('web')}», chat «{i.get('whatsapp')}»"
+        + (f" (aclaró: {str(i.get('aclaracion'))[:120]})" if i.get("aclarada") and i.get("aclaracion") else "")
+        for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
     puntos_por_validar = _dedupe_cap(
-        [*(eval_ia.get("riesgos") or []),
+        [*inconsistencias_txt,
+         *(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],
          *(a.get("brechas") or []),
          *(["Requiere otra entrevista" + (f": {ultima_eh.comentarios[:200]}" if ultima_eh.comentarios else "")]

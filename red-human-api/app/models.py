@@ -423,6 +423,8 @@ class Postulacion(Base):
         saber entre qué postulaciones tendría que elegir un mensaje entrante."""
         if not self.activa:
             return False
+        if any(e.tipo == "whatsapp" and e.estado in ("programada", "en_curso") for e in (self.entrevistas or [])):
+            return True  # 2026-10-09: Entrevista Red Human por WhatsApp en curso (o esperando el «Sí» para comenzar)
         if self.etapa == "Onboarding":
             return True
         if self.etapa == "Prefiltro":

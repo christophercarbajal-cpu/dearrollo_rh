@@ -8,6 +8,10 @@
 2. Generación: solo las actividades de la ruta; prefiltros cerrados (eliminatorias = indispensables); WhatsApp reconfirma
    los indispensables del web pidiendo un dato concreto y no repite lo demás; entrevistas/llamada solo preguntas
    abiertas; «Volver a generar» nunca pisa ediciones de RH sin confirmación; datos cambiados → desactualizado.
+3. Ejecución: la Entrevista por WhatsApp se conduce en el chat con el guion de la VACANTE (incluida la edición de RH
+   hecha después de mandar la invitación) y se evalúa igual que la sala; la Llamada usa la sala en modo llamada; sin guion
+   se genera Just-In-Time antes del primer mensaje; una contradicción con respuestas previas es «Inconsistencia» en
+   Puntos por validar y nunca descarta.
 """
 
 import os
@@ -204,5 +208,140 @@ with TestClient(app) as client:
     check(not r.json()["guiones"]["desactualizado"], "recién generada no está desactualizada")
     r = client.patch(f"/vacantes/{VAC2}", headers=H, json={"titulo": "Montacarguista de patio"})
     check(r.json()["guiones"]["desactualizado"], "cambiar datos de la vacante después de generar → «desactualizado» (sugerir volver a generar)")
+
+    # ================= 3. Ejecución con el candidato =================
+    print("\n--- 3. Ejecución con el candidato ---")
+    import asyncio
+
+    from app.models import Bitacora, Entrevista, Postulacion
+    from app.routers.candidatos import _crear_candidato, crear_postulacion, procesar_prefiltro
+    from app.services import ia as sia
+    from app.services import prefiltro_conversacional as pconv
+    from app.services.entrevistas import crear_entrevista_para_candidato
+
+    ruta_wa = [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"},
+               {"id": "entrevista-wa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
+               {"id": "llamada", "tipo": "llamada_agente", "etapa": "Entrevista IA", "obligatorio": False},
+               {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]
+    r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Montacarguista WA", "generar_si_falta": False,
+                                                 "proceso": {"pasos": ruta_wa}, "preguntas_filtro": web,
+                                                 "guiones": {"secciones": {"entrevista_whatsapp": {
+                                                     "enfoque": "Experiencia en patio", "temas": ["Patio", "Seguridad"],
+                                                     "preguntas": ["Cuéntame de tu último turno en patio.", "Cuéntame cómo cuidas la seguridad al cargar."]}}}})
+    VAC3 = r.json()["id"]
+    v3 = db.query(Vacante).filter(Vacante.codigo == VAC3).one()
+    c3 = _crear_candidato(db, cuenta.id, "Rosa Patio", "web", False, telefono="5512340001", correo="rosa@ejemplo.mx")
+    p3 = crear_postulacion(db, c3, v3, cuenta.id, "web")
+    p3.consentimiento = True
+    p3.prefiltro_completo = True
+    p3.estado = "cumple"
+    p3.etapa = "Entrevista IA"
+    p3.analisis = {"respuestas_web": [{"pregunta": web[0]["pregunta"], "respuesta": "Sí"}]}
+    db.commit()
+    P3 = p3.codigo
+    r = client.post(f"/procesos/postulaciones/{P3}/pasos/entrevista-wa/iniciar", headers=H, json={})
+    db.expire_all()
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    e3 = next((e for e in p3.entrevistas if e.tipo == "whatsapp"), None)
+    check(r.status_code == 200 and e3 is not None and e3.estado == "programada" and e3.guion.get("seccion") == "entrevista_whatsapp",
+          f"«Iniciar» la Entrevista por WhatsApp crea la entrevista con el guion de la vacante ({r.status_code})")
+    intro = sia.mensaje_inicial_entrevista_whatsapp(v3.titulo)  # sin proveedor en la prueba: el envío queda como intento
+    check("inteligencia artificial" in intro and intro.rstrip().endswith("¿Comenzamos?") and p3.espera_respuesta,
+          "la presentación avisa que la conduce la IA y pide «¿Comenzamos?»; la postulación espera respuesta en el chat")
+    # RH edita el guion DESPUÉS de mandar la invitación: el bot usa la versión vigente al comenzar
+    r = client.patch(f"/vacantes/{VAC3}", headers=H, json={"guiones": {"secciones": {"entrevista_whatsapp": {
+        "enfoque": "Experiencia en patio", "temas": ["Patio", "Seguridad"],
+        "preguntas": ["Cuéntame de tu último turno en patio (editada).", "Cuéntame cómo cuidas la seguridad al cargar."]}}}})
+    check(r.status_code == 200, "RH edita el guion de WhatsApp de la vacante")
+    r1 = asyncio.run(procesar_prefiltro(db, p3, "más tarde", "whatsapp"))
+    check(r1.get("esperando") and db.get(Entrevista, e3.id).estado == "programada", "«más tarde» → no empieza ni registra consentimiento")
+    db.expire_all()  # cada petición real abre su sesión; aquí se refresca la caché de la prueba
+    r1 = asyncio.run(procesar_prefiltro(db, db.query(Postulacion).filter_by(codigo=P3).one(), "Sí, comencemos", "whatsapp"))
+    check(r1["respuesta"] == "Cuéntame de tu último turno en patio (editada).",
+          f"el bot hace la PRIMERA pregunta del guion de la vacante con la edición de RH: {r1['respuesta'][:80]}")
+    e3 = db.get(Entrevista, e3.id)
+    check(e3.consentimiento and e3.estado == "en_curso", "el «Sí» queda como consentimiento de la entrevista")
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    r2 = asyncio.run(procesar_prefiltro(db, p3, "No tengo experiencia operando montacargas; trabajé en almacén acomodando cajas.", "whatsapp"))
+    check(r2["respuesta"] == "Cuéntame cómo cuidas la seguridad al cargar.", "segunda pregunta del guion, en orden")
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    r3 = asyncio.run(procesar_prefiltro(db, p3, "Reviso el mástil, uso cinturón, nunca levanto con gente cerca y respeto la capacidad.", "whatsapp"))
+    db.expire_all()
+    e3 = db.get(Entrevista, e3.id)
+    check(r3.get("terminada") and e3.estado == "evaluada" and e3.evaluacion.get("score_entrevista") is not None,
+          "al despedirse se cierra y se evalúa como cualquier entrevista de IA (resumen, fortalezas, puntos por validar, recomendación)")
+    paso_wa = next(x for et in client.get(f"/procesos/postulaciones/{P3}", headers=H).json()["etapas"] for x in et["pasos"] if x["id"] == "entrevista-wa")
+    check(paso_wa["estado"] == "completada", "la actividad «Entrevista Red Human por WhatsApp» queda completada con su evaluación")
+    riesgos = e3.evaluacion.get("riesgos") or []
+    check(riesgos and riesgos[0].startswith("Inconsistencia:") and e3.evaluacion.get("recomendacion") != "no_avanzar",
+          "contradicción con el formulario web → «Inconsistencia» en Puntos por validar, sin recomendar descarte")
+    ficha = client.get(f"/candidatos/{P3}", headers=H).json()
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    check(p3.activa and any(x.startswith("Inconsistencia:") for x in ficha.get("puntosPorValidar") or (ficha.get("detalle") or {}).get("puntosPorValidar") or []),
+          "la ficha la muestra en Puntos por validar y la postulación sigue activa")
+
+    # Llamada Red Human + JIT
+    v3.guiones = {}
+    db.commit()
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    e_ll, _ = crear_entrevista_para_candidato(db, p3, "RH", paso_tipo="llamada_agente")
+    db.commit()
+    db.refresh(v3)
+    check(e_ll.tipo == "llamada" and e_ll.guion.get("seccion") == "llamada" and (v3.guiones.get("secciones") or {}).get("llamada"),
+          "sin guion de llamada en la vacante → se genera Just-In-Time, se guarda en la vacante y se usa")
+    check(db.query(Bitacora).filter(Bitacora.accion == "guion_generado_jit", Bitacora.entidad_id == VAC3).count() >= 1,
+          "el JIT queda en bitácora")
+    pub = client.get(f"/entrevistas/publica/{e_ll.token}").json()
+    client.post(f"/entrevistas/publica/{e_ll.token}/consentimiento", json={"acepta": True})
+    ses = client.post(f"/entrevistas/publica/{e_ll.token}/sesion", json={}).json()
+    db.refresh(e_ll)
+    check(pub["tipo"] == "llamada" and ses.get("llamada") is True and e_ll.tipo == "llamada",
+          "la sala abre la Llamada Red Human en modo llamada (sin perder su tipo aunque caiga a texto)")
+    e_tok = db.query(Entrevista).filter(Entrevista.id == e3.id).one()
+    check(client.post(f"/entrevistas/publica/{e_tok.token}/sesion", json={}).status_code == 409,
+          "una entrevista por WhatsApp no se abre en la sala")
+
+    # JIT del prefiltro: vacante sin preguntas cuya ruta tiene prefiltro por WhatsApp
+    r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Ayudante sin guion", "generar_si_falta": False,
+                                                 "proceso": {"pasos": [{"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
+    v5 = db.query(Vacante).filter(Vacante.codigo == r.json()["id"]).one()
+    c5 = _crear_candidato(db, cuenta.id, "Leo Antiguo", "whatsapp", False, telefono="5512340005")
+    p5 = crear_postulacion(db, c5, v5, cuenta.id, "whatsapp")
+    p5.consentimiento = True
+    db.commit()
+    check(not v5.preguntas_filtro_whatsapp, "candidato antiguo: su vacante no tiene guion de prefiltro")
+    asyncio.run(procesar_prefiltro(db, p5, "Hola", "whatsapp"))
+    db.refresh(v5)
+    check(len(v5.preguntas_filtro_whatsapp) >= 1 and all(q["tipo"] in ("si_no", "numero", "opcion") for q in v5.preguntas_filtro_whatsapp),
+          "el bot genera el guion de prefiltro JIT antes del primer mensaje (nunca arranca sin guion)")
+
+    # Prefiltro conversacional (ruta automática): reconfirmación con dato concreto; contradicción → Inconsistencia, sin cierre
+    demo = Cuenta(nombre="Demo GrupPak", nombre_comercial="GrupPak", razon_social="GrupPak SA de CV", estado="Activa", slug="demo-grupak")
+    db.add(demo)
+    db.flush()
+    db.add(UsuarioCuenta(usuario_id=admin.id, cuenta_id=demo.id))
+    db.commit()
+    rec = sia.pregunta_reconfirmacion("2 años de experiencia operando montacargas")
+    v6 = Vacante(codigo="VAC-RC", titulo="Montacarguista RC", cuenta_id=demo.id, estado="Publicada", modalidad="Presencial",
+                 preguntas_filtro=[{**web[0]}], preguntas_filtro_whatsapp=[rec])
+    db.add(v6)
+    db.flush()
+    c6 = _crear_candidato(db, demo.id, "Iván Reconfirma", "web", False, telefono="5512340006")
+    p6 = crear_postulacion(db, c6, v6, demo.id, "web")
+    p6.consentimiento = True
+    p6.analisis = {"respuestas_web": [{"pregunta": web[0]["pregunta"], "respuesta": "Sí"}]}
+    db.commit()
+    check(pconv.aplica(p6) and any(c.get("reconfirma") for c in pconv.criterios_de(v6)),
+          "el prefiltro conversacional suma la reconfirmación de WhatsApp al indispensable del web")
+    r = asyncio.run(pconv.turno(db, p6, "Hola", "whatsapp"))
+    check("cuánto tiempo" in r["respuesta"].lower() and "2 a 4 años" in r["respuesta"],
+          "tras el «Sí» del formulario, el bot pide el DATO CONCRETO (cuánto tiempo, con rangos)")
+    r = asyncio.run(pconv.turno(db, db.query(Postulacion).filter_by(codigo=p6.codigo).one(), "1 año", "whatsapp"))
+    p6 = db.query(Postulacion).filter_by(codigo=p6.codigo).one()
+    check(p6.activa and p6.estado == "revision" and (p6.analisis.get("inconsistencias") or [{}])[-1].get("fuente") == "reconfirmacion",
+          "«1 año» contradice el «Sí» de 2 años → Inconsistencia y «Revisar prefiltro»; la postulación NO se cierra")
+    ficha6 = client.get(f"/candidatos/{p6.codigo}", headers={"X-Cuenta-Id": str(demo.id)}).json()
+    textos = ficha6.get("puntosPorValidar") or (ficha6.get("detalle") or {}).get("puntosPorValidar") or []
+    check(any(t.startswith("Inconsistencia:") for t in textos), f"y aparece en Puntos por validar: {textos[:1]}")
 
     print(f"\n✅ {OK} comprobaciones OK")

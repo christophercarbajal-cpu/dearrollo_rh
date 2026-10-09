@@ -239,3 +239,19 @@ def _resultado(validaciones: List[dict]) -> dict:
         "total": len(validaciones),
         "validaciones": validaciones,
     }
+
+
+def respuestas_previas(p: Postulacion) -> List[dict]:
+    """Lo que el candidato ya contestó ANTES de la entrevista (formulario web y prefiltro por chat), con su fuente. La
+    evaluación de la entrevista lo usa SOLO para detectar contradicciones («Inconsistencia» en Puntos por validar);
+    nunca se califica ni descarta con ello (2026-10-09)."""
+    a = p.analisis or {}
+    salida: List[dict] = []
+    for r in a.get("respuestas_web") or []:
+        if isinstance(r, dict) and str(r.get("respuesta") or "").strip():
+            salida.append({"fuente": "el formulario web", "pregunta": r.get("pregunta") or "", "respuesta": str(r["respuesta"])[:300]})
+    for r in a.get("respuestas_prefiltro") or []:
+        if isinstance(r, dict) and str(r.get("respuesta") or "").strip():
+            salida.append({"fuente": "el prefiltro por chat", "pregunta": r.get("pregunta") or "", "criterio": r.get("criterio") or "",
+                           "respuesta": str(r["respuesta"])[:300]})
+    return salida[:30]

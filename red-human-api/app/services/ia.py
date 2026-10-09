@@ -1190,6 +1190,25 @@ def mensaje_inicial_entrevista(titulo_vacante: str) -> str:
     )
 
 
+def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str) -> str:
+    """Presentación de la Entrevista Red Human por WhatsApp (2026-10-09). En el chat no hay pantalla de consentimiento:
+    este mensaje la sustituye — dice que la conduce la IA y que la revisa una persona, y el «Sí» es el consentimiento."""
+    puesto = (titulo_vacante or "").strip() or "el puesto"
+    return (
+        f"Hola, soy Red Human. Gracias por participar en el proceso para {puesto}. Vamos a conversar por aquí sobre tu "
+        "experiencia, tus intereses y algunos aspectos relevantes para el puesto (unos 10 minutos). Esta entrevista la "
+        "conduce una inteligencia artificial y tus respuestas las revisa una persona del equipo de RH. ¿Comenzamos?"
+    )
+
+
+CANAL_ENTREVISTA = {
+    "whatsapp": "CANAL: conversas por WhatsApp (texto). Mensajes CORTOS de chat (1-3 renglones), una sola pregunta por mensaje, "
+                "sin listas ni formato.",
+    "llamada": "CANAL: es una LLAMADA de voz. Frases muy cortas y fáciles de escuchar, sin enumeraciones; confirma que te "
+               "escucha bien si la respuesta llega cortada.",
+}
+
+
 def prompt_entrevistador(
     titulo: str,
     requisitos: str,
@@ -1205,8 +1224,12 @@ def prompt_entrevistador(
     sueldo: str = "",
     beneficios: Optional[List[str]] = None,
     area: str = "",
+    canal: str = "avatar",
+    guion_de_vacante: bool = False,
 ) -> str:
     """System prompt compartido por el avatar (Anam) y el modo texto — misma personalidad en ambos.
+    2026-10-09: también para la Entrevista por WhatsApp y la Llamada Red Human (`canal`). Con `guion_de_vacante` las
+    preguntas son las de la plantilla de conversación de la vacante (aprobadas o editadas por RH): se cubren todas.
 
     Fase 4 (Punto 3): protocolo de inicio y silencio, sin numerar, una pregunta por intervención, de
     lo general a lo específico, sin repetir lo ya respondido, entrevistadora (no lectora de
@@ -1238,7 +1261,10 @@ def prompt_entrevistador(
         f"Objetivo de la entrevista: {enfoque or 'validar experiencia real, criterio y motivación para el puesto'}.\n"
         f"Enfoque: {enfoque_entrevista} — cubre: {ENFOQUE_ENTREVISTA_TEMAS[enfoque_entrevista]}.\n"
         f"Temas a cubrir (en este orden aproximado):\n{lista_temas}\n"
-        + (f"Preguntas de referencia (inspiración de tono, NO script; no tienes que hacerlas todas ni tal cual):\n{referencia}\n" if referencia else "")
+        + ((f"GUION DE LA VACANTE (definido por RH): cubre TODAS estas preguntas, en este orden, adaptando solo el tono y "
+             f"repreguntando brevemente cuando haga falta; no agregues preguntas de otros temas:\n{referencia}\n") if referencia and guion_de_vacante
+           else (f"Preguntas de referencia (inspiración de tono, NO script; no tienes que hacerlas todas ni tal cual):\n{referencia}\n" if referencia else ""))
+        + (f"{CANAL_ENTREVISTA[canal]}\n" if canal in CANAL_ENTREVISTA else "")
         + "\n"
         "PROTOCOLO DE INICIO: tu primer mensaje ya se presentó y terminó con «¿Comenzamos?». Si la respuesta "
         "es afirmativa (sí, claro, vamos, adelante, listo, lista, ok, dale, comencemos), haz DE INMEDIATO la "
@@ -1269,13 +1295,14 @@ class TurnoEntrevista(BaseModel):
     terminada: bool = Field(description="true solo cuando ya cubriste los temas y te despediste en este mensaje.")
 
 
-def entrevista_turno(system_prompt: str, historial: List[dict]) -> Tuple[TurnoEntrevista, bool]:
-    """Modo texto (demo o fallback sin avatar). historial: [{"rol","texto"}], el último es del candidato."""
+def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optional[List[str]] = None) -> Tuple[TurnoEntrevista, bool]:
+    """Modo texto (demo o fallback sin avatar). historial: [{"rol","texto"}], el último es del candidato.
+    `preguntas` (2026-10-09): las del guion de la vacante — en modo demo se hacen tal cual, en orden."""
     client = _client()
     if client is None:
         n_agente = sum(1 for m in historial if m["rol"] == "assistant")
         n_usuario = sum(1 for m in historial if m["rol"] == "user")
-        demo_qs = _guion_demo("el puesto").preguntas
+        demo_qs = [q for q in (preguntas or []) if (q or "").strip()] or _guion_demo("el puesto").preguntas
         ultimo = (historial[-1]["texto"] if historial else "").strip().lower()
         # Protocolo de inicio: el primer turno del candidato es la confirmación de que está listo.
         if n_usuario == 1 and n_agente == 1:
@@ -1353,6 +1380,27 @@ class EvaluacionEntrevista(BaseModel):
     # 2026-09-13: lo que la entrevista NO alcanzó a cubrir (entrevista suficiente pero corta) — RH lo
     # valida en la Entrevista Humana. Vacío cuando la entrevista fue completa.
     faltante: List[str] = Field(default_factory=list, description="Temas que la entrevista no cubrió y que RH debe validar después.")
+    # 2026-10-09: contradicciones entre lo que dijo en la entrevista y sus respuestas previas (CV, formulario web,
+    # prefiltro). NUNCA descartan: van a «Puntos por validar» como «Inconsistencia: …» para que RH las aclare.
+    inconsistencias: List[str] = Field(default_factory=list, description="Contradicciones concretas entre la entrevista y las "
+                                       "respuestas previas o el CV, citando ambas versiones. Vacío si no hay.")
+
+
+PREFIJO_INCONSISTENCIA = "Inconsistencia: "
+
+
+def _aplicar_inconsistencias(ev: "EvaluacionEntrevista") -> "EvaluacionEntrevista":
+    """Garantía en código: cada contradicción queda en Puntos por validar y, por sí sola, nunca lleva a «No avanzar» —
+    RH la aclara antes de decidir (la IA no descarta)."""
+    nuevas = [x.strip() for x in ev.inconsistencias or [] if x and x.strip()]
+    if not nuevas:
+        return ev
+    previos = list(ev.riesgos or [])
+    ev.riesgos = [f"{PREFIJO_INCONSISTENCIA}{x}" if not x.startswith(PREFIJO_INCONSISTENCIA) else x for x in nuevas] + [
+        r for r in previos if not r.startswith(PREFIJO_INCONSISTENCIA)]
+    if ev.recomendacion == "no_avanzar":
+        ev.recomendacion = "revision"  # type: ignore[assignment]
+    return ev
 
 
 class SuficienciaEntrevista(BaseModel):
@@ -1455,6 +1503,7 @@ def evaluar_entrevista(
     faltante: Optional[List[str]] = None,
     analisis_cv: Optional[dict] = None,
     cv_datos: Optional[dict] = None,
+    respuestas_previas: Optional[List[dict]] = None,
 ) -> Tuple[EvaluacionEntrevista, bool]:
     """EVALUACIÓN INTEGRAL (2026-09-13): se basa ÚNICAMENTE en Análisis de CV + Entrevista Red Human.
     Los datos del prefiltro por WhatsApp quedan estrictamente fuera (evita contradicciones).
@@ -1462,10 +1511,11 @@ def evaluar_entrevista(
     más lo que faltó (`faltante`) cuando la entrevista fue corta pero suficiente."""
     enfoque_entrevista = _enfoque_valido(enfoque_entrevista)
     faltante = list(faltante or [])
+    previas = [r for r in (respuestas_previas or []) if isinstance(r, dict) and str(r.get("respuesta") or "").strip()]
     client = _client()
     if client is None:
         return (
-            EvaluacionEntrevista(
+            _aplicar_inconsistencias(EvaluacionEntrevista(
                 resumen="Modo demo: agrega OPENAI_API_KEY para la evaluación integral real (CV + Entrevista Red Human).",
                 fortalezas=["Completó la entrevista"],
                 riesgos=(["No se cubrió: " + ", ".join(faltante)] if faltante else []),
@@ -1478,11 +1528,14 @@ def evaluar_entrevista(
                 evidencia="Evaluación simulada (modo demo).",
                 perfil=_perfil_demo(),
                 faltante=faltante,
-            ),
+                inconsistencias=inconsistencias_demo(transcript, previas),
+            )),
             False,
         )
 
     dialogo = "\n".join(f"{'Entrevistadora' if m['rol'] == 'assistant' else 'Candidato'}: {m['texto']}" for m in transcript)
+    bloque_previas = "\n".join(f"- [{r.get('fuente') or 'previa'}] {r.get('pregunta') or r.get('criterio')}: {r.get('respuesta')}"
+                               for r in previas[:30])
     resp = client.responses.parse(
         model=MODEL,
         instructions=(
@@ -1495,6 +1548,9 @@ def evaluar_entrevista(
             "del CV no resueltas en la entrevista y dudas que RH debe validar); RECOMENDACIÓN preliminar "
             "(recomendacion) — la decisión final la toma una persona de RH (human-in-the-loop, LFPDPPP). "
             "Si el CV acredita algo que la entrevista contradice, o viceversa, dilo en puntos por validar. "
+            "INCONSISTENCIAS: compara lo que dijo en la entrevista con sus RESPUESTAS PREVIAS (formulario web, prefiltro) y con "
+            "el CV SOLO para detectar contradicciones concretas; cada una va en `inconsistencias` citando ambas versiones "
+            "(«En el formulario dijo X; en la entrevista dijo Y»). Una contradicción NUNCA es motivo de descarte: RH la aclara. "
             "Si se te indican temas que la entrevista NO cubrió, repítelos en `faltante`, no los infieras y "
             "no los califiques. Construye el perfil profundo por dimensión; si la entrevista no cubrió una "
             "dimensión, márcala evaluado=false y déjala vacía. "
@@ -1508,14 +1564,41 @@ def evaluar_entrevista(
             f"Temas que la entrevista debía cubrir: {'; '.join(temas or []) or 'no especificados'}\n"
             + (f"Temas que la entrevista NO cubrió (RH los validará después): {'; '.join(faltante)}\n" if faltante else "")
             + f"\nANÁLISIS DE CV:\n{_bloque_cv(analisis_cv, cv_datos)}\n\n"
-            f"ENTREVISTA RED HUMAN (transcripción):\n{dialogo}"
+            + (f"RESPUESTAS PREVIAS DEL CANDIDATO (solo para detectar contradicciones; NO se califican):\n{bloque_previas}\n\n" if bloque_previas else "")
+            + f"ENTREVISTA RED HUMAN (transcripción):\n{dialogo}"
         ),
         text_format=EvaluacionEntrevista,
     )
     salida = resp.output_parsed
     if faltante and not salida.faltante:
         salida.faltante = faltante
-    return salida, True
+    return _aplicar_inconsistencias(salida), True
+
+
+_RE_NUM = re.compile(r"\d+")
+
+
+def inconsistencias_demo(transcript: List[dict], previas: List[dict]) -> List[str]:
+    """Modo demo (sin IA): detección determinista mínima — una respuesta previa afirmativa contra una negación explícita
+    en la entrevista sobre el mismo requisito, o años de experiencia distintos."""
+    salida: List[str] = []
+    dichos = [_clave_texto(m.get("texto", "")) for m in transcript or [] if m.get("rol") == "user"]
+    for r in previas:
+        tema = _clave_texto(str(r.get("criterio") or r.get("pregunta") or ""))
+        resp = _clave_texto(str(r.get("respuesta") or ""))
+        claves = [w for w in tema.split() if len(w) > 5][:3]
+        if not claves:
+            continue
+        for d in dichos:
+            if not any(w in d for w in claves):
+                continue
+            nums_prev, nums_ent = _RE_NUM.findall(resp), _RE_NUM.findall(d)
+            negacion = resp.startswith("si") and re.search(r"\b(no tengo|nunca he|no he|no cuento|no se)\b", d)
+            if negacion or (nums_prev and nums_ent and nums_prev[0] != nums_ent[0]):
+                salida.append(f"En {r.get('fuente') or 'una respuesta previa'} respondió «{r.get('respuesta')}» a «{r.get('pregunta') or r.get('criterio')}»; "
+                              f"en la entrevista dijo «{d[:160]}».")
+                break
+    return salida[:4]
 
 # ============================================================
 # 3.5) Capacitación (Fase 1) — generación de curso con IA
@@ -2570,16 +2653,21 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
 
 
 def guion_demo_seccion(clave: str, ficha: FichaGuion) -> GuionEntrevista:
-    """Guion determinista (sin clave de OpenAI) con el estilo de cada actividad y los datos REALES de la vacante."""
-    g = _guion_demo(ficha.titulo, _enfoque_valido(ficha.enfoque_entrevista))
-    preguntas = list(g.preguntas)
+    """Guion determinista (sin clave de OpenAI) con el estilo de cada actividad y los datos REALES de la vacante. Con el
+    enfoque «profesional y personal» siempre conserva su tema propio (objetivos y visión de futuro)."""
+    enfoque = _enfoque_valido(ficha.enfoque_entrevista)
+    g = _guion_demo(ficha.titulo, enfoque)
+    pares = list(zip(g.temas, g.preguntas))
     if ficha.responsabilidades:
-        preguntas.insert(1, f"Cuéntame cómo has hecho algo parecido a: {_minuscula_inicial(ficha.responsabilidades[0])}.")
+        r = _minuscula_inicial(ficha.responsabilidades[0])
+        pares.insert(1, (f"Experiencia en: {r}", f"Cuéntame cómo has hecho algo parecido a: {r}."))
     if ficha.requisitos_indispensables:
-        preguntas.insert(2, f"Platícame un ejemplo concreto relacionado con: {ficha.requisitos_indispensables[0].strip().rstrip('.')}.")
-    limite = {"entrevista_whatsapp": 6, "llamada": 5}.get(clave, 7)
-    preguntas = preguntas[:limite]
-    return GuionEntrevista(enfoque=g.enfoque, temas=[q.rstrip("?.").lstrip("¿")[:120] for q in preguntas], preguntas=preguntas)
+        req = ficha.requisitos_indispensables[0].strip().rstrip(".")
+        pares.insert(2, (f"Requisito: {req}", f"Platícame un ejemplo concreto relacionado con: {req}."))
+    limite = {"entrevista_whatsapp": 6, "llamada": 5}.get(clave, 8)
+    if len(pares) > limite:
+        pares = pares[:limite - 1] + [pares[-1]] if enfoque == "profesional_personal" else pares[:limite]
+    return GuionEntrevista(enfoque=g.enfoque, temas=[t for t, _ in pares], preguntas=[q for _, q in pares])
 
 
 def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[List[dict]] = None,

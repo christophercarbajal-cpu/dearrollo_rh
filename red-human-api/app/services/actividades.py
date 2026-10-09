@@ -16,7 +16,7 @@ from typing import List, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import TIPOS_PASO_EVALUACION, Evaluacion, Postulacion, Usuario, registrar
+from ..models import TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion, Postulacion, Usuario, registrar
 from . import evaluaciones as sev
 from . import proceso as sproc
 
@@ -221,7 +221,7 @@ async def _iniciar_otra(db: Session, p: Postulacion, paso: dict, u: Usuario, cue
 
         r = await solicitar_documentos(p.codigo, None, db=db, u=u, cuenta=cuenta)
         return {"iniciada": True, "resultados": r.get("resultados") or [], "mensaje": "Liga de documentos enviada."}
-    if paso["tipo"] == "entrevista_agente":
+    if paso["tipo"] in TIPOS_PASO_ENTREVISTA_IA:
         return await reenviar(db, p, paso["id"], "candidato", u, cuenta, crear=True)
     raise HTTPException(409, f"«{paso['nombre']}» se trabaja desde su pestaña; no se inicia desde aquí.")
 
@@ -389,7 +389,7 @@ async def reenviar(db: Session, p: Postulacion, paso_id: str, a: str, u: Usuario
     x = _paso_vivo(p, paso_id)
     paso = sproc._paso(p, paso_id)
     opcion = next((r for r in x.get("reenvios") or [] if r["a"] == a), None)
-    if opcion is None and not (crear and paso["tipo"] == "entrevista_agente"):
+    if opcion is None and not (crear and paso["tipo"] in TIPOS_PASO_ENTREVISTA_IA):
         raise HTTPException(409, f"«{x['nombre']}» no tiene nada que enviar {sproc.TEXTO_DESTINATARIO.get(a, 'a ese destinatario')} en este momento.")
     motivo = opcion["motivo"] if opcion else "entrevista"
     if paso["tipo"] in TIPOS_PASO_EVALUACION:
@@ -404,7 +404,7 @@ async def reenviar(db: Session, p: Postulacion, paso_id: str, a: str, u: Usuario
             resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"candidato"})
         else:
             resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"})
-    elif paso["tipo"] == "entrevista_agente":
+    elif paso["tipo"] in TIPOS_PASO_ENTREVISTA_IA:
         resultados = await _reenviar_entrevista(db, p, paso, u, crear)
     elif paso["tipo"] in ("solicitud_documentos", "documentos"):
         from ..routers.candidatos import solicitar_documentos
@@ -424,18 +424,25 @@ async def _reenviar_entrevista(db: Session, p: Postulacion, paso: dict, u: Usuar
 
     from . import motor_ruta
 
-    e = next((y for y in reversed(list(p.entrevistas or [])) if y.estado != "evaluada"), None)
+    if paso["tipo"] == "entrevista_whatsapp":  # 2026-10-09: por el chat, sin liga — (re)envía la presentación
+        from .entrevistas import iniciar_whatsapp
+
+        ok, detalle, entregado, _e = await iniciar_whatsapp(db, p, u.nombre, paso_id=paso["id"])
+        return [{"destinatario": "candidato", "canal": detalle if entregado else "", "enviado": bool(entregado),
+                 "detalle": "" if entregado else detalle}]
+    e = next((y for y in reversed(sproc.entrevistas_de_paso(p, paso["tipo"])) if y.estado != "evaluada"), None)
     if e is None:
         if not crear:
-            raise HTTPException(409, "La Entrevista Red Human aún no tiene sala.")
+            raise HTTPException(409, "La entrevista de Red Human aún no tiene sala.")
         from .entrevistas import crear_entrevista_para_candidato
 
-        e, _ = crear_entrevista_para_candidato(db, p, u.nombre)
+        e, _ = crear_entrevista_para_candidato(db, p, u.nombre, paso_tipo=paso["tipo"])
         db.flush()
     liga = f"{settings.app_url}/entrevista/{e.token}"
     nombre = (p.nombre or "").split(" ")[0] if p.nombre and not p.nombre.startswith("Candidato") else ""
     vacante = p.vacante.titulo if p.vacante else "la vacante"
-    texto = (f"¡Hola{(' ' + nombre) if nombre else ''}! Te compartimos de nuevo la liga de tu entrevista con Red Human para "
+    que = "tu llamada" if paso["tipo"] == "llamada_agente" else "tu entrevista"
+    texto = (f"¡Hola{(' ' + nombre) if nombre else ''}! Te compartimos la liga de {que} con Red Human para "
              f"{vacante}. Entra cuando gustes desde tu celular o computadora: {liga}")
     entregado, detalle = await motor_ruta._avisar(db, p, texto, f"Tu entrevista para {vacante}", liga, motivo="entrevista",
                                                   paso_id=paso["id"], actor=u.nombre)

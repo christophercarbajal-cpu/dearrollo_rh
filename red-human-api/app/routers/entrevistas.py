@@ -284,23 +284,10 @@ def consentir(token: str, datos: ConsentirIn, db: Session = Depends(get_db)):
 
 
 def _system_prompt(e: Entrevista) -> str:
-    p, v, empresa = _contexto(e)
-    guion = e.guion or {}
-    return ia.prompt_entrevistador(
-        v.titulo if v else "vacante general",
-        v.requisitos if v else "",
-        _nombre_entrevistado(e),
-        list(guion.get("preguntas") or []),
-        empresa=empresa,
-        temas=ia.temas_de_guion(guion),
-        enfoque=guion.get("enfoque", ""),
-        enfoque_entrevista=enfoque_entrevista_agente(p, v),
-        ubicacion=(v.ubicacion if v else "") or "",
-        modalidad=(v.modalidad if v else "") or "",
-        sueldo=(v.sueldo if v else "") or "",
-        beneficios=list(v.beneficios or []) if v else [],
-        area=(v.area if v else "") or "",
-    )
+    """2026-10-09: un solo prompt para las tres actividades de IA, con el guion de la vacante (services/entrevistas)."""
+    from ..services.entrevistas import system_prompt
+
+    return system_prompt(e)
 
 
 ESTADOS_CERRADOS = ("completada", "evaluada", "interrumpida", "parcial")
@@ -318,11 +305,16 @@ async def sesion(token: str, datos: Optional[SesionIn] = None, db: Session = Dep
     """Inicia la sesión: token de avatar (Anam) o modo texto si no hay clave (o si el navegador
     pide texto). 403 sin consentimiento, 409 si la entrevista ya está cerrada."""
     e = _por_token(db, token)
+    if e.tipo == "whatsapp":
+        raise HTTPException(409, "Esta entrevista se realiza por WhatsApp: contesta en el chat con Red Human.")
     if not e.consentimiento:
         raise HTTPException(403, "Primero se requiere el consentimiento del candidato.")
     if e.estado in ESTADOS_CERRADOS:
         raise HTTPException(409, MENSAJE_CERRADA)
     forzar_texto = bool(datos and datos.modo == "texto")
+    from ..services.entrevistas import refrescar_guion
+
+    refrescar_guion(e)  # 2026-10-09: antes del primer turno, la versión vigente del guion de la vacante
 
     p, v, empresa = _contexto(e)
     saludo = ia.mensaje_inicial_entrevista(v.titulo if v else "")
@@ -354,16 +346,19 @@ async def sesion(token: str, datos: Optional[SesionIn] = None, db: Session = Dep
             print(f"[ERROR][AVATAR] crear_sesion_avatar falló ({e.codigo}): {str(ex)}", flush=True)
             registrar(db, "sistema", "avatar_error", "entrevista", e.codigo, {"error": str(ex)[:300]})
 
+    llamada = e.tipo == "llamada"  # Llamada Red Human: misma sesión de voz, la sala la muestra como llamada (sin video)
     if ses is None:
-        e.tipo = "texto"
+        if not llamada:
+            e.tipo = "texto"
         if not e.transcript:
             e.transcript = [{"rol": "assistant", "texto": saludo}]
         db.commit()
-        return {"modo": "texto", "mensajes": e.transcript, "nombre": _nombre_entrevistado(e), "motivo": motivo}
+        return {"modo": "texto", "mensajes": e.transcript, "nombre": _nombre_entrevistado(e), "motivo": motivo, "llamada": llamada}
 
-    e.tipo = "avatar"
+    if not llamada:
+        e.tipo = "avatar"
     db.commit()
-    return {"modo": "avatar", "nombre": _nombre_entrevistado(e), **ses}
+    return {"modo": "avatar", "nombre": _nombre_entrevistado(e), "llamada": llamada, **ses}
 
 
 class TurnoIn(BaseModel):
@@ -378,7 +373,7 @@ def turno(token: str, datos: TurnoIn, db: Session = Depends(get_db)):
         raise HTTPException(403, "La entrevista no está en curso.")
 
     historial = list(e.transcript or []) + [{"rol": "user", "texto": datos.texto}]
-    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial)
+    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial, preguntas=list((e.guion or {}).get("preguntas") or []))
     e.transcript = historial + [{"rol": "assistant", "texto": t.respuesta}]
     e.ultima_actividad_en = datetime.now(timezone.utc)
     db.commit()
@@ -527,16 +522,21 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
     el cierre normal y por «Evaluar con lo que hay» (RH, 2026-09-17)."""
     e.estado = "completada"
     e.motivo = ""
+    from ..models import paso_de_entrevista
+    from ..services.evaluacion_integral import respuestas_previas
+
     ev, con_ia = ia.evaluar_entrevista(
         v.titulo if v else "vacante general",
         v.requisitos if v else "",
         e.transcript or [],
         perfil_ideal=(v.perfil_ideal if v else "") or "",
         temas=temas,
-        enfoque_entrevista=enfoque_entrevista_agente(p, v),
+        enfoque_entrevista=enfoque_entrevista_agente(p, v, paso_de_entrevista(e.tipo)),
         faltante=faltante,
         analisis_cv=(p.analisis or {}) if p else {},
         cv_datos=(p.candidato.cv_datos or {}) if p and p.candidato else {},
+        # 2026-10-09: solo para detectar contradicciones → «Inconsistencia» en Puntos por validar (nunca descarta)
+        respuestas_previas=respuestas_previas(p) if p else [],
     )
     if faltante and not ev.faltante:
         ev.faltante = faltante
@@ -554,7 +554,11 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
     # 2026-10-01 (pipeline de 5 columnas): la postulación se QUEDA en Filtro Red Human («Entrevista IA») con su
     # Evaluación integral calculada; ya no existe la columna «Evaluación». NO toca p.estado: la recomendación de la
     # IA queda solo como dato y RH decide el avance (HITL, ver _auto_decision_zero_touch en candidatos.py).
-    if p and p.etapa == "Entrevista IA":
+    if ev.inconsistencias and p:
+        registrar(db, "agente-ia", "entrevista_inconsistencias", "postulacion", p.codigo,
+                  {"entrevista": e.codigo, "inconsistencias": ev.inconsistencias[:4]})
+    # Por WhatsApp la despedida ya salió en el chat: no se manda un segundo «gracias»
+    if p and p.etapa == "Entrevista IA" and e.tipo != "whatsapp":
         registrar(
             db, "agente-ia", "auto_evaluacion_zero_touch", "postulacion", p.codigo,
             {"candidato": p.candidato.codigo, "entrevista": e.codigo, "recomendacion": ev.recomendacion, "match": ev.match_perfil},
@@ -642,6 +646,7 @@ def reabrir(
 
 # Minutos sin sincronización del transcript (ni turno de texto) para dar por abandonada la sesión.
 INACTIVIDAD_ENTREVISTA_MIN = 15
+INACTIVIDAD_WHATSAPP_HORAS = 48  # Entrevista Red Human por WhatsApp (2026-10-09)
 
 
 async def cerrar_entrevistas_inactivas() -> int:
@@ -653,6 +658,8 @@ async def cerrar_entrevistas_inactivas() -> int:
     from ..database import SessionLocal
 
     corte = datetime.now(timezone.utc) - timedelta(minutes=INACTIVIDAD_ENTREVISTA_MIN)
+    # 2026-10-09: por WhatsApp el candidato contesta a su ritmo — la entrevista se cierra tras 48 h sin respuesta
+    corte_whatsapp = datetime.now(timezone.utc) - timedelta(hours=INACTIVIDAD_WHATSAPP_HORAS)
     cerradas = 0
     with SessionLocal() as db:
         abiertas = db.query(Entrevista).filter(Entrevista.estado == "en_curso").all()
@@ -660,7 +667,7 @@ async def cerrar_entrevistas_inactivas() -> int:
             ultima = e.ultima_actividad_en or e.iniciada_en or e.creada_en
             if ultima is not None and ultima.tzinfo is None:
                 ultima = ultima.replace(tzinfo=timezone.utc)
-            if ultima is None or ultima > corte:
+            if ultima is None or ultima > (corte_whatsapp if e.tipo == "whatsapp" else corte):
                 continue
             if not e.consentimiento:
                 continue

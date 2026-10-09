@@ -325,60 +325,76 @@ _AUTO_TODAS = {e: {"avance_automatico": True} for e in ETAPAS_CANDIDATO}  # Cont
 
 
 def _cola_contratacion_onboarding() -> List[dict]:
-    """Contratación y Onboarding, iguales en las tres rutas. Los documentos de ingreso viven en Onboarding: nunca
-    bloquean la ENTRADA a esa etapa (la compuerta solo revisa las etapas que se dejan atrás)."""
+    """Contratación y Onboarding, iguales en las tres rutas (retro 2026-10-09): Propuesta y aceptación → Documentos de
+    ingreso (solo pide lo que falte; lo aprobado antes se reutiliza) → Contrato y firma (al completarse pasa a
+    Onboarding) → Tareas de onboarding → Confirmación de ingreso."""
     return [
-        {"id": "condiciones", "tipo": "condiciones", "nombre": "Condiciones de contratación", "etapa": "Contratación"},
-        {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Firmar documentos", "etapa": "Contratación"},
-        {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Onboarding"},
-        {"id": "induccion", "tipo": "induccion", "nombre": "Inducción", "etapa": "Onboarding"},
-        {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding"},
+        {"id": "condiciones", "tipo": "condiciones", "nombre": "Propuesta y aceptación", "etapa": "Contratación"},
+        {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Contratación"},
+        {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Contrato y firma", "etapa": "Contratación"},
+        {"id": "tareas-onboarding", "tipo": "onboarding", "nombre": "Tareas de onboarding", "etapa": "Onboarding"},
+        {"id": "alta", "tipo": "alta", "nombre": "Confirmación de ingreso", "etapa": "Onboarding"},
     ]
 
 
 def _masivos(con_documentos: bool) -> List[dict]:
+    """Masivos (retro 2026-10-09): todo por el chat — prefiltro y Entrevista Red Human por WhatsApp, sin videollamada.
+    Con documentos iniciales, UNA actividad «Documentos iniciales» manda la liga y valida lo recibido."""
     pasos = [
         {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web sin CV", "con_cv": False},
-        {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Continuar prefiltro por WhatsApp"},
+        {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp"},
     ]
     if con_documentos:
-        pasos += [
-            {"id": "solicitar-documentos", "tipo": "solicitud_documentos", "nombre": "Solicitar documentos por liga", "etapa": "Prefiltro"},
-            {"id": "validar-documentos", "tipo": "documentos", "nombre": "Revisar documentos", "etapa": "Prefiltro"},
-        ]
+        pasos.append({"id": "documentos-iniciales", "tipo": "documentos", "nombre": "Documentos iniciales", "etapa": "Prefiltro"})
     return pasos + [
-        {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
-        {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana"},
+        {"id": "entrevista_red_human", "tipo": "entrevista_whatsapp", "nombre": "Entrevista Red Human por WhatsApp"},
         {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
         *_cola_contratacion_onboarding(),
     ]
 
 
+# Ninguna ruta base lleva médica, psicometría, referencias, pruebas técnicas, inducción ni carta de intención aparte;
+# TODAS sus actividades son obligatorias. «Masivos sin documentos iniciales» es la predeterminada de cada Cuenta.
+RUTA_PREDETERMINADA = "masivos_sin_documentos"
 RUTAS_BASE = {
     "masivos_sin_documentos": {
         "nombre": "Masivos sin documentos iniciales",
-        "descripcion": "Solicitud web sin CV → prefiltro por WhatsApp → Entrevista Red Human → médica y entrevista humana → "
-                       "firma de documentos → onboarding.",
+        "descripcion": "Solicitud web sin CV → prefiltro y Entrevista Red Human por WhatsApp → entrevista humana → "
+                       "propuesta, documentos de ingreso y contrato → onboarding.",
         "pasos": _masivos(False),
     },
     "masivos_con_documentos": {
         "nombre": "Masivos con documentos iniciales",
-        "descripcion": "Como Masivos, pero pide y revisa los documentos desde el Prefiltro (en Onboarding solo se piden los "
-                       "que falten).",
+        "descripcion": "Como Masivos sin documentos, pero pide y revisa los documentos desde el Prefiltro (en Contratación "
+                       "solo se piden los que falten).",
         "pasos": _masivos(True),
     },
     "corporativo": {
         "nombre": "Corporativos",
-        "descripcion": "Solicitud web con CV y prefiltro → Análisis de CV y Entrevista Red Human → entrevista humana → "
-                       "firma de documentos → onboarding.",
+        "descripcion": "Solicitud web con CV → Análisis de CV y prefiltro por WhatsApp → Entrevista Red Human con avatar → "
+                       "entrevista humana → propuesta, documentos de ingreso y contrato → onboarding.",
         "pasos": [
-            {"id": "solicitud-web", "tipo": "prefiltro_web", "nombre": "Solicitud web con CV y prefiltro"},
-            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Entrevista IA"},
-            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+            {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web con CV", "con_cv": True},
+            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Prefiltro"},
+            {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp"},
+            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human con avatar"},
             {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
             *_cola_contratacion_onboarding(),
         ],
     },
+}
+# Firma (tipo, etapa) de las rutas base ANTERIORES a la retro: `corregir_rutas_base` solo reemplaza una plantilla de la
+# Cuenta si sigue exactamente así (RH no la editó).
+_COLA_PREVIA = (("condiciones", "Contratación"), ("carta_contrato", "Contratación"), ("documentos", "Onboarding"),
+                ("induccion", "Onboarding"), ("alta", "Onboarding"))
+_MASIVOS_PREVIA = (("entrevista_agente", "Entrevista IA"), ("medica", "Entrevista Humana"),
+                   ("entrevista_humana", "Entrevista Humana")) + _COLA_PREVIA
+RUTAS_BASE_PREVIAS = {
+    "masivos_sin_documentos": (("solicitud_web", "Prefiltro"), ("prefiltro_whatsapp", "Prefiltro")) + _MASIVOS_PREVIA,
+    "masivos_con_documentos": (("solicitud_web", "Prefiltro"), ("prefiltro_whatsapp", "Prefiltro"),
+                               ("solicitud_documentos", "Prefiltro"), ("documentos", "Prefiltro")) + _MASIVOS_PREVIA,
+    "corporativo": (("prefiltro_web", "Prefiltro"), ("analisis_cv", "Entrevista IA"), ("entrevista_agente", "Entrevista IA"),
+                    ("entrevista_humana", "Entrevista Humana")) + _COLA_PREVIA,
 }
 
 
@@ -402,17 +418,73 @@ def asegurar_rutas_base(db: Session, cuenta_id: int, por: str = "sistema") -> in
     except Exception:  # noqa: BLE001 — tabla del paso no fatal ausente: la cascada usa la ruta en código
         return 0
     n = 0
+    try:
+        hay_pred = db.query(PlantillaProceso.id).filter(PlantillaProceso.cuenta_id == cuenta_id, PlantillaProceso.activa.is_(True),
+                                                        PlantillaProceso.predeterminada.is_(True)).first() is not None
+    except Exception:  # noqa: BLE001
+        hay_pred = True
     for clave in RUTAS_BASE:
         if clave in existentes:
             continue
         r = ruta_base(clave)
+        pred = clave == RUTA_PREDETERMINADA and not hay_pred  # retro 2026-10-09: Masivos sin documentos = predeterminada
         db.add(PlantillaProceso(cuenta_id=cuenta_id, nombre=r["nombre"], descripcion=r["descripcion"], pasos=r["pasos"],
-                                etapas=r["etapas"], version=1, predeterminada=False, activa=True, creado_por=por,
+                                etapas=r["etapas"], version=1, predeterminada=pred, activa=True, creado_por=por,
                                 actualizada_por=por, ruta_base=clave))
         n += 1
     if n:
         db.flush()
     return n
+
+
+def _firma_pasos(pasos) -> tuple:
+    return tuple((x.get("tipo"), x.get("etapa")) for x in (pasos or []) if not x.get("adhoc") and not x.get("heredado"))
+
+
+def corregir_rutas_base(db: Session) -> dict:
+    """UNA vez (marca `rutas_base_retro_2026_10_09` en bitácora): las plantillas base de cada Cuenta que siguen IGUAL a
+    las anteriores (RH no las editó) toman la configuración corregida (sube su versión); las editadas se respetan y
+    quedan listadas en la bitácora. Si la predeterminada de la Cuenta es una ruta base (o no hay), pasa a «Masivos sin
+    documentos iniciales». Vacantes y candidatos NUNCA cambian: conservan su copia. Idempotente y no fatal."""
+    from ..models import Bitacora
+
+    if not _tablas_proceso():
+        return {"corregidas": 0}
+    try:
+        if db.query(Bitacora.id).filter(Bitacora.accion == "rutas_base_retro_2026_10_09").first():
+            return {"corregidas": 0, "yaAplicada": True}
+        base = (db.query(PlantillaProceso)
+                .filter(PlantillaProceso.ruta_base.in_(list(RUTAS_BASE)), PlantillaProceso.activa.is_(True)).all())
+    except Exception:  # noqa: BLE001
+        return {"corregidas": 0}
+    corregidas, respetadas, cuentas = [], [], set()
+    for pl in base:
+        cuentas.add(pl.cuenta_id)
+        if _firma_pasos(pl.pasos) != RUTAS_BASE_PREVIAS[pl.ruta_base]:
+            respetadas.append(pl.id)
+            continue
+        r = ruta_base(pl.ruta_base)
+        pl.nombre, pl.descripcion, pl.pasos, pl.etapas = r["nombre"], r["descripcion"], r["pasos"], r["etapas"]
+        pl.version = (pl.version or 1) + 1
+        pl.actualizada_por = "Retro plantillas base 2026-10-09"
+        corregidas.append(pl.id)
+    predeterminadas = 0
+    for cid in cuentas:
+        pred = (db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cid, PlantillaProceso.activa.is_(True),
+                                                  PlantillaProceso.predeterminada.is_(True)).first())
+        if pred is not None and (pred.ruta_base or "") not in RUTAS_BASE:
+            continue  # RH eligió una ruta propia como predeterminada: se respeta
+        nueva = _plantilla_ruta(db, cid, RUTA_PREDETERMINADA)
+        if nueva is None or nueva is pred:
+            continue
+        if pred is not None:
+            pred.predeterminada = False
+        nueva.predeterminada = True
+        predeterminadas += 1
+    registrar(db, "sistema", "rutas_base_retro_2026_10_09", "plantilla_proceso", "",
+              {"corregidas": corregidas, "editadas_respetadas": respetadas, "predeterminadas": predeterminadas})
+    db.flush()
+    return {"corregidas": len(corregidas), "respetadas": len(respetadas), "predeterminadas": predeterminadas}
 
 
 def retirar_rutas_base_anteriores(db: Session) -> dict:
@@ -435,6 +507,9 @@ def retirar_rutas_base_anteriores(db: Session) -> dict:
         if pl.predeterminada:
             nueva = _plantilla_ruta(db, pl.cuenta_id, RUTAS_BASE_RETIRADAS[pl.ruta_base])
             if nueva is not None:
+                # una sola predeterminada por Cuenta (la siembra ya pudo marcar «Masivos sin documentos iniciales»)
+                (db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == pl.cuenta_id, PlantillaProceso.id != nueva.id)
+                 .update({PlantillaProceso.predeterminada: False}, synchronize_session="fetch"))
                 nueva.predeterminada = True
                 predeterminadas += 1
         pl.activa = False
@@ -954,8 +1029,11 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
                     "revisadoPor": "Revisado por: RH"}
         if faltan:
             recibidos = sum(1 for d in exp.obligatorios if d.entregado)
+            # retro 2026-10-09: «Documentos de ingreso» solo pide lo que falta; lo aprobado antes (Documentos
+            # iniciales) se reutiliza. Si a nada de lo faltante se le ha mandado la liga, la acción es pedirlo.
+            sin_pedir = not any(d.solicitado_en or d.entregado for d in exp.obligatorios if not d.aprobado)
             return {**base, "estado": "en_curso" if recibidos else "pendiente", "espera": _texto_falta(faltan),
-                    "detalle": f"{exp.progreso}% aprobado"}
+                    "detalle": f"{exp.progreso}% aprobado", "sin_solicitar": sin_pedir}
         revisores = sorted({d.revisado_por for d in exp.obligatorios if d.revisado_por})
         return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "100% aprobado",
                 "revisadoPor": f"Revisado por: {', '.join(revisores)}" if revisores else "Revisado por: RH"}
@@ -1024,7 +1102,8 @@ def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
     revisar = [d for d in docs if d.tipo in lista] if lista else [d for d in docs if d.solicitado_en or d.entregado]
     revisar = [d for d in revisar if d.estado != "no_aplica"]
     if not revisar:
-        return {**base, "espera": "Falta solicitar los documentos al candidato"}
+        # retro 2026-10-09: «Documentos iniciales» manda la liga Y valida (una sola actividad)
+        return {**base, "espera": "Falta enviar la liga de documentos al candidato", "sin_solicitar": True}
     faltan = [d.tipo for d in revisar if not d.aprobado]
     if faltan:
         recibidos = sum(1 for d in revisar if d.entregado)
@@ -1290,6 +1369,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
             "excepcionRH": r.get("excepcion"),
             "faltaCorreo": bool(r.get("falta_correo")),
+            "sinSolicitar": bool(r.get("sin_solicitar")),
             "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
             # a quién se espera (cuello de botella real) y el estado de cada destinatario (intento/enviado/entregado/fallido)
@@ -1743,6 +1823,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
     if tipo == "solicitud_documentos" and disponible and estado != "completada":
         # la misma acción ejecuta y refresca la vista: el estado, el resultado y la siguiente acción se recalculan
         return {"clave": "solicitar_documentos", "texto": "Enviar liga de documentos" if estado == "pendiente" else "Reenviar liga"}
+    if tipo == "documentos" and r.get("sin_solicitar") and disponible and estado != "completada":
+        return {"clave": "solicitar_documentos", "texto": "Enviar liga de documentos" if previo else "Solicitar documentos faltantes"}
     if tipo == "documentos" and previo and disponible and estado != "completada":
         return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
     if estado == "completada" or not disponible:

@@ -275,7 +275,9 @@ def _paso_prefiltro(p: Postulacion) -> str:
 
 
 DISPARADORES = {"psicometrica": _disparar_psicometria, "entrevista_agente": _disparar_entrevista, "entrevista_whatsapp": _disparar_entrevista,
-                "llamada_agente": _disparar_entrevista, "referencias": _disparar_referencias, "solicitud_documentos": _disparar_documentos}
+                "llamada_agente": _disparar_entrevista, "referencias": _disparar_referencias, "solicitud_documentos": _disparar_documentos,
+                # retro 2026-10-09: «Documentos iniciales» / «Documentos de ingreso» mandan la liga solos si nada se ha pedido
+                "documentos": _disparar_documentos}
 
 
 async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
@@ -289,6 +291,8 @@ async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
         if (x["tipo"] not in DISPARADORES or x["heredado"] or not x["disponible"] or x["estado"] != "pendiente"
                 or x["id"] in envios or x.get("evaluacion")):
             continue
+        if x["tipo"] == "documentos" and not x.get("sinSolicitar"):
+            continue  # documentos ya pedidos (o sin expediente todavía): RH valida
         _marcar(p, x["id"], {"en": datetime.now(timezone.utc).isoformat(), "ok": None})
         db.commit()
         codigo = p.codigo

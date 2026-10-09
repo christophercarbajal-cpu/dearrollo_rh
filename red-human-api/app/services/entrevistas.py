@@ -132,6 +132,10 @@ _NIEGA = ("no", "luego", "despues", "después", "mas tarde", "más tarde", "ahor
 
 
 def entrevista_whatsapp_activa(p: Postulacion) -> Optional[Entrevista]:
+    """La entrevista por WhatsApp que conduce el chat: solo mientras la postulación sigue en Filtro Red Human (si RH
+    la movió u omitió la actividad, el chat ya no le pertenece)."""
+    if not p.activa or p.etapa != "Entrevista IA":
+        return None
     return next((e for e in reversed(list(p.entrevistas or [])) if e.tipo == "whatsapp" and e.estado in ("programada", "en_curso")), None)
 
 

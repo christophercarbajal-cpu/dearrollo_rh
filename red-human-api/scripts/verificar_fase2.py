@@ -127,6 +127,13 @@ with TestClient(app) as client:
     v1 = db.query(Vacante).filter_by(codigo="VAC-1042").one()
     v2 = db.query(Vacante).filter_by(codigo="VAC-1041").one()
     TEL = "5591234567"
+    # retro 2026-10-09: ruta Masivos (prefiltro y Entrevista Red Human en el mismo chat de WhatsApp)
+    from app.services import proceso as _sproc
+
+    ruta_mas = _sproc.ruta_base("masivos_sin_documentos")
+    for vv in (v1, v2):
+        _r = client.put(f"/procesos/vacantes/{vv.codigo}", json={"pasos": ruta_mas["pasos"], "etapas": ruta_mas["etapas"]})
+        assert _r.status_code == 200, _r.text
     r1 = client.post("/candidatos/postular", data={"vacante": v1.slug, "nombre": "Prueba Fase Dos", "telefono": TEL, "consentimiento": "true"})
     check(r1.status_code == 201 and r1.json()["postulacionNueva"], "POST /postular vacante 1 → postulación nueva")
     r2 = client.post("/candidatos/postular", data={"vacante": v2.slug, "nombre": "Prueba Fase Dos", "telefono": TEL, "consentimiento": "true"})

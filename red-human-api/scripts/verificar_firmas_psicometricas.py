@@ -224,6 +224,9 @@ with TestClient(app) as client:
     check({z["pagina"] for z in cz["zonas"]} == {pag_c} and "firman de conformidad" in " ".join(ultima.split()),
           "contrato: firmas en la última página junto a la cláusula de cierre (nunca una hoja de firmas suelta)")
     sr2 = f"sr-{len(LLAMADAS['crear'])}"
+    # retro 2026-10-09: «Documentos de ingreso» va en Contratación antes del contrato; esta prueba no sube documentos
+    client.post(f"/procesos/postulaciones/{P}/pasos/documentos-ingreso/omitir", headers=H,
+                json={"motivo": "Prueba: documentos fuera del alcance de esta verificación"})
     client.post("/api/webhooks/dropbox", data={"json": json.dumps(evento("signature_request_downloadable", sr2))})
     tareas = {t["clave"]: t for t in client.get(f"/onboarding/expedientes/{EXP}/tareas", headers=H).json()}
     check(tareas["contrato_firmado"]["estado"] == "realizada" and client.get(f"/contratacion/expedientes/{EXP}", headers=H).json()["contrato"] == "Firmado",

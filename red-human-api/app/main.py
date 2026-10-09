@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI):
             with db.begin_nested():
                 creadas = sproc.asegurar_rutas_base_todas(db)
                 sproc.retirar_rutas_base_anteriores(db)  # 2026-10-09: una sola vez (no borra nada)
+                sproc.corregir_rutas_base(db)  # retro 2026-10-09: una sola vez; solo plantillas base sin editar
         except Exception as ex:  # noqa: BLE001 — sin plantillas la cascada usa la ruta en código
             creadas = 0
             print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)

@@ -96,7 +96,8 @@ with TestClient(app) as client:
           and all(ops[t]["etapa"] == "Entrevista IA" for t in ("entrevista_agente", "entrevista_whatsapp", "llamada_agente")),
           "catálogo: tres actividades de IA independientes en Filtro Red Human (avatar, WhatsApp, llamada)")
     corp = next(p for p in client.get("/procesos/plantillas", headers=H).json() if p.get("rutaBase") == "corporativo")
-    pasos = corp["pasos"] + [{"id": "entrevista-wa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
+    # retro 2026-10-09: Corporativos ya trae prefiltro por WhatsApp; esta vacante lo quita para probar que solo aplica lo de su ruta
+    pasos = [x for x in corp["pasos"] if x["tipo"] != "prefiltro_whatsapp"] + [{"id": "entrevista-wa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
                              {"id": "llamada", "tipo": "llamada_agente", "etapa": "Entrevista IA"}]
     guion_wa = {"enfoque": "Validar experiencia real", "temas": ["Experiencia"], "preguntas": ["Cuéntame de tu último trabajo con montacargas."]}
     web = [{"pregunta": "¿Tienes al menos 2 años operando montacargas?", "tipo": "si_no", "valida": "2 años de experiencia operando montacargas",

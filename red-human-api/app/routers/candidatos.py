@@ -1136,6 +1136,40 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
     return envio
 
 
+def entrevista_en_chat(p: Postulacion) -> bool:
+    """Retro 2026-10-09: ¿la ruta lleva «Entrevista Red Human por WhatsApp»? Entonces, al pasar el prefiltro, el MISMO
+    chat sigue con la entrevista (sin agendar videollamada). Solo se agenda si la ruta trae la Entrevista con avatar."""
+    return sproc.tiene_proceso(p) and sproc.paso_de_tipo(p, "entrevista_whatsapp") is not None
+
+
+async def _iniciar_entrevista_en_chat(db: Session, p: Postulacion, actor: str) -> dict:
+    """Arranca (una sola vez) la Entrevista Red Human por WhatsApp en el chat del prefiltro. Si ya existe una activa
+    (p. ej. la disparó el motor de la ruta automática) no la repite."""
+    from ..services import entrevistas as sent
+
+    if sent.entrevista_whatsapp_activa(p) is not None:
+        return {"enviado": None, "detalle": "La entrevista por WhatsApp ya estaba iniciada"}
+    paso = sproc.paso_de_tipo(p, "entrevista_whatsapp") or {}
+    ok, detalle, entregado, _e = await sent.iniciar_whatsapp(db, p, actor, paso_id=paso.get("id", ""))
+    if ok:
+        _marcar_disparo_motor(p, paso.get("id", ""), detalle, entregado)
+    return {"enviado": bool(entregado), "detalle": detalle}
+
+
+def _marcar_disparo_motor(p: Postulacion, paso_id: str, detalle: str, entregado) -> None:
+    """Deja el inicio reclamado en `analisis.motor_ruta.envios` (el motor nunca lo vuelve a mandar)."""
+    if not paso_id:
+        return
+    a = dict(p.analisis or {})
+    m = dict(a.get("motor_ruta") or {})
+    envios = dict(m.get("envios") or {})
+    envios[paso_id] = {"en": datetime.now(timezone.utc).isoformat(), "ok": True, "detalle": (detalle or "")[:300],
+                       **({"entregado": entregado} if entregado is not None else {})}
+    m["envios"] = envios
+    a["motor_ruta"] = m
+    p.analisis = a
+
+
 async def _asignar_curso_filtro(db: Session, p: Postulacion) -> None:
     """Capacitación universal (2026-09-16): si la vacante tiene curso de filtro, se asigna al candidato en
     cuanto queda apto y se le manda la liga; su resultado aparece en la evaluación de la postulación."""
@@ -1188,11 +1222,14 @@ async def _auto_decision_zero_touch(db: Session, p: Postulacion, resultado_prefi
         p.prefiltro_completo = True
         registrar(db, "agente-ia", "auto_apto_zero_touch", "postulacion", p.codigo, {"prefiltro": resultado_prefiltro or "score", "score_cv": p.score, "proceso": True})
         await sproc.avanzar_seguro(db, p)
-        if p.etapa == "Entrevista IA" and sproc.mueve_entrevista_ia(p):
+        if p.etapa == "Entrevista IA" and (sproc.mueve_entrevista_ia(p) or entrevista_en_chat(p)):
+            # el movimiento ya mandó el siguiente paso (liga, invitación a confirmar la cita o la presentación de la
+            # Entrevista por WhatsApp en este mismo chat): ese es el mensaje del turno
+            if entrevista_en_chat(p) and not entrevista_por_liga(p):
+                await _iniciar_entrevista_en_chat(db, p, "agente-ia")
+            db.refresh(p)
             ultimo = next((m for m in reversed(p.mensajes) if m.rol == "assistant"), None)
-            if entrevista_por_liga(p):  # el motor ya mandó la liga de la entrevista: ese es el mensaje del turno
-                return {"respuesta": ultimo.texto if ultimo else "", "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
-            return {"respuesta": _texto_apto(p), "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
+            return {"respuesta": ultimo.texto if ultimo else "", "whatsapp": {"enviado": bool(ultimo and ultimo.enviado)}}
         texto = (
             f"¡Gracias, {p.nombre.split(' ')[0]}! Completaste el primer filtro de la vacante. El equipo de RH revisará "
             "tu perfil y te escribirá por aquí con el siguiente paso. 🙌"
@@ -2138,6 +2175,13 @@ async def aplicar_movimiento(
             except Exception as ex:  # noqa: BLE001
                 envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)[:200]}
             registrar(db, u.nombre, "entrevista_ia_forzada", "postulacion", p.codigo, {"whatsapp": envio, "correo_rh": u.correo})
+        elif entrevista_en_chat(p) and not entrevista_por_liga(p):
+            # Retro 2026-10-09 (Masivos): sin videollamada — la Entrevista Red Human sigue en el mismo chat
+            try:
+                envio = await _iniciar_entrevista_en_chat(db, p, u.nombre)
+            except Exception as ex:  # noqa: BLE001 — nunca bloquea el movimiento
+                envio = {"enviado": False, "detalle": str(ex)[:200]}
+            registrar(db, u.nombre, "entrevista_whatsapp_iniciada", "postulacion", p.codigo, {"whatsapp": envio, "correo_rh": u.correo})
     if datos.etapa == "Onboarding" and not p.expediente and p.consentimiento:
         _abrir_expediente(db, p, u)  # movimiento manual directo a Onboarding: el expediente nace aquí
 

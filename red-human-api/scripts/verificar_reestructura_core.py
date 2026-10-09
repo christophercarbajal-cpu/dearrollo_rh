@@ -137,7 +137,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["id"] != base["id"] and r.json()["nombre"].endswith("(copia)") and r.json()["rutaBase"] == "",
           "Cuenta demo: editar una ruta base la DUPLICA")
     original = next(p for p in client.get("/procesos/plantillas", headers=H_DEMO).json() if p["id"] == base["id"])
-    check(original["version"] == base["version"] and original["pasos"][-1]["nombre"] == "Alta como colaborador", "…y la original queda intacta")
+    check(original["version"] == base["version"] and original["pasos"][-1]["nombre"] == "Confirmación de ingreso", "…y la original queda intacta")
     pr = next(p for p in client.get("/procesos/plantillas", headers=H_REAL).json() if p.get("rutaBase") == "corporativo")
     r = client.patch(f"/procesos/plantillas/{pr['id']}", headers=H_REAL, json={"pasos": pr["pasos"]})
     check(r.json()["id"] == pr["id"], "Cuenta normal: la ruta base se edita en sitio (sin copia)")

@@ -423,7 +423,7 @@ class Postulacion(Base):
         saber entre qué postulaciones tendría que elegir un mensaje entrante."""
         if not self.activa:
             return False
-        if any(e.tipo == "whatsapp" and e.estado in ("programada", "en_curso") for e in (self.entrevistas or [])):
+        if self.etapa == "Entrevista IA" and any(e.tipo == "whatsapp" and e.estado in ("programada", "en_curso") for e in (self.entrevistas or [])):
             return True  # 2026-10-09: Entrevista Red Human por WhatsApp en curso (o esperando el «Sí» para comenzar)
         if self.etapa == "Onboarding":
             return True
@@ -431,7 +431,11 @@ class Postulacion(Base):
             return not self.prefiltro_completo
         if self.etapa == "Entrevista IA":
             # ruta automática (2026-10-08): la entrevista va por liga, no hay agenda que coordinar por chat
-            return self.estado == "cumple" and not self.videollamada_agendada_en and not ruta_automatica(self.cuenta)
+            # retro 2026-10-09: solo se coordina una cita si la ruta trae la Entrevista con avatar (o no hay ruta)
+            pasos = (self.proceso or {}).get("pasos") or []
+            con_avatar = not pasos or any(x.get("tipo") == "entrevista_agente" and not x.get("heredado") for x in pasos)
+            return (self.estado == "cumple" and not self.videollamada_agendada_en and con_avatar
+                    and not ruta_automatica(self.cuenta))
         # Evaluación / Entrevista Humana / Contratación: RH ya tomó el control — aunque el
         # prefiltro haya quedado a medias, el agente no tiene nada que preguntar por chat.
         return False
@@ -2545,15 +2549,17 @@ TIPOS_PASO = {
                              "responsable": "rh", "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
     "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion", "responsable": "rh",
                    "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
-    "condiciones": {"nombre": "Condiciones de contratación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
+    # retro 2026-10-09: nombres del bloque de cierre — Propuesta y aceptación → Documentos de ingreso → Contrato y firma
+    # → Tareas de onboarding → Confirmación de ingreso
+    "condiciones": {"nombre": "Propuesta y aceptación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                     "etapas": ("Contratación",)},
-    "carta_contrato": {"nombre": "Carta intención / contrato", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
+    "carta_contrato": {"nombre": "Contrato y firma", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                        "etapas": ("Contratación", "Onboarding")},
     "induccion": {"nombre": "Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                   "etapas": ("Onboarding",)},
-    "onboarding": {"nombre": "Tareas de Onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+    "onboarding": {"nombre": "Tareas de onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                    "etapas": ("Onboarding",)},
-    "alta": {"nombre": "Alta como colaborador", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+    "alta": {"nombre": "Confirmación de ingreso", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
              "etapas": ("Onboarding",)},
 }
 # Catálogo único (2026-10-09): cada actividad define SOLA a qué otras de su MISMA etapa espera (el editor ya no tiene
@@ -2563,8 +2569,8 @@ ESPERA_DEL_CATALOGO = {
     "prefiltro_whatsapp": ("solicitud_web",),
     "prefiltro_web": ("solicitud_web",),
     "solicitud_documentos": ("prefiltro_whatsapp", "prefiltro_web"),
-    "documentos": ("solicitud_documentos",),
-    "carta_contrato": ("condiciones",),
+    "documentos": ("solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web"),  # retro 2026-10-09: Documentos iniciales tras el prefiltro
+    "carta_contrato": ("condiciones", "documentos"),  # retro 2026-10-09: el contrato se firma con el expediente completo
     "alta": ("documentos", "induccion", "onboarding"),
 }
 TIPOS_PASO_EVALUACION = tuple(TIPOS_EVALUACION_U)

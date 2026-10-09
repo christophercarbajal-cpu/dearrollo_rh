@@ -266,6 +266,9 @@ export interface DatosCuenta {
   whatsappExclusivo?: boolean;
   /** 2026-10-06: canal con candidatos (WhatsApp, Telegram o ambos) y si el bot de Telegram está configurado. */
   canalMensajeria?: CanalMensajeria;
+  /** 2026-10-09: modo de firma de carta + contrato ("" = automático) y el que aplica hoy. */
+  modoFirma?: "" | ModoFirma;
+  modoFirmaEfectivo?: ModoFirma;
   telegramDisponible?: boolean;
   /** 2026-09-17: portal por Cuenta. */
   slug?: string;
@@ -307,6 +310,7 @@ export type CamposCuenta = {
   whatsapp_exclusivo?: boolean;
   /** 2026-10-06: canal activo con candidatos; lo evalúan TODOS los envíos (prefiltro, recordatorios, documentos…). */
   canal_mensajeria?: CanalMensajeria;
+  modo_firma?: "" | ModoFirma;
   estado?: "Activa" | "Inactiva";
 };
 
@@ -3070,8 +3074,11 @@ export function registrarNoIngreso(expedienteId: number, motivo: string) {
 }
 
 /* -------------------- Firma electrónica incrustada (Dropbox Sign, 2026-09-29) -------------------- */
+export type ModoFirma = "electronica" | "papel" | "demo";
 export interface FirmaDocumento {
-  id: number; expedienteId: number; documento: "carta" | "contrato"; documentoTexto: string;
+  id: number; expedienteId: number; documento: "carta" | "contrato" | "documentos"; documentoTexto: string;
+  /** 2026-10-09: electronica (Dropbox Sign) · papel · demo (firma en la plataforma). */
+  modo?: ModoFirma;
   estado: "enviada" | "firmada" | "descargada" | "cancelada" | "error"; testMode: boolean;
   firmantes: { rol: "rh" | "candidato"; nombre: string; estado: "pendiente" | "firmado" }[];
   firmadoPdf: boolean; error: string; creadoPor: string; creadoEn: string | null; firmadaEn: string | null;
@@ -3091,8 +3098,24 @@ export function fetchFirmasExpediente(expedienteId: number) {
 export function signUrlFirmaRH(firmaId: number) {
   return post<FirmaDocumento>(`/firmas/${firmaId}/sign-url`, {});
 }
+/* «Firmar documentos» (2026-10-09): carta + contrato en UN solo acto, con el modo de la Cuenta. */
+export function fetchModoFirma() {
+  return get<{ modo: ModoFirma; elegido: string; modos: Record<ModoFirma, string>; electronicaDisponible: boolean; clientId: string | null; testMode: boolean }>("/firmas/modo");
+}
+export function firmarDocumentos(expedienteId: number) {
+  return post<Partial<FirmaDocumento> & { modo: ModoFirma; pdf?: string; signUrl?: string | null }>(`/firmas/expedientes/${expedienteId}/documentos`, {});
+}
+export function urlDocumentosPdf(expedienteId: number) {
+  return urlArchivo(`/firmas/expedientes/${expedienteId}/documentos.pdf`);
+}
+export function firmarDemoRH(firmaId: number, datos: { imagen?: string; texto?: string }) {
+  return post<FirmaDocumento & { completa: boolean; pasoAOnboarding: boolean }>(`/firmas/${firmaId}/demo/firmar`, datos);
+}
+export function firmarDemoCandidato(token: string, firmaId: number, datos: { imagen?: string; texto?: string }) {
+  return post<{ ok: boolean; yaFirmado: boolean; mensaje: string; completa?: boolean }>(`/firmas/publica/${token}/${firmaId}/demo/firmar`, datos);
+}
 export function fetchFirmasPublicas(token: string) {
-  return get<{ configurado: boolean; clientId: string | null; testMode: boolean; firmas: { id: number; documento: string; estado: string; yoFirme: boolean; puedoFirmar?: boolean }[] }>(
+  return get<{ configurado: boolean; clientId: string | null; testMode: boolean; firmas: { id: number; documento: string; modo?: ModoFirma; estado: string; yoFirme: boolean; puedoFirmar?: boolean }[] }>(
     `/firmas/publica/${token}`,
   );
 }

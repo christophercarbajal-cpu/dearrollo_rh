@@ -323,7 +323,15 @@ function fechaCorta(iso: string) {
 /* 1. Cuentas (Punto 9)                                                */
 /* ================================================================== */
 
-type FormCuentaState = { nombre: string; nombreComercial: string; razonSocial: string; contactoNombre: string; correo: string; whatsapp: string; whatsappExclusivo: boolean; canal: CanalMensajeria; telegramDisponible: boolean; estado: "Activa" | "Inactiva" };
+type FormCuentaState = { nombre: string; nombreComercial: string; razonSocial: string; contactoNombre: string; correo: string; whatsapp: string; whatsappExclusivo: boolean; canal: CanalMensajeria; telegramDisponible: boolean; modoFirma: string; modoFirmaEfectivo: string; estado: "Activa" | "Inactiva" };
+
+// 2026-10-09: modo de firma de «Firmar documentos» (carta + contrato). Vacío = automático.
+const MODOS_FIRMA_OPCIONES = [
+  { valor: "", texto: "Automático (Demo en cuentas demo · Electrónica si hay Dropbox Sign · si no, Papel)" },
+  { valor: "electronica", texto: "Electrónica (Dropbox Sign)" },
+  { valor: "papel", texto: "Papel (RH sube el PDF firmado)" },
+  { valor: "demo", texto: "Demo (firma en la plataforma, sin validez legal)" },
+];
 
 const cuentaAForm = (c?: DatosCuenta | null): FormCuentaState => ({
   nombre: c?.nombre ?? "",
@@ -335,6 +343,8 @@ const cuentaAForm = (c?: DatosCuenta | null): FormCuentaState => ({
   whatsappExclusivo: Boolean(c?.whatsappExclusivo),
   canal: c?.canalMensajeria ?? "whatsapp",
   telegramDisponible: Boolean(c?.telegramDisponible),
+  modoFirma: c?.modoFirma ?? "",
+  modoFirmaEfectivo: c?.modoFirmaEfectivo ?? "",
   estado: c?.estado === "Inactiva" ? "Inactiva" : "Activa",
 });
 
@@ -347,6 +357,7 @@ const formACampos = (f: FormCuentaState): CamposCuenta & { nombre: string } => (
   whatsapp_comunicacion: f.whatsapp,
   whatsapp_exclusivo: f.whatsappExclusivo,
   canal_mensajeria: f.canal,
+  modo_firma: f.modoFirma as CamposCuenta["modo_firma"],
   estado: f.estado,
 });
 
@@ -371,6 +382,13 @@ function CamposCuentaForm({ f, set }: { f: FormCuentaState; set: (k: keyof FormC
               ? "Los candidatos conversan con el bot de Telegram; comparten su número una vez y el proceso sigue igual."
               : "Los candidatos conversan por WhatsApp."}
           {f.canal !== "whatsapp" && !f.telegramDisponible && " El bot de Telegram aún no está configurado en el servidor: mientras tanto todo sale por WhatsApp."}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1.5 sm:col-span-2">
+        <Selector label="Modo de firma de documentos" value={f.modoFirma} onChange={(v) => set("modoFirma", v)} opciones={MODOS_FIRMA_OPCIONES} />
+        <span className="text-[12px] text-ink-3">
+          «Firmar documentos» firma la carta de intención y el contrato en un solo paso; al completarse, el candidato pasa solo a Onboarding.
+          {f.modoFirmaEfectivo && ` Hoy aplica: ${MODOS_FIRMA_OPCIONES.find((m) => m.valor === f.modoFirmaEfectivo)?.texto ?? f.modoFirmaEfectivo}.`}
         </span>
       </div>
       {/* 2026-09-17 (WhatsApp multi-tenant): por defecto el número maestro de WhatsApp atiende a TODAS las

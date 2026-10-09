@@ -26,7 +26,7 @@ import {
   SkipForward, Sparkles, ThumbsDown, XCircle,
 } from "lucide-react";
 import { MenuAcciones, type AccionMenu } from "@/components/dashboard/menu-acciones";
-import { ModalAgregarActividad } from "@/components/dashboard/procesos/agregar-actividad";
+import { ModalAgregarActividad, ModalCompletarActividad } from "@/components/dashboard/procesos/agregar-actividad";
 import { Badge, Button, Card, Eyebrow } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import { BadgeIntegral } from "@/components/dashboard/evaluaciones/resultado-integral";
@@ -52,7 +52,7 @@ export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human
   sin_iniciar: "neutral", esperando_candidato: "human", esperando_referencias: "human", esperando_consentimiento: "human",
   esperando_evaluador: "human", pendiente_resultado: "warn", en_curso: "brand", pendiente_revision: "warn", completada: "good",
   aprobada: "good", no_aprobada: "bad", omitida: "neutral", error: "bad", aprobada_excepcion: "warn", falta_correo: "warn",
-  lista_para_iniciar: "brand",
+  lista_para_iniciar: "brand", superada: "neutral",
 };
 const TEXTO_DESTINATARIO: Record<string, string> = {
   candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador", rh: "RH", cliente: "Cliente",
@@ -559,7 +559,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       )}
 
       {faltan && (
-        <ModalDatosFaltantes
+        <ModalCompletarActividad
           c={c}
           paso={faltan.paso}
           faltan={faltan.faltan}
@@ -689,94 +689,6 @@ function EnviosPorDestinatario({ envios }: { envios?: Record<string, EnvioDestin
 }
 
 /** «Iniciar» pidió un dato crítico: se captura SOLO ese (evaluador / correo) y se reintenta sin duplicar nada. */
-function ModalDatosFaltantes({ c, paso, faltan, mensaje, ocupado, onClose, onEnviar }: {
-  c: Candidato;
-  paso: PasoSeguimiento;
-  faltan: NonNullable<RespuestaIniciar["faltan"]>;
-  mensaje: string;
-  ocupado: boolean;
-  onClose: () => void;
-  onEnviar: (datos: Parameters<typeof iniciarActividad>[2]) => void;
-}) {
-  const [usuarios, setUsuarios] = useState<Entrevistador[]>([]);
-  const [tipo, setTipo] = useState<"interno" | "externo">(paso.tipo === "entrevista_humana" ? "interno" : "externo");
-  const [usuarioId, setUsuarioId] = useState<number | "">("");
-  const [externo, setExterno] = useState({ nombre: "", correo: "", whatsapp: "" });
-  const [correo, setCorreo] = useState(c.correo ?? "");
-  const [error, setError] = useState("");
-  const pideEvaluador = faltan.includes("evaluador");
-  const pideCorreo = faltan.includes("correo");
-  const quien = paso.tipo === "medica" ? "Médico" : paso.tipo === "entrevista_humana" ? "Entrevistador" : "Quién la aplica";
-  useEffect(() => {
-    if (pideEvaluador) fetchEntrevistadores().then((x) => setUsuarios(x ?? []));
-  }, [pideEvaluador]);
-
-  function enviar() {
-    setError("");
-    const datos: Parameters<typeof iniciarActividad>[2] = {};
-    if (pideEvaluador) {
-      if (tipo === "interno") {
-        if (!usuarioId) return setError(`Elige al ${quien.toLowerCase()}.`);
-        datos.evaluador = { tipo: "interno", usuario_id: Number(usuarioId) };
-      } else {
-        if (externo.nombre.trim().length < 3) return setError("Escribe el nombre.");
-        if (!externo.correo.trim() && !externo.whatsapp.trim()) return setError("Escribe un correo o un WhatsApp para enviarle su liga.");
-        datos.evaluador = { tipo: "externo", nombre: externo.nombre.trim(), correo: externo.correo.trim(), whatsapp: externo.whatsapp.trim() };
-      }
-    }
-    if (pideCorreo) {
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo.trim())) return setError("Escribe un correo válido del candidato.");
-      datos.correo = correo.trim();
-    }
-    onEnviar(datos);
-  }
-
-  return (
-    <ModalMarco titulo="Falta un dato para iniciar" subtitulo="Solo se pide lo que falta; lo demás ya está configurado en la actividad." onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        {pideEvaluador && (
-          <>
-            <div className="flex gap-2 text-sm">
-              {(["interno", "externo"] as const).map((t) => (
-                <label key={t} className="flex items-center gap-1.5">
-                  <input type="radio" className="accent-brand" checked={tipo === t} onChange={() => setTipo(t)} />
-                  {t === "interno" ? "Usuario de la Cuenta" : "Externo"}
-                </label>
-              ))}
-            </div>
-            {tipo === "interno" ? (
-              <label className="flex flex-col gap-1 text-xs text-ink-2">
-                {quien}
-                <select className={cn(inputRH, "h-10")} value={usuarioId} onChange={(e) => setUsuarioId(e.target.value ? Number(e.target.value) : "")}>
-                  <option value="">Elegir…</option>
-                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
-                </select>
-              </label>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-3">
-                <input className={inputRH} placeholder="Nombre" value={externo.nombre} onChange={(e) => setExterno({ ...externo, nombre: e.target.value })} />
-                <input className={inputRH} placeholder="Correo" value={externo.correo} onChange={(e) => setExterno({ ...externo, correo: e.target.value })} />
-                <input className={inputRH} placeholder="WhatsApp (10 dígitos)" value={externo.whatsapp} onChange={(e) => setExterno({ ...externo, whatsapp: e.target.value })} />
-              </div>
-            )}
-          </>
-        )}
-        {pideCorreo && (
-          <label className="flex flex-col gap-1 text-xs text-ink-2">
-            Correo del candidato (ahí recibe su prueba)
-            <input className={inputRH} type="email" value={correo} onChange={(e) => setCorreo(e.target.value)} />
-          </label>
-        )}
-        {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={ocupado}>Cancelar</Button>
-          <Button size="sm" onClick={enviar} disabled={ocupado}>{ocupado ? "Iniciando…" : "Iniciar"}</Button>
-        </div>
-      </div>
-    </ModalMarco>
-  );
-}
-
 /** «Agregar correo» (2026-10-08): edición rápida del contacto. Al guardarlo, la API retoma SOLA el envío de la
  * psicometría que se detuvo por falta de correo (sin duplicar). */
 function ModalAgregarCorreo({ c, paso, onClose, onListo }: {

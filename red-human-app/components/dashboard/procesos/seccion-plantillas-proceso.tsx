@@ -14,7 +14,7 @@ import { AvisoLinea, CampoRH, ModalMarco, inputRH, type AvisoRH } from "@/compon
 import { EditorProceso } from "@/components/dashboard/procesos/editor-proceso";
 import {
   crearPlantillaProceso, crearPlantillaProcesoDesdeEjemplo, desactivarPlantillaProceso, editarPlantillaProceso, fetchOpcionesProceso,
-  fetchPlantillasProceso, nombreEtapa, restaurarRutasBase, type OpcionesProceso, type PlantillaProceso,
+  fetchPlantillasProceso, restaurarRutasBase, type OpcionesProceso, type PlantillaProceso,
 } from "@/lib/api";
 import type { EtapasProceso, PasoProceso } from "@/lib/data";
 
@@ -110,12 +110,11 @@ export function SeccionPlantillasProceso() {
                     <Badge tone="neutral">v{p.version}</Badge>
                     {p.predeterminada && <Badge tone="brand">Predeterminado</Badge>}
                     {p.rutaBase && <Badge tone="human">Ruta base</Badge>}
-                    {p.rutaBase === "corporativos" && !lista.some((x) => x.predeterminada) && <Badge tone="neutral">Respaldo</Badge>}
+                    {p.rutaBase === "corporativo" && !lista.some((x) => x.predeterminada) && <Badge tone="neutral">Respaldo</Badge>}
                   </p>
                   <p className="truncate text-[11px] text-ink-3">{resumenPasos(p.pasos)}</p>
                   <p className="text-[11px] text-ink-3">
-                    {p.pasos.filter((x) => x.obligatorio).length} obligatorios ·
-                    {" "}Avance automático: {Object.entries(p.etapas).filter(([, c]) => c?.avance_automatico).map(([e]) => nombreEtapa(e)).join(", ") || "ninguno"}
+                    {p.pasos.filter((x) => x.obligatorio).length} obligatorias · avanza sola al cumplirse
                   </p>
                 </div>
                 <MenuAcciones

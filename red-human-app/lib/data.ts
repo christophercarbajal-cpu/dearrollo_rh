@@ -210,7 +210,7 @@ export interface PsicometriaPaso {
 /** 2026-10-08: «Enviada» dejó de ser un estado; la actividad dice a QUIÉN espera (cuello de botella real). */
 export type EstadoUnificado =
   | "sin_iniciar" | "esperando_candidato" | "esperando_referencias" | "esperando_consentimiento" | "esperando_evaluador"
-  | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error"
+  | "pendiente_resultado" | "en_curso" | "pendiente_revision" | "completada" | "aprobada" | "no_aprobada" | "omitida" | "error" | "superada"
   | "aprobada_excepcion" | "falta_correo" | "lista_para_iniciar";
 /** Ruta automática: una obligatoria «No aprobada» detiene el funnel; RH confirma el descarte (nunca es automático). */
 export interface DescarteSugerido {
@@ -399,6 +399,8 @@ export interface Candidato {
   /* puentes hacia los otros módulos */
   expedienteId?: number | null;
   expedienteProgreso?: number | null;
+  /** 2026-10-09: «Firmar documentos» completo (contrato firmado en cualquier modo). */
+  contratoFirmado?: boolean;
   /** 2026-09-18: empresa que ve el candidato (Cliente o nombre comercial de la Cuenta) — vista previa de correos. */
   empresaVisible?: string;
   /** 2026-09-17: nivel (1-3) del próximo recordatorio de documentos y cuántos van. */

@@ -100,7 +100,7 @@ import {
   ETAPAS_PIPELINE,
   lineasResultados,
 } from "@/lib/api";
-import { usePuedeDecidir, useModoPrueba } from "@/components/sesion";
+import { usePuedeDecidir, useModoPrueba, useSesion } from "@/components/sesion";
 import {
   ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta,
   type AlertaTablero, type OrdenTablero,
@@ -121,7 +121,11 @@ import type { SeguimientoProceso as SeguimientoProcesoData } from "@/lib/data";
 import { evaluadorVacio } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import { PenLine as IconoFirma } from "lucide-react";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
-import { asegurarExpediente, crearFirmaDocumento, fetchEstadoFirmas, fetchFirmasExpediente, subirContratoFirmado, type FirmaDocumento } from "@/lib/api";
+import {
+  asegurarExpediente, fetchFirmasExpediente, fetchModoFirma, firmarDemoRH, firmarDocumentos, subirContratoFirmado, urlDocumentosPdf,
+  type FirmaDocumento, type ModoFirma,
+} from "@/lib/api";
+import { PadFirma, type FirmaCapturada } from "@/components/firmas/pad-firma";
 import { Toast, type ToastMsg } from "@/components/dashboard/toast";
 import { INTERVALO_TABLERO_MS, usePolling } from "@/lib/use-polling";
 import { cn, etiquetaRecordatorio } from "@/lib/utils";
@@ -1341,18 +1345,19 @@ function ModalCandidato({
           </div>
         )}
 
-        {/* Pestañas: Resumen · Evaluación integral · Documentos · WhatsApp · [Expediente] · Historial */}
+        {/* Pestañas: Contratación (ruta + acción principal; antes «Resumen») · Evaluación integral · Documentos · WhatsApp ·
+            [Expediente] · Historial — 2026-10-09 */}
         <div className="border-b border-border-soft bg-surface-2/70 pt-2">
           <div className="scroll-x gap-1 px-3 sm:px-5">
             {(
               [
-                { id: "resumen", label: "Resumen", icon: User, tone: "brand" },
+                { id: "resumen", label: "Contratación", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
                 { id: "documentos", label: "Documentos", icon: FileText, tone: "brand" },
                 { id: "whatsapp", label: "WhatsApp", icon: MessageCircle, tone: "good", badge: c.mensajes },
                 // la pestaña del expediente vive en Contratación Y Onboarding
                 ...(c.etapa === "Contratación" || c.etapa === "Onboarding"
-                  ? [{ id: "contratacion", label: c.etapa === "Onboarding" ? "Expediente" : "Contratación", icon: Briefcase, tone: "warn" }]
+                  ? [{ id: "contratacion", label: "Expediente", icon: Briefcase, tone: "warn" }]
                   : []),
                 { id: "historial", label: "Historial", icon: Clock, tone: "brand" },
               ] as { id: TabCandidato; label: string; icon: typeof User; tone: string; badge?: number }[]
@@ -1419,7 +1424,6 @@ function ModalCandidato({
           {tab === "evaluaciones" && (
             <>
               <PanelResultadoIntegral r={c.resultadoIntegral} />
-              <PanelEvaluaciones c={c} live={live && puedeDecidir} version={versionEval} onCambio={onCambio} />
               <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} seccion="evaluacion" />
               <PestanaEvaluaciones c={c} live={live} onCambio={onCambio} versionEval={versionEval} />
             </>
@@ -2863,9 +2867,12 @@ function PanelContratacion({
   // 2026-09-19 (Bloque 3): vista previa en la misma pantalla de carta / contrato con 3 acciones
   const [docPreview, setDocPreview] = useState<null | "carta" | "contrato">(null);
   // 2026-09-29: firma electrónica incrustada (Dropbox Sign). Sin llaves en el servidor → vista previa del PDF como antes.
-  const [firmaCfg, setFirmaCfg] = useState<{ configurado: boolean; clientId: string | null; testMode: boolean } | null>(null);
+  // 2026-10-09: «Firmar documentos» (carta + contrato en un solo acto) con el modo de la Cuenta: electrónica, papel o demo
+  const [firmaCfg, setFirmaCfg] = useState<{ modo: ModoFirma; clientId: string | null; testMode: boolean } | null>(null);
   const [firmas, setFirmas] = useState<FirmaDocumento[]>([]);
-  const [firmando, setFirmando] = useState<"" | "carta" | "contrato">("");
+  const [firmando, setFirmando] = useState(false);
+  const [padDemo, setPadDemo] = useState<{ id: number; error: string; ocupado: boolean } | null>(null);
+  const { usuario } = useSesion();
   const archivoContrato = useRef<HTMLInputElement>(null);
   const [enviandoDoc, setEnviandoDoc] = useState<"" | "whatsapp" | "correo">("");
   const [resultadoDoc, setResultadoDoc] = useState<{ ok: boolean; texto: string } | null>(null);
@@ -2918,62 +2925,76 @@ function PanelContratacion({
     setFirmas((await fetchFirmasExpediente(c.expedienteId)) ?? []);
   }, [c.expedienteId]);
   useEffect(() => {
-    fetchEstadoFirmas().then((x) => setFirmaCfg(x ?? { configurado: false, clientId: null, testMode: false }));
+    fetchModoFirma().then((x) => setFirmaCfg(x ? { modo: x.modo, clientId: x.clientId, testMode: x.testMode } : { modo: "papel", clientId: null, testMode: false }));
     void cargarFirmas();
   }, [cargarFirmas]);
 
-  /** 2026-10-08: la solicitud de firma viva (o completa) de un documento y si la persona de RH ya firmó: entonces el
-   * botón deja de decir «Firmar/Generar» y solo informa el estado (nunca se ofrece firmar dos veces). */
-  function firmaDe(doc: "carta" | "contrato") {
-    return firmas.find((f) => f.documento === doc && f.estado !== "cancelada" && f.estado !== "error");
-  }
-  function textoFirmado(doc: "carta" | "contrato"): string | null {
-    const f = firmaDe(doc);
-    if (!firmaCfg?.configurado || !f) return null;
-    if (f.estado !== "enviada") return doc === "carta" ? "Carta firmada" : "Contrato firmado";
-    const rh = f.firmantes.find((x) => x.rol === "rh");
-    return rh?.estado === "firmado" ? `${doc === "carta" ? "Carta" : "Contrato"}: falta la firma del candidato` : null;
+  /** 2026-10-09: estado de «Firmar documentos» (la solicitud unificada o un contrato ya firmado por cualquier vía). */
+  const firmaDocs = firmas.find((f) => (f.documento === "documentos" || f.documento === "contrato") && f.estado !== "cancelada" && f.estado !== "error");
+  function textoFirmado(): string | null {
+    if (c.contratoFirmado || (firmaDocs && firmaDocs.estado !== "enviada")) return "Documentos firmados";
+    if (!firmaDocs) return null;
+    const rh = firmaDocs.firmantes.find((x) => x.rol === "rh");
+    return rh?.estado === "firmado" ? "Documentos: falta la firma del candidato" : null;
   }
 
-  /** Firma física / manual del contrato desde Contratación: es el MISMO contrato que ve la tarea de Onboarding. */
-  async function adjuntarContrato(f: File | undefined) {
-    if (archivoContrato.current) archivoContrato.current.value = "";
-    if (!f || c.expedienteId == null) return;
-    const r = await subirContratoFirmado(c.expedienteId, f);
-    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    setAviso({ tono: "ok", texto: "Contrato firmado guardado en el expediente. En Onboarding ya no se vuelve a pedir." });
+  async function refrescarFicha(mensaje: string) {
+    setAviso({ tono: "ok", texto: mensaje });
     void cargarFirmas();
     const ficha = await fetchCandidato(c.id);
     if (ficha) onCambio(ficha);
   }
 
-  /** «Generar carta de intención» / «Generar contrato»: con Dropbox Sign configurado crea la solicitud y abre el modal
-   * de firma incrustado (RH firma aquí; el candidato, en su liga de expediente). Sin él, vista previa del PDF. */
-  async function firmarOVer(doc: "carta" | "contrato") {
+  /** Papel (o firma física en cualquier modo): el PDF firmado se sube y es el MISMO contrato que ve Onboarding. */
+  async function adjuntarContrato(f: File | undefined) {
+    if (archivoContrato.current) archivoContrato.current.value = "";
+    if (!f || c.expedienteId == null) return;
+    const r = await subirContratoFirmado(c.expedienteId, f);
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    await refrescarFicha("Documentos firmados guardados en el expediente. Si no falta nada obligatorio, el candidato pasa solo a Onboarding.");
+  }
+
+  /** Botón ÚNICO «Firmar documentos». Electrónica: modal incrustado de Dropbox Sign (el candidato firma en su liga).
+   * Demo: RH dibuja o escribe su firma aquí. Papel: abre el PDF unido para imprimir; luego «Adjuntar documentos firmados». */
+  async function firmarDocs() {
+    if (c.expedienteId == null) return;
     setResultadoDoc(null);
-    if (!firmaCfg?.configurado || !firmaCfg.clientId || c.expedienteId == null) return setDocPreview(doc);
-    setFirmando(doc);
-    const r = await crearFirmaDocumento(c.expedienteId, doc);
-    setFirmando("");
-    if (!r.ok) {
-      setAviso({ tono: "error", texto: r.error });
-      return;
-    }
+    setFirmando(true);
+    const r = await firmarDocumentos(c.expedienteId);
+    setFirmando(false);
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     void cargarFirmas();
-    if (!r.data.signUrl) {
-      setAviso({ tono: "ok", texto: `${r.data.documentoTexto}: tu firma ya está registrada; falta la del candidato (la hace desde su liga de expediente).` });
-      return;
+    if (r.data.modo === "papel") {
+      window.open(urlDocumentosPdf(c.expedienteId), "_blank", "noopener");
+      return setAviso({ tono: "ok", texto: "Imprime la carta y el contrato, fírmenlos y súbelos con «Adjuntar documentos firmados» (menú «…»)." });
     }
+    const rh = (r.data.firmantes ?? []).find((x) => x.rol === "rh");
+    if (rh?.estado === "firmado") {
+      return setAviso({ tono: "ok", texto: "Tu firma ya está registrada; falta la del candidato (la hace desde su liga de expediente)." });
+    }
+    if (r.data.modo === "demo" && r.data.id != null) return setPadDemo({ id: r.data.id, error: "", ocupado: false });
+    if (!r.data.signUrl || !firmaCfg?.clientId) return;
     await abrirFirmaEmbebida({
       clientId: firmaCfg.clientId,
       signUrl: r.data.signUrl,
       testMode: firmaCfg.testMode,
       onFirmado: () => {
-        setAviso({ tono: "ok", texto: `${r.data.documentoTexto} firmada por ti. El candidato la firma desde su liga de expediente; el PDF final se guarda solo en el expediente.` });
+        setAviso({ tono: "ok", texto: "Firmaste los documentos. El candidato firma desde su liga; al completarse pasa solo a Onboarding." });
         setTimeout(() => void cargarFirmas(), 1500);
       },
       onError: (m) => setAviso({ tono: "error", texto: `Firma electrónica: ${m}` }),
     });
+  }
+
+  async function firmarComoRH(datos: FirmaCapturada) {
+    if (!padDemo) return;
+    setPadDemo({ ...padDemo, ocupado: true, error: "" });
+    const r = await firmarDemoRH(padDemo.id, datos);
+    if (!r.ok) return setPadDemo({ ...padDemo, ocupado: false, error: r.error });
+    setPadDemo(null);
+    await refrescarFicha(r.data.pasoAOnboarding
+      ? "Documentos firmados por ambos: el candidato pasó a Onboarding."
+      : r.data.completa ? "Documentos firmados por ambos." : "Firmaste los documentos. Falta la firma del candidato (la hace desde su liga de expediente).");
   }
 
   async function guardar() {
@@ -3128,63 +3149,46 @@ function PanelContratacion({
       {/* 2026-09-19 (Bloque 3): flujo lineal — con condiciones guardadas aparecen aquí mismo las acciones */}
       {live && condicionesListas && c.expedienteId != null && (
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-border-soft bg-surface p-3">
-          <Button size="sm" variant="outline" onClick={() => void firmarOVer("carta")} disabled={firmando !== "" || Boolean(textoFirmado("carta"))}
-            title={firmaCfg?.configurado ? "Se firma aquí mismo (firma electrónica); el candidato firma desde su liga" : "Vista previa del PDF"}>
-            <FileText className="h-4 w-4" /> {firmando === "carta" ? "Preparando firma…" : textoFirmado("carta") ?? "Generar carta de intención"}
-          </Button>
+          {c.etapa === "Contratación" && (
+            <Button size="sm" onClick={() => void firmarDocs()} disabled={firmando || Boolean(textoFirmado())}
+              title={firmaCfg?.modo === "papel" ? "Imprime carta y contrato; luego sube el PDF firmado"
+                : firmaCfg?.modo === "demo" ? "Firma de demostración en la plataforma (sin validez legal)"
+                : "Firma electrónica: tú firmas aquí y el candidato desde su liga"}>
+              <FileCheck2 className="h-4 w-4" /> {firmando ? "Preparando firma…" : textoFirmado() ?? "Firmar documentos"}
+            </Button>
+          )}
           {/* Onboarding v2: «Solicitar documentos» ya no vive en Contratación — la primera solicitud la hace «Iniciar Onboarding» */}
           {onDocumentos && c.etapa === "Onboarding" && (
             <Button size="sm" variant="outline" onClick={() => onDocumentos("solicitar")} disabled={Boolean(ocupado)}>
               <Send className="h-4 w-4" /> Solicitar documentos
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void firmarOVer("contrato")}
-            disabled={(!documentosListos && !modoPrueba) || firmando !== "" || Boolean(textoFirmado("contrato"))}
-            title={documentosListos || modoPrueba ? "Borrador del contrato con las condiciones finales (el firmado se carga en el Onboarding)" : `Se habilita cuando el expediente tenga el 100 % de documentos Aprobados (hoy ${c.expedienteProgreso ?? 0} %)`}
-          >
-            <FileCheck2 className="h-4 w-4" /> {firmando === "contrato" ? "Preparando firma…" : textoFirmado("contrato") ?? (firmaCfg?.configurado ? "Generar contrato" : "Generar contrato (borrador)")}
-          </Button>
           <input ref={archivoContrato} type="file" accept="application/pdf" className="hidden" onChange={(e) => void adjuntarContrato(e.target.files?.[0])} />
           <MenuAcciones
             acciones={[
-              ...(firmaCfg?.configurado
-                ? [
-                  { etiqueta: "Ver PDF de la carta (enviar por WhatsApp / correo)", icono: <FileText className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("carta"); } },
-                  { etiqueta: "Ver PDF del contrato", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("contrato"); }, disabled: !documentosListos && !modoPrueba },
-                ]
+              { etiqueta: "Ver PDF de la carta (enviar por WhatsApp / correo)", icono: <FileText className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("carta"); } },
+              { etiqueta: "Ver PDF del contrato", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => { setResultadoDoc(null); setDocPreview("contrato"); } },
+              ...(c.expedienteId != null
+                ? [{ etiqueta: "Imprimir carta y contrato (un solo PDF)", icono: <FileText className="h-4 w-4" />, onClick: () => window.open(urlDocumentosPdf(c.expedienteId!), "_blank", "noopener") }]
                 : []),
-              { etiqueta: "Adjuntar contrato firmado (firma física / PDF)", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => archivoContrato.current?.click() },
+              { etiqueta: "Adjuntar documentos firmados (papel / PDF)", icono: <FileCheck2 className="h-4 w-4" />, onClick: () => archivoContrato.current?.click() },
+              ...(c.etapa === "Contratación"
+                ? [{ etiqueta: "Iniciar Onboarding manualmente…", icono: <Send className="h-4 w-4" />, onClick: () => enviarOnboarding(),
+                  disabled: Boolean(ocupado) || (!requisitosOnboarding && !modoPrueba) }]
+                : []),
             ]}
           />
-          {c.etapa === "Contratación" && (
-            <Button
-              size="sm"
-              className="ml-auto"
-              onClick={() => enviarOnboarding()}
-              disabled={Boolean(ocupado) || (!requisitosOnboarding && !modoPrueba)}
-              title={
-                requisitosOnboarding || modoPrueba
-                  ? "Revisa el resumen e inicia el Onboarding (única forma de pasar a Onboarding)"
-                  : `Falta: ${[!condicionesListas && "condiciones (puesto, sueldo, tipo y fecha de ingreso)", !c.consentimiento && "consentimiento de privacidad"].filter(Boolean).join(" y ")}`
-              }
-            >
-              Enviar a Onboarding
-            </Button>
-          )}
         </div>
       )}
 
       {firmas.length > 0 && (
         <div className="mt-3 rounded-xl border border-border-soft bg-surface p-3">
-          <p className="flex items-center gap-1.5 text-[12px] font-semibold text-ink-2"><IconoFirma className="h-3.5 w-3.5" /> Firma electrónica</p>
+          <p className="flex items-center gap-1.5 text-[12px] font-semibold text-ink-2"><IconoFirma className="h-3.5 w-3.5" /> Firma de documentos</p>
           <ul className="mt-2 space-y-1.5 text-[12px]">
             {firmas.map((f) => (
               <li key={f.id} className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-ink-2">
-                  {f.documentoTexto}{f.testMode ? " (prueba)" : ""} · {f.firmantes.map((x) => `${x.rol === "rh" ? "RH" : "Candidato"}: ${x.estado === "firmado" ? "firmó" : "pendiente"}`).join(" · ")}
+                  {f.documentoTexto}{f.modo === "demo" ? " (demostración)" : f.testMode ? " (prueba)" : ""} · {f.firmantes.map((x) => `${x.rol === "rh" ? "RH" : "Candidato"}: ${x.estado === "firmado" ? "firmó" : "pendiente"}`).join(" · ")}
                 </span>
                 <Badge tone={f.estado === "descargada" ? "good" : f.estado === "cancelada" ? "neutral" : f.estado === "firmada" ? "brand" : "warn"}>
                   {f.estado === "descargada" ? "Firmada · PDF en el expediente" : f.estado === "firmada" ? "Firmada · descargando PDF" : f.estado === "cancelada" ? "Cancelada" : "En firma"}
@@ -3196,6 +3200,12 @@ function PanelContratacion({
             <p className="mt-2 text-[11px] text-ink-3">El candidato firma desde su liga de expediente (compártela con «Ver PDF de la carta» → WhatsApp o correo).</p>
           )}
         </div>
+      )}
+      {padDemo && (
+        <ModalMarco titulo="Firmar documentos" subtitulo="Carta de intención y contrato · firma de demostración" onClose={() => setPadDemo(null)} ancho="max-w-lg">
+          <PadFirma nombreSugerido={usuario?.nombre ?? ""} ocupado={padDemo.ocupado} error={padDemo.error}
+            onCancelar={() => setPadDemo(null)} onFirmar={(d) => void firmarComoRH(d)} />
+        </ModalMarco>
       )}
 
       {live && c.etapa === "Contratación" && !requisitosOnboarding && (

@@ -289,6 +289,68 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
   );
 }
 
+/** 2026-10-09: «Falta un dato para iniciar» es el MISMO formulario de «Agregar actividad» (mismo selector de evaluador,
+ * misma validación, mismos campos), mostrando SOLO lo que falta: nunca repite nombre, tipo ni lo ya configurado. */
+export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onClose, onEnviar }: {
+  c: Candidato;
+  paso: { id: string; tipo: string; nombre: string };
+  faltan: string[];
+  mensaje: string;
+  ocupado: boolean;
+  onClose: () => void;
+  onEnviar: (datos: { evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string }; correo?: string }) => void;
+}) {
+  const { internos, contactos } = useCatalogoEvaluadores(c.clienteIdVacante ?? null);
+  const [evaluador, setEvaluador] = useState<EstadoEvaluador>({
+    ...evaluadorVacio, tipo: paso.tipo === "medica" || paso.tipo === "socioeconomica" ? "externo" : "interno",
+  });
+  const [correo, setCorreo] = useState(c.correo ?? "");
+  const [intentado, setIntentado] = useState(false);
+  const pideEvaluador = faltan.includes("evaluador");
+  const pideCorreo = faltan.includes("correo");
+  const errores: { evaluador?: string; correo?: string } = {};
+  if (pideEvaluador) {
+    const m = validarEvaluador(evaluador);
+    if (m) errores.evaluador = m;
+  }
+  if (pideCorreo && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo.trim())) errores.correo = "Escribe un correo válido del candidato.";
+  const quien = paso.tipo === "medica" ? "Médico" : paso.tipo === "entrevista_humana" ? "Entrevistador" : "Quién la aplica";
+
+  function enviar() {
+    setIntentado(true);
+    if (Object.keys(errores).length) return;
+    const datos: Parameters<typeof onEnviar>[0] = {};
+    if (pideEvaluador) {
+      const ev = evaluadorEntrada(evaluador);
+      datos.evaluador = { tipo: ev.tipo, usuario_id: ev.usuarioId ?? null, contacto_id: ev.contactoId ?? null, nombre: ev.nombre ?? "",
+        correo: ev.correo ?? "", whatsapp: ev.whatsapp ?? "" };
+    }
+    if (pideCorreo) datos.correo = correo.trim();
+    onEnviar(datos);
+  }
+
+  return (
+    <ModalMarco titulo={paso.nombre} subtitulo={mensaje || "Solo se pide lo que falta; lo demás ya está configurado en la actividad."} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        {pideEvaluador && (
+          <Fila etiqueta={quien} error={intentado ? errores.evaluador : undefined}>
+            <SelectorEvaluador valor={evaluador} onChange={setEvaluador} internos={internos} contactos={contactos} clienteNombre={c.clienteVacante ?? null} />
+          </Fila>
+        )}
+        {pideCorreo && (
+          <Fila etiqueta="Correo del candidato (ahí recibe su prueba)" error={intentado ? errores.correo : undefined}>
+            <input className={inputRH} type="email" value={correo} onChange={(e) => setCorreo(e.target.value)} />
+          </Fila>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={ocupado}>Cancelar</Button>
+          <Button size="sm" onClick={enviar} disabled={ocupado}>{ocupado ? "Iniciando…" : "Iniciar"}</Button>
+        </div>
+      </div>
+    </ModalMarco>
+  );
+}
+
 type Setter = <K extends keyof FormActividad>(k: K, v: FormActividad[K]) => void;
 type Ver = (k: keyof FormActividad) => string | undefined;
 
@@ -423,13 +485,20 @@ function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams
 
       {["entrevista_humana", "medica"].includes(f.tipo) && (
         <>
+          {/* 2026-10-09: formulario ÚNICO de citas — evaluador interno/externo, modalidad e instrucciones aquí mismo */}
+          <Fila etiqueta="Instrucciones (opcional)" deVacante={deVacante("instrucciones")}>
+            <textarea className={cn(inputRH, "h-16 py-2")} value={f.instrucciones} onChange={(e) => set("instrucciones", e.target.value)}
+              placeholder={f.tipo === "medica" ? "Ayuno de 8 horas, identificación oficial…" : "Qué traer, con quién preguntar al llegar…"} />
+          </Fila>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.conCita} onChange={(e) => set("conCita", e.target.checked)} />
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.conCita}
+              onChange={(e) => { set("conCita", e.target.checked); if (e.target.checked) set("iniciarAlGuardar", true); }} />
             <CalendarClock className="h-4 w-4 text-ink-3" /> Programar cita
           </label>
           {f.conCita && (
             <Fila etiqueta="Cita" error={ver("cita")}>
               <CamposCita valor={f.cita} onChange={(v) => set("cita", v)} teams={teams} />
+              <span className="text-[11px] text-ink-3">Con la cita completa se avisa solo al candidato y {f.tipo === "medica" ? "al médico (después de su consentimiento)" : "al entrevistador"}.</span>
             </Fila>
           )}
         </>

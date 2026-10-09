@@ -21,8 +21,10 @@ import {
   urlCartaIntencionPublica,
   fetchFirmasPublicas,
   signUrlFirmaCandidato,
+  firmarDemoCandidato,
 } from "@/lib/api";
 import { abrirFirmaEmbebida } from "@/lib/firma-embebida";
+import { PadFirma } from "@/components/firmas/pad-firma";
 
 type Fase = "cargando" | "no_disponible" | "lista";
 
@@ -32,6 +34,17 @@ const ESTADO_INFO: Record<DocumentoExpedientePublico["estado"], { label: string;
   rechazado: { label: "Rechazado — vuelve a subirlo", tone: "bad", icon: FileWarning },
   pendiente: { label: "Pendiente", tone: "neutral", icon: Clock },
 };
+
+/** 2026-10-09: el candidato nunca ve un error crudo («Error 409 al llamar /…»): solo un mensaje claro. */
+function mensajeLimpio(error: string): string {
+  const m = /^Error (\d{3}) al llamar/.exec(error || "");
+  if (!m) return error;
+  const codigo = Number(m[1]);
+  if (codigo === 409) return "Esta acción ya no está disponible (es posible que ya se haya completado). Recarga la página; si el problema sigue, contacta a Recursos Humanos.";
+  if (codigo === 404) return "No encontramos este documento. Pide a Recursos Humanos una liga nueva.";
+  if (codigo >= 500) return "No pudimos completar la acción por un problema temporal. Intenta de nuevo en un momento.";
+  return "No pudimos completar la acción. Intenta de nuevo o contacta a Recursos Humanos.";
+}
 
 export default function ExpedientePublico() {
   const params = useParams();
@@ -46,6 +59,8 @@ export default function ExpedientePublico() {
   const [firmando, setFirmando] = useState<number | null>(null);
   const [avisoFirma, setAvisoFirma] = useState("");
   const [reintentar, setReintentar] = useState<number | null>(null);
+  // 2026-10-09: firma de DEMOSTRACIÓN en la plataforma (sin Dropbox Sign)
+  const [padDemo, setPadDemo] = useState<{ id: number; error: string; ocupado: boolean } | null>(null);
   const cargarFirmas = useCallback(() => {
     fetchFirmasPublicas(token).then(setFirmas);
   }, [token]);
@@ -54,6 +69,10 @@ export default function ExpedientePublico() {
   }, [cargarFirmas]);
 
   async function firmar(id: number) {
+    if (firmas?.firmas.find((x) => x.id === id)?.modo === "demo") {
+      setAvisoFirma("");
+      return setPadDemo({ id, error: "", ocupado: false });
+    }
     setFirmando(id);
     setAvisoFirma("");
     setReintentar(null);
@@ -62,7 +81,7 @@ export default function ExpedientePublico() {
     if (!r.ok) {
       // 2026-10-08: mensaje limpio (el detalle técnico vive solo en los logs del servidor) + reintento lógico
       setReintentar(id);
-      return setAvisoFirma(r.error);
+      return setAvisoFirma(mensajeLimpio(r.error));
     }
     if (!r.data.signUrl) {
       setAvisoFirma(r.data.mensaje || "Ya firmaste este documento. ¡Gracias!");
@@ -99,7 +118,7 @@ export default function ExpedientePublico() {
     const r = await subirDocumentoPublico(token, tipo, archivos[0]);
     setSubiendo(null);
     if (!r.ok) {
-      setError(r.error);
+      setError(mensajeLimpio(r.error));
       return;
     }
     cargar(); // re-sincroniza la lista completa desde el servidor en vez de mezclar formas de respuesta distintas
@@ -153,7 +172,9 @@ export default function ExpedientePublico() {
             {firmas && firmas.firmas.length > 0 && (
               <Card className="mt-6 p-5">
                 <p className="text-sm font-semibold text-ink">Documentos para firmar</p>
-                <p className="mt-0.5 text-[12px] text-ink-3">Se firman aquí mismo con firma electrónica.</p>
+                <p className="mt-0.5 text-[12px] text-ink-3">
+                  {firmas.firmas.some((f) => f.modo === "demo") ? "Se firman aquí mismo: dibuja tu firma o escribe tu nombre." : "Se firman aquí mismo con firma electrónica."}
+                </p>
                 <ul className="mt-3 flex flex-col gap-2">
                   {firmas.firmas.map((f) => (
                     <li key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-soft px-3.5 py-2.5">
@@ -174,6 +195,19 @@ export default function ExpedientePublico() {
                     </li>
                   ))}
                 </ul>
+                {padDemo && (
+                  <div className="mt-4 rounded-2xl border border-border-soft p-4">
+                    <PadFirma ocupado={padDemo.ocupado} error={padDemo.error} onCancelar={() => setPadDemo(null)}
+                      onFirmar={async (d) => {
+                        setPadDemo({ ...padDemo, ocupado: true, error: "" });
+                        const r = await firmarDemoCandidato(token, padDemo.id, d);
+                        if (!r.ok) return setPadDemo({ ...padDemo, ocupado: false, error: mensajeLimpio(r.error) });
+                        setPadDemo(null);
+                        setAvisoFirma(r.data.mensaje);
+                        cargarFirmas();
+                      }} />
+                  </div>
+                )}
                 {avisoFirma && (
                   <p className="mt-3 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
                     {avisoFirma}

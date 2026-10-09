@@ -85,6 +85,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
   const [ocupado, setOcupado] = useState("");
   const [agregar, setAgregar] = useState<PresetEvaluacion | null>(null);
   const [nueva, setNueva] = useState(false);
+  const [tipoNueva, setTipoNueva] = useState("");
   const [resultado, setResultado] = useState<{ e: Evaluacion; modo: ModoResultado } | null>(null);
   const [ver, setVer] = useState<string | null>(null);
   const [motivo, setMotivo] = useState<{ e: Evaluacion; accion: "no_realizada" | "cancelar" } | null>(null);
@@ -157,13 +158,9 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
       case "sincronizar": return accion(e, () => sincronizarEvaluacion(e.codigo), "Resultado recibido del proveedor.");
       case "avanzar_paso": return accion(e, () => avanzarEvaluacionIntegrada(e.codigo), "Paso registrado.");
       case "programar_otra":
-        return setAgregar({
-          tipo: "entrevista_humana", titulo: "Programar otra entrevista",
-          evaluador: e.evaluador ? {
-            tipo: e.evaluador.tipo === "interno" ? "interno" : "externo", usuarioId: e.evaluador.usuarioId,
-            contacto: e.evaluador.contactoId ?? (e.evaluador.tipo === "externo" ? "nuevo" : ""), nombre: e.evaluador.nombre, correo: e.evaluador.correo, whatsapp: e.evaluador.whatsapp,
-          } : undefined,
-        });
+        // 2026-10-09: formulario ÚNICO de citas («Agregar actividad» con la entrevista humana preseleccionada)
+        setTipoNueva("entrevista_humana");
+        return setNueva(true);
     }
   }
 
@@ -216,7 +213,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
           <p className="mt-1 text-[12px] text-ink-3">Entrevista humana, médica, psicométrica, socioeconómica, técnica o práctica, referencias laborales u otra. Solo la entrevista humana mueve a Filtro humano; los resultados no cambian la columna.</p>
         </div>
         {live && c.activa !== false && (
-          <Button size="sm" onClick={() => setNueva(true)}><ClipboardCheck className="h-4 w-4" /> Agregar evaluación</Button>
+          <Button size="sm" onClick={() => { setTipoNueva(""); setNueva(true); }}><ClipboardCheck className="h-4 w-4" /> Agregar actividad</Button>
         )}
       </div>
       {aviso && (
@@ -252,6 +249,7 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
         // 2026-10-08: el MISMO formulario dinámico que «Agregar actividad» de la ruta (configura todo en un paso)
         <ModalAgregarActividad
           c={c}
+          tipoInicial={tipoNueva}
           onClose={() => setNueva(false)}
           onAgregada={(r, aviso) => {
             setNueva(false);

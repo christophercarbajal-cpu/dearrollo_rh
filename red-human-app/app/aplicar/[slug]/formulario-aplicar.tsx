@@ -79,8 +79,10 @@ export default function FormularioAplicar() {
     return m;
   }, [vacante]);
 
+  // 2026-10-09: el CV solo es obligatorio si la ruta de la vacante lo pide (Análisis de CV o solicitud con CV)
+  const pideCv = vacante?.pideCv !== false;
   const puedeAvanzar =
-    step === 0 ? datos.nombre.trim().length > 2 && (datos.telefono.trim() || datos.correo.trim()) : step === 1 ? consent && cv !== null : true;
+    step === 0 ? datos.nombre.trim().length > 2 && (datos.telefono.trim() || datos.correo.trim()) : step === 1 ? consent && (cv !== null || !pideCv) : true;
 
   async function siguiente() {
     setError("");
@@ -94,7 +96,7 @@ export default function FormularioAplicar() {
     }
 
     // Validaciones previas al envío
-    if (!cv) {
+    if (!cv && pideCv) {
       setError("El currículum es obligatorio. Por favor sube tu CV en formato PDF o imagen.");
       setStep(1);
       return;
@@ -274,8 +276,9 @@ export default function FormularioAplicar() {
                       ) : (
                         <Dropzone
                           onArchivos={(a) => setCv(a[0])}
-                          titulo="Sube tu currículum (obligatorio)"
-                          ayuda="PDF o foto · máx. 10 MB · nuestro asistente leerá tus datos para que no los captures"
+                          titulo={pideCv ? "Sube tu currículum (obligatorio)" : "Sube tu currículum (opcional)"}
+                          ayuda={pideCv ? "PDF o foto · máx. 10 MB · nuestro asistente leerá tus datos para que no los captures"
+                            : "No es necesario para esta vacante: basta con responder unas preguntas rápidas."}
                         />
                       )}
 

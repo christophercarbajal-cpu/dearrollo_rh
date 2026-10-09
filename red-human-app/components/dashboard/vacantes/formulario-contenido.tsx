@@ -17,6 +17,11 @@
      Vacantes agrega después Gestión (Responsable → Colaboradores) y Publicación; Plantillas agrega
      encima Nombre/Alcance.
 
+   2026-10-09 (generación según la ruta) — en Vacantes el orden es: Datos principales → Sobre la vacante → Proceso de
+   selección (`slotProceso`) → Generar → Revisar («Plantillas de conversación»: SOLO las secciones de las actividades de
+   la ruta, editables) → Guardar. «Volver a generar» nunca pisa ediciones de RH sin preguntar; los avisos de
+   cumplimiento salen UNA vez (en el bloque de Generar) y desaparecen al capturar el dato.
+
    Dos reglas NO NEGOCIABLES (también garantizadas en el servidor, ia._asegurar_capturado):
    - Red Human no inventa condiciones reales (sueldo, periodicidad, ubicación, modalidad, horario,
      prestaciones): lo que RH no capturó queda vacío/pendiente, nunca rellenado.
@@ -24,7 +29,7 @@
      solo complementa lo vacío. `contenidoDesdeGenerado` aplica exactamente eso del lado del cliente. */
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, MessageSquareText, Sparkles, X } from "lucide-react";
 import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
@@ -32,6 +37,12 @@ import type { Vacante } from "@/lib/data";
 import {
   generarVacanteIA,
   ENFOQUES_ENTREVISTA,
+  ORDEN_GUIONES,
+  TITULOS_GUION,
+  type ClaveGuion,
+  type GuionConversacion,
+  type MetaGuion,
+  type ProcesoEntrada,
   MONEDAS_SUELDO,
   PERIODICIDADES_SUELDO,
   SENIORITIES,
@@ -78,7 +89,23 @@ export interface ContenidoVacante {
   avisos_cumplimiento: string[];
   texto_whatsapp: string;
   texto_bolsa: string;
+  /* --- 2026-10-09: plantillas de conversación de ESTA vacante (solo Vacantes) --- */
+  guiones: GuionesForm;
 }
+
+/** Guiones de entrevista/llamada + trazabilidad; los prefiltros viven en preguntas_filtro / preguntas_filtro_whatsapp. */
+export interface GuionesForm {
+  secciones: Partial<Record<ClaveGuion, GuionConversacion>>;
+  meta: Record<string, MetaGuion>;
+  /** Secciones de las actividades de la ruta (vacío = aún no se genera). */
+  aplican: ClaveGuion[];
+  /** Secciones con ediciones de RH (no se regeneran sin preguntar). */
+  editadas: ClaveGuion[];
+  /** La API dice que los datos de la vacante cambiaron después de generar. */
+  desactualizado: boolean;
+}
+
+export const GUIONES_VACIOS: GuionesForm = { secciones: {}, meta: {}, aplican: [], editadas: [], desactualizado: false };
 
 export const CONTENIDO_VACIO: ContenidoVacante = {
   titulo: "",
@@ -106,6 +133,7 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   avisos_cumplimiento: [],
   texto_whatsapp: "",
   texto_bolsa: "",
+  guiones: GUIONES_VACIOS,
 };
 
 export const MODALIDADES = ["Presencial", "Híbrido", "Remoto"];
@@ -181,6 +209,24 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     avisos_cumplimiento: [...(p.avisosCumplimiento ?? [])],
     texto_whatsapp: p.textoWhatsapp,
     texto_bolsa: p.textoBolsa,
+    guiones: GUIONES_VACIOS, // la plantilla de vacante no lleva guiones: son de cada vacante
+  };
+}
+
+/** Guiones de una vacante guardada (detalle para RH). */
+export function guionesDesdeVacante(v: Vacante): GuionesForm {
+  const g = v.guiones;
+  if (!g) return GUIONES_VACIOS;
+  const secciones: Partial<Record<ClaveGuion, GuionConversacion>> = {};
+  for (const s of g.secciones) {
+    if (s.clase === "guion" && !s.vacia) secciones[s.clave] = s.contenido as GuionConversacion;
+  }
+  return {
+    secciones,
+    meta: g.meta ?? {},
+    aplican: g.aplican ?? [],
+    editadas: g.secciones.filter((s) => s.editado).map((s) => s.clave),
+    desactualizado: Boolean(g.desactualizado),
   };
 }
 
@@ -212,6 +258,7 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     avisos_cumplimiento: [...(v.avisosCumplimiento ?? [])],
     texto_whatsapp: v.textoWhatsapp ?? "",
     texto_bolsa: v.textoBolsa ?? "",
+    guiones: guionesDesdeVacante(v),
   };
 }
 
@@ -235,6 +282,59 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     texto_whatsapp: base.texto_whatsapp || (g.texto_whatsapp ?? ""),
     texto_bolsa: base.texto_bolsa || (g.portal?.page ?? ""),
   };
+}
+
+/** 2026-10-09: tras «Generar», los prefiltros y guiones son EXACTAMENTE los de la ruta (la API regresa tal cual lo que
+ * se pidió conservar). Lo que no está en la ruta queda vacío. */
+export function aplicarGuionesGenerados(base: ContenidoVacante, g: VacanteGenerada): ContenidoVacante {
+  const gg = g.guiones;
+  if (!gg) return base;
+  const conservadas = new Set(gg.conservadas ?? []);
+  const secciones: Partial<Record<ClaveGuion, GuionConversacion>> = {};
+  for (const clave of gg.aplican) {
+    if (clave === "prefiltro_web" || clave === "prefiltro_whatsapp") continue;
+    const nueva = gg.secciones[clave] ?? (conservadas.has(clave) ? base.guiones.secciones[clave] : undefined);
+    if (nueva) secciones[clave] = nueva;
+  }
+  return {
+    ...base,
+    preguntas_filtro: g.preguntas_filtro ?? [],
+    preguntas_filtro_whatsapp: g.preguntas_filtro_whatsapp ?? [],
+    guiones: {
+      secciones,
+      meta: { ...base.guiones.meta, ...gg.meta },
+      aplican: gg.aplican,
+      editadas: base.guiones.editadas.filter((k) => conservadas.has(k)),
+      desactualizado: false,
+    },
+  };
+}
+
+/** Avisos de cumplimiento UNA sola vez y solo los vigentes: un dato ya capturado (sueldo, ubicación, prestaciones) borra
+ * su aviso. Misma regla que el servidor (`ia.avisos_vigentes`). */
+export function avisosVigentes(c: ContenidoVacante): string[] {
+  const capturado: Record<string, boolean> = {
+    sueldo: Boolean(c.sueldo_periodicidad && c.sueldo_periodicidad !== "a_convenir" && c.sueldo_desde),
+    ubicacion: Boolean(c.ubicacion_estado || c.ubicacion.trim()),
+    prestaciones: c.beneficios.some((b) => b.trim()),
+  };
+  const temas: Record<string, string[]> = { sueldo: ["sueldo", "salario", "a convenir"], ubicacion: ["ubicacion"], prestaciones: ["prestacion", "beneficio"] };
+  const pendiente = ["no captur", "pendiente", "confirmar", "falta", "sin dato", "no se invent", "no especific"];
+  const vistos = new Set<string>();
+  const usados = new Set<string>();
+  const salida: string[] = [];
+  for (const a of c.avisos_cumplimiento) {
+    const t = a.replace(/\s+/g, " ").trim();
+    const k = clave(t);
+    if (!k || vistos.has(k)) continue;
+    const tema = pendiente.some((p) => k.includes(p)) ? Object.keys(temas).find((x) => temas[x].some((p) => k.includes(p))) : undefined;
+    if (tema && (capturado[tema] || usados.has(tema))) continue;
+    if (k.startsWith("modo demo") && salida.some((x) => clave(x).startsWith("modo demo"))) continue;
+    vistos.add(k);
+    if (tema) usados.add(tema);
+    salida.push(t);
+  }
+  return salida;
 }
 
 /** true si ya hay contenido (capturado o generado) — la API no debe volver a generarlo al guardar. */
@@ -283,9 +383,10 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     resumen: c.resumen,
     perfil_ideal: c.perfil_ideal,
     palabras_clave: c.palabras_clave,
-    avisos_cumplimiento: c.avisos_cumplimiento,
+    avisos_cumplimiento: avisosVigentes(c),
     texto_whatsapp: c.texto_whatsapp,
     texto_bolsa: c.texto_bolsa,
+    guiones: { secciones: c.guiones.secciones, meta: c.guiones.meta },
   };
 }
 
@@ -342,8 +443,10 @@ function SelectorUbicacion({
   );
 }
 
-function CriteriosEditor({ items, onChange }: { items: CriterioFiltro[]; onChange: (c: CriterioFiltro[]) => void }) {
+function CriteriosEditor({ items, onChange, cerradas = false }: { items: CriterioFiltro[]; onChange: (c: CriterioFiltro[]) => void; cerradas?: boolean }) {
   const set = (i: number, cambios: Partial<CriterioFiltro>) => onChange(items.map((x, j) => (j === i ? { ...x, ...cambios } : x)));
+  // 2026-10-09: en las plantillas de conversación los prefiltros son SOLO cerrados (sin «Texto corto»)
+  const tipos = cerradas ? TIPOS_CRITERIO.filter((t) => t.valor !== "texto_corto") : TIPOS_CRITERIO;
   return (
     <div className="flex flex-col gap-2">
       {items.map((c, i) => (
@@ -365,7 +468,7 @@ function CriteriosEditor({ items, onChange }: { items: CriterioFiltro[]; onChang
               onChange={(e) => set(i, { tipo: e.target.value as CriterioFiltro["tipo"] })}
               className="h-10 rounded-xl border border-border-soft bg-surface px-2.5 text-sm outline-none focus:border-brand"
             >
-              {TIPOS_CRITERIO.map((t) => (
+              {tipos.map((t) => (
                 <option key={t.valor} value={t.valor}>
                   {t.texto}
                 </option>
@@ -382,7 +485,16 @@ function CriteriosEditor({ items, onChange }: { items: CriterioFiltro[]; onChang
               Eliminatoria (descarta si no cumple)
             </label>
           </div>
+          {(c.tipo === "numero" || c.tipo === "opcion") && (
+            <input
+              value={(c.opciones ?? []).join(" | ")}
+              onChange={(e) => set(i, { opciones: e.target.value.split("|").map((x) => x.trim()).filter(Boolean) })}
+              placeholder="Opciones separadas por | (ej. Menos de 1 año | 1 a 2 años | Más de 2 años)"
+              className="mt-2 h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand"
+            />
+          )}
           {c.valida && <p className="mt-1.5 text-[11px] text-ink-3">Valida: {c.valida}</p>}
+          {c.reconfirma && <p className="text-[11px] text-ink-3">Reconfirma con un dato concreto lo que contestó en el formulario web.</p>}
         </div>
       ))}
       <Button
@@ -398,6 +510,81 @@ function CriteriosEditor({ items, onChange }: { items: CriterioFiltro[]; onChang
   );
 }
 
+/** Guion de entrevista o llamada: enfoque + preguntas ABIERTAS (los temas se derivan de las preguntas). */
+function GuionEditor({ valor, onChange }: { valor: GuionConversacion | undefined; onChange: (g: GuionConversacion) => void }) {
+  const g = valor ?? { enfoque: "", temas: [], preguntas: [] };
+  return (
+    <div className="flex flex-col gap-3">
+      <Area label="Enfoque" value={g.enfoque} onChange={(enfoque) => onChange({ ...g, enfoque })} rows={2} />
+      <ListaEditable
+        label="Preguntas (abiertas, en orden)"
+        items={g.preguntas}
+        onChange={(preguntas) => onChange({ ...g, preguntas, temas: preguntas.map((q) => q.replace(/^[¿\s]+|[?.\s]+$/g, "").slice(0, 120)) })}
+        placeholder="Ej. Cuéntame de tu último trabajo en almacén."
+      />
+    </div>
+  );
+}
+
+/** «Revisar»: las plantillas de conversación SOLO de las actividades de la ruta, editables. Al editar una sección queda
+ * marcada como edición de RH (no se regenera sin preguntar). */
+function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; onChange: (c: ContenidoVacante) => void }) {
+  const g = value.guiones;
+  const marcar = (clave: ClaveGuion, cambios: Partial<ContenidoVacante>, secciones?: GuionesForm["secciones"]) =>
+    onChange({
+      ...value,
+      ...cambios,
+      guiones: { ...g, secciones: secciones ?? g.secciones, editadas: g.editadas.includes(clave) ? g.editadas : [...g.editadas, clave] },
+    });
+  const orden = ORDEN_GUIONES.filter((k) => g.aplican.includes(k));
+  return (
+    <section className="rounded-xl border border-border-soft">
+      <div className="flex items-center gap-2 border-b border-border-faint px-4 py-3">
+        <MessageSquareText className="h-4 w-4 text-brand" />
+        <span className="text-sm font-semibold text-ink">Revisar · Plantillas de conversación</span>
+        <span className="text-xs text-ink-3">solo las actividades de la ruta de esta vacante</span>
+      </div>
+      <div className="flex flex-col gap-5 px-4 py-4">
+        {orden.length === 0 && (
+          <p className="text-sm text-ink-3">La ruta de esta vacante no tiene prefiltros, entrevistas de Red Human ni llamada: no hay guiones que revisar.</p>
+        )}
+        {orden.map((k) => {
+          const editada = g.editadas.includes(k);
+          return (
+            <div key={k} className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Eyebrow>{TITULOS_GUION[k]}</Eyebrow>
+                {editada && <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-medium text-warn">Editado por RH</span>}
+              </div>
+              <p className="text-[11px] text-ink-3">
+                {k.startsWith("prefiltro")
+                  ? "Solo preguntas cerradas (Sí / No, número u opción). Las eliminatorias son los requisitos indispensables."
+                  : "Solo preguntas abiertas. Red Human las hace en este orden con el candidato."}
+              </p>
+              {k === "prefiltro_web" && (
+                <CriteriosEditor cerradas items={value.preguntas_filtro} onChange={(x) => marcar(k, { preguntas_filtro: x })} />
+              )}
+              {k === "prefiltro_whatsapp" && (
+                <CriteriosEditor cerradas items={value.preguntas_filtro_whatsapp} onChange={(x) => marcar(k, { preguntas_filtro_whatsapp: x })} />
+              )}
+              {!k.startsWith("prefiltro") && (
+                <GuionEditor valor={g.secciones[k]} onChange={(guion) => marcar(k, {}, { ...g.secciones, [k]: guion })} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** Huella de lo que alimenta los guiones: si cambia después de generar, se sugiere volver a generar. */
+function firmaGeneracion(c: ContenidoVacante, ruta?: ProcesoEntrada) {
+  const pasos = ruta && "pasos" in ruta ? (ruta.pasos ?? []).map((x) => x.tipo) : ruta ?? null;
+  return JSON.stringify([c.titulo, c.responsabilidades, c.requisitos, c.requisitos_deseables, c.ubicacion_estado, c.ubicacion_municipio,
+    c.modalidad, c.sueldo_desde, c.sueldo_hasta, c.sueldo_periodicidad, c.enfoque_entrevista, pasos]);
+}
+
 export function FormularioContenidoVacante({
   value,
   onChange,
@@ -407,6 +594,9 @@ export function FormularioContenidoVacante({
   mostrarCliente = true,
   slotDatosPrincipales,
   faltaCliente = false,
+  conGuiones = false,
+  slotProceso,
+  rutaGeneracion,
 }: {
   value: ContenidoVacante;
   onChange: (c: ContenidoVacante) => void;
@@ -421,6 +611,12 @@ export function FormularioContenidoVacante({
   slotDatosPrincipales?: React.ReactNode;
   /** true cuando la Cuenta tiene Clientes y RH todavía no eligió (Cliente o «recluta directo»). */
   faltaCliente?: boolean;
+  /** 2026-10-09 (solo Vacantes): plantillas de conversación por actividad de la ruta, en «Revisar». */
+  conGuiones?: boolean;
+  /** «Proceso de selección» va ANTES de Generar: lo que se genere depende de la ruta. */
+  slotProceso?: React.ReactNode;
+  /** La ruta elegida (sin ella, la API usa la predeterminada de la Cuenta). */
+  rutaGeneracion?: ProcesoEntrada;
 }) {
   const set = <K extends keyof ContenidoVacante>(k: K) => (v: ContenidoVacante[K]) => onChange({ ...value, [k]: v });
   const [generando, setGenerando] = useState(false);
@@ -428,8 +624,19 @@ export function FormularioContenidoVacante({
   const [avanzado, setAvanzado] = useState(false);
   const [empresaIA, setEmpresaIA] = useState("");
   const [generado, setGenerado] = useState(() => tieneContenidoManual(value));
+  const [firmaGen, setFirmaGen] = useState<string | null>(null);
+  const [confirmar, setConfirmar] = useState<ClaveGuion[] | null>(null);
+  const avisos = avisosVigentes(value);
+  const desactualizado = conGuiones && generado && (firmaGen !== null ? firmaGen !== firmaGeneracion(value, rutaGeneracion) : value.guiones.desactualizado);
 
-  async function generar() {
+  async function generar(decision?: "conservar" | "sobrescribir") {
+    // «Volver a generar»: las secciones editadas por RH nunca se pisan sin preguntar
+    const editadas = conGuiones ? value.guiones.editadas : [];
+    if (generado && editadas.length && !decision) {
+      setConfirmar(editadas);
+      return;
+    }
+    setConfirmar(null);
     const faltan = faltantesDatosPrincipales(value);
     if (faltaCliente) faltan.splice(3, 0, "Cliente (o «La Cuenta recluta directo»)");
     if (faltan.length) {
@@ -455,13 +662,24 @@ export function FormularioContenidoVacante({
       beneficios: p.beneficios,
       cliente_id: clienteId ?? null,
       mostrar_cliente_candidato: mostrarCliente,
+      responsabilidades: p.responsabilidades,
+      enfoque_entrevista: value.enfoque_entrevista,
+      ...(conGuiones
+        ? {
+            proceso: rutaGeneracion,
+            guiones_actuales: { preguntas_filtro: value.preguntas_filtro, preguntas_filtro_whatsapp: value.preguntas_filtro_whatsapp, secciones: value.guiones.secciones },
+            conservar: decision === "conservar" ? editadas : [],
+          }
+        : {}),
     });
     setGenerando(false);
     if (!r.ok) {
       setErrorIA(r.error);
       return;
     }
-    onChange(contenidoDesdeGenerado(value, r.data));
+    const base = contenidoDesdeGenerado(value, r.data);
+    onChange(conGuiones ? aplicarGuionesGenerados(base, r.data) : base);
+    setFirmaGen(firmaGeneracion(value, rutaGeneracion));
     onGenerado?.(r.data);
     setGenerado(true);
     if (r.data.empresa) setEmpresaIA(r.data.empresa);
@@ -535,6 +753,9 @@ export function FormularioContenidoVacante({
         </div>
       </Seccion>
 
+      {/* 2026-10-09: «Proceso de selección» ANTES de generar — se genera solo lo de las actividades de la ruta */}
+      {slotProceso}
+
       {/* 3. Única acción principal */}
       {conIA && (
         <div className="rounded-xl border border-dashed border-brand/40 bg-brand-soft/30 p-4">
@@ -542,7 +763,7 @@ export function FormularioContenidoVacante({
             <p className="text-sm text-ink-2">
               {generado ? "Vuelve a generar si cambiaste algo arriba." : "Red Human completa descripción, responsabilidades, prefiltros, entrevista y textos de publicación."}
             </p>
-            <Button type="button" onClick={generar} disabled={generando}>
+            <Button type="button" onClick={() => generar()} disabled={generando}>
               <Sparkles className="h-4 w-4" /> {generando ? "Generando…" : generado ? "Volver a generar" : "Generar vacante con Red Human"}
             </Button>
           </div>
@@ -552,15 +773,37 @@ export function FormularioContenidoVacante({
               Contenido generado a nombre de <b className="text-ink">{empresaIA}</b>.
             </p>
           )}
-          {generado && value.avisos_cumplimiento.length > 0 && (
+          {confirmar && (
+            <div className="mt-3 rounded-lg border border-warn/40 bg-warn-soft/50 p-3 text-sm text-ink-2">
+              <p className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
+                <span>Editaste a mano: {confirmar.map((k) => `«${TITULOS_GUION[k]}»`).join(", ")}. ¿Qué hacemos con esas ediciones?</span>
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" size="sm" onClick={() => generar("conservar")}>Conservar mis ediciones</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => generar("sobrescribir")}>Sobrescribirlas</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setConfirmar(null)}>Cancelar</Button>
+              </div>
+            </div>
+          )}
+          {desactualizado && !confirmar && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-warn">
+              <AlertTriangle className="h-3.5 w-3.5" /> Cambiaste datos de la vacante o su ruta después de generar: vuelve a generar para actualizar los guiones.
+            </p>
+          )}
+          {/* Avisos de cumplimiento: UNA sola vez, aquí; desaparecen al capturar el dato */}
+          {generado && avisos.length > 0 && (
             <ul className="mt-3 space-y-1 rounded-lg bg-warn-soft/40 p-3 text-xs leading-relaxed text-ink-2">
-              {value.avisos_cumplimiento.map((a, i) => (
+              {avisos.map((a, i) => (
                 <li key={i}>· {a}</li>
               ))}
             </ul>
           )}
         </div>
       )}
+
+      {/* 4. Revisar — plantillas de conversación de las actividades de la ruta (Vacantes) */}
+      {conGuiones && generado && <PlantillasConversacion value={value} onChange={onChange} />}
 
       {/* 4. Configuración avanzada — acordeón CERRADO por defecto: todo lo que la IA genera sola */}
       <section className="rounded-xl border border-border-soft">
@@ -583,16 +826,19 @@ export function FormularioContenidoVacante({
             <Area label="Perfil ideal" value={value.perfil_ideal} onChange={set("perfil_ideal")} rows={3} />
             <ListaEditable label="Palabras clave" items={value.palabras_clave} onChange={set("palabras_clave")} />
           </Seccion>
-          <Seccion titulo="Prefiltro · postulación web" ayuda="Preguntas del formulario público; Red Human las propone desde los requisitos indispensables.">
-            <CriteriosEditor items={value.preguntas_filtro} onChange={set("preguntas_filtro")} />
-          </Seccion>
-          <Seccion titulo="Prefiltro · WhatsApp" ayuda="Puntos críticos que Red Human confirma por chat (experiencia, ubicación…). Vacío = el agente usa las de la web.">
-            <CriteriosEditor items={value.preguntas_filtro_whatsapp} onChange={set("preguntas_filtro_whatsapp")} />
-          </Seccion>
+          {!conGuiones && (
+            <>
+              <Seccion titulo="Prefiltro · postulación web" ayuda="Preguntas del formulario público; Red Human las propone desde los requisitos indispensables.">
+                <CriteriosEditor items={value.preguntas_filtro} onChange={set("preguntas_filtro")} />
+              </Seccion>
+              <Seccion titulo="Prefiltro · WhatsApp" ayuda="Puntos críticos que Red Human confirma por chat (experiencia, ubicación…). Vacío = el agente usa las de la web.">
+                <CriteriosEditor items={value.preguntas_filtro_whatsapp} onChange={set("preguntas_filtro_whatsapp")} />
+              </Seccion>
+            </>
+          )}
           <Seccion titulo="Textos de publicación">
             <Area label="Texto para WhatsApp" value={value.texto_whatsapp} onChange={set("texto_whatsapp")} rows={3} />
             <Area label="Texto para bolsa de trabajo" value={value.texto_bolsa} onChange={set("texto_bolsa")} rows={4} />
-            <ListaEditable label="Avisos de cumplimiento" items={value.avisos_cumplimiento} onChange={set("avisos_cumplimiento")} />
           </Seccion>
         </div>
       </section>

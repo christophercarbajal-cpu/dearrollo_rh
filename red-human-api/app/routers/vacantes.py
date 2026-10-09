@@ -304,11 +304,13 @@ def _ficha(datos: GenerarIn, empresa: str) -> ia.FichaVacante:
     )
 
 
-def _generar(datos: GenerarIn, empresa: str):
+def _generar(datos: GenerarIn, empresa: str, pide_cv: Optional[bool] = None):
     if not datos.titulo.strip():
         raise HTTPException(400, "El título del puesto es obligatorio para generar la publicación.")
     _validar_sueldo(datos)
-    return ia.generar_vacante(_ficha(datos, empresa))
+    ficha = _ficha(datos, empresa)
+    ficha.pide_cv = pide_cv
+    return ia.generar_vacante(ficha)
 
 
 @router.post("/generar")
@@ -319,11 +321,12 @@ def generar(
     respeta literal lo capturado (ia._asegurar_capturado). Todo lo generado nombra a la empresa con la
     regla Cliente-visible / Cuenta (Punto 1)."""
     empresa = _empresa_resuelta(db, cuenta, datos.cliente_id, datos.mostrar_cliente_candidato)
-    resultado, con_ia = _generar(datos, empresa)
-    salida = {"ia": con_ia, "empresa": empresa, "sueldo_texto": datos.sueldo_texto() or "A convenir", **resultado.model_dump(by_alias=True)}
-    # 2026-10-09: prefiltros y guiones SOLO de las actividades de la ruta elegida, con las reglas de generación por tipo
     from ..services import guiones as sgui
 
+    pasos_ruta = _pasos_de_formulario(db, cuenta.id, datos.proceso)
+    resultado, con_ia = _generar(datos, empresa, pide_cv=sgui.pide_cv(pasos_ruta) if pasos_ruta else None)
+    salida = {"ia": con_ia, "empresa": empresa, "sueldo_texto": datos.sueldo_texto() or "A convenir", **resultado.model_dump(by_alias=True)}
+    # 2026-10-09: prefiltros y guiones SOLO de las actividades de la ruta elegida, con las reglas de generación por tipo
     actuales = dict(datos.guiones_actuales or {})
     vigentes = {"prefiltro_web": actuales.get("preguntas_filtro") or [], "prefiltro_whatsapp": actuales.get("preguntas_filtro_whatsapp") or [],
                 **{k: g for k, g in (actuales.get("secciones") or {}).items() if k in sgui.SECCIONES}}
@@ -332,7 +335,7 @@ def generar(
                "ubicacion": datos.ubicacion_texto(), "modalidad": datos.modalidad, "sueldo": datos.sueldo_texto() or "A convenir",
                "enfoque_entrevista": datos.enfoque_entrevista if datos.enfoque_entrevista in ENFOQUES_ENTREVISTA else "profesional", "horario": ""}
     try:
-        g = sgui.generar(datos_g, _pasos_de_formulario(db, cuenta.id, datos.proceso), vigentes, conservar=datos.conservar, empresa=empresa)
+        g = sgui.generar(datos_g, pasos_ruta, vigentes, conservar=datos.conservar, empresa=empresa)
     except sgui.ErrorGuion as e:
         raise HTTPException(e.status, e.mensaje)
     salida["preguntas_filtro"] = g["secciones"].get("prefiltro_web", vigentes["prefiltro_web"] if "prefiltro_web" in g["conservadas"] else [])
@@ -500,8 +503,10 @@ def crear(
     con_ia = None
     v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
     if datos.generar_si_falta and not datos.publicaciones and not datos.responsabilidades:
+        from ..services import guiones as sgui
+
         entrada_generador = GenerarIn(**datos.model_dump(include=set(GenerarIn.model_fields) - {"proceso", "guiones_actuales", "conservar"}))
-        generado, con_ia = _generar(entrada_generador, v.empresa)
+        generado, con_ia = _generar(entrada_generador, v.empresa, pide_cv=sgui.pide_cv(sgui.pasos_de_vacante(db, v)))
         _aplicar_generado(v, generado)
     _guardar_guiones(v, datos.guiones, u.nombre, web=v.preguntas_filtro, whatsapp=v.preguntas_filtro_whatsapp)
     if con_ia is not None:
@@ -791,6 +796,9 @@ def regenerar(
         descripcion_breve=(datos.notas or "").strip(), requisitos_indispensables=requisitos_lista(v.requisitos),
         requisitos_deseables=list(v.requisitos_deseables or []), beneficios=list(v.beneficios or []),
     )
+    from ..services import guiones as _sgui
+
+    ficha.pide_cv = _sgui.pide_cv(_sgui.pasos_de_vacante(db, v))
     generado, con_ia = ia.generar_vacante(ficha)
     # regenerar = volver a redactar: se limpian los textos generados para que _aplicar_generado los
     # rellene, pero lo capturado (requisitos, beneficios, sueldo, seniority) se respeta igual.

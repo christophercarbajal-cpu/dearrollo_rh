@@ -7,7 +7,7 @@ from . import fechas
 from .config import settings
 from .models import CONCLUSIONES_ENTREVISTA, TIPO_CONTRATO_FIRMADO, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
-from .services.ia import texto_preguntas, texto_util_candidato
+from .services.ia import avisos_vigentes, texto_preguntas, texto_util_candidato
 
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 
@@ -64,6 +64,17 @@ def nombre_empresa_candidato(v: Vacante) -> str:
     return v.empresa or ""
 
 
+def _pide_cv(v) -> bool:
+    from sqlalchemy.orm import object_session
+
+    from .services import guiones as sgui
+
+    try:
+        return sgui.pide_cv(sgui.pasos_de_vacante(object_session(v), v))
+    except Exception:  # noqa: BLE001 — sin ruta calculable se pide como siempre
+        return True
+
+
 def vacante_dict(
     v: Vacante,
     n_candidatos: int = 0,
@@ -111,7 +122,11 @@ def vacante_dict(
         "beneficios": v.beneficios or [],
         "palabrasClave": v.palabras_clave or [],
         "seniority": v.seniority or "",
-        "avisosCumplimiento": v.avisos_cumplimiento or [],
+        # 2026-10-09: una sola vez y solo los vigentes (un dato ya capturado borra su aviso)
+        "avisosCumplimiento": avisos_vigentes(v.avisos_cumplimiento, sueldo=v.sueldo or "", ubicacion=v.ubicacion or "",
+                                              beneficios=v.beneficios or []),
+        # ¿la ruta de la vacante pide CV? El formulario público y los textos de publicación lo respetan.
+        "pideCv": _pide_cv(v),
         # publicaciones por plataforma: {occ|linkedin|portal|whatsapp: {titulo, copy, page, etiquetas}}
         "publicaciones": v.publicaciones or {},
         "textoWhatsapp": v.texto_whatsapp or "",

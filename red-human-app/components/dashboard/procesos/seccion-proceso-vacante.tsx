@@ -104,7 +104,8 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
       {abierto && (
         <div className="flex flex-col gap-3 border-t border-border-faint p-4">
           <p className="text-[12px] text-ink-3">
-            Define qué pasos sigue cada candidato de esta vacante. Personalizarlo aquí no cambia la plantilla de la Cuenta
+            Define qué actividades sigue cada candidato de esta vacante; Red Human genera los prefiltros y guiones SOLO de
+            estas actividades. Ajustar la ruta aquí cambia únicamente esta vacante: la plantilla general de la Cuenta no se toca
             {codigoVacante && activos ? `, y los ${activos} candidato(s) activo(s) conservan la versión con la que entraron` : ""}.
           </p>
           <label className="flex flex-col gap-1.5">
@@ -124,7 +125,7 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
               {personalizado && <Badge tone="warn">Personalizado para esta vacante</Badge>}
               <span className="text-[12px] text-ink-3">{resumenPasos(efectivo.pasos)}</span>
               <button type="button" onClick={() => setPersonalizar((x) => !x)} className="text-[12px] font-semibold text-brand hover:underline">
-                {personalizar ? "Ocultar pasos" : "Personalizar pasos, dependencias y responsables"}
+                {personalizar ? "Ocultar pasos" : "Ajustar ruta de esta vacante"}
               </button>
             </div>
           )}

@@ -12,6 +12,8 @@
    hecha después de mandar la invitación) y se evalúa igual que la sala; la Llamada usa la sala en modo llamada; sin guion
    se genera Just-In-Time antes del primer mensaje; una contradicción con respuestas previas es «Inconsistencia» en
    Puntos por validar y nunca descarta.
+4. Publicación y avisos: si la ruta no pide CV, ningún texto de publicación dice «envía tu CV» y el formulario público lo
+   deja opcional (`pideCv`); los avisos de cumplimiento salen una sola vez y desaparecen al capturar el dato.
 """
 
 import os
@@ -343,5 +345,29 @@ with TestClient(app) as client:
     ficha6 = client.get(f"/candidatos/{p6.codigo}", headers={"X-Cuenta-Id": str(demo.id)}).json()
     textos = ficha6.get("puntosPorValidar") or (ficha6.get("detalle") or {}).get("puntosPorValidar") or []
     check(any(t.startswith("Inconsistencia:") for t in textos), f"y aparece en Puntos por validar: {textos[:1]}")
+
+    # ================= 4. Publicación sin CV y avisos únicos =================
+    print("\n--- 4. Publicación según la ruta y avisos ---")
+    masivos = next(p for p in client.get("/procesos/plantillas", headers=H).json() if p.get("rutaBase") == "masivos_sin_documentos")
+    r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"plantilla_id": masivos["id"]}})
+    textos = " ".join([r.json()["texto_whatsapp"]] + [r.json()[k]["copy"] + r.json()[k]["page"] for k in ("occ", "linkedin", "portal")])
+    check(r.status_code == 200 and "CV" not in textos and "currículum" not in textos.lower(),
+          "ruta Masivos (solicitud sin CV): ningún texto de publicación pide el CV")
+    r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"plantilla_id": corp["id"]}})
+    check("CV" in r.json()["occ"]["page"], "ruta Corporativos (con Análisis de CV): la publicación sí lo pide")
+    r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Ayudante masivo", "generar_si_falta": False,
+                                                 "proceso": {"plantilla_id": masivos["id"]},
+                                                 "avisos_cumplimiento": ["Sueldo no capturado («A convenir»): RH debe confirmarlo antes de publicar.",
+                                                                         "Falta confirmar el sueldo del puesto.",
+                                                                         "Se reescribió un requisito de edad como competencia.",
+                                                                         "Se reescribió un requisito de edad como competencia."]})
+    det = r.json()
+    slug = det["slug"]
+    check(det["avisosCumplimiento"] == ["Se reescribió un requisito de edad como competencia."],
+          f"avisos: sin duplicados y sin el del sueldo ya capturado: {det['avisosCumplimiento']}")
+    client.post(f"/vacantes/{det['id']}/publicar", headers=H, json={"plataformas": ["Portal"]})
+    pub_slug = client.get(f"/vacantes/slug/{slug}").json()
+    check(pub_slug.get("pideCv") is False and client.get(f"/vacantes/{VAC}", headers=H).json()["pideCv"] is True,
+          "el formulario público sabe si la ruta pide CV (Masivos no; Corporativos sí)")
 
     print(f"\n✅ {OK} comprobaciones OK")

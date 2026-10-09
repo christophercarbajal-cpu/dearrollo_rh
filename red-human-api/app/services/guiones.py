@@ -73,6 +73,16 @@ def pasos_de_vacante(db: Optional[Session], v) -> list:
         return list(sproc.ruta_base(sproc.RUTA_RESPALDO)["pasos"])
 
 
+def pide_cv(pasos: Optional[list]) -> bool:
+    """¿La ruta exige CV? Análisis de CV o una «Solicitud web» con CV. Sin CV en la ruta, la publicación no lo pide."""
+    for x in pasos or []:
+        if not isinstance(x, dict) or x.get("heredado"):
+            continue
+        if x.get("tipo") == "analisis_cv" or (x.get("tipo") == "solicitud_web" and x.get("con_cv")):
+            return True
+    return False
+
+
 def secciones_aplicables(tipos: List[str]) -> List[str]:
     """Secciones que corresponden a las actividades de la ruta, en el orden fijo. Lo que no está en la ruta no existe."""
     presentes = set(tipos or [])

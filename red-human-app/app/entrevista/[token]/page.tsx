@@ -494,7 +494,9 @@ export default function SalaEntrevista() {
 
   const enSala = fase === "sala" || fase === "finalizando";
   // Tótem + sala en video: pantalla completa inmersiva (sin header ni márgenes).
-  const salaTotem = totem && enSala && modo === "avatar";
+  // 2026-10-09: «Llamada Red Human» = la misma sesión de voz, sin video (la sala se muestra como llamada)
+  const esLlamada = info?.tipo === "llamada";
+  const salaTotem = totem && enSala && modo === "avatar" && !esLlamada;
 
   return (
     <main className={cn("sala-publica min-h-svh bg-bg", totem && "totem text-lg", salaTotem && "fixed inset-0 overflow-hidden")}>
@@ -606,15 +608,15 @@ export default function SalaEntrevista() {
           <>
             <div className="text-center">
               <Badge tone="good" dot>
-                Entrevista · {info.empresa}
+                {esLlamada ? "Llamada" : "Entrevista"} · {info.empresa}
               </Badge>
               <h1 className={cn("font-display mt-3 text-2xl font-bold sm:text-3xl", totem && "text-5xl leading-tight sm:text-5xl")}>
-                Hola {info.candidato.split(" ")[0]}, tu entrevista para {info.puesto}
+                Hola {info.candidato.split(" ")[0]}, tu {esLlamada ? "llamada" : "entrevista"} para {info.puesto}
               </h1>
               <p className={cn("mx-auto mt-2 max-w-xl leading-relaxed text-ink-2", totem ? "max-w-3xl text-2xl" : "text-sm")}>
                 Conversarás con <b className="text-ink">Red Human</b>, nuestra entrevistadora
-                {info.avatar_disponible ? " en video" : " por chat"}. Dura alrededor de 10 minutos y puedes hacerla
-                desde tu celular o computadora.
+                {esLlamada ? (info.avatar_disponible ? " por voz (sin video)" : " por chat") : info.avatar_disponible ? " en video" : " por chat"}.
+                Dura alrededor de 10 minutos y puedes hacerla desde tu celular o computadora.
               </p>
             </div>
 
@@ -654,8 +656,9 @@ export default function SalaEntrevista() {
                 </p>
               )}
               <Button className={cn("mt-5 w-full", totem && "min-h-20 rounded-3xl text-2xl")} size={totem ? "lg" : "md"} disabled={!acepto} onClick={empezar}>
-                {info.avatar_disponible ? <Video className={totem ? "h-7 w-7" : "h-4 w-4"} /> : <MessageCircle className={totem ? "h-7 w-7" : "h-4 w-4"} />}
-                Comenzar entrevista
+                {esLlamada && info.avatar_disponible ? <Phone className={totem ? "h-7 w-7" : "h-4 w-4"} />
+                  : info.avatar_disponible ? <Video className={totem ? "h-7 w-7" : "h-4 w-4"} /> : <MessageCircle className={totem ? "h-7 w-7" : "h-4 w-4"} />}
+                {esLlamada ? "Comenzar llamada" : "Comenzar entrevista"}
               </Button>
             </Card>
           </>
@@ -738,7 +741,26 @@ export default function SalaEntrevista() {
 
         {enSala && !salaTotem && (
           <Card className="overflow-hidden">
-            {modo === "avatar" ? (
+            {modo === "avatar" && esLlamada ? (
+              <div className="relative grid min-h-[20rem] place-items-center bg-[#151517] px-6 py-10 text-center">
+                {/* el audio sale del mismo <video> de la sesión; en llamada no se muestra la imagen */}
+                <video id="avatar-video" autoPlay playsInline className="pointer-events-none absolute h-px w-px opacity-0" aria-hidden />
+                <div className="flex flex-col items-center gap-4">
+                  <span className="grid h-20 w-20 animate-pulse place-items-center rounded-full bg-brand/20 text-brand">
+                    <Phone className="h-9 w-9" />
+                  </span>
+                  <p className="font-display text-lg font-bold text-white">Llamada con Red Human</p>
+                  <div className="max-w-md space-y-1">
+                    {mensajes.slice(-2).map((m, i) => (
+                      <p key={i} className="text-[13px] leading-snug text-white/80">
+                        <b>{m.rol === "assistant" ? "Red Human: " : "Tú: "}</b>
+                        {m.texto}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : modo === "avatar" ? (
               <div className="relative aspect-video bg-[#151517]">
                 <video id="avatar-video" autoPlay playsInline className="h-full w-full object-cover" />
                 <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 font-mono text-[11px] text-white/90 backdrop-blur">

@@ -192,6 +192,8 @@ class FichaVacante(BaseModel):
     requisitos_indispensables: List[str] = Field(default_factory=list)
     requisitos_deseables: List[str] = Field(default_factory=list)
     beneficios: List[str] = Field(default_factory=list)
+    # 2026-10-09: ¿la ruta de la vacante pide CV? (Análisis de CV o solicitud con CV). None = no se sabe → como siempre.
+    pide_cv: Optional[bool] = None
 
 
 def _clave_texto(t: str) -> str:
@@ -233,7 +235,9 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
         avisos.append("Sueldo no capturado («A convenir»): RH debe confirmarlo antes de publicar (no se inventó).")
     if not ficha.ubicacion:
         avisos.append("Ubicación no capturada: RH debe confirmarla antes de publicar.")
-    salida.avisos_cumplimiento = avisos
+    salida.avisos_cumplimiento = avisos_vigentes(avisos, sueldo=ficha.sueldo_texto, ubicacion=ficha.ubicacion, beneficios=ficha.beneficios)
+    if ficha.pide_cv is False:
+        _quitar_cv(salida)
     if not salida.preguntas_filtro_whatsapp:
         salida.preguntas_filtro_whatsapp = puntos_criticos_whatsapp(salida.preguntas_filtro)
     salida.preguntas_filtro = cerrar_preguntas_web(salida.preguntas_filtro)
@@ -242,6 +246,60 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
         if p.tipo == "numero" and not p.opciones:
             p.opciones = _RANGO_ANOS_GENERICO
     return salida
+
+
+# 2026-10-09: avisos de cumplimiento UNA sola vez y solo mientras sigan vigentes (un dato capturado borra su aviso).
+_TEMAS_AVISO = {
+    "sueldo": ("sueldo", "salario", "a convenir"),
+    "ubicacion": ("ubicacion",),
+    "prestaciones": ("prestacion", "beneficio"),
+}
+_PENDIENTE = ("no captur", "pendiente", "confirmar", "falta", "sin dato", "no se invent", "no especific")
+
+
+def avisos_vigentes(avisos: Optional[List[str]], *, sueldo: str = "", ubicacion: str = "", beneficios: Optional[List[str]] = None) -> List[str]:
+    """Sin duplicados (mismo texto o mismo dato pendiente) y sin los avisos de un dato que RH ya capturó."""
+    capturado = {"sueldo": bool(sueldo) and sueldo != "A convenir", "ubicacion": bool((ubicacion or "").strip()),
+                 "prestaciones": bool([b for b in (beneficios or []) if str(b).strip()])}
+    vistos, temas, salida = set(), set(), []
+    for a in avisos or []:
+        t = " ".join(str(a or "").split())
+        k = _clave_texto(t)
+        if not k or k in vistos:
+            continue
+        tema = next((x for x, pal in _TEMAS_AVISO.items() if any(p in k for p in pal)), None) if any(p in k for p in _PENDIENTE) else None
+        if tema and (capturado[tema] or tema in temas):
+            continue
+        if k.startswith("modo demo") and any(_clave_texto(x).startswith("modo demo") for x in salida):
+            continue
+        vistos.add(k)
+        if tema:
+            temas.add(tema)
+        salida.append(t)
+    return salida
+
+
+# Publicación sin CV (2026-10-09): si la ruta no pide CV, ningún texto público dice «envía tu CV».
+_FRASES_CV = [
+    (re.compile(r"Env[ií]a tu (CV|curr[ií]culum)( vitae)? por este medio", re.IGNORECASE), "Postúlate desde la liga de la vacante"),
+    (re.compile(r"solo necesitas tu (CV|curr[ií]culum) o responder unas preguntas r[aá]pidas", re.IGNORECASE), "solo responde unas preguntas rápidas"),
+    (re.compile(r"(env[ií]a|manda|comparte|adjunta|sube)(nos)? tu (CV|curr[ií]culum)( vitae)?", re.IGNORECASE), "postúlate en la liga"),
+    (re.compile(r"(con|y) tu (CV|curr[ií]culum)( vitae)?", re.IGNORECASE), ""),
+]
+
+
+def texto_sin_cv(texto: str) -> str:
+    salida = texto or ""
+    for patron, reemplazo in _FRASES_CV:
+        salida = patron.sub(reemplazo, salida)
+    return re.sub(r"[ \t]{2,}", " ", salida)
+
+
+def _quitar_cv(salida: "VacanteGenerada") -> None:
+    salida.texto_whatsapp = texto_sin_cv(salida.texto_whatsapp)
+    for bloque in (salida.occ, salida.linkedin, salida.portal):
+        bloque.texto_copy = texto_sin_cv(bloque.texto_copy)
+        bloque.page = texto_sin_cv(bloque.page)
 
 
 # 2026-09-20 (Bloque 1): reglas de prefiltro garantizadas en código, no solo en el prompt.
@@ -402,7 +460,8 @@ def _demo_vacante(f: FichaVacante) -> VacanteGenerada:
             page=(
                 f"SOBRE LA VACANTE\n{empresa} busca {titulo} para su equipo{en_lugar}.\n\n"
                 f"ACTIVIDADES PRINCIPALES\n{lista_act}\n\nREQUISITOS\n{viñetas}\n\nOFRECEMOS\n{lista_ben}\n\n"
-                "CÓMO POSTULARTE\n• Envía tu CV por este medio y el equipo de RH te contactará."
+                + ("CÓMO POSTULARTE\n• Envía tu CV por este medio y el equipo de RH te contactará." if f.pide_cv is not False
+                 else "CÓMO POSTULARTE\n• Postúlate desde la liga de la vacante: solo responde unas preguntas rápidas.")
             ),
             etiquetas=[x for x in [titulo.lower(), area.lower() or "empleo", lugar.lower(), "vacante"] if x],
         ),
@@ -430,7 +489,8 @@ def _demo_vacante(f: FichaVacante) -> VacanteGenerada:
                 "**Lo que harás**\n" + "\n".join(f"- {a}" for a in actividades) + "\n\n"
                 "**Lo que necesitas**\n" + "\n".join(f"- {r}" for r in reqs)
                 + ("\n\n**Lo que te damos**\n" + "\n".join(f"- {b}" for b in ofrecemos) if ofrecemos else "") + "\n\n"
-                "Postúlate en 2 minutos: solo necesitas tu CV o responder unas preguntas rápidas."
+                + ("Postúlate en 2 minutos: solo necesitas tu CV o responder unas preguntas rápidas." if f.pide_cv is not False
+                 else "Postúlate en 2 minutos: solo responde unas preguntas rápidas.")
             ),
             etiquetas=[x for x in [titulo.lower(), f"empleo {lugar.lower()}" if lugar else "", "vacante"] if x],
         ),
@@ -472,7 +532,10 @@ def generar_vacante(ficha: FichaVacante) -> Tuple[VacanteGenerada, bool]:
             f"- Descripción breve (guía obligatoria a expandir): {ficha.descripcion_breve or '(sin dato)'}\n"
             f"- Requisitos indispensables capturados (conservar literal, como indispensables):{lista(ficha.requisitos_indispensables)}\n"
             f"- Requisitos deseables capturados (conservar literal, como deseables):{lista(ficha.requisitos_deseables)}\n"
-            f"- Prestaciones capturadas (las únicas que puedes mencionar):{lista(ficha.beneficios)}\n\n"
+            f"- Prestaciones capturadas (las únicas que puedes mencionar):{lista(ficha.beneficios)}\n"
+            + ("- La ruta de esta vacante NO pide CV: nunca escribas «envía tu CV» ni nada parecido; invita a postularse en la "
+               "liga respondiendo unas preguntas rápidas.\n" if ficha.pide_cv is False else "")
+            + "\n"
             "Genera la publicación completa a partir de esta ficha, complementando SOLO lo que falte."
         ),
         text_format=VacanteGenerada,

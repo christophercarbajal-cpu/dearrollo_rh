@@ -1354,7 +1354,8 @@ function ModalCandidato({
                 { id: "resumen", label: "Contratación", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
                 { id: "documentos", label: "Documentos", icon: FileText, tone: "brand" },
-                { id: "whatsapp", label: "WhatsApp", icon: MessageCircle, tone: "good", badge: c.mensajes },
+                // 2026-10-09: la conversación es de ESTA postulación — la pestaña lleva el nombre del puesto
+                { id: "whatsapp", label: c.puesto || "Conversación", icon: MessageCircle, tone: "good", badge: c.mensajes },
                 // la pestaña del expediente vive en Contratación Y Onboarding
                 ...(c.etapa === "Contratación" || c.etapa === "Onboarding"
                   ? [{ id: "contratacion", label: "Expediente", icon: Briefcase, tone: "warn" }]
@@ -2476,7 +2477,10 @@ function PestanaWhatsApp({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 text-xs text-ink-3">
-        <span>{c.telefono ? `+${c.telefono}` : "Sin teléfono"}</span>
+        {/* 2026-10-09: encabezado del chat = el puesto de esta postulación (no el genérico «WhatsApp») */}
+        <span className="min-w-0 truncate">
+          <b className="font-semibold text-ink">{c.puesto || "Sin vacante asignada"}</b> · {c.telefono ? `+${c.telefono}` : "Sin teléfono"}
+        </span>
         <button
           onClick={cargar}
           disabled={cargandoMsgs}

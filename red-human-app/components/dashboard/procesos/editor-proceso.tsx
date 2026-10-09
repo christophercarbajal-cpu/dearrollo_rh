@@ -19,7 +19,9 @@ import { cn } from "@/lib/utils";
 
 const selectRH = cn(inputRH, "h-10 pr-8");
 /** Tipos con algo propio que configurar (el resto se usa tal cual lo define el catálogo). */
-const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "entrevista_agente", "psicometrica"]);
+// 2026-10-09: las tres actividades de IA (avatar, WhatsApp, llamada) son independientes y cada una lleva su enfoque
+const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "llamada_agente"]);
+const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "psicometrica", ...ENTREVISTAS_IA]);
 
 function nuevoId(pasos: PasoProceso[], tipo: string): string {
   const base = tipo.replace(/_/g, "-");
@@ -52,7 +54,7 @@ export function pasoNuevo(t: OpcionTipoPaso, etapa: EtapaCandidato, pasos: PasoP
     responsable: { tipo: t.responsable },
     regla: { tipo: t.regla },
     plazo_dias: null,
-    ...(t.valor === "entrevista_humana" ? { tipo_entrevista: "general" } : t.valor === "entrevista_agente" ? { tipo_entrevista: "profesional" } : {}),
+    ...(t.valor === "entrevista_humana" ? { tipo_entrevista: "general" } : ENTREVISTAS_IA.has(t.valor) ? { tipo_entrevista: "profesional" } : {}),
   }, t);
 }
 
@@ -193,7 +195,7 @@ function DetalleActividad({ p, catalogo = [], opciones, soloLectura, onCambio }:
           </select>
         </label>
       )}
-      {p.tipo === "entrevista_agente" && (
+      {ENTREVISTAS_IA.has(p.tipo) && (
         <label className="flex flex-col gap-1 text-xs text-ink-2">
           Enfoque de la Entrevista Red Human
           <select className={selectRH} value={p.tipo_entrevista ?? "profesional"} disabled={soloLectura} onChange={(ev) => onCambio({ tipo_entrevista: ev.target.value })}>

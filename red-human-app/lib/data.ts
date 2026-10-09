@@ -564,6 +564,10 @@ export interface Vacante {
   }[];
   /** Fase 4: prefiltro por WhatsApp independiente (vacío = usa `criterios`) y ubicación estructurada. */
   criteriosWhatsapp?: { pregunta: string; tipo: string; valida: string; respuesta_esperada: string; descarta: boolean; opciones?: string[] }[];
+  /** 2026-10-09: ¿la ruta de la vacante pide CV? (false = el formulario público lo deja opcional). */
+  pideCv?: boolean;
+  /** 2026-10-09: plantillas de conversación por actividad de la ruta (solo en el detalle para RH). */
+  guiones?: import("./api").VistaGuiones;
   ubicacionEstado?: string;
   ubicacionMunicipio?: string;
   /** Capacitación universal: curso que se asigna como filtro al quedar apto */

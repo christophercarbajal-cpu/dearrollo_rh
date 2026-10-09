@@ -553,6 +553,69 @@ export interface CriterioFiltro {
   valida: string;
   respuesta_esperada: string;
   descarta: boolean;
+  /** numero / opcion: rangos u opciones que elige el candidato. */
+  opciones?: string[];
+  /** 2026-10-09 (WhatsApp): requisito indispensable del web que esta pregunta reconfirma con un dato concreto. */
+  reconfirma?: string;
+  minimo?: number;
+  opciones_validas?: string[];
+}
+
+/* ---------- Plantillas de conversación por vacante (2026-10-09) ---------- */
+export type ClaveGuion = "prefiltro_web" | "prefiltro_whatsapp" | "entrevista_whatsapp" | "entrevista_avatar" | "llamada";
+export const ORDEN_GUIONES: ClaveGuion[] = ["prefiltro_web", "prefiltro_whatsapp", "entrevista_whatsapp", "entrevista_avatar", "llamada"];
+export const TITULOS_GUION: Record<ClaveGuion, string> = {
+  prefiltro_web: "Prefiltro · Web",
+  prefiltro_whatsapp: "Prefiltro · WhatsApp",
+  entrevista_whatsapp: "Entrevista Red Human por WhatsApp — guion",
+  entrevista_avatar: "Entrevista con avatar — guion",
+  llamada: "Llamada — guion",
+};
+export interface GuionConversacion {
+  enfoque: string;
+  temas: string[];
+  preguntas: string[];
+}
+export interface MetaGuion {
+  generado_en?: string;
+  generado_ia?: boolean;
+  generado_hash?: string;
+  huella?: string;
+  editado?: boolean;
+  editado_por?: string;
+  editado_en?: string | null;
+}
+export interface SeccionGuionVista {
+  clave: ClaveGuion;
+  titulo: string;
+  clase: "prefiltro" | "guion";
+  aplica: boolean;
+  contenido: CriterioFiltro[] | GuionConversacion;
+  vacia: boolean;
+  generadoEn?: string | null;
+  generadoIa?: boolean;
+  editado: boolean;
+  editadoPor: string;
+  editadoEn?: string | null;
+  desactualizado: boolean;
+}
+/** Lo que regresa el detalle de la vacante para RH (nunca el portal). */
+export interface VistaGuiones {
+  secciones: SeccionGuionVista[];
+  aplican: ClaveGuion[];
+  meta: Record<string, MetaGuion>;
+  huella: string;
+  desactualizado: boolean;
+}
+/** Lo que regresa «Generar»: solo las secciones de la ruta (los prefiltros viajan en preguntas_filtro*). */
+export interface GuionesGenerados {
+  secciones: Partial<Record<ClaveGuion, GuionConversacion>>;
+  meta: Record<string, MetaGuion>;
+  aplican: ClaveGuion[];
+  conservadas: ClaveGuion[];
+  generadas: ClaveGuion[];
+  huella: string;
+  ia: boolean;
 }
 
 /** Salida cruda del generador (aún no persistida). */
@@ -580,6 +643,8 @@ export interface VacanteGenerada {
   preguntas_filtro: CriterioFiltro[];
   /** 2026-09-16 (prefiltro dual): 2-3 puntos críticos que la IA confirma por WhatsApp. */
   preguntas_filtro_whatsapp?: CriterioFiltro[];
+  /** 2026-10-09: guiones de las actividades de la ruta (solo las que están en ella). */
+  guiones?: GuionesGenerados;
 }
 
 /** Parte 3 (2026-09-12): sueldo estructurado. "a_convenir" = sin montos. El texto que se muestra
@@ -628,6 +693,14 @@ export interface DatosVacante extends SueldoEstructurado {
   /** Fase 4: la empresa visible se resuelve en el servidor a partir del Cliente y de "mostrar cliente". */
   cliente_id?: number | null;
   mostrar_cliente_candidato?: boolean;
+  /* --- Generación según la ruta (2026-10-09) --- */
+  responsabilidades?: string[];
+  enfoque_entrevista?: EnfoqueEntrevista;
+  /** Ruta elegida en el formulario; sin ella, la predeterminada de la Cuenta. */
+  proceso?: ProcesoEntrada;
+  guiones_actuales?: { preguntas_filtro?: CriterioFiltro[]; preguntas_filtro_whatsapp?: CriterioFiltro[]; secciones?: Partial<Record<ClaveGuion, GuionConversacion>> };
+  /** Secciones con ediciones de RH que NO se regeneran. */
+  conservar?: ClaveGuion[];
 }
 
 export function fetchVacantes(filtros?: {
@@ -732,9 +805,17 @@ export function crearVacante(
     texto_bolsa?: string;
     /** Proceso configurable (2026-10-06): sin mandar = la plantilla predeterminada de la Cuenta. */
     proceso?: ProcesoEntrada;
+    /** Plantillas de conversación (2026-10-09). */
+    guiones?: { secciones: Partial<Record<ClaveGuion, GuionConversacion>>; meta: Record<string, MetaGuion> };
   },
 ) {
   return post<Vacante>("/vacantes", datos);
+}
+
+/** «Volver a generar» las plantillas de conversación de una vacante guardada (solo las de su ruta). Con ediciones de RH
+ * y sin `sobrescribir_editadas` la API responde 409. */
+export function generarGuionesVacante(codigo: string, datos: { secciones?: ClaveGuion[]; sobrescribir_editadas?: boolean }) {
+  return post<Vacante & { generadas: ClaveGuion[]; conservadas: ClaveGuion[] }>(`/vacantes/${codigo}/guiones/generar`, datos);
 }
 
 /** Pipeline de cinco columnas (2026-10-01). Los valores internos no se renombran («Entrevista IA», «Entrevista

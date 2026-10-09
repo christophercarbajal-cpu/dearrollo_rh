@@ -35,6 +35,7 @@ import { Area, Selector, ToggleSiNo } from "@/components/dashboard/campos";
 import {
   CONTENIDO_VACIO,
   FormularioContenidoVacante,
+  guionesDesdeVacante,
   contenidoComoPayload,
   contenidoDesdePlantilla,
   contenidoDesdeVacante,
@@ -59,6 +60,7 @@ import {
   TIPOS_EVALUACION,
   type PruebaPsicometrica,
   eliminarVacante,
+  fetchVacante,
   fetchVacantes,
   fetchVistaPreviaVacante,
   publicarVacante,
@@ -693,6 +695,14 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
   const [proceso, setProceso] = useState<EstadoProcesoVacante>(() => procesoInicial(v));
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+  // 2026-10-09: los guiones solo vienen en el detalle para RH (nunca en listados ni en el portal)
+  useEffect(() => {
+    fetchVacante(v.id).then((d) => {
+      if (d) setContenido((c) => ({ ...c, guiones: guionesDesdeVacante(d) }));
+    });
+  }, [v.id]);
+  // Ruta con la que se generan los guiones: la que RH esté ajustando o la copia de esta vacante
+  const rutaGeneracion = proceso.tocado ? entradaProceso(proceso) : v.proceso?.pasos?.length ? { pasos: v.proceso.pasos } : undefined;
 
   async function guardar() {
     const faltan = faltantesDatosPrincipales(contenido);
@@ -718,8 +728,10 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
           onChange={setContenido}
           clienteId={v.clienteId ?? null}
           mostrarCliente={v.mostrarClienteCandidato ?? true}
+          conGuiones
+          rutaGeneracion={rutaGeneracion}
+          slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} />}
         />
-        <SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} />
         {error && <Aviso tono="error" onCerrar={() => setError("")}>{error}</Aviso>}
         <div className="flex items-center gap-3 border-t border-border-faint pt-5">
           <Button variant="outline" className="flex-1" onClick={onClose} disabled={guardando}>
@@ -985,6 +997,9 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
           clienteId={clienteId || null}
           mostrarCliente={mostrarCliente}
           faltaCliente={faltaCliente}
+          conGuiones
+          rutaGeneracion={entradaProceso(proceso)}
+          slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} />}
           slotDatosPrincipales={
             clientes.length > 0 ? (
               <>
@@ -1017,9 +1032,7 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
           }
         />
 
-        <SeccionProcesoVacante value={proceso} onChange={setProceso} />
-
-        {/* Gestión — DESPUÉS de la Entrevista Red Human (Parte 3, punto 9) */}
+        {/* Gestión — DESPUÉS de Generar y Revisar (2026-10-09: el proceso de selección va antes de Generar) */}
         <div className="border-t border-border-faint pt-5">
           <Eyebrow>Gestión</Eyebrow>
         </div>
@@ -1136,24 +1149,9 @@ function ResultadoGeneracion({ gen }: { gen: VacanteGenerada }) {
           : "Publicación generada con plantilla (modo demo — agrega OPENAI_API_KEY en la API para IA real)."}
       </Aviso>
 
-      {gen.avisos_cumplimiento.length > 0 && (
-        <Card className="border-warn/30 bg-warn-soft/40 p-4">
-          <span className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-warn">
-            <ShieldAlert className="h-3.5 w-3.5" /> Cumplimiento · revisa antes de publicar
-          </span>
-          <ul className="mt-2.5 space-y-1.5">
-            {gen.avisos_cumplimiento.map((a, i) => (
-              <li key={i} className="text-[13px] leading-relaxed text-ink-2">
-                · {a}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
+      {/* 2026-10-09: los avisos de cumplimiento y los prefiltros ya se ven UNA vez en el formulario (Generar · Revisar) */}
       <ContenidoBase gen={gen} />
       <PestanasPlataforma bloques={bloques} />
-      <Criterios criterios={gen.preguntas_filtro} />
     </div>
   );
 }

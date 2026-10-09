@@ -122,6 +122,11 @@ def normalizar_pregunta(q) -> Optional[dict]:
     if not isinstance(q, dict) or not _texto(q.get("pregunta")):
         return None
     tipo = q.get("tipo") if q.get("tipo") in TIPOS_PREGUNTA_CERRADA else None
+    from . import ia
+
+    if ia.es_autopercepcion(_texto(q.get("pregunta"))):
+        raise ErrorGuion(400, f"«{_texto(q.get('pregunta'), 80)}»: el prefiltro no pregunta autopercepciones (no se pueden "
+                              "verificar). Pregunta por un requisito concreto (experiencia, documento, disponibilidad).")
     if tipo is None:
         raise ErrorGuion(400, f"«{_texto(q.get('pregunta'), 80)}»: los prefiltros solo admiten preguntas cerradas "
                               "(Sí / No, número o una opción de una lista).")

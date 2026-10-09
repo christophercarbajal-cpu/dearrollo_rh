@@ -101,13 +101,17 @@ with TestClient(app) as client:
     client.patch(f"/vacantes/{VAC}", json={"preguntas_filtro_whatsapp": wa})
     r = client.post("/candidatos", json={"nombre": "Ana WA", "telefono": "5511223344", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]
-    PREGUNTAS_USADAS.clear()
+    # retro 2026-10-09: prefiltro conversacional en todas las Cuentas — solo indispensables, cerradas, de una en una
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Hola, me interesa"})
-    check(r.status_code == 200 and PREGUNTAS_USADAS and PREGUNTAS_USADAS[-1] == ["¿Vives en Zapopan o cerca?"], f"el turno de prefiltro recibe las preguntas de WhatsApp: {PREGUNTAS_USADAS[-1]}")
+    check(r.status_code == 200 and "¿Tienes experiencia en caja?" in r.json()["respuesta"], f"primero el indispensable de la web: {r.json()['respuesta'][:120]}")
+    r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Sí"})
+    check("¿Vives en Zapopan o cerca?" in r.json()["respuesta"] and "Años de experiencia" not in r.json()["respuesta"],
+          "después la pregunta PROPIA de WhatsApp (indispensable y cerrada); lo no indispensable no se pregunta")
     client.patch(f"/vacantes/{VAC}", json={"preguntas_filtro_whatsapp": []})
-    PREGUNTAS_USADAS.clear()
-    r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Sí tengo experiencia"})
-    check(PREGUNTAS_USADAS and PREGUNTAS_USADAS[-1] == ["¿Tienes experiencia en caja?", "¿Años de experiencia?"], "sin preguntas de WhatsApp → usa las de la web (fallback)")
+    r = client.post("/candidatos", json={"nombre": "Beto WA", "telefono": "5511223355", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
+    P2 = r.json()["id"]
+    r = client.post(f"/candidatos/{P2}/prefiltro", json={"texto": "Hola"})
+    check("¿Tienes experiencia en caja?" in r.json()["respuesta"], "sin preguntas de WhatsApp → usa las de la web (fallback)")
 
     print("\n--- Plantillas ---")
     r = client.post("/plantillas", json={"nombre": "P F4", "titulo": "Cajero", "ubicacion_estado": "Nuevo León", "ubicacion_municipio": "Monterrey", "preguntas_filtro_whatsapp": wa})

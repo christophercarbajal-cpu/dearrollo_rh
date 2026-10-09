@@ -95,21 +95,17 @@ with TestClient(app) as client:
     P1 = r.json()["id"]
     p1 = db.query(Postulacion).filter(Postulacion.codigo == P1).one()
 
-    def _agenda_falsa(nombre, titulo, historial, *, db, candidato, nota=""):
-        from app.services.entrevistas import crear_entrevista_para_candidato
-        e, _ = crear_entrevista_para_candidato(db, candidato, "agente-ia")
-        liga = f"http://app.test/entrevista/{e.token}"
-        t = ia.TurnoPrefiltro(respuesta=f"¡Listo! Tu entrevista quedó para mañana a las 10:00. Aquí está tu liga: {liga} ¡Éxito!", clasificacion_lista=False)
-        t.cita_fecha_hora = "2026-09-18T10:00:00-06:00"
-        t.cita_liga = liga
-        return t, True
-
-    ia.agenda_turno = _agenda_falsa
+    # retro 2026-10-09: agenda determinista — propone y SOLO registra con el «sí» explícito del candidato
     ENVIOS.clear()
     res = asyncio.run(rc._procesar_turno_agenda(db, p1, [{"rol": "user", "texto": "mañana a las 10"}], "whatsapp"))
+    check(res["cita"] is None and "http" not in res["respuesta"] and "¿Te confirmo mañana a las 10:00 a.m." in res["respuesta"],
+          f"el candidato propone horario → el bot pide confirmación SIN registrar: «{res['respuesta']}»")
+    res = asyncio.run(rc._procesar_turno_agenda(db, p1, [{"rol": "user", "texto": "ok"}], "whatsapp"))
+    check(res["cita"] is None and "Sí" in res["respuesta"], "«ok» no es un «sí» explícito: vuelve a pedir la confirmación")
+    res = asyncio.run(rc._procesar_turno_agenda(db, p1, [{"rol": "user", "texto": "Sí"}], "whatsapp"))
     texto = res["respuesta"]
-    check(texto.count("http") == 1, f"la respuesta trae UNA sola liga (antes 2): «{texto[-80:]}»")
-    check(texto.endswith(res["cita"]["liga"]) and "Aquí está tu liga:" in texto, "la liga es la real del sistema y el texto del modelo se conserva sin la URL")
+    check(res["cita"] is not None and texto.count("http") == 1, f"con el «sí» explícito se registra y la respuesta trae UNA sola liga: «{texto[-80:]}»")
+    check(texto.endswith(res["cita"]["liga"]) and "mañana a las 10:00 a.m." in texto, "la liga es la real del sistema y el texto confirma el horario")
     check(rc._sin_ligas("Hola https://a.b/x  \n\n\n\nfin") == "Hola\n\nfin", "_sin_ligas limpia URL y espacios sobrantes")
 
     # ================= 2. Persistencia de la Entrevista IA =================

@@ -827,7 +827,11 @@ def prefiltro_turno(
             + "\n".join(lineas_contexto) + "\n"
             f"Criterios de prefiltro:\n{criterios_prefiltro(preguntas)}\n\n"
             "Reglas: (1) una sola pregunta por mensaje y UN solo criterio por pregunta (nunca compuestas: «¿cuántos años tienes y has usado SAP?» son dos mensajes), tono cálido y breve — hablas como un reclutador "
-            "humano, NO como un cuestionario robótico;" + saludo + " (2) recorre los criterios en orden "
+            "humano, NO como un cuestionario robótico;" + saludo + " (1b) SOLO preguntas CERRADAS (sí/no o un dato "
+            "concreto) sobre los criterios indispensables (DESCARTA); NUNCA preguntes autopercepciones («¿te consideras "
+            "organizado?», «¿eres responsable?»); si ya respondió en el formulario web, pide el DATO EXACTO (cuántos años, en "
+            "qué empresa); si la respuesta es ambigua (p. ej. «8» sin unidad) pide aclaración («¿8 años o 8 meses?»); si "
+            "dice que no entiende, reformula la MISMA pregunta con otras palabras más sencillas; (2) recorre los criterios en orden "
             "y no repitas los que ya quedaron contestados — no es necesario agotarlos todos: en cuanto "
             "puedas clasificar con confianza, cierra antes (ver regla 5); (3) si el candidato pregunta "
             "sobre sueldo, ubicación, beneficios o el puesto, contesta con los datos de la vacante que "
@@ -1336,13 +1340,16 @@ def prompt_entrevistador(
         f"momento, responde solo: «{ESPERA_INICIO}» y espera. Si recibes un turno vacío o sin contenido antes "
         f"de empezar, di: «{AVISO_SILENCIO.format(nombre=candidato_nombre)}».\n\n"
         "CÓMO ENTREVISTAS: (1) frases cortas y lenguaje sencillo, en español mexicano; (2) UNA sola pregunta "
-        "principal por intervención — jamás dos preguntas en la misma oración; (3) primero pregunta algo "
+        "principal por intervención — jamás dos preguntas en la misma oración; SOLO preguntas ABIERTAS (qué, cómo, "
+        "cuéntame, platícame) — nunca de sí/no ni de prefiltro; (3) primero pregunta algo "
         "general del tema y luego profundiza según lo que responda, con repreguntas también cortas (máximo "
-        "dos por tema); (4) NUNCA digas 'Pregunta 1', 'Pregunta 2', ni numeres ni enumeres las preguntas; "
+        "dos por tema); si la respuesta es general o vaga, REPREGUNTA pidiendo un ejemplo concreto (qué hizo, "
+        "cuándo, cómo y con qué resultado); (4) NUNCA digas 'Pregunta 1', 'Pregunta 2', ni numeres ni enumeres las preguntas; "
         "(5) si la persona ya respondió algo que ibas a preguntar después, NO lo vuelvas a preguntar: "
         "reconoce brevemente y sigue con lo siguiente; (6) compórtate como una entrevistadora que conversa, "
         "no como quien lee un cuestionario: reacciona a lo que dice, conecta temas, sé cálida y profesional; "
-        "(7) no evalúes en voz alta, no prometas nada sobre el resultado: la decisión la toma una persona "
+        "(7) no evalúes en voz alta, no prometas nada sobre el resultado: PROHIBIDO decir «tu perfil es "
+        "compatible», «vas muy bien», «seguro pasas» o que avanzará en el proceso — la decisión la toma una persona "
         "de RH; (8) cuando ya tengas suficiente de un tema, cambia de tema sin anunciarlo.\n\n"
         f"CUMPLIMIENTO (NO NEGOCIABLE): nunca preguntes, insinúes ni registres datos sobre {DATOS_SENSIBLES_PROHIBIDOS}. "
         "Si la persona los menciona por su cuenta, no repreguntes, no comentes y sigue con el tema laboral.\n\n"
@@ -1392,7 +1399,25 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
         input=mensajes,
         text_format=TurnoEntrevista,
     )
-    return resp.output_parsed, True
+    turno = resp.output_parsed
+    turno.respuesta = sin_promesas(turno.respuesta)  # retro 2026-10-09: garantizado en código, no solo en el prompt
+    return turno, True
+
+
+# Retro 2026-10-09: frases que valoran o prometen avance. El agente NUNCA las dice (entrevista, prefiltro ni agenda).
+_RE_PROMESA = re.compile(
+    r"[^.!?\n]*\b(perfil (es |resulta )?(muy )?(compatible|ideal|adecuado)|eres (el|la) (candidat[oa] )?(ideal|indicad[oa])|"
+    r"vas (muy )?bien|seguro (que )?(pasas|avanzas|quedas)|(vas a|vas|seguro) (avanzar|pasar|quedar)|"
+    r"avanzar[aá]s|pasar[aá]s a la siguiente|(quedaste|est[aá]s) (seleccionad|contratad|aceptad)\w*)\b[^.!?\n]*[.!?]?",
+    re.IGNORECASE)
+
+
+def sin_promesas(texto: str) -> str:
+    """Quita las oraciones que valoran el perfil o prometen avanzar («Tu perfil es compatible…»)."""
+    limpio = _RE_PROMESA.sub("", texto or "")
+    limpio = re.sub(r"[ \t]{2,}", " ", limpio)
+    limpio = re.sub(r"\n{3,}", "\n\n", limpio).strip()
+    return limpio or (texto or "").strip()
 
 
 # ---------- Evaluación: recomendación + conocimiento profundo del candidato (Punto 5) ----------
@@ -2508,6 +2533,43 @@ class ClasificacionRespuesta(BaseModel):
     sentido: Literal["si", "no", "ambigua"] = Field(description="«si» si la respuesta afirma, «no» si niega, «ambigua» si no queda claro.")
 
 
+# Retro 2026-10-09: el prefiltro NUNCA pregunta autopercepciones («¿te consideras organizado?»): no se pueden verificar.
+_RE_AUTOPERCEPCION = re.compile(
+    r"\b(te consideras|te describes|te defines|te percibes|te calificar\w*|c[oó]mo te ves|te sientes (una persona|capaz)|"
+    r"eres (una )?persona|eres (muy )?(organizad|responsable|puntual|proactiv|trabajador|honest|comprometid|l[ií]der|creativ|"
+    r"paciente|ordenad|din[aá]mic|amable|tolerante|sociable|respetuos|disciplinad|eficiente|atent))\w*",
+    re.IGNORECASE)
+
+
+def es_autopercepcion(texto: str) -> bool:
+    return bool(_RE_AUTOPERCEPCION.search(texto or ""))
+
+
+def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[str]] = None) -> str:
+    """«No entiendo»: la MISMA pregunta con otras palabras, más sencilla y cerrada. Determinista; la IA solo la pule."""
+    if opciones:
+        lista = "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1))
+        base = f"Te lo pregunto de otra forma: {pregunta.strip()}\nEscríbeme el número de la opción que te corresponde:\n{lista}"
+    else:
+        req = (criterio or pregunta).strip().rstrip(".?¿")
+        base = f"Te lo pregunto de otra forma: para esta vacante se necesita {req[:1].lower() + req[1:]}. ¿Cumples con eso? Respóndeme *Sí* o *No*."
+    client = _client()
+    if client is None or opciones:
+        return base
+    try:
+        resp = client.responses.create(
+            model=MODEL,
+            instructions=("Reformula la pregunta de prefiltro para un candidato que dijo que no la entendió: UNA sola pregunta "
+                          "cerrada que se conteste con Sí o No, palabras sencillas, español mexicano, máximo 25 palabras, sin "
+                          "autopercepciones. Termina con «Respóndeme Sí o No.»"),
+            input=f"Pregunta original: {pregunta}\nRequisito: {criterio}",
+        )
+        texto = (getattr(resp, "output_text", "") or "").strip()
+        return f"Te lo pregunto de otra forma: {texto}" if texto and "?" in texto else base
+    except Exception:  # noqa: BLE001 — la versión determinista basta
+        return base
+
+
 def clasificar_respuesta_prefiltro(pregunta: str, respuesta: str) -> Optional[str]:
     """«si» / «no» / None. Solo se llama cuando el léxico determinista no pudo decidir; ante cualquier duda (o sin
     clave) regresa None y el bot pide aclaración. Nunca decide el prefiltro: solo interpreta la respuesta."""
@@ -2664,6 +2726,9 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
       la IA si reconfirma un indispensable con tipo número/opción; si no, la determinista). Nada no indispensable.
     * WhatsApp sin web: el prefiltro principal — cerrado, indispensables como eliminatorias."""
     indisp = [r for r in ficha.requisitos_indispensables if r.strip()]
+    # retro 2026-10-09: una autopercepción («¿te consideras organizado?») nunca entra al prefiltro
+    web = [q for q in web or [] if not es_autopercepcion(q.get("pregunta", ""))]
+    whatsapp = [q for q in whatsapp or [] if not es_autopercepcion(q.get("pregunta", ""))]
     salida_web: List[dict] = []
     if hay_web:
         if web and not any(q.get("reconfirma") for q in web) and all(q.get("tipo") == "si_no" for q in web) and not indisp:

@@ -1,4 +1,10 @@
-"""Prefiltro conversacional (2026-10-08) — SOLO las Cuentas con ruta automática (`models.CUENTAS_RUTA_AUTOMATICA`).
+"""Prefiltro conversacional (2026-10-08; retro 2026-10-09: TODAS las Cuentas cuya ruta trae «Prefiltro por WhatsApp»).
+
+Reglas del bot (retro 2026-10-09, garantizadas en código): solo preguntas CERRADAS sobre los INDISPENSABLES, de una en
+una (lo no indispensable solo se registra si vino del formulario); nunca autopercepciones («¿te consideras
+organizado?»); lo que ya respondió en la web se reconfirma con el dato exacto; un número sin unidad («8») pide «¿8 años
+o 8 meses?»; «no entiendo» reformula la misma pregunta; un indispensable incumplido = mensaje de rechazo y cierre.
+Una postulación que ya iba a medio prefiltro con el flujo anterior (o lo terminó) lo conserva.
 
 UNA entidad (`Postulacion.analisis["prefiltro_conversacional"]`) junta lo que el candidato contestó en el formulario web
 y lo que contesta en el chat (WhatsApp o Telegram: la fachada `services/whatsapp.py` decide el canal; aquí no hay nada
@@ -70,6 +76,10 @@ def criterios_de(v) -> List[dict]:
         cid = clave if clave not in usados else f"{clave}-{i + 1}"
         usados.add(cid)
         pregunta = str(pv["pregunta"]).strip()
+        from . import ia
+
+        if ia.es_autopercepcion(pregunta):
+            continue  # retro 2026-10-09: una autopercepción no se puede verificar — el bot nunca la pregunta
         chat = str(pv.get("pregunta_chat") or "").strip() or pregunta
         if es_ubicacion:
             chat = f"¿Vives en {ubic} o te queda cerca para trasladarte?"
@@ -78,6 +88,25 @@ def criterios_de(v) -> List[dict]:
             "chat": chat, "indispensable": bool(pv.get("descarta")),
             "esperada": "no" if _norm(pv.get("respuesta_esperada") or "Sí") == "no" else "si",
         })
+    # Retro 2026-10-09: preguntas PROPIAS del prefiltro por WhatsApp (no reconfirman nada): entran las cerradas e
+    # indispensables que el web no cubre (las abiertas de vacantes anteriores no: el bot solo pregunta cerradas).
+    ya = {_norm(c["criterio"]) for c in salida} | {_norm(c["pregunta"]) for c in salida}
+    from . import ia
+
+    for i, pw in enumerate((v.preguntas_filtro_whatsapp if v is not None else None) or []):
+        if (not isinstance(pw, dict) or pw.get("reconfirma") or not pw.get("descarta") or not str(pw.get("pregunta", "")).strip()
+                or (pw.get("tipo") or "si_no") not in ("si_no", "opcion", "numero") or ia.es_autopercepcion(pw["pregunta"])):
+            continue
+        pregunta = str(pw["pregunta"]).strip()
+        criterio = str(pw.get("valida") or pregunta).strip()
+        if _norm(criterio) in ya or _norm(pregunta) in ya:
+            continue
+        ya.add(_norm(criterio))
+        cid = f"wa{i + 1}"
+        usados.add(cid)
+        salida.append({"id": cid, "clave": cid, "criterio": criterio, "pregunta": pregunta,
+                       "chat": str(pw.get("pregunta_chat") or "").strip() or pregunta, "indispensable": True,
+                       "esperada": "no" if _norm(pw.get("respuesta_esperada") or "Sí") == "no" else "si"})
     # 2026-10-09: reconfirmaciones de WhatsApp (dato concreto) de los indispensables del web
     por_criterio = {_norm(c["criterio"]): c for c in salida if c["indispensable"]}
     for pw in (v.preguntas_filtro_whatsapp if v is not None else None) or []:
@@ -116,6 +145,17 @@ def _anos(t: str) -> Optional[float]:
     return n
 
 
+_RE_SOLO_NUMERO = re.compile(r"(?:como |unos |unas |mas o menos |aprox\w* )?(\d+(?:[.,]\d+)?|" + "|".join(_NUMEROS) + r")")
+
+
+def numero_sin_unidad(c: dict, texto: str) -> Optional[str]:
+    """«8» en una pregunta de tiempo: ¿años o meses? Regresa el número (texto) si hay que aclarar la unidad."""
+    if c.get("tipo") != "numero":
+        return None
+    m = _RE_SOLO_NUMERO.fullmatch(_norm(texto))
+    return m.group(1) if m else None
+
+
 def clasificar_dato(c: dict, texto: str) -> Optional[str]:
     """Reconfirmación con dato concreto: «si» si el dato cumple, «no» si lo contradice, None si no se entiende."""
     t = _norm(texto)
@@ -145,7 +185,18 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
 
 
 def aplica(p: Optional[Postulacion]) -> bool:
-    return bool(p is not None and ruta_automatica(p.cuenta) and p.vacante is not None and criterios_de(p.vacante))
+    if p is None or p.vacante is None or not criterios_de(p.vacante):
+        return False
+    if ruta_automatica(p.cuenta):
+        return True
+    # Retro 2026-10-09: todas las Cuentas, si la ruta trae «Prefiltro por WhatsApp» — salvo una postulación que ya iba (o
+    # terminó) con el prefiltro anterior: lo conserva.
+    pasos = (p.proceso or {}).get("pasos") or []
+    if not any(x.get("tipo") == "prefiltro_whatsapp" and not x.get("heredado") for x in pasos):
+        return False
+    if estado(p):
+        return True
+    return not (p.prefiltro_completo or (p.analisis or {}).get("respuestas_prefiltro"))
 
 
 # ============================================================ clasificación de respuestas
@@ -156,6 +207,8 @@ _RE_SI_SIN_PROBLEMA = re.compile(r"\b(no hay problema|sin problema|no tengo prob
 _RE_NO = re.compile(r"^(no|nop|nel|negativo|nunca|para nada|tampoco|aun no|todavia no)\b")
 _RE_SI = re.compile(r"^(si|sii+|sip|simon|claro|por supuesto|afirmativo|correcto|asi es|exacto|yes|ok|okey|va|vale|dale|desde luego|"
                     r"con gusto|cuento con|tengo|puedo|termine|acabe|vivo|estoy)\b")
+_RE_NO_ENTIENDE = re.compile(r"(no (le )?entiendo( la pregunta)?|no entendi( la pregunta)?|no le entendi|no comprendo|que|como|mande|"
+                             r"perdon|a que te refieres|que quieres decir|que significa( eso)?|no se a que te refieres|explicame|me explicas)")
 _RE_SUPERIOR = re.compile(r"\b(prepa|preparatoria|bachiller\w*|licenciatura|universidad|carrera|ingenier\w*|tecnico|cbtis|conalep|cetis|cecyt\w*)\b")
 _RE_INCOMPLETA = re.compile(r"\b(trunca|no (la )?termine|sin terminar|inconclus\w*|me falto|incomplet\w*|la deje|no la acabe)\b")
 SALUDOS = {"hola", "holi", "ola", "buenas", "buen dia", "buenos dias", "buenas tardes", "buenas noches", "hey", "hi", "hello",
@@ -254,7 +307,7 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
             # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
             base = respuestas.get(c["reconfirma"]) or {}
             return base.get("valor") == "si" and base.get("fuente") == "web"
-        return True
+        return c["indispensable"]  # retro 2026-10-09: el chat solo pregunta indispensables (lo demás se registra)
 
     siguiente = next((c for c in criterios if falta(c)), None)
     return (None, None, siguiente) if siguiente else ("cumple", None, None)
@@ -454,6 +507,30 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if pendiente is not None and (reconexion or es_saludo(texto)):
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
         return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
+    if pendiente is not None and _RE_NO_ENTIENDE.fullmatch(_norm(texto)):
+        # retro 2026-10-09: «no entiendo» → la MISMA pregunta con otras palabras (cuenta como aclaración)
+        n = aclaraciones.get(pendiente["id"], 0) + 1
+        if n <= MAX_ACLARACIONES:
+            aclaraciones[pendiente["id"]] = n
+            e["aclaraciones"] = aclaraciones
+            from . import ia
+
+            registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
+            return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], pendiente.get("opciones")),
+                                   aclaracion=True)
+    unidad = dict(e.get("unidad_pendiente") or {})
+    if pendiente is not None and pendiente["id"] in unidad:
+        # respuesta a «¿8 años o 8 meses?»: se completa el dato con la unidad elegida
+        t = _norm(texto)
+        es_mes = bool(re.search(r"\bmes", t))
+        if es_mes or re.search(r"\bano", t):
+            texto = f"{unidad.pop(pendiente['id'])} {'meses' if es_mes else 'años'}"
+            e["unidad_pendiente"] = unidad
+    elif pendiente is not None and pendiente.get("reconfirma") and numero_sin_unidad(pendiente, texto):
+        n_txt = numero_sin_unidad(pendiente, texto)
+        unidad[pendiente["id"]] = n_txt
+        e["unidad_pendiente"] = unidad
+        return await responder(f"Para no equivocarme: ¿son {n_txt} años o {n_txt} meses?", aclaracion=True)
     if pendiente is not None:
         valor = clasificar_dato(pendiente, texto) if pendiente.get("reconfirma") else clasificar(pendiente, texto)
         if valor is None and (pendiente["indispensable"] or pendiente.get("reconfirma")):
@@ -468,7 +545,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             e["aclaraciones"] = aclaraciones
             registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                       {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
-            pide = "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor."
+            pide = ("Dime el tiempo exacto, por ejemplo «3 años» o «8 meses»." if pendiente.get("tipo") == "numero"
+                    else "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
             return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
         e["respuestas"] = {**(e.get("respuestas") or {}),
                            pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
@@ -503,13 +581,15 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     db.commit()
     from . import proceso as sproc
 
-    antes = {x.id for x in p.entrevistas or []}
+    antes = {m.id for m in p.mensajes or [] if m.rol == "assistant"}
     await sproc.avanzar_seguro(db, p)
     db.refresh(p)
-    nueva = next((x for x in p.entrevistas or [] if x.id not in antes), None)
     ultimo = next((m for m in reversed(p.mensajes) if m.rol == "assistant"), None)
-    if nueva is not None and ultimo is not None:
+    if ultimo is not None and ultimo.id not in antes:
+        # la ruta ya mandó el siguiente paso (Entrevista por WhatsApp en este chat, liga o propuesta de cita)
         return {"respuesta": ultimo.texto, "clasificacion": {"estado": "cumple", "evidencia": ""}, "ia": False,
                 "whatsapp": {"enviado": bool(ultimo.enviado)}, "prefiltro": "cumple"}
-    mensaje = ("Tu perfil es compatible con esta vacante. Te escribiremos por este medio con el siguiente paso de tu proceso. 🙌")
+    # retro 2026-10-09: sin valoraciones ni promesas de avance («Tu perfil es compatible» está prohibido)
+    mensaje = (f"Gracias, {nombre_ficha(p).split(' ')[0]}. Registré tus respuestas; una persona del equipo de RH te escribirá "
+               "por este medio. 🙌")
     return await responder(mensaje, clasificacion={"estado": "cumple", "evidencia": ""})

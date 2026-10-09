@@ -234,8 +234,10 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
         texto = (f"{saludo}Buenas noticias: tu postulación a {vacante} continúa. El siguiente paso es tu entrevista con Red Human "
                  f"(entra cuando gustes, dura unos 10 minutos): {liga}")
     else:
-        # 2026-10-08: texto acordado — es el mensaje que sigue al prefiltro aprobado (nunca «agenda una videollamada»)
-        texto = f"{saludo}Tu perfil es compatible con esta vacante. El siguiente paso es tu entrevista con Red Human: {liga}"
+        # 2026-10-08: mensaje que sigue al prefiltro aprobado (nunca «agenda una videollamada»). Retro 2026-10-09: sin
+        # valoraciones ni promesas («Tu perfil es compatible» está prohibido).
+        texto = (f"{saludo}Gracias por responder. El siguiente paso de tu proceso es una entrevista con Red Human (unos 10 "
+                 f"minutos); entra cuando estés en un lugar tranquilo: {liga}")
     db.flush()
     entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", liga, motivo="entrevista", paso_id=paso["id"])
     return True, (f"Liga enviada por {detalle}" if entregado else f"Liga creada; el aviso no salió ({detalle})"), entregado

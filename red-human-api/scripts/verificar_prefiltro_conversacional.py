@@ -225,22 +225,17 @@ with TestClient(app) as client:
     check(len(salida) == 1 and salida[0].endswith("\n\n¿Terminaste la secundaria?") and salida[0].startswith("Retomemos"),
           "reconexión / saludo → repite la pregunta pendiente EXACTA")
     salida = wa("Terminé la prepa")
-    check(len(salida) == 1 and salida[0].endswith(criterios["ubicacion"]["chat"]), "prepa cumple secundaria → siguiente: Ubicación")
-    salida = wa("Sí, vivo cerca")
-    check(len(salida) == 1 and salida[0].endswith(criterios["nss_fiscal"]["chat"]), "→ NSS / situación fiscal")
-    salida = wa("No, todavía no lo tramito")
-    check(len(salida) == 1 and salida[0].endswith(criterios["experiencia"]["chat"]), "NSS «No» solo se registra → Experiencia")
-    salida = wa("No, sería mi primer trabajo")
     pa = recargar(PA)
+    # retro 2026-10-09: el chat SOLO pregunta indispensables — ubicación, NSS y experiencia no se preguntan
     check(pa.activa and pa.analisis["prefiltro_web"]["resultado"] == "cumple" and pa.prefiltro_completo,
-          "sin experiencia y sin NSS sigue CUMPLIENDO: se aprueba al vuelo, sin esperar a RH")
+          "prepa cumple secundaria y turnos venía «Sí» del formulario → aprobado al vuelo; lo no indispensable NO se pregunta")
     check(pa.etapa == "Entrevista IA" and len(pa.entrevistas) == 1, "avanza solo a Filtro Red Human y se crea la sala de la entrevista")
     liga = f"{settings.app_url}/entrevista/{pa.entrevistas[0].token}"
-    check(salida == [f"¡Ana! Tu perfil es compatible con esta vacante. El siguiente paso es tu entrevista con Red Human: {liga}"],
-          "UN mensaje: «Tu perfil es compatible con esta vacante. El siguiente paso es tu entrevista con Red Human: [liga]»")
+    check(len(salida) == 1 and salida[0].endswith(liga) and "compatible" not in salida[0].lower(),
+          f"UN mensaje con la liga de la entrevista, sin «Tu perfil es compatible» ni promesas: «{salida[0][:90]}…»")
     ent = pa.analisis[pconv.ENTIDAD]["respuestas"]
-    check(ent["turnos"]["fuente"] == "web" and ent["secundaria"]["fuente"] == "whatsapp" and ent["nss_fiscal"]["valor"] == "no"
-          and ent["experiencia"]["valor"] == "no", "web y chat alimentan la MISMA entidad (con su fuente)")
+    check(ent["turnos"]["fuente"] == "web" and ent["secundaria"]["fuente"] == "whatsapp" and "nss_fiscal" not in ent
+          and "experiencia" not in ent, "web y chat alimentan la MISMA entidad (con su fuente)")
     check(paso(seg(PA), "prefiltro")["estadoUnificado"] == "aprobada", "Prefiltro «Aprobada» en la ruta")
     salida = wa("ok, gracias")
     check(len(salida) == 1 and liga in salida[0], "si escribe de nuevo, se le recuerda la liga de su entrevista")
@@ -274,6 +269,10 @@ with TestClient(app) as client:
     check(sum(1 for t in salida if "?" in t) == 1, "una sola pregunta por mensaje")
     salida = tg(text="sí")
     check(len(salida) == 1 and salida[0].endswith("¿Tienes disponibilidad para rolar turnos?"), "→ Turnos")
+    salida = tg(text="No entiendo")
+    check(len(salida) == 1 and salida[0].startswith("Te lo pregunto de otra forma") and "rolar turnos" in salida[0].lower(),
+          "«No entiendo» → reformula la MISMA pregunta (no la toma como «No»)")
+    check(recargar(pt.codigo).activa, "…y no cierra la postulación")
     salida = tg(text="Solo puedo en la mañana")
     check(len(salida) == 1 and salida[0].startswith("Para no equivocarme") and "rolar turnos" in salida[0],
           "respuesta ambigua → pide aclaración antes de decidir")
@@ -322,7 +321,41 @@ with TestClient(app) as client:
     print("\n--- 5. Aislamiento ---")
     otra_v.preguntas_filtro = [dict(q) for q in ajustes_demo.PREGUNTAS_AYUDANTE]
     db.commit()
-    check(not pconv.aplica(recargar(otra_p.codigo)), "otra Cuenta (sin ruta automática) conserva su prefiltro de siempre")
+    check(not pconv.aplica(recargar(otra_p.codigo)), "otra Cuenta cuya ruta no trae «Prefiltro por WhatsApp»: el bot no prefiltra")
+    op = recargar(otra_p.codigo)
+    op.proceso = {**op.proceso, "pasos": op.proceso["pasos"] + [{"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}
+    db.commit()
+    check(pconv.aplica(recargar(otra_p.codigo)), "retro 2026-10-09: con «Prefiltro por WhatsApp» en la ruta aplica en CUALQUIER Cuenta")
+    op = recargar(otra_p.codigo)
+    op.prefiltro_completo = True
+    db.commit()
+    check(not pconv.aplica(recargar(otra_p.codigo)), "…pero una postulación que ya terminó su prefiltro anterior lo conserva")
+
+    # ------------------------------------------------------------------ 6. reglas de la retro (unidad, autopercepción)
+    print("\n--- 6. Retro: «8» sin unidad, autopercepciones ---")
+    from types import SimpleNamespace
+
+    vx = SimpleNamespace(preguntas_filtro=[
+        {"pregunta": "¿Tienes al menos 2 años de experiencia en almacén?", "valida": "2 años de experiencia en almacén", "tipo": "si_no",
+         "respuesta_esperada": "Sí", "descarta": True},
+        {"pregunta": "¿Te consideras una persona organizada?", "valida": "Organizado", "tipo": "si_no", "respuesta_esperada": "Sí",
+         "descarta": True}],
+        preguntas_filtro_whatsapp=[{"pregunta": "Para confirmar: ¿cuánto tiempo de experiencia en almacén tienes?", "tipo": "numero",
+                                    "reconfirma": "2 años de experiencia en almacén", "opciones": ["Menos de 1 año", "1 a 2 años", "Más de 2 años"],
+                                    "opciones_validas": ["Más de 2 años"], "minimo": 2}],
+        modalidad="Presencial", ubicacion="", ubicacion_municipio="", ubicacion_estado="")
+    cs = pconv.criterios_de(vx)
+    check(not any("organizad" in c["pregunta"].lower() for c in cs), "una autopercepción («¿Te consideras organizada?») nunca se pregunta")
+    rc = next(c for c in cs if c.get("reconfirma"))
+    check(pconv.numero_sin_unidad(rc, "8") == "8" and pconv.numero_sin_unidad(rc, "8 años") is None,
+          "«8» sin unidad en una pregunta de tiempo → hay que aclarar «¿8 años o 8 meses?»")
+    check(pconv.clasificar_dato(rc, "8 meses") == "no" and pconv.clasificar_dato(rc, "3 años") == "si", "con la unidad, el dato se evalúa")
+    from app.services import ia as _ia
+
+    check(_ia.es_autopercepcion("¿Eres una persona responsable?") and not _ia.es_autopercepcion("¿Cuentas con INE vigente?"),
+          "detector de autopercepciones")
+    check("compatible" not in _ia.sin_promesas("¡Gracias! Tu perfil es compatible. ¿Qué hacías en tu último trabajo?").lower(),
+          "el agente nunca dice «Tu perfil es compatible» (filtro en código)")
     db.close()
 
 print(f"\n{OK} comprobaciones OK")

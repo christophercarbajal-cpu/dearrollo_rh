@@ -1119,10 +1119,11 @@ def entrevista_por_liga(p: Postulacion) -> bool:
 
 
 def _texto_apto(p: Postulacion) -> str:
-    return (
-        f"¡Buenas noticias, {p.nombre.split(' ')[0]}! 🎉 Tu perfil es compatible con lo que buscamos "
-        "para esta vacante. Cuéntame, ¿qué disponibilidad tienes para una breve videollamada?"
-    )
+    """Retro 2026-10-09: propone fecha y hora EXACTAS y pide confirmación (`services/agenda_chat`). Sin valoraciones ni
+    promesas («Tu perfil es compatible» está prohibido). Deja la propuesta vigente en la postulación."""
+    from ..services import agenda_chat
+
+    return agenda_chat.invitacion(p)
 
 
 async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
@@ -1133,7 +1134,7 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
     texto = _texto_apto(p)
     envio = await _enviar_whatsapp(p, texto)
     guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
-    return envio
+    return {**envio, "texto": texto}
 
 
 def entrevista_en_chat(p: Postulacion) -> bool:
@@ -1242,7 +1243,7 @@ async def _auto_decision_zero_touch(db: Session, p: Postulacion, resultado_prefi
     p.etapa = "Entrevista IA"
     registrar(db, "agente-ia", "auto_apto_zero_touch", "postulacion", p.codigo, {"prefiltro": resultado_prefiltro or "score", "score_cv": p.score})
     envio = await _avisar_apto_e_iniciar_agenda(db, p)
-    return {"respuesta": _texto_apto(p), "whatsapp": envio}
+    return {"respuesta": envio.get("texto", ""), "whatsapp": envio}
 
 
 def _parsear_fecha_cita(valor: str) -> Optional[datetime]:
@@ -1275,39 +1276,41 @@ def _sin_ligas(texto: str) -> str:
 
 
 async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[dict], canal: str, nota: str = "") -> dict:
-    """Turno posterior a la clasificación: coordina la videollamada con la herramienta
-    agendar_videollamada (function calling) — ver ia.agenda_turno. `nota` (2026-09-15): contexto
-    extra para el modelo cuando se está reagendando."""
-    v = p.vacante
-    turno, con_ia = ia.agenda_turno(
-        nombre_ficha(p), v.titulo if v else "", historial, db=db, candidato=p, nota=nota
-    )
+    """Turno de agenda de la Entrevista Red Human con avatar (retro 2026-10-09, `services/agenda_chat`): el bot propone
+    una fecha/hora exacta, pide «¿Te confirmo …?» y registra la cita ÚNICAMENTE con el «sí» explícito del candidato.
+    `nota` (reagendar) solo antepone un reconocimiento breve."""
+    from ..fechas import ETIQUETA_ZONA
+    from ..services import agenda_chat
+    from ..services.entrevistas import crear_entrevista_para_candidato
 
-    respuesta_final = turno.respuesta
-    if turno.cita_fecha_hora and turno.cita_liga:
-        fecha = _parsear_fecha_cita(turno.cita_fecha_hora)
-        p.videollamada_agendada_en = fecha or datetime.now(timezone.utc)
-        p.videollamada_liga = turno.cita_liga
+    texto = (historial[-1]["texto"] if historial and historial[-1]["rol"] == "user" else "")
+    d = agenda_chat.decidir(p, texto)
+    cita = None
+    if d["accion"] == "registrar":
+        cuando = d["cuando"].astimezone(timezone.utc)
+        e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=cuando)
+        db.flush()
+        liga = f"{settings.app_url}/entrevista/{e.token}"
+        p.videollamada_agendada_en = cuando
+        p.videollamada_liga = liga
         p.etapa = "Entrevista IA"  # ver ETAPAS_CANDIDATO
-        registrar(
-            db, "agente-ia", "videollamada_agendada", "postulacion", p.codigo,
-            {"fecha_hora": turno.cita_fecha_hora, "liga": turno.cita_liga, "fecha_parseada": bool(fecha)},
-        )
-        # La liga real se agrega aquí, textual — nunca se manda la que el modelo haya escrito
-        # dentro de turno.respuesta: un token de 32+ caracteres es fácil de transcribir mal.
-        respuesta_final = f"{_sin_ligas(turno.respuesta)}\n\n{turno.cita_liga}"  # una sola liga (2026-09-17)
+        agenda_chat.fijar_propuesta(p, None)
+        registrar(db, "agente-ia", "videollamada_agendada", "postulacion", p.codigo,
+                  {"fecha_hora": cuando.isoformat(), "liga": liga, "confirmada_por_candidato": texto[:120]})
+        nombre = nombre_ficha(p).split(" ")[0]
+        respuesta_final = (f"Listo, {nombre}. Tu entrevista con Red Human quedó agendada {agenda_chat.texto_horario(cuando)} "
+                           f"({ETIQUETA_ZONA}). Entra a esa hora desde esta liga:\n\n{liga}")  # una sola liga (2026-09-17)
+        cita = {"fechaHora": cuando.isoformat(), "liga": liga}
+    else:
+        respuesta_final = d["texto"]
+        if nota:
+            respuesta_final = f"Claro, la reagendamos. {respuesta_final}"
 
     envio = await _enviar_whatsapp(p, respuesta_final, canal)
     guardar_mensaje(db, p, "assistant", respuesta_final, canal, envio)
     _actualizar_ultima_actividad(p)
     db.commit()
-    return {
-        "respuesta": respuesta_final,
-        "clasificacion": None,
-        "ia": con_ia,
-        "whatsapp": envio,
-        "cita": {"fechaHora": turno.cita_fecha_hora, "liga": turno.cita_liga} if turno.cita_liga else None,
-    }
+    return {"respuesta": respuesta_final, "clasificacion": None, "ia": False, "whatsapp": envio, "cita": cita}
 
 
 async def _procesar_turno_onboarding(db: Session, p: Postulacion, historial: List[dict], canal: str) -> dict:
@@ -1370,6 +1373,9 @@ async def _reabrir_agenda(db: Session, p: Postulacion, historial: List[dict], ca
     p.videollamada_agendada_en = None
     p.videollamada_liga = ""
     p.videollamada_aviso_noshow_enviado = False
+    from ..services import agenda_chat
+
+    agenda_chat.fijar_propuesta(p, None)  # se propone un horario nuevo (o el que pida el candidato)
     db.flush()
     return await _procesar_turno_agenda(db, p, historial, canal, nota=(
         "El candidato ya tenía una videollamada agendada y pidió REAGENDARLA (o no asistió). Reconoce el "

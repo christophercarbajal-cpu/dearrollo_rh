@@ -175,7 +175,17 @@ with TestClient(app) as client:
     TEL3 = "5215530000003"
     webhook(client, TEL3, "Hola")
     r = webhook(client, TEL3, "2")
-    check(r["accion"] == "menu_vacantes_empresa" and len(filas_ultima_lista()) == 10, "«2» escrito elige la segunda empresa (Growtea) → sus 10 vacantes (tope de Meta)")
+    filas = filas_ultima_lista()
+    check(r["accion"] == "menu_vacantes_empresa" and len(filas) == 10 and filas[-1]["id"] == f"MAS-{growtea.id}-1",
+          "«2» escrito elige la segunda empresa (Growtea, 11 vacantes) → 9 vacantes + «Ver más vacantes» (tope de Meta: 10 filas)")
+    vistas = {f["id"] for f in filas[:-1]}
+    r = webhook(client, TEL3, sel=f"MAS-{growtea.id}-1")
+    filas = filas_ultima_lista()
+    check(r["accion"] == "menu_vacantes_pagina" and len(filas) == 3 and filas[-1]["id"] == f"MAS-{growtea.id}-0",
+          "«Ver más vacantes» → página 2 con las 2 restantes + «Volver al inicio»")
+    check(not ({f["id"] for f in filas[:-1]} & vistas) and len(vistas) + 2 == 11, "entre las dos páginas se ofrecen las 11 vacantes, sin repetir")
+    r = webhook(client, TEL3, sel=filas[0]["id"])
+    check(r["accion"] == "aviso_privacidad_enviado", "una vacante de la página 2 se elige normal")
 
     # ================= 4. Retrocompatibilidad: número exclusivo (Premium) =================
     print("\n--- 4. Número exclusivo por Cuenta (Premium) ---")
@@ -190,9 +200,15 @@ with TestClient(app) as client:
     check(persona4.cuenta_id == carbe.id, "la persona nace directamente en CARBE (ruteo dedicado)")
     r = webhook(client, "5215530000005", "Hola", receptor="525599999999")
     check(ENVIOS[-1][1].startswith("🏢"), "otro número (maestro) sigue compartido para todas las Cuentas")
+    # 2026-10-09 (tenant routing): el número propio de una Cuenta enruta a ESA Cuenta aunque no sea Premium
     r = client.patch(f"/cuentas/{carbe.id}", json={"whatsapp_exclusivo": False})
     r = webhook(client, "5215530000006", "Hola", receptor="525533001122")
-    check(ENVIOS[-1][1].startswith("🏢"), "sin la marca de exclusivo, el mismo número vuelve a ser compartido")
+    filas = filas_ultima_lista()
+    check(not ENVIOS[-1][1].startswith("🏢") and filas and all(f["id"] == vc["id"] for f in filas),
+          "sin la marca de exclusivo, el número que es de CARBE sigue ofreciendo SOLO vacantes de CARBE")
+    r = client.patch(f"/cuentas/{carbe.id}", json={"whatsapp_comunicacion": ""})
+    r = webhook(client, "5215530000007", "Hola", receptor="525533001122")
+    check(ENVIOS[-1][1].startswith("🏢"), "un número que ninguna Cuenta tiene registrado sigue compartido (número maestro)")
 
     db.close()
 

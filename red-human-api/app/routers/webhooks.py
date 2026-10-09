@@ -494,7 +494,10 @@ def _alcance_whatsapp(db: Session, numero_receptor: str, canal: str = "whatsapp"
 
     - `dedicado`: el número receptor está reservado por UNA Cuenta (`whatsapp_exclusivo` + número
       igual a `whatsapp_comunicacion`) → solo esa Cuenta. Opción Premium / comportamiento anterior.
-    - `compartido`: cualquier otro caso → todas las Cuentas activas (número maestro).
+    - `numero` (2026-10-09, tenant routing): sin reserva exclusiva, las Cuentas activas cuyo `whatsapp_comunicacion`
+      ES el número que recibió el mensaje → solo esas (sus vacantes, sus postulaciones). Así un número propio de
+      una Cuenta nunca ofrece vacantes de otra.
+    - `compartido`: ninguna Cuenta tiene ese número → todas las Cuentas activas (número maestro).
     Canal (2026-10-06): solo las Cuentas cuyo `canal_mensajeria` acepta ese canal (lista vacía = nadie lo atiende)."""
     activas = db.query(Cuenta).filter(Cuenta.estado == "Activa").order_by(Cuenta.id).all()
     if not activas:
@@ -510,6 +513,9 @@ def _alcance_whatsapp(db: Session, numero_receptor: str, canal: str = "whatsapp"
         ]
         if len(dedicadas) == 1:
             return dedicadas, "dedicado"
+        por_numero = [c for c in activas if _normalizar_telefono(c.whatsapp_comunicacion or "") == receptor]
+        if por_numero:
+            return por_numero, "numero"
     return activas, "compartido"
 
 
@@ -546,16 +552,35 @@ def _descripcion_vacante(v: Vacante, con_empresa: bool) -> str:
     return " · ".join(partes)[:72]
 
 
-async def _enviar_menu_vacantes(db: Session, telefono: str, alcance: List[Cuenta], p: Postulacion, cuenta_filtro: Optional[Cuenta] = None) -> dict:
+POR_PAGINA_MENU = 9  # Meta: máximo 10 filas por lista → 9 vacantes + «Ver más vacantes»
+_RE_PAGINA_MENU = re.compile(r"^MAS-(\d+)-(\d+)$")
+
+
+async def _enviar_menu_vacantes(
+    db: Session, telefono: str, alcance: List[Cuenta], p: Postulacion, cuenta_filtro: Optional[Cuenta] = None, pagina: int = 0,
+) -> dict:
     """Menú de vacantes publicadas del alcance (número compartido: todas las empresas). Con más de 10
     vacantes en total —límite de Meta por lista— primero se pregunta la empresa (ids `CTA-<id>`) y se
-    guarda en `analisis.cuenta_elegida`; `cuenta_filtro` lista solo esa Cuenta."""
+    guarda en `analisis.cuenta_elegida`; `cuenta_filtro` lista solo esa Cuenta. 2026-10-09: si ESA Cuenta tiene más
+    de 10, el menú se pagina (9 vacantes + fila «Ver más vacantes», id `MAS-<cuenta>-<página>`); antes las
+    vacantes 11+ nunca se ofrecían."""
     if cuenta_filtro:
-        vacantes = _vacantes_publicadas(db, cuenta_filtro.id)
+        vacantes = _vacantes_publicadas(db, cuenta_filtro.id, limite=0)
+        filas = [{"id": v.codigo, "titulo": v.titulo, "descripcion": _descripcion_vacante(v, False)} for v in vacantes]
+        encabezado = f"📋 Vacantes · {(cuenta_filtro.nombre_comercial or cuenta_filtro.nombre)[:40]}"
+        if len(filas) > 10:
+            paginas = (len(filas) + POR_PAGINA_MENU - 1) // POR_PAGINA_MENU
+            pagina = min(max(pagina, 0), paginas - 1)
+            filas = filas[pagina * POR_PAGINA_MENU:(pagina + 1) * POR_PAGINA_MENU]
+            siguiente = (pagina + 1) % paginas
+            filas.append({
+                "id": f"MAS-{cuenta_filtro.id}-{siguiente}",
+                "titulo": "Ver más vacantes" if siguiente else "Volver al inicio",
+                "descripcion": f"Página {pagina + 1} de {paginas} · {len(vacantes)} vacantes",
+            })
+            encabezado = f"{encabezado[:48]} ({pagina + 1}/{paginas})"
         return await enviar_lista_interactiva(
-            telefono, f"📋 Vacantes · {(cuenta_filtro.nombre_comercial or cuenta_filtro.nombre)[:40]}",
-            "Selecciona la vacante que te interesa:", "Ver vacantes",
-            [{"id": v.codigo, "titulo": v.titulo, "descripcion": _descripcion_vacante(v, False)} for v in vacantes],
+            telefono, encabezado, "Selecciona la vacante que te interesa:", "Ver vacantes", filas,
         )
     todas = _vacantes_publicadas(db, [c.id for c in alcance], limite=0)
     if not todas:
@@ -807,6 +832,17 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
             await _enviar_menu_vacantes(db, telefono, alcance, p, cuenta_filtro=elegida)
             db.commit()
             return {"ok": True, "accion": "menu_vacantes_empresa", "candidato": c.codigo, "postulacion": p.codigo, "cuenta": elegida.id}
+    # «Ver más vacantes» (menú paginado de una empresa con >10 vacantes)
+    pagina_menu = _RE_PAGINA_MENU.match(id_seleccionado or "")
+    if en_seleccion_vacante and not p.vacante_id and pagina_menu:
+        elegida = next((x for x in alcance if x.id == int(pagina_menu.group(1))), None)
+        if elegida:
+            analisis_p["cuenta_elegida"] = elegida.id
+            p.analisis = analisis_p
+            await _enviar_menu_vacantes(db, telefono, alcance, p, cuenta_filtro=elegida, pagina=int(pagina_menu.group(2)))
+            db.commit()
+            return {"ok": True, "accion": "menu_vacantes_pagina", "candidato": c.codigo, "postulacion": p.codigo,
+                    "cuenta": elegida.id, "pagina": int(pagina_menu.group(2))}
     # un número («2») cuando se estaba eligiendo empresa se interpreta contra la lista de empresas
     if en_seleccion_vacante and not p.vacante_id and analisis_p.get("eligiendo_empresa") and texto.strip().isdigit():
         empresas = _cuentas_con_vacantes(db, alcance)

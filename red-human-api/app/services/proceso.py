@@ -38,7 +38,8 @@ from sqlalchemy.orm import Session, object_session
 from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
-    TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_EVALUACION, Evaluacion, PlantillaProceso, Postulacion, Usuario,
+    TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
+    PlantillaProceso, Postulacion, Usuario,
     conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
 )
 
@@ -179,7 +180,7 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
             if t not in TIPOS_ENTREVISTA_HUMANA:
                 raise ErrorProceso(400, f"Tipo de entrevista humana inválido. Usa uno de: {', '.join(TIPOS_ENTREVISTA_HUMANA)}.")
             paso["tipo_entrevista"] = t
-        elif tipo == "entrevista_agente":
+        elif tipo in TIPOS_PASO_ENTREVISTA_IA:
             t = crudo.get("tipo_entrevista", crudo.get("tipoEntrevista")) or "profesional"
             if t not in ENFOQUES_ENTREVISTA:
                 raise ErrorProceso(400, f"Enfoque de la Entrevista Red Human inválido. Usa uno de: {', '.join(ENFOQUES_ENTREVISTA)}.")
@@ -661,9 +662,10 @@ def liga_actividad(paso: dict, p: Postulacion, ev: Optional[Evaluacion], r: dict
     tipo = paso["tipo"]
     if r["estado"] in ("omitida", "cancelada"):
         return None
-    if tipo == "entrevista_agente":
-        e = next((x for x in reversed(list(p.entrevistas or [])) if x.estado != "evaluada"), None)
-        return {"url": f"{settings.app_url}/entrevista/{e.token}", "texto": "Sala de la entrevista"} if e is not None and e.token else None
+    if tipo in ("entrevista_agente", "llamada_agente"):
+        e = next((x for x in reversed(entrevistas_de_paso(p, tipo)) if x.estado != "evaluada"), None)
+        texto = "Liga de la llamada" if tipo == "llamada_agente" else "Sala de la entrevista"
+        return {"url": f"{settings.app_url}/entrevista/{e.token}", "texto": texto} if e is not None and e.token else None
     if tipo in TIPOS_PASO_EVALUACION and ev is not None and ev.estado != "cancelada":
         from . import evaluaciones as sev
 
@@ -868,8 +870,8 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
         if not hay_cv or not p.score:
             return {**base, "espera": "Falta el CV del candidato"}
         return _con_score(base, regla, int(p.score))
-    # entrevista_agente
-    entrevistas = list(p.entrevistas or [])
+    # entrevista_agente / entrevista_whatsapp / llamada_agente: cada actividad lee SOLO sus entrevistas (2026-10-09)
+    entrevistas = entrevistas_de_paso(p, tipo)
     evaluada = next((e for e in reversed(entrevistas) if e.estado == "evaluada" and e.evaluacion), None)
     puntaje = score_de_entrevista(evaluada.evaluacion) if evaluada is not None else None
     if puntaje is not None:
@@ -886,9 +888,19 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
                   "programada": "Falta que el candidato realice la entrevista", "en_curso": "En curso con el candidato",
                   "completada": "Red Human está evaluando"}.get(ultima.estado, "")
         return {**base, "estado": "en_curso", "espera": espera}
+    if tipo == "entrevista_whatsapp":
+        return {**base, "espera": "Falta iniciar la entrevista por WhatsApp"}
+    if tipo == "llamada_agente":
+        return {**base, "espera": "Falta iniciar la llamada con el candidato"}
     if p.videollamada_agendada_en:
         return {**base, "estado": "en_curso", "espera": "Videollamada agendada con el candidato"}
     return {**base, "espera": "Falta agendar la entrevista con el candidato"}
+
+
+def entrevistas_de_paso(p: Postulacion, tipo: str) -> list:
+    """Entrevistas de la IA que cumplen la actividad `tipo` (avatar/texto → con avatar; whatsapp; llamada)."""
+    tipos = TIPOS_ENTREVISTA_DE_PASO.get(tipo, ("avatar", "texto"))
+    return [e for e in (p.entrevistas or []) if (e.tipo or "avatar") in tipos]
 
 
 def _aware_iso(texto) -> Optional[datetime]:
@@ -1128,7 +1140,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         return []
     pasos = p.proceso["pasos"]
     if solo_evaluables:
-        pasos = [x for x in pasos if x["tipo"] in TIPOS_PASO_EVALUACION or x["tipo"] in ("analisis_cv", "entrevista_agente")]
+        pasos = [x for x in pasos if x["tipo"] in TIPOS_PASO_EVALUACION or x["tipo"] == "analisis_cv" or x["tipo"] in TIPOS_PASO_ENTREVISTA_IA]
     evs = _evaluaciones_de(p, evaluaciones)
     por_paso = asignar_evaluaciones(pasos, evs)
     tareas = None if solo_evaluables else (precarga["tareas"] if "tareas" in precarga else _tareas(p))
@@ -1162,7 +1174,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
                 if r["psicometria"]["status"] == "error_envio":
                     r["error"] = "Error de envío: la prueba se generó, pero no le llegó al candidato"
                     r["espera"] = r["error"]
-        elif tipo in ("prefiltro_whatsapp", "prefiltro_web", "analisis_cv", "entrevista_agente"):
+        elif tipo in ("prefiltro_whatsapp", "prefiltro_web", "analisis_cv") or tipo in TIPOS_PASO_ENTREVISTA_IA:
             r = _paso_red_human(paso, p)
         elif tipo == "solicitud_web":
             r = _paso_solicitud(paso, p)
@@ -1299,7 +1311,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
 # ============================================================ cuello de botella, reenvíos y menú (2026-10-08)
 
 # Avisos de la POSTULACIÓN (sin evaluación) que cuentan para cada actividad.
-MOTIVOS_PASO = {"entrevista_agente": ("entrevista",), "solicitud_documentos": ("documentos",), "documentos": ("documentos",)}
+MOTIVOS_PASO = {"entrevista_agente": ("entrevista",), "entrevista_whatsapp": ("entrevista",), "llamada_agente": ("entrevista",),
+                "solicitud_documentos": ("documentos",), "documentos": ("documentos",)}
 CONDICIONES = {"opcional": "Opcional", "completarse": "Requiere completarse", "aprobacion": "Requiere aprobación"}
 QUE_SE_ENVIA = {"consentimiento": "el consentimiento", "referencias": "la liga para capturar sus referencias",
                 "proveedor": "la liga de la prueba", "otro_sistema": "la liga de la prueba", "evaluador": "la liga",
@@ -1395,7 +1408,8 @@ def _con_cuello(paso: dict, r: dict, ev: Optional[Evaluacion], env: Optional[dic
             r = {**r, "referencias_capturadas": True}
     elif r.get("revisar_prefiltro"):
         cuello = {"clave": "pendiente_revision", "texto": "Pendiente de revisión", "quien": None}
-    elif r["estado"] == "en_curso" and tipo in ("entrevista_agente", "solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web", "solicitud_web"):
+    elif r["estado"] == "en_curso" and (tipo in ("solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web", "solicitud_web")
+                                        or tipo in TIPOS_PASO_ENTREVISTA_IA):
         motivos = MOTIVOS_PASO.get(tipo)
         cuello = {"clave": "esperando_candidato", "texto": "Esperando candidato", "quien": "candidato",
                   "motivos": motivos, "que": (motivos or ("",))[0], "legado": True}
@@ -1452,7 +1466,7 @@ def _reenvios(paso: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
                 and not sev.bloqueo_consentimiento(ev) and not esperando_referencias(ev)):
             agregar(senv.destinatario_evaluador(ev), "evaluador")
         return salida
-    if tipo == "entrevista_agente" and r["estado"] == "en_curso" and r.get("liga"):
+    if tipo in TIPOS_PASO_ENTREVISTA_IA and r["estado"] == "en_curso" and r.get("liga"):
         agregar("candidato", "entrevista")
     elif tipo in ("solicitud_documentos", "documentos") and r["estado"] in ("en_curso", "pendiente") and r.get("liga"):
         agregar("candidato", "documentos")
@@ -1533,7 +1547,7 @@ ESTADOS_UNIFICADOS = {
 TIPOS_AUTOMATICOS = ("solicitud_web", "prefiltro_whatsapp", "prefiltro_web", "analisis_cv")
 # Ruta automática: el motor las DISPARA solas al habilitarse (services/motor_ruta.py). Las que piden agendar,
 # aplicar en persona, revisar o aprobar (entrevistas humanas, médica, referencias, condiciones…) siguen manuales.
-TIPOS_DISPARABLES = ("psicometrica", "entrevista_agente", "solicitud_documentos", "referencias")
+TIPOS_DISPARABLES = ("psicometrica", "entrevista_agente", "entrevista_whatsapp", "llamada_agente", "solicitud_documentos", "referencias")
 
 
 def _cumplido(r: dict) -> bool:
@@ -1719,7 +1733,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
             return {"clave": "iniciar_evaluacion", "texto": texto}
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
-               "entrevista_agente": "evaluaciones", "documentos": "contratacion", "condiciones": "contratacion",
+               "entrevista_agente": "evaluaciones", "entrevista_whatsapp": "evaluaciones", "llamada_agente": "evaluaciones",
+               "documentos": "contratacion", "condiciones": "contratacion",
                "onboarding": "contratacion", "alta": "contratacion", "solicitud_web": "resumen",
                "solicitud_documentos": "contratacion", "carta_contrato": "contratacion", "induccion": "contratacion"}[tipo]
     previo = _indice(paso["etapa"]) < _indice("Contratación")
@@ -2048,9 +2063,10 @@ def paso_de_tipo(p: Postulacion, tipo: str) -> Optional[dict]:
     return next((x for x in (p.proceso or {}).get("pasos", []) if x["tipo"] == tipo and not x.get("heredado")), None)
 
 
-def enfoque_entrevista_agente(p: Optional[Postulacion], v) -> str:
-    """Enfoque de la Entrevista Red Human: el del paso del proceso si lo trae; si no, el de la vacante."""
-    paso = paso_de_tipo(p, "entrevista_agente") if p is not None and tiene_proceso(p) else None
+def enfoque_entrevista_agente(p: Optional[Postulacion], v, tipo: str = "entrevista_agente") -> str:
+    """Enfoque de la entrevista de la IA (`tipo` = su actividad): el del paso del proceso si lo trae; si no, el de la
+    vacante."""
+    paso = paso_de_tipo(p, tipo) if p is not None and tiene_proceso(p) else None
     if paso and (p.proceso or {}).get("origen") in ("cuenta", "base") and not paso.get("adhoc"):
         paso = None  # ruta de la Cuenta o de respaldo: el enfoque lo decide la vacante (lo que RH eligió al crearla)
     if paso and paso.get("tipo_entrevista") in ENFOQUES_ENTREVISTA:
@@ -2092,6 +2108,11 @@ def mueve_entrevista_ia(p: Postulacion) -> bool:
     """¿Entrar a Filtro Red Human debe iniciar la agenda de la Entrevista Red Human? Siempre sin proceso; con proceso,
     solo si el proceso la incluye."""
     return not tiene_proceso(p) or paso_de_tipo(p, "entrevista_agente") is not None
+
+
+def tiene_entrevista_ia(p: Postulacion) -> bool:
+    """¿La ruta incluye alguna de las tres actividades de entrevista de la IA? (avatar, WhatsApp o llamada)."""
+    return not tiene_proceso(p) or any(paso_de_tipo(p, t) is not None for t in TIPOS_PASO_ENTREVISTA_IA)
 
 
 def etapa_lista(p: Postulacion) -> Tuple[Optional[str], List[dict]]:

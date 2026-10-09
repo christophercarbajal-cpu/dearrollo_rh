@@ -304,7 +304,7 @@ with TestClient(app) as client:
     check(post(P2).etapa == "Contratación", "avance automático en TODAS las Cuentas (2026-10-09): Filtro humano completo → Contratación")
     integral = client.get(f"/candidatos/{P2}").json()["resultadoIntegral"]
     nombres = {v["nombre"]: v for v in integral["validaciones"]}
-    check(nombres.get("Psicométrica", {}).get("obligatoria") and nombres.get("Entrevista Red Human", {}).get("score") == 82,
+    check(nombres.get("Psicométrica", {}).get("obligatoria") and nombres.get("Entrevista Red Human con avatar", {}).get("score") == 82,
           "la evaluación integral toma las validaciones obligatorias del proceso")
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación"})
     s = seg(P2)

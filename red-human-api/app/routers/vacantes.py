@@ -80,6 +80,23 @@ def _salida(db: Session, v: Vacante) -> dict:
     return vacante_dict(v, total, nuevos, _embudo(db, v), colaboradores)
 
 
+def _salida_rh(db: Session, v: Vacante) -> dict:
+    """Detalle para RH: agrega las plantillas de conversación (guiones por actividad de la ruta). NUNCA en los payloads
+    públicos (portal, /aplicar): el guion de la entrevista no se le muestra al candidato."""
+    from ..services import guiones as sgui
+
+    return {**_salida(db, v), "guiones": sgui.vista(v, db=db)}
+
+
+def _guardar_guiones(v: Vacante, entrada: Optional[dict], por: str, web=None, whatsapp=None) -> None:
+    from ..services import guiones as sgui
+
+    try:
+        sgui.guardar_desde_formulario(v, entrada, por, preguntas_web=web, preguntas_whatsapp=whatsapp)
+    except sgui.ErrorGuion as e:
+        raise HTTPException(e.status, e.mensaje)
+
+
 def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
     """Agrega el logo de la Cuenta al payload candidato-visible (Fase B, punto 12: la vista
     previa/portal público hereda la apariencia mínima de la Cuenta — logo + nombre comercial;
@@ -358,6 +375,9 @@ class CrearIn(GenerarIn):
     # Proceso configurable (2026-10-06): {plantilla_id} copia una plantilla de la Cuenta; {pasos, etapas} la personaliza
     # para ESTA vacante sin tocar la plantilla; {quitar: true} = sin proceso. Omitido = la plantilla predeterminada.
     proceso: Optional[dict] = None
+    # Plantillas de conversación (2026-10-09): {secciones: {entrevista_whatsapp|entrevista_avatar|llamada: guion},
+    # meta: {...de /generar}} — los prefiltros viajan en preguntas_filtro / preguntas_filtro_whatsapp.
+    guiones: Optional[dict] = None
 
 
 @router.post("", status_code=201)
@@ -436,6 +456,7 @@ def crear(
         _aplicar_generado(v, generado)
 
     v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
+    _guardar_guiones(v, datos.guiones, u.nombre, web=v.preguntas_filtro, whatsapp=v.preguntas_filtro_whatsapp)
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -449,7 +470,7 @@ def crear(
          "proceso": (v.proceso or {}).get("plantilla_nombre") or ("personalizado" if v.proceso else "")},
     )
     db.commit()
-    return _salida(db, v)
+    return _salida_rh(db, v)
 
 
 def _proceso_nuevo(db: Session, cuenta_id: int, datos: Optional[dict]) -> dict:
@@ -560,7 +581,7 @@ def detalle(
     codigo: str, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)
 ):
     v = _por_codigo(db, codigo, cuenta.id)
-    return {**_salida(db, v), "homonimasOtrasCuentas": _homonimas_otras_cuentas(db, v)}
+    return {**_salida_rh(db, v), "homonimasOtrasCuentas": _homonimas_otras_cuentas(db, v)}
 
 
 @router.get("/{codigo}/vista-previa")
@@ -616,7 +637,9 @@ class ActualizarIn(BaseModel):
     avisar_evaluaciones_antes_onboarding: Optional[bool] = None
     # Proceso configurable (2026-10-06): mismo formato que en la creación. Cambiarlo sube la versión del proceso de la
     # vacante y NUNCA toca a los candidatos que ya tiene (cada uno conserva la versión con la que entró).
+    # «Ajustar ruta de esta vacante»: solo cambia esta copia; la plantilla general de la Cuenta no se toca.
     proceso: Optional[dict] = None
+    guiones: Optional[dict] = None  # 2026-10-09: plantillas de conversación (mismo formato que en la creación)
 
 
 @router.patch("/{codigo}")
@@ -630,6 +653,10 @@ def actualizar(
         db, cuenta, datos.cliente_id, datos.responsable_id, datos.colaboradores_ids, None
     )
     cambios = datos.model_dump(exclude_none=True, exclude={"autor"})
+    # 2026-10-09: guiones y prefiltros se guardan por el servicio de guiones (validación estricta + quién editó)
+    entrada_guiones = cambios.pop("guiones", None)
+    web_nuevo = cambios.pop("preguntas_filtro", None)
+    whatsapp_nuevo = cambios.pop("preguntas_filtro_whatsapp", None)
     if colaboradores_validos is not None:
         cambios["colaboradores_ids"] = colaboradores_validos
     if datos.estado is not None and datos.estado not in ESTADOS:
@@ -672,6 +699,10 @@ def actualizar(
 
     for campo, valor in cambios.items():
         setattr(v, campo, valor)
+    if entrada_guiones is not None or web_nuevo is not None or whatsapp_nuevo is not None:
+        _guardar_guiones(v, entrada_guiones, u.nombre, web=web_nuevo, whatsapp=whatsapp_nuevo)
+        cambios.update({k: True for k, x in (("guiones", entrada_guiones), ("preguntas_filtro", web_nuevo),
+                                             ("preguntas_filtro_whatsapp", whatsapp_nuevo)) if x is not None})
     # Fase 4: si tocó Estado/Municipio, el texto de ubicación se deriva
     if any(k in cambios for k in ("ubicacion_estado", "ubicacion_municipio")):
         v.ubicacion = texto_ubicacion(v.ubicacion_estado, v.ubicacion_municipio, v.ubicacion)
@@ -688,7 +719,7 @@ def actualizar(
 
     registrar(db, u.nombre, "vacante_editada", "vacante", v.codigo, {"campos": sorted(cambios)})
     db.commit()
-    return _salida(db, v)
+    return _salida_rh(db, v)
 
 
 class RegenerarIn(BaseModel):
@@ -716,7 +747,7 @@ def regenerar(
     _aplicar_generado(v, generado)
     registrar(db, u.nombre, "vacante_regenerada", "vacante", v.codigo, {"ia": con_ia, "notas": datos.notas})
     db.commit()
-    return {"ia": con_ia, **_salida(db, v)}
+    return {"ia": con_ia, **_salida_rh(db, v)}
 
 
 # ------------------------------------------------------------

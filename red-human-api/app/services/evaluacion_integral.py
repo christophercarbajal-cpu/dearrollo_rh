@@ -28,7 +28,7 @@ agregadas fuera del proceso cuentan como no obligatorias. Mismas reglas de resul
 
 from typing import Iterable, List, Optional
 
-from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, Evaluacion, Postulacion, conclusiones_de, score_de_entrevista
+from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, TIPOS_PASO_ENTREVISTA_IA, Evaluacion, Postulacion, conclusiones_de, score_de_entrevista
 
 RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
@@ -173,7 +173,7 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
     for x in pasos:
         if x["estado"] in ("omitida", "cancelada"):
             continue
-        if x["tipo"] in ("analisis_cv", "entrevista_agente"):
+        if x["tipo"] == "analisis_cv" or x["tipo"] in TIPOS_PASO_ENTREVISTA_IA:
             score = x["score"] if x["estado"] == "completada" else None
             if score is None and not x["obligatorio"] and x["estado"] == "pendiente":
                 continue

@@ -303,6 +303,32 @@ def separar_preguntas_whatsapp(preguntas: List[PreguntaFiltro]) -> List[Pregunta
     return salida
 
 
+# 2026-10-09 (guiones por vacante): las entrevistas y llamadas SOLO llevan preguntas abiertas. Una pregunta cerrada
+# («¿Tienes…?», «¿Cuentas con…?», «¿Has…?») se reescribe como invitación a contar con evidencia.
+_RE_CERRADA = re.compile(r"^\s*¿?\s*(tienes|cuentas|has|puedes|estás|estas|sabes|manejas|vives|eres|te\s+\w+|conoces|dominas|"
+                         r"podrías|podrias|tendrías|tendrias|aceptas|cumples)\b\s*(con\s+|en\s+|de\s+)?", re.IGNORECASE)
+
+
+def abrir_preguntas(preguntas: List[str]) -> List[str]:
+    """Garantía en código: ninguna pregunta de entrevista/llamada se contesta con «sí» o «no»."""
+    salida: List[str] = []
+    for q in preguntas or []:
+        t = " ".join(str(q or "").split())
+        if not t:
+            continue
+        m = _RE_CERRADA.match(t)
+        if m:
+            tema = t[m.end():].strip(" ¿?.")
+            if not tema:
+                t = "Cuéntame un ejemplo concreto de tu experiencia."
+            elif tema.lower().startswith(("experiencia", "conocimiento")):
+                t = f"Cuéntame sobre tu {tema[0].lower() + tema[1:]}: un ejemplo concreto."
+            else:
+                t = f"Cuéntame tu experiencia con {tema}: un ejemplo concreto."
+        salida.append(t)
+    return salida
+
+
 def puntos_criticos_whatsapp(web: List[PreguntaFiltro]) -> List[PreguntaFiltro]:
     """Prefiltro de WhatsApp derivado del web cuando la IA no lo entregó (o en modo demo): experiencia
     (tipo numero) + hasta 2 eliminatorias, en tono de chat. Máximo 3."""
@@ -2355,3 +2381,277 @@ def clasificar_respuesta_prefiltro(pregunta: str, respuesta: str) -> Optional[st
     except Exception as ex:  # noqa: BLE001 — sin IA se pide aclaración
         print(f"[ia] clasificación de respuesta no disponible ({ex})", flush=True)
         return None
+
+
+# ============================================================
+# Generación de contenido según la ruta (2026-10-09) — plantillas de conversación por vacante
+# ============================================================
+#
+# Reglas NO negociables (garantizadas en código, no solo en el prompt):
+#   * Prefiltros (Web y WhatsApp): SOLO preguntas cerradas (Sí/No, número con rangos u opción); eliminatorias permitidas.
+#   * Entrevistas y llamadas: SOLO preguntas abiertas y guion; nunca una pregunta de prefiltro.
+#   * Reconfirmación: con Prefiltro · Web Y Prefiltro · WhatsApp en la ruta, cada INDISPENSABLE del web se reconfirma en
+#     WhatsApp pidiendo un DATO CONCRETO (web: «¿tienes experiencia?» → WhatsApp: «¿cuánto tiempo?»). Lo no indispensable
+#     no se repite.
+#   * Solo se genera lo que está en la ruta de la vacante.
+
+
+class PreguntaPrefiltroIA(BaseModel):
+    pregunta: str = Field(description="Pregunta CERRADA en español mexicano.")
+    tipo: Literal["si_no", "numero", "opcion"] = Field(description="si_no = Sí/No/Parcial; numero = rangos; opcion = una de una lista.")
+    valida: str = Field(description="Requisito que valida (texto del requisito).")
+    respuesta_esperada: str = Field(description="Respuesta que cumple (ej. 'Sí', '>= 2 años', la opción válida).")
+    descarta: bool = Field(description="true solo si el requisito es INDISPENSABLE (eliminatoria).")
+    opciones: List[str] = Field(description="numero/opcion: 3 a 5 opciones ordenadas; si_no: vacío.")
+    reconfirma: str = Field(description="Solo en WhatsApp: el requisito indispensable (texto EXACTO) del web que esta pregunta "
+                                        "reconfirma pidiendo un dato concreto; vacío si no reconfirma nada.")
+
+
+class GuionesIA(BaseModel):
+    prefiltro_web: List[PreguntaPrefiltroIA] = Field(default_factory=list)
+    prefiltro_whatsapp: List[PreguntaPrefiltroIA] = Field(default_factory=list)
+    entrevista_whatsapp: Optional[GuionEntrevista] = None
+    entrevista_avatar: Optional[GuionEntrevista] = None
+    llamada: Optional[GuionEntrevista] = None
+
+
+class FichaGuion(BaseModel):
+    titulo: str
+    responsabilidades: List[str] = Field(default_factory=list)
+    requisitos_indispensables: List[str] = Field(default_factory=list)
+    requisitos_deseables: List[str] = Field(default_factory=list)
+    ubicacion: str = ""
+    modalidad: str = ""
+    horario: str = ""
+    sueldo: str = ""
+    empresa: str = ""
+    enfoque_entrevista: str = "profesional"
+
+
+ESTILO_GUION = {
+    "entrevista_whatsapp": "Entrevista Red Human por WhatsApp (texto en el chat): mensajes CORTOS, una pregunta por mensaje, "
+                           "tono cálido de chat; 5 a 6 preguntas.",
+    "entrevista_avatar": "Entrevista Red Human con avatar (video, se dice en voz alta): frases naturales y breves; 5 a 7 preguntas.",
+    "llamada": "Llamada Red Human (conversación por VOZ conducida por la IA): frases muy cortas, fáciles de escuchar, sin listas "
+               "ni enumeraciones; 4 a 6 preguntas.",
+}
+
+_RE_ANOS = re.compile(r"(\d+(?:[.,]\d+)?)\s*(años|año|anos|ano|meses|mes)\b", re.IGNORECASE)
+
+
+def _norm_req(t: str) -> str:
+    return _clave_texto(t).strip(" .")
+
+
+def _rangos(n: float) -> Tuple[List[str], List[str]]:
+    """Rangos de años alrededor del mínimo pedido y cuáles cumplen."""
+    n = max(1, int(round(n)))
+    if n == 1:
+        ops = ["Menos de 6 meses", "6 meses a 1 año", "1 a 3 años", "Más de 3 años"]
+        return ops, ops[2:]
+    ops = ["Menos de 1 año", "1 año" if n == 2 else f"1 a {n - 1} años", f"{n} a {n + 2} años", f"Más de {n + 2} años"]
+    return ops, ops[2:]
+
+
+def _tema_experiencia(req: str) -> str:
+    t = _RE_ANOS.sub("", req).strip(" .")
+    t = re.sub(r"^\s*(de|con)\s+", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"^\s*experiencia\s+(de|en|como|con)?\s*", "", t, flags=re.IGNORECASE).strip(" .")
+    return t or "un puesto similar"
+
+
+def _de_experiencia(tema: str) -> str:
+    """«de experiencia operando montacargas» / «de experiencia en almacén»."""
+    primera = (tema.split() or [""])[0].lower()
+    return f"de experiencia {tema}" if primera.endswith(("ando", "endo", "iendo")) else f"de experiencia en {tema}"
+
+
+def _minuscula_inicial(t: str) -> str:
+    t = t.strip().rstrip(".")
+    return t[0].lower() + t[1:] if len(t) > 1 and not t[:2].isupper() else t
+
+
+def pregunta_web_cerrada(req: str, descarta: bool = True) -> dict:
+    """Prefiltro web (y WhatsApp sin web): cumplimiento del requisito, Sí/No/Parcial."""
+    m = _RE_ANOS.search(req)
+    if m:
+        n = m.group(1).replace(",", ".")
+        unidad = m.group(2).lower().replace("ano", "año")
+        q = f"¿Tienes al menos {n} {unidad} {_de_experiencia(_tema_experiencia(req))}?"
+    else:
+        q = f"¿Cumples con este requisito: {_minuscula_inicial(req)}?"
+    return {"pregunta": q, "tipo": "si_no", "valida": req.strip(), "respuesta_esperada": "Sí", "descarta": descarta,
+            "opciones": list(OPCIONES_CERRADAS)}
+
+
+def pregunta_reconfirmacion(req: str) -> dict:
+    """WhatsApp reconfirma un indispensable del web pidiendo un DATO CONCRETO, pero cerrado (rangos u opciones)."""
+    m = _RE_ANOS.search(req)
+    if m or "experiencia" in _clave_texto(req):
+        n = float(m.group(1).replace(",", ".")) if m else 1.0
+        if m and m.group(2).lower().startswith("mes"):
+            n = max(1.0, n / 12)
+        ops, validas = _rangos(n)
+        return {"pregunta": f"Para confirmar: ¿cuánto tiempo {_de_experiencia(_tema_experiencia(req))} tienes?", "tipo": "numero",
+                "valida": req.strip(), "respuesta_esperada": f">= {int(n) if n == int(n) else n} años", "descarta": False,
+                "opciones": ops, "reconfirma": req.strip(), "minimo": n, "opciones_validas": validas}
+    ops = ["Sí, y lo puedo comprobar", "Sí, pero no lo puedo comprobar", "No"]
+    return {"pregunta": f"Para confirmar «{req.strip().rstrip('.')}»: ¿cuál de estas opciones te describe?", "tipo": "opcion",
+            "valida": req.strip(), "respuesta_esperada": ops[0], "descarta": False, "opciones": ops, "reconfirma": req.strip(),
+            "opciones_validas": ops[:2]}
+
+
+def _pregunta_dict(p: "PreguntaPrefiltroIA") -> dict:
+    d = p.model_dump()
+    if not d.get("reconfirma"):
+        d.pop("reconfirma", None)
+    if d["tipo"] == "si_no":
+        d["opciones"] = list(OPCIONES_CERRADAS)
+    return d
+
+
+def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion, hay_web: bool,
+                        hay_whatsapp: bool) -> Tuple[List[dict], List[dict]]:
+    """Reglas de prefiltro garantizadas en código (IA o demo):
+    * Web: cerradas Sí/No/Parcial, primero cada indispensable (eliminatoria) y después lo deseable (solo suma).
+    * WhatsApp con web en la ruta: SOLO reconfirmaciones de los indispensables del web, con dato concreto y cerradas (lo de
+      la IA si reconfirma un indispensable con tipo número/opción; si no, la determinista). Nada no indispensable.
+    * WhatsApp sin web: el prefiltro principal — cerrado, indispensables como eliminatorias."""
+    indisp = [r for r in ficha.requisitos_indispensables if r.strip()]
+    salida_web: List[dict] = []
+    if hay_web:
+        if web and not any(q.get("reconfirma") for q in web) and all(q.get("tipo") == "si_no" for q in web) and not indisp:
+            salida_web = [dict(q) for q in web]
+        else:
+            cerradas = cerrar_preguntas_web([
+                PreguntaFiltro(pregunta=q["pregunta"], tipo=q.get("tipo") if q.get("tipo") in ("si_no", "numero", "opcion", "texto_corto") else "si_no",
+                               valida=q.get("valida") or q["pregunta"], respuesta_esperada=q.get("respuesta_esperada") or "Sí",
+                               descarta=bool(q.get("descarta")))
+                for q in web if q.get("pregunta")])
+            por_req = {_norm_req(q.valida): q.model_dump() for q in cerradas}
+            for r in indisp:  # cada indispensable tiene su eliminatoria
+                q = por_req.pop(_norm_req(r), None) or pregunta_web_cerrada(r)
+                q["descarta"] = True
+                salida_web.append(q)
+            for q in por_req.values():
+                q["descarta"] = False  # la IA no decide eliminatorias que RH no marcó como indispensables
+                salida_web.append(q)
+        if not salida_web:
+            salida_web = [pregunta_web_cerrada(r, False) for r in ficha.requisitos_deseables[:3] if r.strip()]
+    salida_wa: List[dict] = []
+    if hay_whatsapp:
+        if hay_web:
+            reconf = {_norm_req(q.get("reconfirma", "")): q for q in whatsapp
+                      if q.get("reconfirma") and q.get("tipo") in ("numero", "opcion") and len(q.get("opciones") or []) >= 2}
+            for q in [x for x in salida_web if x.get("descarta")]:
+                det = pregunta_reconfirmacion(q["valida"])
+                propia = reconf.get(_norm_req(q["valida"]))
+                if propia and propia["tipo"] == det["tipo"] and propia.get("opciones") == det["opciones"]:
+                    salida_wa.append({**propia, "reconfirma": q["valida"], "descarta": False, "opciones_validas": det["opciones_validas"],
+                                      **({"minimo": det["minimo"]} if "minimo" in det else {})})
+                elif propia and propia.get("opciones_validas"):
+                    salida_wa.append({**propia, "reconfirma": q["valida"], "descarta": False})
+                else:
+                    salida_wa.append(det)  # la regla de reconfirmación nunca depende de que la IA la cumpla
+        else:
+            cerradas = [dict(q) for q in whatsapp if q.get("tipo") in ("si_no", "numero", "opcion") and not q.get("reconfirma")]
+            por_req = {_norm_req(q.get("valida", "")): q for q in cerradas}
+            for r in indisp:
+                q = por_req.pop(_norm_req(r), None) or pregunta_web_cerrada(r)
+                q["descarta"] = True
+                if q["tipo"] == "si_no":
+                    q["opciones"] = list(OPCIONES_CERRADAS)
+                elif len(q.get("opciones") or []) < 2:
+                    q = pregunta_web_cerrada(r)
+                salida_wa.append(q)
+            if not salida_wa:
+                salida_wa = [pregunta_web_cerrada(r, False) for r in ficha.requisitos_deseables[:2] if r.strip()]
+    return salida_web, salida_wa
+
+
+def guion_demo_seccion(clave: str, ficha: FichaGuion) -> GuionEntrevista:
+    """Guion determinista (sin clave de OpenAI) con el estilo de cada actividad y los datos REALES de la vacante."""
+    g = _guion_demo(ficha.titulo, _enfoque_valido(ficha.enfoque_entrevista))
+    preguntas = list(g.preguntas)
+    if ficha.responsabilidades:
+        preguntas.insert(1, f"Cuéntame cómo has hecho algo parecido a: {_minuscula_inicial(ficha.responsabilidades[0])}.")
+    if ficha.requisitos_indispensables:
+        preguntas.insert(2, f"Platícame un ejemplo concreto relacionado con: {ficha.requisitos_indispensables[0].strip().rstrip('.')}.")
+    limite = {"entrevista_whatsapp": 6, "llamada": 5}.get(clave, 7)
+    preguntas = preguntas[:limite]
+    return GuionEntrevista(enfoque=g.enfoque, temas=[q.rstrip("?.").lstrip("¿")[:120] for q in preguntas], preguntas=preguntas)
+
+
+def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[List[dict]] = None,
+                    hay_web: bool = False, hay_whatsapp: bool = False) -> Tuple[dict, bool]:
+    """Genera SOLO las secciones `claves` (las de la ruta que no se conservan). `web_actual`: el Prefiltro · Web vigente
+    cuando se conserva (las reconfirmaciones de WhatsApp salen de él). Regresa ({clave: contenido}, con_ia)."""
+    claves = list(dict.fromkeys(claves))
+    guion_claves = [c for c in claves if c in ESTILO_GUION]
+    enfoque = _enfoque_valido(ficha.enfoque_entrevista)
+    con_ia = False
+    crudo = GuionesIA()
+    client = _client()
+    if client is not None and claves:
+        def lista(xs: List[str]) -> str:
+            return ("\n" + "\n".join(f"  - {x}" for x in xs)) if xs else " (sin dato)"
+
+        pedido = []
+        if "prefiltro_web" in claves:
+            pedido.append("prefiltro_web: preguntas CERRADAS (si_no) — una por requisito indispensable (descarta=true) y, si "
+                          "acaso, 1-2 deseables (descarta=false). Un requisito numérico es un umbral («¿Tienes al menos 2 años…?»).")
+        if "prefiltro_whatsapp" in claves:
+            pedido.append(
+                "prefiltro_whatsapp: preguntas CERRADAS en tono de chat. " + (
+                    "La ruta TAMBIÉN tiene prefiltro web: cada requisito INDISPENSABLE se RECONFIRMA pidiendo un DATO CONCRETO "
+                    "como pregunta cerrada (tipo numero con rangos u opcion), con `reconfirma` = el requisito exacto. Ejemplo: web "
+                    "«¿Tienes experiencia operando montacargas?» → WhatsApp «¿Cuánto tiempo llevas operando montacargas?» con "
+                    "rangos. NO repitas nada que no sea indispensable." if hay_web else
+                    "Es el PRIMER filtro: una pregunta por requisito indispensable (descarta=true), cerradas."))
+        for c in guion_claves:
+            pedido.append(f"{c}: guion con enfoque, temas y SOLO preguntas ABIERTAS (nunca de sí/no, nunca preguntas de "
+                          f"prefiltro). Estilo: {ESTILO_GUION[c]}")
+        web_txt = ""
+        if web_actual and "prefiltro_web" not in claves:
+            web_txt = "\nPrefiltro web vigente (las reconfirmaciones salen de aquí):\n" + "\n".join(
+                f"  - {q.get('pregunta')} [valida: {q.get('valida')}; {'indispensable' if q.get('descarta') else 'no indispensable'}]"
+                for q in web_actual)
+        try:
+            resp = client.responses.parse(
+                model=MODEL,
+                instructions=(
+                    "Generas las plantillas de conversación de UNA vacante para Red Human (RH en México), en español mexicano. "
+                    "Llena SOLO las secciones pedidas; deja vacías las demás. Usa EXCLUSIVAMENTE los datos de la vacante: nunca "
+                    "inventes condiciones (sueldo, horario, ubicación, prestaciones). "
+                    f"Enfoque de las entrevistas: {enfoque} ({ENFOQUE_ENTREVISTA_TEMAS[enfoque]}). "
+                    f"PROHIBIDO preguntar sobre: {DATOS_SENSIBLES_PROHIBIDOS}.\nSecciones pedidas:\n- " + "\n- ".join(pedido)
+                ),
+                input=(
+                    f"Puesto: {ficha.titulo}\nEmpresa: {ficha.empresa or '(sin dato)'}\nResponsabilidades:{lista(ficha.responsabilidades)}\n"
+                    f"Requisitos indispensables:{lista(ficha.requisitos_indispensables)}\n"
+                    f"Requisitos deseables:{lista(ficha.requisitos_deseables)}\nUbicación: {ficha.ubicacion or '(sin dato)'}\n"
+                    f"Modalidad: {ficha.modalidad or '(sin dato)'}\nHorario: {ficha.horario or '(sin dato)'}\n"
+                    f"Sueldo: {ficha.sueldo or '(sin dato)'}{web_txt}"
+                ),
+                text_format=GuionesIA,
+            )
+            crudo, con_ia = resp.output_parsed, True
+        except Exception as ex:  # noqa: BLE001 — sin IA disponible se genera en modo determinista; nunca bloquea
+            print(f"[ia] generar_guiones cayó a modo determinista: {str(ex)[:200]}", flush=True)
+            crudo, con_ia = GuionesIA(), False
+
+    salida: dict = {}
+    if "prefiltro_web" in claves or "prefiltro_whatsapp" in claves:
+        web_in = [_pregunta_dict(q) for q in crudo.prefiltro_web] if "prefiltro_web" in claves else list(web_actual or [])
+        wa_in = [_pregunta_dict(q) for q in crudo.prefiltro_whatsapp]
+        web_out, wa_out = asegurar_prefiltros(web_in, wa_in, ficha, hay_web=hay_web, hay_whatsapp=hay_whatsapp)
+        if "prefiltro_web" in claves:
+            salida["prefiltro_web"] = web_out
+        if "prefiltro_whatsapp" in claves:
+            salida["prefiltro_whatsapp"] = wa_out
+    for c in guion_claves:
+        g = getattr(crudo, c, None)
+        if g is None or not g.preguntas:
+            g = guion_demo_seccion(c, ficha)
+        salida[c] = {"enfoque": g.enfoque, "temas": list(g.temas or []), "preguntas": abrir_preguntas(list(g.preguntas))}
+    return salida, con_ia

@@ -115,6 +115,12 @@ class Vacante(Base):
     plataformas: Mapped[list] = mapped_column(JSON, default=list)
     # Fase 4 (Punto 6): qué cubre la Entrevista IA — ver ENFOQUES_ENTREVISTA. Solo 2 niveles.
     enfoque_entrevista: Mapped[str] = mapped_column(String(30), default="profesional")
+    # Plantillas de conversación (2026-10-09): guiones de ESTA vacante por actividad de su ruta — nunca de la Cuenta ni de
+    # la plantilla de vacante. {"secciones": {entrevista_whatsapp|entrevista_avatar|llamada: {enfoque, temas[],
+    # preguntas[]}}, "meta": {seccion: {generado_en, generado_ia, editado, editado_por, editado_en, huella}}}. Los
+    # prefiltros viven en `preguntas_filtro` (Web) y `preguntas_filtro_whatsapp` (WhatsApp) — una sola fuente para el
+    # portal y el agente; aquí solo su meta. Ver `services/guiones.py`.
+    guiones: Mapped[dict] = mapped_column(JSON, default=dict)
 
     # --- contenido enriquecido del generador (módulo 3.5) ---
     resumen: Mapped[str] = mapped_column(Text, default="")
@@ -534,7 +540,9 @@ class Entrevista(Base):
     candidato_id: Mapped[int] = mapped_column(ForeignKey("candidatos.id"), index=True)  # persona (historial)
     postulacion_id: Mapped[Optional[int]] = mapped_column(ForeignKey("postulaciones.id"), nullable=True, index=True)
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga pública para el candidato
-    tipo: Mapped[str] = mapped_column(String(12), default="avatar")  # avatar | texto
+    # avatar | texto (sala de la Entrevista Red Human con avatar) · whatsapp (Entrevista Red Human por WhatsApp, por texto en
+    # el chat) · llamada (Llamada Red Human: conversación por voz con la IA) — 2026-10-09, ver TIPOS_ENTREVISTA_DE_PASO
+    tipo: Mapped[str] = mapped_column(String(12), default="avatar")
     # programada | en_curso | completada | evaluada | interrumpida (ver ESTADOS_ENTREVISTA)
     estado: Mapped[str] = mapped_column(String(20), default="programada")
     guion: Mapped[dict] = mapped_column(JSON, default=dict)  # {enfoque, temas[], preguntas[]} (preguntas = legado)
@@ -2516,8 +2524,15 @@ TIPOS_PASO = {
                       "etapas": ("Prefiltro",)},
     "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "calificacion", "responsable": "red_human",
                     "etapas": ("Prefiltro", "Entrevista IA")},
-    "entrevista_agente": {"nombre": "Entrevista Red Human", "etapa": "Entrevista IA", "regla": "calificacion",
+    # 2026-10-09: TRES actividades de IA independientes en Filtro Red Human (nunca agruparlas en un «canal»): con avatar
+    # (sala), por WhatsApp (texto en el chat) y Llamada Red Human (voz). Las tres guardan la MISMA evaluación (resumen,
+    # evidencia, fortalezas, puntos por validar, recomendación) y cada una lee su guion de la vacante.
+    "entrevista_agente": {"nombre": "Entrevista Red Human con avatar", "etapa": "Entrevista IA", "regla": "calificacion",
                           "responsable": "red_human", "etapas": ("Entrevista IA",)},
+    "entrevista_whatsapp": {"nombre": "Entrevista Red Human por WhatsApp", "etapa": "Entrevista IA", "regla": "calificacion",
+                            "responsable": "red_human", "etapas": ("Entrevista IA",)},
+    "llamada_agente": {"nombre": "Llamada Red Human", "etapa": "Entrevista IA", "regla": "calificacion",
+                       "responsable": "red_human", "etapas": ("Entrevista IA",)},
     **{tipo: {"nombre": nombre, "etapa": "Entrevista Humana", "regla": "dictamen",
               "responsable": "usuario" if tipo == "entrevista_humana" else "rh",
               "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación")}
@@ -2551,6 +2566,18 @@ ESPERA_DEL_CATALOGO = {
     "alta": ("documentos", "induccion", "onboarding"),
 }
 TIPOS_PASO_EVALUACION = tuple(TIPOS_EVALUACION_U)
+# Actividades de entrevista conducidas por la IA y qué `Entrevista.tipo` cumple cada una (2026-10-09).
+TIPOS_ENTREVISTA_DE_PASO = {"entrevista_agente": ("avatar", "texto"), "entrevista_whatsapp": ("whatsapp",),
+                            "llamada_agente": ("llamada",)}
+TIPOS_PASO_ENTREVISTA_IA = tuple(TIPOS_ENTREVISTA_DE_PASO)
+
+
+def paso_de_entrevista(tipo_entrevista: str) -> str:
+    """Tipo de actividad de la ruta que cumple una `Entrevista` según su `tipo`."""
+    for paso, tipos in TIPOS_ENTREVISTA_DE_PASO.items():
+        if (tipo_entrevista or "avatar") in tipos:
+            return paso
+    return "entrevista_agente"
 # Condición de avance de un paso: ninguna = basta completarlo; calificacion = score >= mínimo (CV / Entrevista Red
 # Human); dictamen = conclusión dentro de las aceptadas; validacion = una persona lo confirmó (resultado revisado por
 # RH, documentos aprobados, prefiltro «cumple»).

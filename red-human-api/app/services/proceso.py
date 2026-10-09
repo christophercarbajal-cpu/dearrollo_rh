@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session, object_session
 
 from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
-    ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
+    ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_EVALUACION, Evaluacion, PlantillaProceso, Postulacion, Usuario,
     conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
 )
@@ -187,6 +187,14 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
         salida.append(paso)
 
     por_id = {p["id"]: p for p in salida}
+    # 2026-10-09: dependencias del CATÁLOGO (misma etapa) — el editor ya no las captura; las explícitas que lleguen por
+    # la API (rutas previas, agente) se conservan.
+    for p in salida:
+        if p.get("adhoc") or p.get("heredado"):
+            continue
+        espera = ESPERA_DEL_CATALOGO.get(p["tipo"], ())
+        p["depende_de"] += [x["id"] for x in salida if x is not p and x["tipo"] in espera and x["etapa"] == p["etapa"]
+                            and not x.get("adhoc") and not x.get("heredado")]
     for p in salida:
         for d in p["depende_de"]:
             if d == p["id"]:
@@ -234,14 +242,11 @@ def limpiar_config(config: dict) -> dict:
     return salida
 
 
-def normalizar_etapas(etapas) -> dict:
-    etapas = etapas if isinstance(etapas, dict) else {}
-    salida = {}
-    for e in ETAPAS_CANDIDATO:
-        cfg = etapas.get(e) or {}
-        auto = bool(cfg.get("avance_automatico", cfg.get("avanceAutomatico", False))) if isinstance(cfg, dict) else False
-        salida[e] = {"avance_automatico": auto and e not in ETAPAS_SIN_AVANCE_AUTOMATICO}
-    return salida
+def normalizar_etapas(etapas=None) -> dict:
+    """2026-10-09 (decisión del usuario, TODAS las Cuentas): el avance entre etapas es SIEMPRE automático cuando no quedan
+    obligatorios pendientes; ya no existe el interruptor por etapa (lo guardado se ignora). Contratación → Onboarding
+    solo al completarse «Firmar documentos»; de Onboarding nunca se sale solo."""
+    return {e: {"avance_automatico": e not in ETAPAS_SIN_AVANCE_AUTOMATICO} for e in ETAPAS_CANDIDATO}
 
 
 def tiene_proceso(obj) -> bool:
@@ -305,12 +310,16 @@ def ejemplo(clave: str) -> dict:
             "etapas": normalizar_etapas(e["etapas"])}
 
 
-# ============================================================ rutas base precargadas (2026-10-06)
-# Las tres rutas del documento de reglas. Se siembran como plantillas EDITABLES en cada Cuenta (`asegurar_rutas_base`)
-# y viven aquí como respaldo: «Corporativos sin psicometría» es el último nivel de la cascada de asignación. El orden
-# visual NO crea dependencias: solo las explícitas (`depende_de`, «Esperar a…»); lo demás corre en paralelo.
+# ============================================================ rutas base precargadas (2026-10-09)
+# Tres rutas base: «Masivos sin documentos iniciales», «Masivos con documentos iniciales» y «Corporativos». Se siembran
+# como plantillas EDITABLES en cada Cuenta (`asegurar_rutas_base`) y viven aquí como respaldo: «Corporativos» es el
+# último nivel de la cascada de asignación. Las dependencias salen del catálogo (`models.ESPERA_DEL_CATALOGO`).
 
-RUTA_RESPALDO = "corporativos"
+RUTA_RESPALDO = "corporativo"
+# Rutas base de 2026-10-06: se DESACTIVAN una vez (nunca se borran; vacantes y candidatos conservan su copia). Si una
+# era la predeterminada de la Cuenta, la nueva equivalente toma su lugar.
+RUTAS_BASE_RETIRADAS = {"masivos": "masivos_con_documentos", "corporativos": "corporativo",
+                        "corporativos_psicometria": "corporativo"}
 _AUTO_TODAS = {e: {"avance_automatico": True} for e in ETAPAS_CANDIDATO}  # Contratación/Onboarding se apagan al normalizar
 
 
@@ -319,54 +328,52 @@ def _cola_contratacion_onboarding() -> List[dict]:
     bloquean la ENTRADA a esa etapa (la compuerta solo revisa las etapas que se dejan atrás)."""
     return [
         {"id": "condiciones", "tipo": "condiciones", "nombre": "Condiciones de contratación", "etapa": "Contratación"},
-        {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Carta intención / contrato", "etapa": "Contratación",
-         "depende_de": ["condiciones"]},
+        {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Firmar documentos", "etapa": "Contratación"},
         {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Onboarding"},
         {"id": "induccion", "tipo": "induccion", "nombre": "Inducción", "etapa": "Onboarding"},
-        {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding",
-         "depende_de": ["documentos-ingreso", "induccion"]},
+        {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding"},
+    ]
+
+
+def _masivos(con_documentos: bool) -> List[dict]:
+    pasos = [
+        {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web sin CV", "con_cv": False},
+        {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Continuar prefiltro por WhatsApp"},
+    ]
+    if con_documentos:
+        pasos += [
+            {"id": "solicitar-documentos", "tipo": "solicitud_documentos", "nombre": "Solicitar documentos por liga", "etapa": "Prefiltro"},
+            {"id": "validar-documentos", "tipo": "documentos", "nombre": "Revisar documentos", "etapa": "Prefiltro"},
+        ]
+    return pasos + [
+        {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+        {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana"},
+        {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
+        *_cola_contratacion_onboarding(),
     ]
 
 
 RUTAS_BASE = {
-    "masivos": {
-        "nombre": "Masivos",
-        "descripcion": "Solicitud web sin CV → prefiltro por WhatsApp → documentos por liga → Entrevista Red Human → médica y "
-                       "entrevista humana → contratación → onboarding (12 pasos).",
-        "pasos": [
-            {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web sin CV", "con_cv": False},
-            {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Continuar prefiltro por WhatsApp",
-             "depende_de": ["solicitud-web"]},
-            {"id": "solicitar-documentos", "tipo": "solicitud_documentos", "nombre": "Solicitar documentos por liga",
-             "etapa": "Prefiltro", "depende_de": ["prefiltro-whatsapp"]},
-            {"id": "validar-documentos", "tipo": "documentos", "nombre": "Validar documentos", "etapa": "Prefiltro",
-             "depende_de": ["solicitar-documentos"]},
-            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
-            {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana"},
-            {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
-            *_cola_contratacion_onboarding(),
-        ],
+    "masivos_sin_documentos": {
+        "nombre": "Masivos sin documentos iniciales",
+        "descripcion": "Solicitud web sin CV → prefiltro por WhatsApp → Entrevista Red Human → médica y entrevista humana → "
+                       "firma de documentos → onboarding.",
+        "pasos": _masivos(False),
     },
-    "corporativos": {
-        "nombre": "Corporativos sin psicometría",
+    "masivos_con_documentos": {
+        "nombre": "Masivos con documentos iniciales",
+        "descripcion": "Como Masivos, pero pide y revisa los documentos desde el Prefiltro (en Onboarding solo se piden los "
+                       "que falten).",
+        "pasos": _masivos(True),
+    },
+    "corporativo": {
+        "nombre": "Corporativos",
         "descripcion": "Solicitud web con CV y prefiltro → Análisis de CV y Entrevista Red Human → entrevista humana → "
-                       "contratación → onboarding (9 pasos).",
+                       "firma de documentos → onboarding.",
         "pasos": [
             {"id": "solicitud-web", "tipo": "prefiltro_web", "nombre": "Solicitud web con CV y prefiltro"},
             {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Entrevista IA"},
             {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
-            {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
-            *_cola_contratacion_onboarding(),
-        ],
-    },
-    "corporativos_psicometria": {
-        "nombre": "Corporativos con psicometría",
-        "descripcion": "Igual que Corporativos, con Psicometría en Filtro humano (10 pasos).",
-        "pasos": [
-            {"id": "solicitud-web", "tipo": "prefiltro_web", "nombre": "Solicitud web con CV y prefiltro"},
-            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Entrevista IA"},
-            {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
-            {"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría", "etapa": "Entrevista Humana"},
             {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
             *_cola_contratacion_onboarding(),
         ],
@@ -405,6 +412,37 @@ def asegurar_rutas_base(db: Session, cuenta_id: int, por: str = "sistema") -> in
     if n:
         db.flush()
     return n
+
+
+def retirar_rutas_base_anteriores(db: Session) -> dict:
+    """UNA vez (marca `rutas_base_2026_10_09` en bitácora): desactiva las rutas base de 2026-10-06 de cada Cuenta y, si
+    alguna era la predeterminada, pasa la marca a su equivalente nueva. Nunca borra; vacantes y candidatos conservan su
+    copia. Idempotente y no fatal."""
+    from ..models import Bitacora
+
+    if not _tablas_proceso():
+        return {"desactivadas": 0}
+    try:
+        if db.query(Bitacora.id).filter(Bitacora.accion == "rutas_base_2026_10_09").first():
+            return {"desactivadas": 0, "yaAplicada": True}
+        viejas = (db.query(PlantillaProceso)
+                  .filter(PlantillaProceso.ruta_base.in_(list(RUTAS_BASE_RETIRADAS)), PlantillaProceso.activa.is_(True)).all())
+    except Exception:  # noqa: BLE001
+        return {"desactivadas": 0}
+    predeterminadas = 0
+    for pl in viejas:
+        if pl.predeterminada:
+            nueva = _plantilla_ruta(db, pl.cuenta_id, RUTAS_BASE_RETIRADAS[pl.ruta_base])
+            if nueva is not None:
+                nueva.predeterminada = True
+                predeterminadas += 1
+        pl.activa = False
+        pl.predeterminada = False
+        pl.actualizada_por = "Rutas base 2026-10-09"
+    registrar(db, "sistema", "rutas_base_2026_10_09", "plantilla_proceso", "",
+              {"desactivadas": [pl.id for pl in viejas], "predeterminadas_transferidas": predeterminadas})
+    db.flush()
+    return {"desactivadas": len(viejas), "predeterminadas": predeterminadas}
 
 
 def asegurar_rutas_base_todas(db: Session) -> int:
@@ -688,8 +726,10 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         if regla["tipo"] == "ninguna":
             cumple = True
         elif regla["tipo"] == "validacion":
-            cumple = bool(ev.revisada_en) and conclusion not in CONCLUSION_NEGATIVA
-            if not ev.revisada_en:
+            # 2026-10-09: «Avanzar» del entrevistador ya es la decisión de una persona: no espera la revisión de RH
+            avanzar = ev.tipo == "entrevista_humana" and conclusion == "avanzar"
+            cumple = (bool(ev.revisada_en) or avanzar) and conclusion not in CONCLUSION_NEGATIVA
+            if not ev.revisada_en and not avanzar:
                 espera = "Falta la revisión de RH"
         else:  # dictamen / calificación
             cumple = conclusion in (regla.get("aceptados") or [])
@@ -984,22 +1024,21 @@ def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
 
 
 def _paso_carta_contrato(base: dict, p: Postulacion, exp) -> dict:
-    """Terminado con la carta o el contrato FIRMADOS (Dropbox Sign o carga manual) o con la carta enviada al candidato;
-    en curso con una firma pendiente o un contrato en borrador."""
+    """«Firmar documentos» (2026-10-09): terminado SOLO con el contrato firmado (carta + contrato en un solo acto, en
+    cualquier modo: electrónica, papel o demo; o el contrato firmado cargado a mano). La carta sola —enviada o
+    firmada— deja la actividad en curso: falta firmar el contrato."""
     from ..models import TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO
 
     if exp is None:
         return {**base, "espera": "El expediente se abre al llegar a Contratación"}
-    firmados = [d for d in (exp.documentos or []) if getattr(d, "interno", False) and d.tipo in (TIPO_CARTA_FIRMADA, TIPO_CONTRATO_FIRMADO)]
-    if firmados:
-        d = firmados[-1]
-        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{d.tipo}",
-                "revisadoPor": "Revisado por: RH", "terminado_en": _aware(getattr(d, "recibido_en", None))}
+    contrato = [d for d in (exp.documentos or []) if getattr(d, "interno", False) and d.tipo == TIPO_CONTRATO_FIRMADO]
+    if contrato:
+        d = contrato[-1]
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Documentos firmados",
+                "revisadoPor": f"Revisado por: {d.revisado_por or 'RH'}", "terminado_en": _aware(getattr(d, "recibido_en", None))}
     eventos = _bitacora(p, ("carta_intencion_enviada", "contrato_generado"), "expediente", str(exp.id))
-    enviada = [b for b in eventos if b.accion == "carta_intencion_enviada" and (b.detalle or {}).get("enviado")]
-    if enviada:
-        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Carta de intención enviada",
-                "revisadoPor": f"Revisado por: {enviada[-1].actor}", "terminado_en": _aware(enviada[-1].ts)}
+    if any(getattr(d, "interno", False) and d.tipo == TIPO_CARTA_FIRMADA for d in (exp.documentos or [])):
+        return {**base, "estado": "en_curso", "espera": "Carta firmada: falta firmar el contrato («Firmar documentos»)"}
     db = object_session(p)
     firma = None
     if db is not None:
@@ -1011,16 +1050,18 @@ def _paso_carta_contrato(base: dict, p: Postulacion, exp) -> dict:
         except Exception:  # noqa: BLE001
             firma = None
     if firma is not None:
-        nombre = "carta de intención" if firma.documento == "carta" else "contrato"
-        if firma.estado in ("firmada", "descargada"):
-            return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{nombre.capitalize()} firmado(a)",
+        if firma.estado in ("firmada", "descargada") and firma.documento in ("contrato", "documentos"):
+            return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Documentos firmados",
                     "revisadoPor": "Revisado por: RH", "terminado_en": _aware(firma.firmada_en)}
         if firma.estado == "error":
-            return {**base, "estado": "en_curso", "espera": f"La firma del {nombre} falló: vuelve a mandarla"}
-        return {**base, "estado": "en_curso", "espera": f"Falta la firma del {nombre}"}
-    if eventos:
-        return {**base, "estado": "en_curso", "espera": "Documento generado: falta enviarlo o firmarlo"}
-    return {**base, "espera": "Falta generar la carta de intención o el contrato"}
+            return {**base, "estado": "en_curso", "espera": "La firma falló: vuelve a mandar «Firmar documentos»"}
+        if firma.estado == "enviada":
+            faltan = [("RH" if x.get("rol") == "rh" else "el candidato") for x in (firma.firmantes or []) if x.get("estado") != "firmado"]
+            return {**base, "estado": "en_curso", "espera": f"Falta la firma de {' y '.join(faltan)}" if faltan else "Firmando…"}
+    enviada = [b for b in eventos if b.accion == "carta_intencion_enviada" and (b.detalle or {}).get("enviado")]
+    if enviada or eventos:
+        return {**base, "estado": "en_curso", "espera": "Falta «Firmar documentos» (carta de intención y contrato)"}
+    return {**base, "espera": "Falta «Firmar documentos» (carta de intención y contrato)"}
 
 
 def _paso_induccion(base: dict, p: Postulacion) -> dict:
@@ -1177,6 +1218,12 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
     salida = []
     for paso in pasos:
         r = calculados[paso["id"]]
+        superada = (_indice(paso["etapa"]) < actual and r["estado"] in ("pendiente", "en_curso") and not r.get("excepcion")
+                    and not paso.get("heredado"))
+        if superada:
+            # 2026-10-09 (estados cruzados): en Onboarding no se muestra «Prefiltro: En curso»; queda como etapa superada
+            r = {**r, "error": None, "falta_correo": False, "espera": "",
+                 "cuello": {"clave": "superada", "texto": "No se completó · etapa superada", "quien": None}}
         deps = [calculados[d] for d in paso.get("depende_de", []) if d in calculados]
         deps_listas = all(d["estado"] in ("completada", "omitida", "cancelada") for d in deps)
         faltan_deps = [x["nombre"] for x in pasos if x["id"] in paso.get("depende_de", [])
@@ -1189,9 +1236,11 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             previos_pendientes = [x["nombre"] for x in pasos if x["obligatorio"] and not x.get("heredado")
                                   and _indice(x["etapa"]) < _indice(paso["etapa"]) and not _cumplido(calculados[x["id"]])]
             etapa_alcanzada = not previos_pendientes
-        disponible = deps_listas and etapa_alcanzada and r["estado"] in ("pendiente", "en_curso")
+        disponible = deps_listas and etapa_alcanzada and r["estado"] in ("pendiente", "en_curso") and not superada
         espera = r["espera"]
-        if r["estado"] == "pendiente" and not deps_listas:
+        if superada:
+            espera = ""
+        elif r["estado"] == "pendiente" and not deps_listas:
             espera = f"Falta completar: {', '.join(faltan_deps)}"
         elif r["estado"] == "pendiente" and not etapa_alcanzada:
             espera = (f"Falta completar: {', '.join(previos_pendientes)}" if previos_pendientes
@@ -1274,6 +1323,19 @@ def esperando_referencias(ev: Optional[Evaluacion]) -> bool:
     return ev is not None and sev.esperando_referencias(ev)
 
 
+def tiene_evaluador(ev: Optional[Evaluacion]) -> bool:
+    """¿La evaluación ya tiene a quién la aplica (usuario, contacto o datos capturados)?"""
+    return bool(ev is not None and (ev.evaluador_usuario_id or ev.evaluador_contacto_id or (ev.evaluador_nombre or "").strip()
+                                    or (ev.evaluador_correo or "").strip() or (ev.evaluador_whatsapp or "").strip()))
+
+
+def _texto_cita(dt: Optional[datetime]) -> str:
+    from ..fechas import con_zona, local
+
+    loc = local(dt)
+    return con_zona(loc.strftime("%d/%m/%Y %H:%M")) if loc else ""
+
+
 def _cuello_evaluacion(ev: Optional[Evaluacion]) -> Optional[dict]:
     """¿A quién espera una evaluación viva sin resultado? {clave, texto, quien, motivos, que, legado}."""
     if ev is None or ev.estado in ("cancelada", "con_resultado"):
@@ -1304,7 +1366,15 @@ def _cuello_evaluacion(ev: Optional[Evaluacion]) -> Optional[dict]:
         from . import envios as senv
 
         dest = senv.destinatario_evaluador(ev)
-        texto = {"medico": "Esperando médico", "entrevistador": "Esperando entrevistador"}.get(dest, "Esperando evaluador")
+        if dest == "entrevistador" and tiene_evaluador(ev):
+            # 2026-10-09: con entrevistador y su liga ya no se «espera al entrevistador»: la cita está programada (o falta
+            # que registre el resultado). Un envío FALLIDO a esa persona sigue mostrando «Error».
+            texto = "Programada · " + _texto_cita(ev.cita_fecha_hora) if ev.cita_fecha_hora else "Pendiente de resultado"
+            return {"clave": "pendiente_resultado", "texto": texto, "quien": dest, "motivos": None, "que": "evaluador",
+                    "legado": True}
+        if dest == "entrevistador":
+            return {"clave": "esperando_evaluador", "texto": "Falta asignar entrevistador", "quien": None, "motivos": None, "que": "evaluador"}
+        texto = {"medico": "Esperando médico"}.get(dest, "Esperando evaluador")
         return {"clave": "esperando_evaluador", "texto": texto, "quien": dest, "motivos": None, "que": "evaluador",
                 "legado": bool(ev.enviada_en)}
     return {"clave": "pendiente_resultado", "texto": "Pendiente de registrar resultado", "quien": None}
@@ -1456,6 +1526,8 @@ ESTADOS_UNIFICADOS = {
     # 2026-10-08: no aprobada, pero RH decidió continuar (el resultado reprobatorio se conserva) · falta un dato
     "aprobada_excepcion": "Continúa por decisión de RH", "falta_correo": "Falta correo para enviar la prueba",
     "lista_para_iniciar": "Lista para iniciar",
+    # 2026-10-09: actividad de una etapa que el candidato YA dejó atrás sin completarla: nunca «En curso» ni «Sin iniciar»
+    "superada": "Etapa superada",
 }
 # Las resuelve Red Human solas (el candidato las responde o la IA las califica): la ficha solo muestra su estado.
 TIPOS_AUTOMATICOS = ("solicitud_web", "prefiltro_whatsapp", "prefiltro_web", "analisis_cv")
@@ -2042,7 +2114,16 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
     movidas: List[str] = []
     for _ in range(len(ETAPAS_CANDIDATO)):
         cfg = normalizar_etapas(p.proceso.get("etapas"))
-        encendido = cfg.get(p.etapa, {}).get("avance_automatico") or ruta_automatica(p.cuenta)
+        encendido = cfg.get(p.etapa, {}).get("avance_automatico")  # 2026-10-09: siempre, salvo Contratación/Onboarding
+        if p.etapa == "Contratación":
+            # 2026-10-09: «Firmar documentos» completo (y nada obligatorio pendiente) → Onboarding solo, con la selección
+            # de la plantilla (decisión del usuario). Cualquier bloqueo queda en bitácora y RH sigue con «Iniciar Onboarding».
+            if _documentos_firmados(p) and not etapa_lista(p)[1]:
+                from ..routers.onboarding import iniciar_automatico
+
+                if await iniciar_automatico(db, p):
+                    movidas.append("Onboarding")
+            break
         if p.etapa in ETAPAS_SIN_AVANCE_AUTOMATICO or not encendido:
             break
         sig, falta = etapa_lista(p)
@@ -2062,6 +2143,16 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
             break
         movidas.append(sig)
     return movidas
+
+
+def _documentos_firmados(p: Postulacion) -> bool:
+    e = p.expediente
+    db = object_session(p)
+    if e is None or db is None:
+        return False
+    from . import firma_documentos
+
+    return firma_documentos.firmado(db, e)
 
 
 async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:

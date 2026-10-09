@@ -138,7 +138,9 @@ with TestClient(app) as client:
           "sin entrevista humana agregada no se envía a «Filtro humano» (salvo movimiento manual)")
     omitir_previos(P)
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "registro_directo"})
-    check(r.status_code == 201 and etapa() == "Entrevista IA", "agregar otra evaluación (técnica) NO cambia la columna")
+    # 2026-10-09: avance automático en TODAS las Cuentas — con los obligatorios previos omitidos la ruta avanza sola
+    check(r.status_code == 201 and r.json()["movidaAFiltroHumano"] is False and etapa() == "Entrevista Humana",
+          "agregar otra evaluación (técnica) no es lo que mueve: la ruta avanza sola al no quedar obligatorios previos")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={
         "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "externo", "nombre": "Leo Externo", "correo": "leo@externo.mx"},
         "cita": {"fecha": "2026-10-20", "hora": "10:00", "modalidad": "Presencial", "direccion": "Av. Juárez 10"},

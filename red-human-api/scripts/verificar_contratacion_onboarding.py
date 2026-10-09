@@ -292,7 +292,8 @@ with TestClient(app) as client:
                     files={"archivo": ("contrato.pdf", io.BytesIO(pdf_firmado()), "application/pdf")})
     check(r.status_code == 200 and r.json()["tarea"] is None, "se acepta el PDF firmado en Contratación (antes 409)")
     check(paso(seg(pd.codigo), "carta-contrato")["estado"] == "completada", "completa la actividad de contrato")
-    iniciar(pd.expediente.id)
+    db.refresh(pd)
+    check(pd.etapa == "Onboarding", "documentos firmados → el candidato pasa SOLO a Onboarding (2026-10-09)")
     check(tareas(pd.expediente.id)["contrato_firmado"]["estado"] == "realizada", "y en Onboarding la tarea ya llega Realizada")
 
     print("\n--- 9. Expediente parcial: solo se pide lo que falta ---")
@@ -300,9 +301,13 @@ with TestClient(app) as client:
     falta = [d.tipo for d in pe.expediente.documentos if not d.aprobado and not d.interno]
     client.post(f"/onboarding/expedientes/{pe.expediente.id}/contrato-firmado", headers=H,
                 files={"archivo": ("contrato.pdf", io.BytesIO(pdf_firmado()), "application/pdf")})
-    r = iniciar(pe.expediente.id)
-    check(r["documentosPorSolicitar"] == falta and r["bienvenida"] == [], f"solo se solicita {falta}, sin bienvenida de expediente completo")
+    # 2026-10-09: el contrato firmado inicia el Onboarding SOLO (misma lógica que «Iniciar Onboarding»)
     pe = recargar(pe.codigo)
+    from app.services import onboarding as onb_srv
+
+    check(pe.etapa == "Onboarding" and [d.tipo for d in onb_srv.documentos_por_solicitar(pe.expediente)] == falta
+          and not db.query(Bitacora).filter_by(accion="bienvenida_onboarding_enviada", entidad_id=str(pe.expediente.id)).count(),
+          f"inicio automático: solo queda por pedir {falta}, sin bienvenida de expediente completo")
     check(all(d.solicitado_en is None for d in pe.expediente.documentos if d.aprobado), "lo ya aprobado nunca se marca como solicitado")
     db.close()
 

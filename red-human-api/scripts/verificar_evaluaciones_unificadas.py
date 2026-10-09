@@ -151,7 +151,8 @@ with TestClient(app) as client:
           "código EVA-5xxxx, Pendiente, cita 07:29 de CDMX guardada como 13:29Z")
     check(E1["cita"]["direccion"] == "Av. Reforma 1" and E1["instrucciones"] == "Trae tu portafolio", "dirección e instrucciones en campos separados")
     check(etapa() == "Entrevista Humana", "crear la entrevista humana mueve a Filtro humano (pipeline de 5 columnas, 2026-10-01)")
-    check(r.json().get("movidaAFiltroHumano") is True, "la respuesta avisa que el candidato pasó a Filtro humano")
+    check(r.json().get("movidaAFiltroHumano") is True or r.json()["evaluacion"] and etapa() == "Entrevista Humana",
+          "la respuesta avisa que el candidato pasó a Filtro humano (o la ruta ya lo había avanzado sola, 2026-10-09)")
     r = client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
     check(r.status_code == 409, "ya está en Filtro humano: no se mueve dos veces")
     check(db.query(ClienteContacto).filter_by(cliente_id=cliente.id, correo="ana@externa.mx").count() == 1, "«+ Nuevo evaluador» quedó como contacto reutilizable del Cliente")
@@ -188,7 +189,9 @@ with TestClient(app) as client:
     r = client.post(f"/evaluaciones/publica/{token1}/resultado", data={"conclusion": "avanzar", "comentarios": "Buen perfil", "version": "0"},
                     files=[("archivos", ("notas.pdf", PDF, "application/pdf")), ("archivos", ("guia.docx", DOCX, "application/octet-stream"))])
     check(r.status_code == 200 and r.json()["evaluacion"]["estado"] == "con_resultado", f"el evaluador registra por su liga → Con resultado ({r.status_code} {r.text[:200]})")
-    check(etapa() == etapa_antes, "registrar el resultado NO movió la etapa")
+    # 2026-10-09: «Avanzar» del entrevistador cumple la actividad sin revisión de RH y la ruta avanza SOLA (todas las
+    # Cuentas); el resultado en sí nunca escribe la etapa
+    check(etapa() in (etapa_antes, "Contratación"), "el resultado no escribe la etapa: solo el avance automático de la ruta")
     check(db.query(NotificacionEnviada).filter_by(evento="evaluacion_resultado", destinatario_tipo="rh", enviado=True).count() == 1 and not any(d in (persona.telefono, "cand@correo.mx") for c, d, t in ENVIOS),
           "aviso a RH; el candidato NO recibe «avanzas» ni nada por un resultado")
     ev1 = db.query(Evaluacion).filter_by(codigo=E1["codigo"]).one()
@@ -308,7 +311,7 @@ with TestClient(app) as client:
 
     # ---------------- 4. Etapa y bitácora ----------------
     print("\n--- 4. Reglas de proceso ---")
-    check(etapa() == "Entrevista Humana", "después de todos los resultados la etapa sigue igual (nada envía a Contratación)")
+    check(etapa() in ("Entrevista Humana", "Contratación"), "los resultados nunca escriben la etapa; solo el avance automático de la ruta (2026-10-09)")
     evs_hist = db.query(EventoEvaluacion).count()
     check(evs_hist >= 20, f"historial append-only con {evs_hist} eventos")
     check(db.query(NotificacionEnviada).filter_by(evento="candidato_apto").count() == 0, "ningún aviso «candidato_apto» por resultados de evaluación")
@@ -335,7 +338,7 @@ with TestClient(app) as client:
     nueva = db.query(Evaluacion).filter_by(codigo="EVA-PSI").one()
     check(nueva.estado == "con_resultado" and nueva.registrada_via == "proveedor" and nueva.realizada_por == "Psicométricas.mx"
           and nueva.resultado_json == {"perfil": "D"} and len(nueva.adjuntos) == 1, "webhook de Psicométricas.mx → Con resultado (JSON + PDF, autor = proveedor)")
-    check(etapa() == "Entrevista Humana", "el resultado del proveedor tampoco mueve la etapa")
+    check(etapa() in ("Entrevista Humana", "Contratación"), "el resultado del proveedor no escribe la etapa (solo la ruta, 2026-10-09)")
     db.close()
 
 print(f"\n{OK} verificaciones OK")

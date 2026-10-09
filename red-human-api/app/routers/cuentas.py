@@ -20,7 +20,7 @@ from ..config import settings
 from ..database import get_db
 from ..seed import slug_cuenta_unico
 from ..deps import cuenta_actual, usuario_actual, usuario_admin
-from ..models import CANALES_MENSAJERIA, normalizar_canal_mensajeria, ROLES, Cliente, Cuenta, Usuario, UsuarioCuenta, registrar
+from ..models import CANALES_MENSAJERIA, MODOS_FIRMA, normalizar_canal_mensajeria, ROLES, Cliente, Cuenta, Usuario, UsuarioCuenta, registrar
 from .auth import CORREO_RE, crear_usuario_basico
 
 router = APIRouter(prefix="/cuentas", tags=["cuentas"])
@@ -44,6 +44,9 @@ def _cuenta_dict(cu: Cuenta, actual_id: Optional[int] = None) -> dict:
         # 2026-10-06: canal con candidatos (whatsapp | telegram | ambos) y si el bot de Telegram está configurado
         "canalMensajeria": normalizar_canal_mensajeria(cu.canal_mensajeria),
         "telegramDisponible": bool((settings.telegram_bot_token or "").strip()),
+        # 2026-10-09: modo de firma de carta + contrato ("" = automático) y el que aplica hoy
+        "modoFirma": cu.modo_firma or "",
+        "modoFirmaEfectivo": _modo_firma_efectivo(cu),
         "slug": cu.slug or "",
         "portalUrl": f"{settings.app_url}/portal?cuenta={cu.slug}" if cu.slug else f"{settings.app_url}/portal",  # 2026-09-17
         "estado": cu.estado,
@@ -248,7 +251,17 @@ class ActualizarCuentaIn(BaseModel):
     whatsapp_comunicacion: Optional[str] = None
     whatsapp_exclusivo: Optional[bool] = None
     canal_mensajeria: Optional[str] = None
+    modo_firma: Optional[str] = None  # electronica | papel | demo | "" (automático)
     estado: Optional[str] = None
+
+
+def _modo_firma_efectivo(cu: Cuenta) -> str:
+    from ..services import firma_documentos
+
+    try:
+        return firma_documentos.modo_de(cu)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _canal_valido(valor: str) -> str:
@@ -272,6 +285,8 @@ def _aplicar_actualizacion(db: Session, cu: Cuenta, datos: ActualizarCuentaIn, a
         raise HTTPException(400, "El correo no tiene un formato válido.")
     if "canal_mensajeria" in payload:
         payload["canal_mensajeria"] = _canal_valido(payload["canal_mensajeria"])
+    if "modo_firma" in payload and payload["modo_firma"].strip() not in ("", *MODOS_FIRMA):
+        raise HTTPException(400, "Modo de firma inválido. Usa 'electronica', 'papel', 'demo' o vacío (automático).")
     for campo, valor in payload.items():
         setattr(cu, campo, valor.strip() if isinstance(valor, str) else valor)
     registrar(db, admin.nombre, "cuenta_actualizada", "cuenta", str(cu.id), {"campos": list(payload)})

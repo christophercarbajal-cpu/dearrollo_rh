@@ -241,12 +241,15 @@ with TestClient(app) as client:
     db.expire_all()
     check("otro número" in ultimo(7002)["text"] and db.query(Bitacora).filter_by(accion="telegram_liga_rechazada").count() == 1,
           "la liga de una postulación solo sirve desde el chat con SU teléfono")
-    tg(mensaje(7001, text=f"/start {s['telegram']['pasos']['medica'].split('start=')[1]}"))
-    check("todavía no está disponible" in ultimo(7001)["text"], "paso aún no disponible → el proceso dice qué falta")
+    # 2026-10-09: con el prefiltro cumplido la ruta ya avanzó sola a Filtro humano; «Condiciones» (Contratación) sigue sin habilitarse
+    tg(mensaje(7001, text=f"/start {s['telegram']['pasos']['condiciones'].split('start=')[1]}"))
+    check("todavía no está disponible" in ultimo(7001)["text"], f"paso aún no disponible → el proceso dice qué falta ({ultimo(7001)['text'][:160]} · {post(P).etapa})")
     p = post(P)
     p.prefiltro_completo, p.estado = True, "cumple"
     db.commit()
-    check(client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"}).status_code == 200, "avanza a Filtro humano")
+    if post(P).etapa != "Entrevista Humana":
+        client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})
+    check(post(P).etapa == "Entrevista Humana", "en Filtro humano (la ruta avanza sola al cumplirse el prefiltro)")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "medica", "forma": "registro_directo", "paso_id": "medica"})
     assert r.status_code == 201, r.text
     n_msgs = len(post(P).mensajes)

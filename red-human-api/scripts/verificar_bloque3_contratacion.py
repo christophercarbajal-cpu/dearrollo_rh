@@ -124,9 +124,10 @@ with TestClient(app) as client:
 
     print("\n--- 5. Alta perfecta: Colaborador con las condiciones finales + snapshot inmutable ---")
     # Onboarding v2 (2026-09-28): a Onboarding se entra con «Iniciar Onboarding» y el alta exige «Confirmar ingreso»
-    res = client.get(f"/onboarding/expedientes/{EXP}/resumen").json()
-    r = client.post(f"/onboarding/expedientes/{EXP}/iniciar", json={"documentos": res["configuracion"]["documentos"], "notificar_responsables": False})
-    check(r.status_code == 200 and r.json()["candidato"]["etapa"] == "Onboarding", f"«Iniciar Onboarding» ({r.status_code})")
+    # 2026-10-09: «Firmar documentos» (aquí en papel: RH sube el PDF firmado) → el candidato pasa SOLO a Onboarding
+    r = client.post(f"/onboarding/expedientes/{EXP}/contrato-firmado", files={"archivo": ("firmados.pdf", PDF_MIN, "application/pdf")})
+    check(r.status_code == 200 and client.get(f"/candidatos/{P}").json()["etapa"] == "Onboarding",
+          f"documentos firmados → Onboarding automático ({r.status_code} {r.text[:160]})")
     r = client.post(f"/contratacion/expedientes/{EXP}/alta", json={})
     check(r.status_code == 409 and "Confirmar ingreso" in r.json()["detail"], "sin «Confirmar ingreso» no hay alta (Onboarding v2)")
     client.post(f"/onboarding/expedientes/{EXP}/confirmar-ingreso", json={"fecha_real": __import__("datetime").date.today().isoformat()})

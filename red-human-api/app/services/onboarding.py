@@ -465,7 +465,7 @@ def firma_contrato(db: Session, e: Expediente):
     try:
         from ..models import FirmaDocumento
 
-        return (db.query(FirmaDocumento).filter(FirmaDocumento.expediente_id == e.id, FirmaDocumento.documento == "contrato",
+        return (db.query(FirmaDocumento).filter(FirmaDocumento.expediente_id == e.id, FirmaDocumento.documento.in_(("contrato", "documentos")),
                                                FirmaDocumento.estado.in_(("firmada", "descargada")))
                 .order_by(FirmaDocumento.id.desc()).first())
     except Exception:  # noqa: BLE001

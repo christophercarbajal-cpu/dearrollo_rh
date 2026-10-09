@@ -97,33 +97,37 @@ with TestClient(app) as client:
     cuenta = db.get(Cuenta, r.json()["id"])
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
     pls = {p["rutaBase"]: p for p in client.get("/procesos/plantillas").json() if p.get("rutaBase")}
-    check(set(pls) == {"masivos", "corporativos", "corporativos_psicometria"}, "la Cuenta nace con las tres rutas base editables")
-    check([len(pls[k]["pasos"]) for k in ("masivos", "corporativos", "corporativos_psicometria")] == [12, 9, 10],
-          "Masivos 12 pasos · Corporativos sin psicometría 9 · con psicometría 10")
-    nombres = [p["nombre"] for p in pls["masivos"]["pasos"]]
-    check(nombres == ["Solicitud web sin CV", "Continuar prefiltro por WhatsApp", "Solicitar documentos por liga", "Validar documentos",
+    # 2026-10-09: tres rutas base nuevas (las de 2026-10-06 se desactivan una vez, sin borrarse)
+    check(set(pls) == {"masivos_sin_documentos", "masivos_con_documentos", "corporativo"}, "la Cuenta nace con las tres rutas base editables")
+    check([len(pls[k]["pasos"]) for k in ("masivos_sin_documentos", "masivos_con_documentos", "corporativo")] == [10, 12, 9],
+          "Masivos sin documentos 10 actividades · con documentos 12 · Corporativos 9")
+    nombres = [p["nombre"] for p in pls["masivos_con_documentos"]["pasos"]]
+    check(nombres == ["Solicitud web sin CV", "Continuar prefiltro por WhatsApp", "Solicitar documentos por liga", "Revisar documentos",
                       "Entrevista Red Human", "Evaluación médica", "Entrevista humana", "Condiciones de contratación",
-                      "Carta intención / contrato", "Documentos de ingreso", "Inducción", "Alta como colaborador"],
-          "Masivos: los 12 pasos del documento, en orden de etapa")
-    etapas_m = [p["etapa"] for p in pls["masivos"]["pasos"]]
+                      "Firmar documentos", "Documentos de ingreso", "Inducción", "Alta como colaborador"],
+          "Masivos con documentos: las 12 actividades, en orden de etapa")
+    etapas_m = [p["etapa"] for p in pls["masivos_con_documentos"]["pasos"]]
     check(etapas_m == ["Prefiltro"] * 4 + ["Entrevista IA"] + ["Entrevista Humana"] * 2 + ["Contratación"] * 2 + ["Onboarding"] * 3,
-          "Masivos: Prefiltro (4) → Filtro Red Human (1) → Filtro humano (2) → Contratación (2) → Onboarding (3)")
-    corp_psi = [(p["etapa"], p["nombre"]) for p in pls["corporativos_psicometria"]["pasos"]]
-    check(corp_psi[3:5] == [("Entrevista Humana", "Psicometría"), ("Entrevista Humana", "Entrevista humana")],
-          "Corporativos con psicometría: Psicometría y Entrevista humana en Filtro humano")
+          "Masivos con documentos: Prefiltro (4) → Filtro Red Human (1) → Filtro humano (2) → Contratación (2) → Onboarding (3)")
+    check(not any(p["tipo"] in ("solicitud_documentos",) or (p["tipo"] == "documentos" and p["etapa"] == "Prefiltro")
+                  for p in pls["masivos_sin_documentos"]["pasos"]), "Masivos sin documentos: no pide documentos antes de Onboarding")
     for k, pl in pls.items():
         auto = {e for e, c in pl["etapas"].items() if c["avance_automatico"]}
-        check(auto == {"Prefiltro", "Entrevista IA", "Entrevista Humana"}, f"{pl['nombre']}: avance automático encendido por defecto")
-    ent = next(p for p in pls["corporativos_psicometria"]["pasos"] if p["tipo"] == "entrevista_humana")
-    check(ent["depende_de"] == [], "el orden visual no crea dependencias: Psicometría y Entrevista humana corren en paralelo")
-    check(next(p for p in pls["masivos"]["pasos"] if p["tipo"] == "documentos" and p["etapa"] == "Prefiltro")["depende_de"] == ["solicitar-documentos"],
-          "«Esperar a…» explícito: Validar documentos espera a la solicitud")
-    r = client.patch(f"/procesos/plantillas/{pls['corporativos']['id']}", json={"nombre": "Corporativos (editada)"})
-    check(r.status_code == 200 and r.json()["nombre"] == "Corporativos (editada)" and r.json()["rutaBase"] == "corporativos",
+        check(auto == {"Prefiltro", "Entrevista IA", "Entrevista Humana"}, f"{pl['nombre']}: avance automático (sin interruptor)")
+    ent = next(p for p in pls["masivos_sin_documentos"]["pasos"] if p["tipo"] == "entrevista_humana")
+    check(ent["depende_de"] == [], "médica y entrevista humana corren en paralelo (el catálogo no las encadena)")
+    check(next(p for p in pls["masivos_con_documentos"]["pasos"] if p["tipo"] == "documentos" and p["etapa"] == "Prefiltro")["depende_de"] == ["solicitar-documentos"],
+          "el catálogo define a qué espera cada actividad: Revisar documentos espera a la solicitud")
+    pasos_sin_deps = [dict(x, depende_de=[]) for x in pls["masivos_con_documentos"]["pasos"]]
+    r = client.post("/procesos/plantillas", json={"nombre": "Sin dependencias capturadas", "pasos": pasos_sin_deps})
+    check(r.status_code == 201 and next(p for p in r.json()["pasos"] if p["id"] == "validar-documentos")["depende_de"] == ["solicitar-documentos"],
+          "aunque el editor ya no mande dependencias, la API las recalcula desde el catálogo")
+    r = client.patch(f"/procesos/plantillas/{pls['corporativo']['id']}", json={"nombre": "Corporativos (editada)"})
+    check(r.status_code == 200 and r.json()["nombre"] == "Corporativos (editada)" and r.json()["rutaBase"] == "corporativo",
           "las rutas base se editan como cualquier plantilla")
-    client.delete(f"/procesos/plantillas/{pls['masivos']['id']}")
+    client.delete(f"/procesos/plantillas/{pls['masivos_con_documentos']['id']}")
     r = client.post("/procesos/plantillas/rutas-base")
-    check(r.status_code == 200 and r.json()["creadas"] == 1 and len([p for p in client.get("/procesos/plantillas").json() if p.get("rutaBase")]) == 3,
+    check(r.status_code == 200 and r.json()["creadas"] == 1 and len([p for p in client.get("/procesos/plantillas").json() if p.get("rutaBase") and p["activa"]]) == 3,
           "«Restaurar rutas base» reactiva la desactivada (sin duplicar)")
 
     # ================= 2. Cascada de asignación =================
@@ -155,19 +159,19 @@ with TestClient(app) as client:
     P_BASE = nueva("Berta Base", V_SIN)
     s = seg(P_BASE)
     check(s["tieneProceso"] and s["origen"] == "base" and s["plantilla"] == "Corporativos (editada)",
-          "vacante sin proceso y Cuenta sin predeterminado → «Corporativos sin psicometría» (nivel 3)")
-    client.patch(f"/procesos/plantillas/{pls['corporativos_psicometria']['id']}", json={"predeterminada": True})
+          "vacante sin proceso y Cuenta sin predeterminado → «Corporativos» (nivel 3)")
+    client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"predeterminada": True})
     P_CTA = nueva("Carla Cuenta", V_SIN)
-    check(seg(P_CTA)["origen"] == "cuenta" and seg(P_CTA)["plantilla"] == "Corporativos con psicometría",
+    check(seg(P_CTA)["origen"] == "cuenta" and seg(P_CTA)["plantilla"] == "Masivos sin documentos iniciales",
           "con proceso predeterminado de la Cuenta → ese (nivel 2)")
-    client.patch(f"/procesos/plantillas/{pls['corporativos_psicometria']['id']}", json={"predeterminada": False})
-    r = client.put(f"/procesos/vacantes/{V_MAS}", json={"plantilla_id": pls["masivos"]["id"]})
+    client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"predeterminada": False})
+    r = client.put(f"/procesos/vacantes/{V_MAS}", json={"plantilla_id": pls["masivos_con_documentos"]["id"]})
     check(r.status_code == 200, "la vacante copia la ruta Masivos")
     P_VAC = nueva("Vero Vacante", V_MAS)
-    check(seg(P_VAC)["origen"] == "vacante" and seg(P_VAC)["plantilla"] == "Masivos", "con proceso de la vacante → ese (nivel 1)")
+    check(seg(P_VAC)["origen"] == "vacante" and seg(P_VAC)["plantilla"] == "Masivos con documentos iniciales", "con proceso de la vacante → ese (nivel 1)")
     antes = [x["nombre"] for x in post(P_BASE).proceso["pasos"]]
-    pasos_edit = [dict(x) for x in pls["corporativos"]["pasos"]] + [{"tipo": "referencias", "etapa": "Entrevista Humana", "nombre": "Referencias", "obligatorio": False}]
-    client.patch(f"/procesos/plantillas/{pls['corporativos']['id']}", json={"pasos": pasos_edit})
+    pasos_edit = [dict(x) for x in pls["corporativo"]["pasos"]] + [{"tipo": "referencias", "etapa": "Entrevista Humana", "nombre": "Referencias", "obligatorio": False}]
+    client.patch(f"/procesos/plantillas/{pls['corporativo']['id']}", json={"pasos": pasos_edit})
     check([x["nombre"] for x in post(P_BASE).proceso["pasos"]] == antes, "copia ESTÁTICA: editar la plantilla después no toca a la postulación")
     # postulación nacida sin vacante (menú de WhatsApp): ruta provisional que se reemplaza al elegir vacante
     c = db.query(Candidato).filter(Candidato.cuenta_id == cuenta.id).first()
@@ -242,18 +246,23 @@ with TestClient(app) as client:
           "sin condiciones no se inicia el Onboarding")
     client.patch(f"/candidatos/{P}/condiciones-contratacion", json={"puesto": "Analista", "sueldo": "$25,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": HOY})
     r = client.post(f"/onboarding/expedientes/{EXP}/iniciar", json={"documentos": [{"tipo": "CURP"}]})
-    check(r.status_code == 409 and "Carta intención / contrato" in r.json()["detail"], "Contratación: falta la carta intención / contrato (obligatorio) → 409")
+    check(r.status_code == 409 and "Firmar documentos" in r.json()["detail"], "Contratación: falta «Firmar documentos» (obligatorio) → 409")
     r = client.post(f"/contratacion/expedientes/{EXP}/carta-intencion/enviar", json={"canal": "correo"})
-    check(r.status_code == 200 and paso(seg(P), "carta-contrato")["estado"] == "completada", "carta de intención enviada → paso completado")
+    check(paso(seg(P), "carta-contrato")["estado"] != "completada", "2026-10-09: enviar solo la carta ya no completa «Firmar documentos»")
     curso = Curso(codigo="CUR-RUTA", titulo="Inducción Rutas", cuenta_id=cuenta.id, estado="Publicado")
     db.add(curso)
     db.commit()
-    r = client.post(f"/onboarding/expedientes/{EXP}/iniciar", json={"documentos": [{"tipo": "CURP"}], "notificar_responsables": False, "solicitar_documentos": False})
-    check(r.status_code == 200 and post(P).etapa == "Onboarding", "«Iniciar Onboarding» sin documentos todavía: los de Onboarding NO bloquean la entrada")
+    r = client.post(f"/firmas/expedientes/{EXP}/documentos")
+    check(r.status_code == 200 and r.json()["modo"] == "papel", "«Firmar documentos» sin Dropbox Sign → modo Papel (PDF para imprimir)")
+    r = client.post(f"/onboarding/expedientes/{EXP}/contrato-firmado", files={"archivo": ("firmados.pdf", PDF, "application/pdf")})
+    check(r.status_code == 200 and post(P).etapa == "Onboarding",
+          "documentos firmados → Onboarding automático (los documentos de Onboarding NO bloquean la entrada)")
     s = seg(P)
     check(paso(s, "documentos-ingreso")["estado"] in ("pendiente", "en_curso"), "Documentos de ingreso quedan pendientes DENTRO de Onboarding")
-    client.post(f"/contratacion/expedientes/{EXP}/documentos", data={"tipo": "CURP"}, files={"archivo": ("curp.pdf", PDF, "application/pdf")})
-    client.post(f"/contratacion/expedientes/{EXP}/documentos/estado", json={"tipo": "CURP", "estado": "aprobado"})
+    # 2026-10-09: el inicio automático aplica la selección COMPLETA de la plantilla: se aprueban todos los obligatorios
+    for d in [x for x in client.get(f"/contratacion/expedientes/{EXP}").json()["documentos"] if x.get("obligatorio") and not x.get("interno")]:
+        client.post(f"/contratacion/expedientes/{EXP}/documentos", data={"tipo": d["nombre"]}, files={"archivo": ("doc.pdf", PDF, "application/pdf")})
+        client.post(f"/contratacion/expedientes/{EXP}/documentos/estado", json={"tipo": d["nombre"], "estado": "aprobado"})
     db.add(AsignacionCurso(codigo="ASG-RUTA", curso_id=curso.id, tipo="candidato", postulacion_id=post(P).id, token="tok-asg-ruta",
                            estado="completado", aprobado=True, calificacion=95, completado_en=datetime.now(timezone.utc)))
     db.commit()

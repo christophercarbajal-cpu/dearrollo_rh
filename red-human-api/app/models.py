@@ -1015,6 +1015,8 @@ class Cuenta(Base):
     # 2026-10-06: canal de mensajería con candidatos (`CANALES_MENSAJERIA`): whatsapp | telegram | ambos. Lo leen el
     # alcance de cada webhook y la fachada de envío (`services/mensajeria.py`) para TODO envío automático o manual.
     canal_mensajeria: Mapped[str] = mapped_column(String(12), default="whatsapp")
+    # 2026-10-09: modo de firma de carta + contrato (MODOS_FIRMA); vacío = automático (services/firma_documentos.modo_de)
+    modo_firma: Mapped[str] = mapped_column(String(15), default="")
     estado: Mapped[str] = mapped_column(String(20), default="Activa")  # Activa | Inactiva | Eliminada
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
@@ -2073,6 +2075,15 @@ def ruta_automatica(cuenta) -> bool:
     return bool(cuenta is not None and (getattr(cuenta, "slug", "") or "") in CUENTAS_RUTA_AUTOMATICA)
 
 
+# Cuentas DEMO (2026-10-09): editar una ruta base DUPLICA la plantilla (la original queda intacta) y la firma de
+# documentos usa el modo Demo (sin Dropbox Sign). Por slug, igual que las demás reglas aisladas.
+CUENTAS_DEMO = CUENTAS_RUTA_AUTOMATICA | CUENTAS_PSICOMETRIA_SIMPLE
+
+
+def es_cuenta_demo(cuenta) -> bool:
+    return bool(cuenta is not None and (getattr(cuenta, "slug", "") or "") in CUENTAS_DEMO)
+
+
 def score_de_entrevista(evaluacion: Optional[dict]) -> Optional[int]:
     """Score PROPIO de la Entrevista Red Human (2026-10-08), sin el CV: `score_entrevista` de la evaluación; las
     evaluaciones previas (sin ese campo) lo derivan de sus calificaciones de la entrevista (experiencia y comunicación,
@@ -2451,7 +2462,13 @@ class EnvioActividad(Base):
 
 
 # --- Firma electrónica incrustada con Dropbox Sign (2026-09-29) ---
-DOCUMENTOS_FIRMA = {"carta": "Carta de intención", "contrato": "Contrato individual de trabajo"}
+DOCUMENTOS_FIRMA = {"carta": "Carta de intención", "contrato": "Contrato individual de trabajo",
+                    # 2026-10-09: «Firmar documentos» = carta + contrato en UN solo acto (services/firma_documentos.py)
+                    "documentos": "Carta de intención y contrato"}
+# Modo de firma de los documentos de contratación (2026-10-09). `Cuenta.modo_firma` vacío = automático (demo en Cuentas
+# demo; electrónica con Dropbox Sign configurado; papel si no).
+MODOS_FIRMA = {"electronica": "Electrónica (Dropbox Sign)", "papel": "Papel (RH sube el PDF firmado)",
+               "demo": "Demo (firma en la plataforma, sin validez legal)"}
 ESTADOS_FIRMA = ("enviada", "firmada", "descargada", "cancelada", "error")
 
 
@@ -2471,6 +2488,7 @@ class FirmaDocumento(Base):
     estado: Mapped[str] = mapped_column(String(20), default="enviada")  # ESTADOS_FIRMA
     test_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     documento_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Documento interno con el PDF firmado
+    modo: Mapped[str] = mapped_column(String(15), default="electronica")  # MODOS_FIRMA (2026-10-09)
     error: Mapped[str] = mapped_column(Text, default="")
     eventos: Mapped[list] = mapped_column(JSON, default=list)  # [{fecha, tipo}]
     creado_por: Mapped[str] = mapped_column(String(150), default="")
@@ -2521,6 +2539,17 @@ TIPOS_PASO = {
     "alta": {"nombre": "Alta como colaborador", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
              "etapas": ("Onboarding",)},
 }
+# Catálogo único (2026-10-09): cada actividad define SOLA a qué otras de su MISMA etapa espera (el editor ya no tiene
+# «En paralelo / Esperar a…»). Lo que no aparece aquí corre en paralelo dentro de su etapa; entre etapas manda la
+# compuerta. `proceso.normalizar_pasos` las convierte en `depende_de` contra los pasos reales de la ruta.
+ESPERA_DEL_CATALOGO = {
+    "prefiltro_whatsapp": ("solicitud_web",),
+    "prefiltro_web": ("solicitud_web",),
+    "solicitud_documentos": ("prefiltro_whatsapp", "prefiltro_web"),
+    "documentos": ("solicitud_documentos",),
+    "carta_contrato": ("condiciones",),
+    "alta": ("documentos", "induccion", "onboarding"),
+}
 TIPOS_PASO_EVALUACION = tuple(TIPOS_EVALUACION_U)
 # Condición de avance de un paso: ninguna = basta completarlo; calificacion = score >= mínimo (CV / Entrevista Red
 # Human); dictamen = conclusión dentro de las aceptadas; validacion = una persona lo confirmó (resultado revisado por
@@ -2564,7 +2593,8 @@ class PlantillaProceso(Base):
     creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_por: Mapped[str] = mapped_column(String(150), default="")
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
-    # 2026-10-06: ruta base precargada que originó la plantilla (masivos | corporativos | corporativos_psicometria);
+    # 2026-10-06: ruta base precargada que originó la plantilla (2026-10-09: masivos_sin_documentos |
+    # masivos_con_documentos | corporativo; las de 2026-10-06 quedaron desactivadas, ver proceso.RUTAS_BASE_RETIRADAS);
     # vacía = plantilla propia de RH. Sirve para sembrarlas una sola vez por Cuenta y para el respaldo de asignación.
     ruta_base: Mapped[str] = mapped_column(String(40), default="", index=True)
 

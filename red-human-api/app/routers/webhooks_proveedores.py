@@ -48,6 +48,18 @@ def _procesar_dropbox(evento: dict) -> None:
     try:
         r = procesar_evento_firma(db, evento)
         log.info("[DROPBOX SIGN] %s → %s", (evento.get("event") or {}).get("event_type"), r)
+        if r in ("firmada", "descargada"):
+            # 2026-10-09: documentos firmados → la ruta sale sola a Onboarding (si no queda nada obligatorio)
+            import asyncio
+
+            from ..models import Expediente, FirmaDocumento
+            from ..services import proceso as sproc
+
+            sr_id = (evento.get("signature_request") or {}).get("signature_request_id") or ""
+            f = db.query(FirmaDocumento).filter(FirmaDocumento.signature_request_id == sr_id).first() if sr_id else None
+            e = db.get(Expediente, f.expediente_id) if f is not None else None
+            if e is not None and e.postulacion is not None:
+                asyncio.run(sproc.avanzar_seguro(db, e.postulacion))
     except Exception:  # noqa: BLE001
         db.rollback()
         log.exception("[DROPBOX SIGN] no se pudo procesar el evento")

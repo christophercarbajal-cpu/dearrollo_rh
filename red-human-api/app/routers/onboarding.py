@@ -514,6 +514,37 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
     }
 
 
+async def iniciar_automatico(db: Session, p) -> bool:
+    """2026-10-09: al completarse «Firmar documentos» el candidato pasa SOLO a Onboarding con la selección de la
+    plantilla que aplica (sin el resumen; RH ajusta después desde las tareas). Usa EXACTAMENTE «Iniciar Onboarding»
+    (mismas validaciones, tareas, solicitud de lo faltante o bienvenida y avisos). Nunca lanza: un bloqueo queda en
+    bitácora y RH continúa a mano. Regresa True si inició."""
+    from types import SimpleNamespace
+
+    from ..services.proceso import ACTOR_AUTOMATICO
+
+    e = p.expediente
+    cuenta = db.get(Cuenta, p.cuenta_id) if p is not None else None
+    if e is None or cuenta is None or p.etapa != "Contratación":
+        return False
+    cfg = onb.configuracion_para(db, cuenta.id, e.puesto, e.empresa)
+    datos = IniciarOnboardingIn(
+        documentos=cfg.get("documentos") or [], recursos=cfg.get("recursos") or [], responsables=cfg.get("responsables") or {},
+        plazos=cfg.get("plazos") or {}, curso_induccion_id=cfg.get("cursoInduccionId"), plantilla_id=cfg.get("plantillaId"),
+    )
+    actor = SimpleNamespace(nombre=ACTOR_AUTOMATICO, correo="", id=None, rol="Sistema", puede_autorizar_omisiones=lambda: False)
+    try:
+        await iniciar_onboarding(e.id, datos, db, actor, cuenta)
+        registrar(db, ACTOR_AUTOMATICO, "onboarding_iniciado_por_firma", "expediente", str(e.id), {"postulacion": p.codigo})
+        db.commit()
+        return True
+    except HTTPException as ex:  # las validaciones van ANTES de tocar nada: sin rollback (el llamador puede traer cambios)
+        registrar(db, ACTOR_AUTOMATICO, "onboarding_automatico_detenido", "expediente", str(e.id),
+                  {"postulacion": p.codigo, "motivo": str(ex.detail)[:300]})
+        db.commit()
+        return False
+
+
 async def _bienvenida_onboarding(db: Session, e: Expediente, p, cuenta: Cuenta, u: Usuario) -> List[dict]:
     """Expediente completo al entrar a Onboarding: bienvenida + datos e instrucciones de ingreso (evento
     `instrucciones_ingreso` en su variante de Onboarding), sin ligas de documentos. Nunca bloquea."""

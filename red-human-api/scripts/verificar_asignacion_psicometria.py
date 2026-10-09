@@ -101,10 +101,11 @@ with TestClient(app) as client:
     check(client.patch(f"/evaluaciones/pruebas/{KOS}", headers=H, json={"nombre": "Kostick (PAPI)"}).json()["tipo"] == "prueba",
           "editar solo el nombre conserva tipo, modo y proveedor")
 
-    print("\n--- 2. Ruta «Corporativos con psicometría» con batería predeterminada; la vacante la hereda o la cambia ---")
+    print("\n--- 2. Ruta «Corporativos» + Psicometría con batería predeterminada; la vacante la hereda o la cambia ---")
     client.post("/procesos/plantillas/rutas-base", headers=H)
-    pl = next(x for x in client.get("/procesos/plantillas", headers=H).json() if x["rutaBase"] == "corporativos_psicometria")
-    pasos = [dict(x, pruebas=[BAT]) if x["tipo"] == "psicometrica" else x for x in pl["pasos"]]
+    # 2026-10-09: la ruta base es «Corporativos»; la psicometría se agrega desde el catálogo en Filtro humano
+    pl = next(x for x in client.get("/procesos/plantillas", headers=H).json() if x["rutaBase"] == "corporativo")
+    pasos = pl["pasos"] + [{"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría", "etapa": "Entrevista Humana", "pruebas": [BAT]}]
     r = client.patch(f"/procesos/plantillas/{pl['id']}", headers=H, json={"pasos": pasos})
     check(r.status_code == 200 and next(x for x in r.json()["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [BAT],
           "la ruta guarda la batería por defecto del catálogo")

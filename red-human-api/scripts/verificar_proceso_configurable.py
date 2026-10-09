@@ -301,14 +301,14 @@ with TestClient(app) as client:
     s = seg(P2)
     check(r.status_code == 200 and paso(s, "referencias")["cumpleRegla"] and paso(s, "referencias")["revisadoPor"] == f"Revisado por: {admin.nombre}",
           "revisada por RH → cumple; «Revisado por: [nombre]»")
-    check(s["listaParaAvanzar"] and post(P2).etapa == "Entrevista Humana", "sin avance automático en Filtro humano: lista, pero RH decide")
+    check(post(P2).etapa == "Contratación", "avance automático en TODAS las Cuentas (2026-10-09): Filtro humano completo → Contratación")
     integral = client.get(f"/candidatos/{P2}").json()["resultadoIntegral"]
     nombres = {v["nombre"]: v for v in integral["validaciones"]}
     check(nombres.get("Psicométrica", {}).get("obligatoria") and nombres.get("Entrevista Red Human", {}).get("score") == 82,
           "la evaluación integral toma las validaciones obligatorias del proceso")
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación"})
     s = seg(P2)
-    check(r.status_code == 200 and paso(s, "onboarding")["espera"] == "Se habilita en Onboarding" and paso(s, "alta")["disponible"] is False,
+    check(post(P2).etapa == "Contratación" and paso(s, "onboarding")["espera"] == "Se habilita en Onboarding" and paso(s, "alta")["disponible"] is False,
           "en Contratación: los pasos de Onboarding esperan su etapa")
 
     # estado ≠ resultado: psicometría desfavorable

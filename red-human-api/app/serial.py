@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from . import fechas
 from .config import settings
-from .models import CONCLUSIONES_ENTREVISTA, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
+from .models import CONCLUSIONES_ENTREVISTA, TIPO_CONTRATO_FIRMADO, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
 from .services.ia import texto_preguntas, texto_util_candidato
 
@@ -292,6 +292,10 @@ def _sintesis_global(p: Postulacion) -> dict:
     elif resultado_apto is True:
         recomendacion = "Realizar Entrevista Red Human"
         motivo = "Pasó el prefiltro; la evaluación integral requiere la Entrevista Red Human."
+    if p.etapa in ("Contratación", "Onboarding") and recomendacion != "No avanzar":
+        # 2026-10-09 (estados cruzados): «Avanzar a contratación» / «Realizar entrevista…» ya quedaron atrás; en estas
+        # etapas la recomendación es el pendiente actual de la ruta (`proceso._recomendacion_ruta`)
+        recomendacion, motivo = None, ""
 
     return {
         "prefiltroResumen": prefiltro_resumen,
@@ -560,6 +564,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         # --- Expediente (Contratación) — pertenece a ESTA postulación (decisión P5) ---
         "expedienteId": exp.id if exp else None,
         "expedienteProgreso": exp.progreso if exp else None,
+        # 2026-10-09: «Firmar documentos» completo (PDF interno «Contrato firmado», cualquier modo)
+        "contratoFirmado": bool(exp and any(d.interno and d.tipo == TIPO_CONTRATO_FIRMADO for d in exp.documentos)),
         "recordatorioNivel": exp.nivel_recordatorio if exp else None,
         "recordatoriosEnviados": (exp.recordatorios_enviados or 0) if exp else None,
         "expedienteEstado": exp.estado if exp else None,

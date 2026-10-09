@@ -18,7 +18,7 @@ from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
     ENFOQUES_ENTREVISTA, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
     RESULTADOS_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, Cuenta, PlantillaProceso, Usuario, Vacante, conclusiones_de,
-    nombre_etapa, registrar,
+    es_cuenta_demo, nombre_etapa, registrar,
 )
 from ..services import proceso as sproc
 from ..services.modulos_rh import requiere_modulos_rh
@@ -133,7 +133,8 @@ def restaurar_rutas_base(db: Session = Depends(get_db), u: Usuario = Depends(usu
     """«Restaurar rutas base»: siembra las que falten y REACTIVA las que RH desactivó (con sus ediciones; nunca las
     sobrescribe)."""
     n = sproc.asegurar_rutas_base(db, cuenta.id, u.nombre)
-    for pl in db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cuenta.id, PlantillaProceso.ruta_base != "",
+    for pl in db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cuenta.id,
+                                                PlantillaProceso.ruta_base.in_(list(sproc.RUTAS_BASE)),
                                                 PlantillaProceso.activa.is_(False)).all():
         pl.activa = True
         pl.actualizada_por = u.nombre
@@ -158,8 +159,19 @@ def crear_desde_ejemplo(clave: str, db: Session = Depends(get_db), u: Usuario = 
 def editar_plantilla(pid: int, datos: EditarPlantillaIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
                      cuenta: Cuenta = Depends(cuenta_actual)):
     """Editar NUNCA toca a las vacantes que ya copiaron la plantilla ni a sus candidatos: sube la versión y las
-    vacantes nuevas (o las que RH vuelva a asociar) toman la nueva."""
+    vacantes nuevas (o las que RH vuelva a asociar) toman la nueva. 2026-10-09: en una Cuenta DEMO, cambiar el contenido
+    de una ruta base la DUPLICA («… (copia)») y la original queda intacta; la respuesta es la copia."""
     pl = _plantilla(db, pid, cuenta.id)
+    if es_cuenta_demo(cuenta) and pl.ruta_base and (datos.pasos is not None or datos.etapas is not None):
+        copia = PlantillaProceso(cuenta_id=cuenta.id, nombre=f"{(datos.nombre or pl.nombre).strip()[:190]} (copia)",
+                                 descripcion=pl.descripcion or "", pasos=pl.pasos or [], etapas=pl.etapas or {}, version=1,
+                                 predeterminada=False, activa=True, creado_por=u.nombre, actualizada_por=u.nombre, ruta_base="")
+        db.add(copia)
+        db.flush()
+        registrar(db, u.nombre, "plantilla_proceso_duplicada", "plantilla_proceso", str(copia.id),
+                  {"original": pl.id, "motivo": "cuenta_demo", "correo_rh": u.correo})
+        pl = copia
+        datos = datos.model_copy(update={"nombre": None})
     cambios = []
     if datos.nombre is not None:
         if not datos.nombre.strip():

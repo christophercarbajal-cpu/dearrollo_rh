@@ -83,7 +83,9 @@ def _validacion_evaluacion(ev: Evaluacion, obligatoria: bool) -> dict:
     legible = conclusiones_de(ev.tipo).get(conclusion, "")
     if conclusion in CONCLUSION_NEGATIVA:
         estado = "no_apto"  # «calificado como No apto» cuenta aunque RH aún no lo revise
-    elif ev.estado != "con_resultado" or not ev.revisada_en or conclusion in CONCLUSION_PENDIENTE:
+    elif ev.estado != "con_resultado" or conclusion in CONCLUSION_PENDIENTE or (
+            not ev.revisada_en and not (ev.tipo == "entrevista_humana" and conclusion == "avanzar")):
+        # 2026-10-09: «Avanzar» registrado por el entrevistador cuenta sin esperar la revisión de RH
         estado = "pendiente"
     elif conclusion in CONCLUSION_OBSERVACIONES:
         estado = "observaciones"
@@ -102,7 +104,9 @@ def _validacion_evaluacion(ev: Evaluacion, obligatoria: bool) -> dict:
         "tipo": ev.tipo, "estado": estado, "resultado": resultado,
         "detalle": f"Realizada por: {ev.realizada_por}" if ev.realizada_por else "",
         "score": None,
-        "revisadoPor": _revisado_por(ev.revisada_por if ev.revisada_en else ""),
+        "revisadoPor": _revisado_por(ev.revisada_por if ev.revisada_en else (
+            (ev.realizada_por or ev.evaluador_nombre or ev.registrada_por or "el entrevistador")
+            if ev.tipo == "entrevista_humana" and conclusion == "avanzar" and ev.estado == "con_resultado" else "")),
         "codigo": ev.codigo,
     }
 

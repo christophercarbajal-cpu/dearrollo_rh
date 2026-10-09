@@ -135,15 +135,20 @@ with TestClient(app) as client:
     print("\n--- 2. Botón único «Agregar evaluación» ---")
     PA = nueva("Ana Prefiltro")
     r = client.post(f"/evaluaciones/postulaciones/{PA}", json={"tipo": "medica", "forma": "registro_directo"})
-    check(r.status_code == 201 and post(PA).etapa == "Prefiltro" and r.json()["movidaAFiltroHumano"] is False, "crear una evaluación médica NO cambia la columna")
+    check(r.status_code == 201 and r.json()["movidaAFiltroHumano"] is False,
+          "crear una evaluación médica no es «mover por entrevista humana» (la ruta avanza sola si no quedan obligatorios, 2026-10-09)")
     r = entrevista_humana(PA)
     p = post(PA)
-    check(r.status_code == 201 and p.etapa == "Entrevista Humana" and r.json()["movidaAFiltroHumano"] is True, "crear una entrevista humana mueve de Prefiltro a Filtro humano")
-    check(any(h.get("evento") == "movida_por_entrevista_humana" for h in p.historial or []), "el movimiento queda como nota en el historial")
-    check([o["actividad"] for o in p.actividades_omitidas or []] == ["Prefiltro", "Entrevista IA"], "lo saltado queda como «Omitida» con motivo")
+    movio = r.json()["movidaAFiltroHumano"]
+    check(r.status_code == 201 and p.etapa == "Entrevista Humana",
+          "con la entrevista humana el candidato queda en Filtro humano (la mueve ella o, sin obligatorios previos, la ruta sola)")
+    check(any(h.get("evento") in ("movida_por_entrevista_humana", "avance_automatico") for h in p.historial or []),
+          "el movimiento queda como nota en el historial")
+    if movio:
+        check([o["actividad"] for o in p.actividades_omitidas or []] == ["Prefiltro", "Entrevista IA"], "lo saltado queda como «Omitida» con motivo")
     EH_A = r.json()["evaluacion"]["codigo"]
     r = client.post(f"/evaluaciones/{EH_A}/resultado", data={"conclusion": "avanzar", "comentarios": "Muy bien", "version": "0"})
-    check(r.status_code == 200 and post(PA).etapa == "Entrevista Humana", "registrar el resultado NO mueve (RH decide el avance)")
+    check(r.status_code == 200 and post(PA).etapa in ("Entrevista Humana", "Contratación"), "«Avanzar» cumple la actividad; la ruta avanza sola si no quedan obligatorios (2026-10-09)")
 
     PC = nueva("Carlos Contratado")
     client.patch(f"/candidatos/{PC}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
@@ -194,7 +199,8 @@ with TestClient(app) as client:
     client.post(f"/evaluaciones/{EK}/resultado", data={"conclusion": "avanzar", "comentarios": "", "version": "0"})
     ri = client.get(f"/candidatos/{PK}").json()["resultadoIntegral"]
     eh = next(v for v in ri["validaciones"] if v["codigo"] == EK)
-    check(ri["estado"] == "pendiente" and eh["revisadoPor"] == "Pendiente de revisión", "resultado sin revisión de RH → Pendiente de revisión")
+    check(eh["estado"] == "aprobada" and eh["revisadoPor"] != "Pendiente de revisión",
+          "«Avanzar» del entrevistador ya no espera la revisión de RH (2026-10-09)")
     client.post(f"/evaluaciones/{EK}/revisar", json={"conclusion": "avanzar"})
     ri = client.get(f"/candidatos/{PK}").json()["resultadoIntegral"]
     eh = next(v for v in ri["validaciones"] if v["codigo"] == EK)

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
-from ..models import DOCUMENTOS_FIRMA, Cuenta, Expediente, FirmaDocumento, Usuario, registrar
+from ..models import DOCUMENTOS_FIRMA, MODOS_FIRMA, Cuenta, Expediente, FirmaDocumento, Usuario, registrar
 from ..services import dropbox_sign as dsign
 from ..services.modulos_rh import requiere_modulos_rh
 
@@ -34,6 +34,7 @@ def firma_dict(f: FirmaDocumento) -> dict:
         "expedienteId": f.expediente_id,
         "documento": f.documento,
         "documentoTexto": DOCUMENTOS_FIRMA.get(f.documento, f.documento),
+        "modo": getattr(f, "modo", "") or "electronica",
         "estado": f.estado,
         "testMode": bool(f.test_mode),
         "firmantes": [{"rol": x.get("rol"), "nombre": x.get("nombre"), "estado": x.get("estado", "pendiente")} for x in (f.firmantes or [])],
@@ -90,7 +91,7 @@ def aplicar_estado(db: Session, f: FirmaDocumento, firmados: set, completa: bool
             # el PDF final puede no estar listo con all_signed; con `downloadable` sí (se reintenta ahí)
             try:
                 pdf = dsign.descargar_pdf(f.signature_request_id)
-                tipo_doc = TIPO_CONTRATO_FIRMADO if f.documento == "contrato" else TIPO_CARTA_FIRMADA
+                tipo_doc = TIPO_CONTRATO_FIRMADO if f.documento in ("contrato", "documentos") else TIPO_CARTA_FIRMADA
                 doc = onb.guardar_documento_firmado(db, e, tipo_doc, pdf, f"{f.documento}-firmado-{e.id}.pdf", "Dropbox Sign (firma electrónica)", canal="firma_electronica")
                 f.documento_id = doc.id
                 f.estado, f.error = "descargada", ""
@@ -98,7 +99,7 @@ def aplicar_estado(db: Session, f: FirmaDocumento, firmados: set, completa: bool
                           {"documento": f.documento, "signature_request_id": f.signature_request_id, "evento": origen})
             except Exception as ex:  # noqa: BLE001
                 f.error = str(ex)[:500]
-        if e is not None and f.documento == "contrato":
+        if e is not None and f.documento in ("contrato", "documentos"):
             onb.sincronizar_contrato(db, e)  # firmado por todos = contrato firmado, aunque el PDF siga descargándose
     return f.estado
 
@@ -124,8 +125,8 @@ def _sign_url(db: Session, f: FirmaDocumento, rol: str) -> Optional[str]:
     proveedor NO es un error: se sincroniza el estado real y se regresa None. Fallas de red → 503 limpio (reintentar);
     el detalle técnico queda solo en los logs."""
     x = _firmante(f, rol)
-    if not x or x.get("estado") == "firmado" or f.estado != "enviada":
-        return None
+    if not x or x.get("estado") == "firmado" or f.estado != "enviada" or (getattr(f, "modo", "") or "electronica") != "electronica":
+        return None  # demo: se firma en la plataforma (sin URL del proveedor)
     try:
         return dsign.sign_url(x["signature_id"])
     except dsign.FirmaError as ex:
@@ -267,7 +268,7 @@ def firmas_publicas(token: str, db: Session = Depends(get_db)):
         c = _firmante(f, "candidato")
         yo = bool(c and c.get("estado") == "firmado")
         # 2026-10-08: solo «Firmar» si ESTE firmante no ha firmado y la solicitud sigue viva
-        salida.append({"id": f.id, "documento": DOCUMENTOS_FIRMA.get(f.documento, f.documento),
+        salida.append({"id": f.id, "documento": DOCUMENTOS_FIRMA.get(f.documento, f.documento), "modo": getattr(f, "modo", "") or "electronica",
                        "estado": f.estado, "yoFirme": yo, "puedoFirmar": f.estado == "enviada" and not yo})
     return {"configurado": dsign.configurado(), "clientId": settings.dropbox_sign_client_id if dsign.configurado() else None,
             "testMode": bool(settings.dropbox_sign_test_mode), "firmas": salida}
@@ -287,6 +288,159 @@ def sign_url_candidato(token: str, firma_id: int, db: Session = Depends(get_db))
                     "clientId": settings.dropbox_sign_client_id, "testMode": bool(settings.dropbox_sign_test_mode)}
         raise HTTPException(409, MENSAJE_NO_DISPONIBLE)
     return {"signUrl": url, "yaFirmado": False, "clientId": settings.dropbox_sign_client_id, "testMode": bool(settings.dropbox_sign_test_mode)}
+
+
+# ---------------- «Firmar documentos» (2026-10-09): carta + contrato en un solo acto, tres modos ----------------
+
+class FirmarDemoIn(BaseModel):
+    imagen: str = ""  # data:image/png;base64,… (firma dibujada)
+    texto: str = ""   # o el nombre escrito
+
+
+@router.get("/modo")
+def modo_firma(_: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    from ..services import firma_documentos as fdoc
+
+    return {"modo": fdoc.modo_de(cuenta), "elegido": cuenta.modo_firma or "", "modos": MODOS_FIRMA,
+            "electronicaDisponible": dsign.configurado(),
+            "clientId": settings.dropbox_sign_client_id if dsign.configurado() else None, "testMode": bool(settings.dropbox_sign_test_mode)}
+
+
+def _validar_para_firmar(db: Session, e: Expediente) -> None:
+    from ..services.configuracion import modo_prueba_activo
+
+    if e.estado == "alta":
+        raise HTTPException(409, "El colaborador ya fue dado de alta.")
+    if not (e.puesto and e.sueldo and e.tipo_contratacion and e.fecha_ingreso) and not modo_prueba_activo(db):
+        raise HTTPException(409, "Captura y guarda las condiciones de contratación antes de firmar los documentos.")
+
+
+@router.get("/expedientes/{exp_id}/documentos.pdf")
+def pdf_documentos(exp_id: int, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Carta de intención + contrato en un PDF (modo Papel: imprimir y firmar; también vista previa)."""
+    from fastapi.responses import Response
+
+    from ..services import firma_documentos as fdoc
+    from .contratacion import _expediente
+
+    e = _expediente(db, exp_id, cuenta.id)
+    pdf, _zonas = fdoc.pdf_documentos(e)
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="documentos-{e.id}.pdf"'})
+
+
+@router.post("/expedientes/{exp_id}/documentos")
+def firmar_documentos(exp_id: int, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Botón ÚNICO «Firmar documentos». Electrónica: una solicitud de Dropbox Sign con ambos documentos (RH firma aquí,
+    el candidato en su liga). Demo: solicitud interna (cada quien firma en la plataforma). Papel: regresa el PDF para
+    imprimir; RH sube el firmado con «Adjuntar documentos firmados». Una solicitud viva se REUTILIZA."""
+    from ..services import firma_documentos as fdoc
+    from .contratacion import _expediente
+
+    e = _expediente(db, exp_id, cuenta.id)
+    _validar_para_firmar(db, e)
+    modo = fdoc.modo_de(cuenta)
+    if fdoc.firmado(db, e):
+        raise HTTPException(409, "Los documentos ya están firmados.")
+    if modo == "papel":
+        return {"modo": "papel", "pdf": f"/firmas/expedientes/{e.id}/documentos.pdf"}
+    viva = fdoc.firma_viva(db, e)
+    if viva is not None and (viva.modo or "electronica") == modo:
+        return {**firma_dict(viva), "signUrl": _sign_url(db, viva, "rh"), "reutilizada": True}
+    p = e.postulacion
+    nombre_cand = (p.nombre if p else "") or (e.candidato.nombre if e.candidato else "Candidato")
+    correo_cand = (p.correo if p else "") or (e.candidato.correo if e.candidato else "")
+    if modo == "demo":
+        f = fdoc.crear_demo(db, e, cuenta.id, u, nombre_cand, correo_cand)
+        db.commit()
+        return {**firma_dict(f), "signUrl": None, "reutilizada": False}
+    # electrónica
+    if not correo_cand:
+        raise HTTPException(409, "El candidato no tiene correo: Dropbox Sign lo necesita para identificar al firmante.")
+    if not u.correo:
+        raise HTTPException(409, "Tu usuario no tiene correo para firmar como representante de la empresa.")
+    if u.correo.strip().lower() == correo_cand.strip().lower():
+        raise HTTPException(409, "El correo del candidato es el mismo que el tuyo: cada firmante necesita su propio correo.")
+    from .contratacion import _datos_carta_intencion
+
+    pdf, zonas = fdoc.pdf_documentos(e)
+    d = _datos_carta_intencion(e)
+    titulo = f"{DOCUMENTOS_FIRMA['documentos']} — {nombre_cand}"
+    try:
+        sr = dsign.crear_solicitud_embebida(
+            pdf, f"documentos-{e.id}.pdf", titulo, titulo,
+            f"{d.get('empresa') or cuenta.nombre_visible}: firma de la carta de intención y el contrato para el puesto {e.puesto}.",
+            [{"nombre": u.nombre, "correo": u.correo}, {"nombre": nombre_cand, "correo": correo_cand}],
+            {"expediente_id": e.id, "cuenta_id": cuenta.id, "documento": "documentos"},
+            zonas=zonas, indice_por_rol=INDICE_FIRMANTE,
+        )
+    except dsign.FirmaError as ex:
+        print(f"[firmas] crear solicitud (documentos) · expediente {e.id}: {ex}", flush=True)
+        registrar(db, u.nombre, "firma_error_tecnico", "expediente", str(e.id), {"donde": "crear_documentos", "status": ex.status, "detalle": str(ex)[:500]})
+        db.commit()
+        raise HTTPException(503, MENSAJE_RED)
+    por_correo = {s["correo"]: s for s in sr["signatures"]}
+    firmantes = []
+    for rol, nombre, correo in (("rh", u.nombre, u.correo), ("candidato", nombre_cand, correo_cand)):
+        s_ = por_correo.get(correo.lower())
+        firmantes.append({"rol": rol, "nombre": nombre, "correo": correo, "signature_id": s_["signature_id"] if s_ else "", "estado": "pendiente"})
+    f = FirmaDocumento(cuenta_id=cuenta.id, expediente_id=e.id, documento="documentos", modo="electronica",
+                       signature_request_id=sr["signature_request_id"], firmantes=firmantes, estado="enviada",
+                       test_mode=bool(settings.dropbox_sign_test_mode), creado_por=u.nombre, eventos=[])
+    db.add(f)
+    db.flush()
+    registrar(db, u.nombre, "firma_solicitada", "expediente", str(e.id),
+              {"documento": "documentos", "modo": "electronica", "signature_request_id": f.signature_request_id, "correo_rh": u.correo})
+    db.commit()
+    return {**firma_dict(f), "signUrl": _sign_url(db, f, "rh"), "reutilizada": False}
+
+
+async def _tras_firma_demo(db: Session, f: FirmaDocumento) -> dict:
+    """Si ya firmaron ambos, la ruta sale sola a Onboarding (misma regla que la firma electrónica)."""
+    from ..services import proceso as sproc
+
+    db.commit()
+    movidas: list = []
+    if f.estado in ("firmada", "descargada"):
+        e = db.get(Expediente, f.expediente_id)
+        if e is not None and e.postulacion is not None:
+            movidas = await sproc.avanzar_seguro(db, e.postulacion)
+    return {**firma_dict(f), "completa": f.estado in ("firmada", "descargada"), "pasoAOnboarding": "Onboarding" in movidas}
+
+
+@router.post("/{firma_id}/demo/firmar")
+async def firmar_demo_rh(firma_id: int, datos: FirmarDemoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                         cuenta: Cuenta = Depends(cuenta_actual)):
+    from ..services import firma_documentos as fdoc
+
+    f = db.query(FirmaDocumento).filter(FirmaDocumento.id == firma_id, FirmaDocumento.cuenta_id == cuenta.id).first()
+    if not f:
+        raise HTTPException(404, "Firma no encontrada.")
+    rh = _firmante(f, "rh")
+    if rh and (rh.get("correo") or "").lower() != (u.correo or "").lower():
+        raise HTTPException(403, f"Esta firma la debe hacer {rh.get('nombre')} (representante registrado).")
+    try:
+        fdoc.firmar_demo(db, f, "rh", datos.imagen, datos.texto)
+    except ValueError as ex:
+        raise HTTPException(409 if "ya" in str(ex).lower() else 400, str(ex))
+    return await _tras_firma_demo(db, f)
+
+
+@router.post("/publica/{token}/{firma_id}/demo/firmar")
+async def firmar_demo_candidato(token: str, firma_id: int, datos: FirmarDemoIn, db: Session = Depends(get_db)):
+    from ..services import firma_documentos as fdoc
+
+    e = _exp_publico(db, token)
+    f = db.query(FirmaDocumento).filter(FirmaDocumento.id == firma_id, FirmaDocumento.expediente_id == e.id).first()
+    if not f:
+        raise HTTPException(404, "Documento no encontrado.")
+    if (_firmante(f, "candidato") or {}).get("estado") == "firmado":
+        return {"ok": True, "yaFirmado": True, "mensaje": "Ya firmaste este documento. ¡Gracias!"}
+    try:
+        fdoc.firmar_demo(db, f, "candidato", datos.imagen, datos.texto)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    r = await _tras_firma_demo(db, f)
+    return {"ok": True, "yaFirmado": True, "mensaje": "¡Listo! Tu firma quedó registrada.", "completa": r["completa"]}
 
 
 def procesar_evento_firma(db: Session, evento: dict) -> str:

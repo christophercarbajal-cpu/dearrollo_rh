@@ -5,6 +5,9 @@
 1. Almacenamiento: plantillas de conversación POR VACANTE (prefiltro web/WhatsApp, entrevista por WhatsApp, con avatar
    y llamada), solo las de su ruta; edición manual marcada con quién; prefiltros solo cerrados; ajustar la ruta de la
    vacante NO toca la plantilla de la Cuenta; los guiones nunca salen en los payloads públicos.
+2. Generación: solo las actividades de la ruta; prefiltros cerrados (eliminatorias = indispensables); WhatsApp reconfirma
+   los indispensables del web pidiendo un dato concreto y no repite lo demás; entrevistas/llamada solo preguntas
+   abiertas; «Volver a generar» nunca pisa ediciones de RH sin confirmación; datos cambiados → desactualizado.
 """
 
 import os
@@ -132,5 +135,74 @@ with TestClient(app) as client:
     pub = pub if isinstance(pub, list) else pub.get("vacantes", [])
     check("guiones" not in publico and all("guiones" not in x for x in pub if isinstance(x, dict)),
           "los guiones nunca salen en los payloads públicos")
+
+    # ================= 2. Generación según la ruta =================
+    print("\n--- 2. Generación según la ruta ---")
+    import re as _re
+
+    ABIERTA_NO = _re.compile(r"^\s*¿?\s*(tienes|cuentas|has|puedes|estás|estas|vives|eres|cumples)\b", _re.IGNORECASE)
+    pasos_corp = corp["pasos"] + [{"id": "prefiltro-wa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
+                                  {"id": "entrevista-wa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"}]
+    r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"pasos": pasos_corp}})
+    g = r.json()
+    check(r.status_code == 200 and g["guiones"]["aplican"] == ["prefiltro_web", "prefiltro_whatsapp", "entrevista_whatsapp", "entrevista_avatar"],
+          f"generar: solo las secciones de la ruta (sin Llamada): {g['guiones'].get('aplican')}")
+    check(set(g["guiones"]["secciones"]) == {"entrevista_whatsapp", "entrevista_avatar"} and "llamada" not in g["guiones"]["meta"],
+          "no se genera nada para actividades que no están en la ruta")
+    web_g, wa_g = g["preguntas_filtro"], g["preguntas_filtro_whatsapp"]
+    check(web_g and all(q["tipo"] in ("si_no", "numero", "opcion") and q.get("opciones") for q in web_g + wa_g),
+          "prefiltros web y WhatsApp: solo preguntas cerradas")
+    indisp = [q for q in web_g if q["descarta"]]
+    check(sorted(q["valida"] for q in indisp) == sorted(FICHA["requisitos_indispensables"]),
+          "eliminatorias del web = exactamente los requisitos indispensables")
+    check(len(wa_g) == len(indisp) and all(q.get("reconfirma") and q["tipo"] in ("numero", "opcion") for q in wa_g)
+          and not any("inventarios" in q["valida"].lower() for q in wa_g),
+          "WhatsApp: reconfirma CADA indispensable con un dato concreto y no repite lo no indispensable")
+    exp = next(q for q in wa_g if "montacargas" in q["valida"] and "años" in q["valida"])
+    check(exp["tipo"] == "numero" and "cuánto tiempo" in exp["pregunta"].lower() and exp.get("minimo") == 2,
+          f"web «¿tienes al menos 2 años…?» → WhatsApp «¿cuánto tiempo…?» con rangos: {exp['pregunta']}")
+    textos_prefiltro = {q["pregunta"] for q in web_g + wa_g}
+    guiones_g = g["guiones"]["secciones"]
+    check(all(not ABIERTA_NO.match(q) and q not in textos_prefiltro for c in guiones_g.values() for q in c["preguntas"]),
+          "entrevistas: solo preguntas abiertas y ninguna pregunta de prefiltro")
+    check(all(m.get("generado_hash") and not m.get("editado") for m in g["guiones"]["meta"].values()), "meta de generación por sección")
+
+    r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"pasos": [
+        {"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]}})
+    solo_wa = r.json()
+    check(solo_wa["guiones"]["aplican"] == ["prefiltro_whatsapp"] and solo_wa["preguntas_filtro"] == []
+          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"]),
+          "ruta solo con prefiltro por WhatsApp: es el primer filtro (eliminatorias cerradas), sin web")
+
+    editado = {"enfoque": "Mío", "temas": ["Montacargas"], "preguntas": ["Cuéntame de tu turno más pesado."]}
+    r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"pasos": pasos_corp}, "conservar": ["entrevista_whatsapp"],
+                                                         "guiones_actuales": {"secciones": {"entrevista_whatsapp": editado}}})
+    check("entrevista_whatsapp" in r.json()["guiones"]["conservadas"] and "entrevista_whatsapp" not in r.json()["guiones"]["secciones"],
+          "«Volver a generar» conservando una edición: esa sección no se toca")
+
+    # alta con lo generado: lo intacto NO cuenta como edición; lo cambiado sí
+    secciones_alta = dict(guiones_g)
+    secciones_alta["entrevista_avatar"] = {**guiones_g["entrevista_avatar"], "preguntas": guiones_g["entrevista_avatar"]["preguntas"] + ["Cuéntame qué te gustaría aprender aquí."]}
+    r = client.post("/vacantes", headers=H, json={**FICHA, "generar_si_falta": False, "proceso": {"pasos": pasos_corp},
+                                                 "preguntas_filtro": web_g, "preguntas_filtro_whatsapp": wa_g,
+                                                 "guiones": {"secciones": secciones_alta, "meta": g["guiones"]["meta"]}})
+    VAC2 = r.json()["id"]
+    det2 = r.json()
+    check(not seccion(det2, "entrevista_whatsapp")["editado"] and not seccion(det2, "prefiltro_web")["editado"]
+          and seccion(det2, "entrevista_avatar")["editado"], "al guardar: lo generado intacto no es edición; lo que RH cambió sí")
+    r = client.post(f"/vacantes/{VAC2}/guiones/generar", headers=H, json={})
+    check(r.status_code == 409 and "Entrevista con avatar" in r.json()["detail"],
+          "volver a generar con ediciones manuales SIN confirmar → 409 (nunca se pisan solas)")
+    r = client.post(f"/vacantes/{VAC2}/guiones/generar", headers=H, json={"sobrescribir_editadas": False})
+    check(r.status_code == 200 and r.json()["conservadas"] == ["entrevista_avatar"]
+          and seccion(r.json(), "entrevista_avatar")["contenido"]["preguntas"][-1] == "Cuéntame qué te gustaría aprender aquí.",
+          "«Conservar mis ediciones»: se regenera lo demás y la edición queda")
+    r = client.post(f"/vacantes/{VAC2}/guiones/generar", headers=H, json={"sobrescribir_editadas": True})
+    check(r.status_code == 200 and not seccion(r.json(), "entrevista_avatar")["editado"]
+          and "Cuéntame qué te gustaría aprender aquí." not in seccion(r.json(), "entrevista_avatar")["contenido"]["preguntas"],
+          "«Sobrescribir»: la sección vuelve a lo generado")
+    check(not r.json()["guiones"]["desactualizado"], "recién generada no está desactualizada")
+    r = client.patch(f"/vacantes/{VAC2}", headers=H, json={"titulo": "Montacarguista de patio"})
+    check(r.json()["guiones"]["desactualizado"], "cambiar datos de la vacante después de generar → «desactualizado» (sugerir volver a generar)")
 
     print(f"\n✅ {OK} comprobaciones OK")

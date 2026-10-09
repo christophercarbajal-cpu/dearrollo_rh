@@ -108,7 +108,8 @@ with TestClient(app) as client:
     app.dependency_overrides[usuario_actual] = lambda: admin
     app.dependency_overrides[usuario_decisor] = lambda: admin
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
-    r = client.post("/vacantes/generar", json={"titulo": "Auxiliar contable", "requisitos_indispensables": ["Licenciatura en Contaduría", "2 años de experiencia en conciliaciones"], "requisitos_deseables": ["Inglés"]})
+    r = client.post("/vacantes/generar", json={"titulo": "Auxiliar contable", "requisitos_indispensables": ["Licenciatura en Contaduría", "2 años de experiencia en conciliaciones"], "requisitos_deseables": ["Inglés"],
+                                               "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})  # 2026-10-09: solo lo que está en la ruta
     check(r.status_code == 200, f"POST /vacantes/generar ({r.status_code})")
     j = r.json()
     web_api = j.get("preguntas_filtro") or j.get("preguntasFiltro") or []

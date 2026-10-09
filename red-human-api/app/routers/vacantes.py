@@ -18,7 +18,7 @@ from ..database import get_db
 from ..services import bolsas, conteos, notificaciones
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
-    ENFOQUES_ENTREVISTA, MONEDAS_SUELDO, PERIODICIDADES_SUELDO, PLATAFORMAS, Cliente, Cuenta, Curso, Plantilla, Postulacion,
+    ENFOQUES_ENTREVISTA, MONEDAS_SUELDO, PERIODICIDADES_SUELDO, PLATAFORMAS, Cliente, Cuenta, Curso, Plantilla, PlantillaProceso, Postulacion,
     Usuario, UsuarioCuenta, Vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
 )
 from ..services.mensajeria import canales_publicos
@@ -241,6 +241,13 @@ class GenerarIn(BaseModel):
     empresa: str = ""
     cliente_id: Optional[int] = None
     mostrar_cliente_candidato: bool = True
+    # Generación según la ruta (2026-10-09): la ruta que eligió RH en el formulario ({plantilla_id} o {pasos}; sin ella,
+    # la predeterminada de la Cuenta), el enfoque, lo que ya hay (para conservar ediciones) y qué secciones conservar.
+    responsabilidades: List[str] = []
+    enfoque_entrevista: str = "profesional"
+    proceso: Optional[dict] = None
+    guiones_actuales: Optional[dict] = None  # {preguntas_filtro, preguntas_filtro_whatsapp, secciones: {clave: guion}}
+    conservar: List[str] = []
 
     def ubicacion_texto(self) -> str:
         return texto_ubicacion(self.ubicacion_estado, self.ubicacion_municipio, self.ubicacion)
@@ -313,7 +320,49 @@ def generar(
     regla Cliente-visible / Cuenta (Punto 1)."""
     empresa = _empresa_resuelta(db, cuenta, datos.cliente_id, datos.mostrar_cliente_candidato)
     resultado, con_ia = _generar(datos, empresa)
-    return {"ia": con_ia, "empresa": empresa, "sueldo_texto": datos.sueldo_texto() or "A convenir", **resultado.model_dump(by_alias=True)}
+    salida = {"ia": con_ia, "empresa": empresa, "sueldo_texto": datos.sueldo_texto() or "A convenir", **resultado.model_dump(by_alias=True)}
+    # 2026-10-09: prefiltros y guiones SOLO de las actividades de la ruta elegida, con las reglas de generación por tipo
+    from ..services import guiones as sgui
+
+    actuales = dict(datos.guiones_actuales or {})
+    vigentes = {"prefiltro_web": actuales.get("preguntas_filtro") or [], "prefiltro_whatsapp": actuales.get("preguntas_filtro_whatsapp") or [],
+                **{k: g for k, g in (actuales.get("secciones") or {}).items() if k in sgui.SECCIONES}}
+    datos_g = {"titulo": datos.titulo.strip(), "responsabilidades": [x for x in datos.responsabilidades if x.strip()] or list(resultado.responsabilidades),
+               "requisitos": list(resultado.requisitos_indispensables), "requisitos_deseables": list(resultado.requisitos_deseables),
+               "ubicacion": datos.ubicacion_texto(), "modalidad": datos.modalidad, "sueldo": datos.sueldo_texto() or "A convenir",
+               "enfoque_entrevista": datos.enfoque_entrevista if datos.enfoque_entrevista in ENFOQUES_ENTREVISTA else "profesional", "horario": ""}
+    try:
+        g = sgui.generar(datos_g, _pasos_de_formulario(db, cuenta.id, datos.proceso), vigentes, conservar=datos.conservar, empresa=empresa)
+    except sgui.ErrorGuion as e:
+        raise HTTPException(e.status, e.mensaje)
+    salida["preguntas_filtro"] = g["secciones"].get("prefiltro_web", vigentes["prefiltro_web"] if "prefiltro_web" in g["conservadas"] else [])
+    salida["preguntas_filtro_whatsapp"] = g["secciones"].get(
+        "prefiltro_whatsapp", vigentes["prefiltro_whatsapp"] if "prefiltro_whatsapp" in g["conservadas"] else [])
+    salida["guiones"] = {"secciones": {k: c for k, c in g["secciones"].items() if sgui.SECCIONES[k]["clase"] == "guion"},
+                         "meta": g["meta"], "aplican": g["aplican"], "conservadas": g["conservadas"], "generadas": g["generadas"],
+                         "huella": g["huella"], "ia": g["ia"]}
+    return salida
+
+
+def _pasos_de_formulario(db: Session, cuenta_id: int, proceso: Optional[dict]) -> list:
+    """Ruta que eligió RH en el formulario (aún sin guardar): pasos personalizados, una plantilla o, sin elegir, la que le
+    tocaría a la vacante (predeterminada de la Cuenta o la de respaldo)."""
+    from ..services import proceso as sproc
+
+    proceso = proceso or {}
+    if proceso.get("quitar"):
+        return []
+    if proceso.get("pasos"):
+        return [x for x in proceso["pasos"] if isinstance(x, dict)]
+    pid = proceso.get("plantilla_id", proceso.get("plantillaId"))
+    if pid:
+        pl = db.query(PlantillaProceso).filter(PlantillaProceso.id == int(pid), PlantillaProceso.cuenta_id == cuenta_id).first()
+        if pl is not None:
+            return list(pl.pasos or [])
+    try:
+        return list(sproc.ruta_para(db, cuenta_id, None).get("pasos") or [])
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _aplicar_generado(v: Vacante, g: ia.VacanteGenerada) -> None:
@@ -332,8 +381,7 @@ def _aplicar_generado(v: Vacante, g: ia.VacanteGenerada) -> None:
     v.avisos_cumplimiento = g.avisos_cumplimiento
     v.texto_whatsapp = v.texto_whatsapp or g.texto_whatsapp
     v.texto_bolsa = v.texto_bolsa or g.occ.page  # compatibilidad con la forma anterior
-    v.preguntas_filtro = v.preguntas_filtro or [p.model_dump() for p in g.preguntas_filtro]
-    v.preguntas_filtro_whatsapp = v.preguntas_filtro_whatsapp or [p.model_dump() for p in g.preguntas_filtro_whatsapp]
+    # 2026-10-09: los prefiltros ya no salen de aquí — los genera `services/guiones` según la ruta de la vacante
     v.publicaciones = {
         "whatsapp": {"titulo": v.titulo, "copy": v.texto_whatsapp, "page": v.texto_whatsapp, "etiquetas": []},
         "occ": g.occ.bloque(),
@@ -450,13 +498,16 @@ def crear(
     v.empresa = nombre_empresa(cuenta, cliente_obj, datos.mostrar_cliente_candidato)
 
     con_ia = None
+    v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
     if datos.generar_si_falta and not datos.publicaciones and not datos.responsabilidades:
-        entrada_generador = GenerarIn(**datos.model_dump(include=set(GenerarIn.model_fields)))
+        entrada_generador = GenerarIn(**datos.model_dump(include=set(GenerarIn.model_fields) - {"proceso", "guiones_actuales", "conservar"}))
         generado, con_ia = _generar(entrada_generador, v.empresa)
         _aplicar_generado(v, generado)
-
-    v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
     _guardar_guiones(v, datos.guiones, u.nombre, web=v.preguntas_filtro, whatsapp=v.preguntas_filtro_whatsapp)
+    if con_ia is not None:
+        from ..services import guiones as sgui
+
+        sgui.generar_para_vacante(db, v, u.nombre)  # conserva lo que RH ya escribió; genera lo que falte de la ruta
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -724,6 +775,7 @@ def actualizar(
 
 class RegenerarIn(BaseModel):
     notas: str = ""
+    sobrescribir_guiones: bool = False  # 2026-10-09: por defecto los guiones editados a mano se conservan
 
 
 @router.post("/{codigo}/regenerar")
@@ -743,11 +795,50 @@ def regenerar(
     # regenerar = volver a redactar: se limpian los textos generados para que _aplicar_generado los
     # rellene, pero lo capturado (requisitos, beneficios, sueldo, seniority) se respeta igual.
     v.resumen = v.perfil_ideal = v.texto_whatsapp = v.texto_bolsa = ""
-    v.responsabilidades, v.palabras_clave, v.preguntas_filtro = [], [], []
+    v.responsabilidades, v.palabras_clave = [], []
     _aplicar_generado(v, generado)
-    registrar(db, u.nombre, "vacante_regenerada", "vacante", v.codigo, {"ia": con_ia, "notas": datos.notas})
+    from ..services import guiones as sgui
+
+    g = sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=datos.sobrescribir_guiones)
+    registrar(db, u.nombre, "vacante_regenerada", "vacante", v.codigo,
+              {"ia": con_ia, "notas": datos.notas, "guiones": g["generadas"], "guiones_conservados": g["conservadas"]})
     db.commit()
     return {"ia": con_ia, **_salida_rh(db, v)}
+
+
+class GenerarGuionesIn(BaseModel):
+    secciones: List[str] = []  # vacío = todas las de la ruta
+    # «Volver a generar»: si alguna sección tiene ediciones de RH, sin confirmación explícita → 409 (nunca se pisan solas)
+    sobrescribir_editadas: Optional[bool] = None
+
+
+@router.post("/{codigo}/guiones/generar")
+def generar_guiones_vacante(
+    codigo: str, datos: GenerarGuionesIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """Genera (o vuelve a generar) las plantillas de conversación de la vacante con sus datos actuales, SOLO para las
+    actividades de su ruta. Con ediciones manuales en las secciones pedidas exige `sobrescribir_editadas` (true = se
+    reemplazan; false = se conservan y se genera lo demás)."""
+    from ..services import guiones as sgui
+
+    v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    aplican = sgui.secciones_aplicables(sgui.tipos_de_ruta(sgui.pasos_de_vacante(db, v)))
+    pedidas = [c for c in aplican if not datos.secciones or c in datos.secciones]
+    if not pedidas:
+        raise HTTPException(409, "La ruta de esta vacante no tiene actividades con guion (prefiltros, entrevistas o llamada).")
+    editadas = sgui.editadas(v, pedidas)
+    if editadas and datos.sobrescribir_editadas is None:
+        titulos = ", ".join(f"«{sgui.SECCIONES[c]['titulo']}»" for c in editadas)
+        raise HTTPException(409, f"Hay ediciones manuales en {titulos}. Confirma si quieres sobrescribirlas o conservarlas.")
+    try:
+        g = sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=bool(datos.sobrescribir_editadas), solo=pedidas)
+    except sgui.ErrorGuion as e:
+        raise HTTPException(e.status, e.mensaje)
+    registrar(db, u.nombre, "guiones_generados", "vacante", v.codigo,
+              {"generadas": g["generadas"], "conservadas": g["conservadas"], "ia": g["ia"]})
+    db.commit()
+    return {**_salida_rh(db, v), "generadas": g["generadas"], "conservadas": g["conservadas"]}
 
 
 # ------------------------------------------------------------

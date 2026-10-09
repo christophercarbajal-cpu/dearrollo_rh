@@ -85,12 +85,18 @@ with TestClient(app) as client:
 
     print("\n--- Prefiltro dual: la IA genera web + puntos críticos WhatsApp ---")
     r = client.post("/vacantes/generar", json={"titulo": "Cajero(a) de sucursal", "area": "Operaciones", "seniority": "Junior", "ubicacion": "Zapopan, Jalisco",
-                                                "requisitos_indispensables": ["Secundaria terminada", "Manejo de efectivo", "Disponibilidad de fin de semana"]})
+                                                "requisitos_indispensables": ["Secundaria terminada", "Manejo de efectivo", "Disponibilidad de fin de semana"],
+                                                # 2026-10-09: solo se genera lo que está en la ruta (aquí web + WhatsApp)
+                                                "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     check(r.status_code == 200 and len(r.json()["preguntas_filtro"]) >= 3, f"generar: prefiltro web con {len(r.json()['preguntas_filtro'])} preguntas")
     wa = r.json()["preguntas_filtro_whatsapp"]
-    check(1 <= len(wa) <= 3 and any(q["tipo"] == "numero" for q in wa), f"generar: prefiltro WhatsApp con solo {len(wa)} puntos críticos (experiencia + eliminatorias)")
-    check(all(q["pregunta"] != w["pregunta"] or True for q in r.json()["preguntas_filtro"] for w in wa) and wa[0]["pregunta"].startswith("Cuéntame"), "las de WhatsApp están redactadas en tono conversacional, no copian toda la lista web")
-    r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana"], "publicar": True, "generar_si_falta": True})
+    # 2026-10-09: con web + WhatsApp en la ruta, WhatsApp RECONFIRMA cada indispensable con un dato concreto (cerrado)
+    check(len(wa) == 3 and all(q["tipo"] in ("numero", "opcion") and q.get("reconfirma") for q in wa),
+          f"generar: prefiltro WhatsApp = {len(wa)} reconfirmaciones cerradas de los indispensables")
+    check(not {q["pregunta"] for q in r.json()["preguntas_filtro"]} & {w["pregunta"] for w in wa} and wa[0]["pregunta"].startswith("Para confirmar"),
+          "las de WhatsApp piden el dato concreto, no copian la lista web")
+    r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana"], "publicar": True, "generar_si_falta": True,
+                                       "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["WhatsApp", "Portal"]})
     v = client.get(f"/vacantes/{VAC}").json()

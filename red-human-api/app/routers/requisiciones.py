@@ -405,6 +405,9 @@ def convertir_vacante(
             requisitos=r.requisitos, modalidad=r.modalidad, descripcion=datos.notas,
         ), v.empresa)
         _aplicar_generado(v, generado)
+        from ..services import guiones as sgui
+
+        sgui.generar_para_vacante(db, v, u.nombre)  # 2026-10-09: prefiltros y guiones de SU ruta
 
     r.estado = "convertida_vacante"
     registrar(db, u.nombre, "requisicion_convertida", "requisicion", r.codigo, {"vacante": v.codigo, "ia": con_ia})

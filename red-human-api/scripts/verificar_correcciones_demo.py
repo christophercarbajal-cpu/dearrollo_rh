@@ -41,6 +41,10 @@ from app.services.configuracion import obtener  # noqa: E402
 OK = 0
 
 
+import itertools as _it
+_WAMID = _it.count(1)  # wamid único por mensaje simulado (el webhook deduplica reintentos)
+
+
 def check(cond, msg):
     global OK
     if not cond:
@@ -51,7 +55,7 @@ def check(cond, msg):
 
 
 def webhook_meta(client, telefono: str, texto: str = "", tipo: str = "text", media: dict = None, wamid: str = "wamid.1"):
-    m = {"from": telefono, "id": wamid, "type": tipo}
+    m = {"from": telefono, "id": f"{wamid}.{next(_WAMID)}", "type": tipo}
     if tipo == "text":
         m["text"] = {"body": texto}
     else:

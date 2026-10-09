@@ -22,7 +22,8 @@ Plataforma SaaS de agente de IA de RH para México. `red-human-app` (Next.js 15)
 
 - `WHATSAPP_PROVIDER=meta`. El token (`META_WHATSAPP_TOKEN`) vive solo en el servidor; nunca al navegador.
 - El webhook `POST /webhooks/whatsapp` es público: valida siempre la firma `X-Hub-Signature-256` con `META_APP_SECRET`. (2026-10-08, `webhooks.verificar_firma_whatsapp`, sobre el cuerpo CRUDO y ANTES de leerlo: con secreto, sin firma válida → 403; `WHATSAPP_PROVIDER=meta` sin secreto → 503; otros proveedores sin secreto aceptan mensajes pero los acuses de entrega NUNCA se procesan sin firma verificada). Las verificaciones que simulan Meta firman el cuerpo.
-- El webhook contesta 200 de inmediato y corre el prefiltro en segundo plano — Meta reintenta si tardas, y se deduplica por `wamid`.
+- El webhook contesta 200 de inmediato y corre el prefiltro en segundo plano — Meta reintenta si tardas, y se deduplica por `wamid`. (2026-10-08: el turno corre en su propia tarea y sesión; si termina en `WHATSAPP_WEBHOOK_ESPERA_SEG` (3 s) se regresa su resultado, si no `en_proceso`; dedupe en memoria + `Mensaje.wa_id`. Las verificaciones mandan wamid únicos.)
+- Verificación GET: `hub.challenge` en texto plano con el token de `WHATSAPP_VERIFY_TOKEN` (alias `META_VERIFY_TOKEN`), solo del `.env` (sin él → 503; nunca se imprime). Graph `META_API_VERSION` default `v24.0`. Regresión: `scripts/verificar_whatsapp_webhook.py`.
 - Teléfonos: en la base se guardan a 10 dígitos; hacia la API salen como `52` + 10 (sin el `1`, que Meta ya no usa).
 - Ventana de 24 h: fuera de ella Meta rechaza el texto libre (error 131047) y hay que usar plantilla aprobada (`META_PLANTILLA_AVISO`).
 - Ningún mensaje saliente decide nada: sigue siendo la persona de RH quien avanza o descarta.

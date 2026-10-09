@@ -38,6 +38,10 @@ from app.models import (  # noqa: E402
 OK = 0
 
 
+import itertools as _it
+_WAMID = _it.count(1)  # wamid único por mensaje simulado (el webhook deduplica reintentos)
+
+
 def check(cond, msg):
     global OK
     if not cond:
@@ -50,7 +54,7 @@ def check(cond, msg):
 def meta_texto(tel, texto, nombre="Persona Prueba"):
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": nombre}, "wa_id": tel}],
-        "messages": [{"from": tel, "id": f"wamid.{texto[:8]}", "type": "text", "text": {"body": texto}}],
+        "messages": [{"from": tel, "id": f"wamid.{next(_WAMID)}.{texto[:8]}", "type": "text", "text": {"body": texto}}],
     }}]}]}
 
 

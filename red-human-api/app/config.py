@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,11 +50,15 @@ class Settings(BaseSettings):
     meta_phone_number_id: str = ""   # id del número emisor (panel de Meta)
     meta_waba_id: str = ""           # id de la cuenta de WhatsApp Business
     meta_whatsapp_token: str = ""    # token de acceso (System User, permanente)
-    # Mismo string que capturas al dar de alta el webhook en Meta.
-    # TODO: mover a .env — este default quedó en el repo y conviene rotarlo.
-    meta_verify_token: str = "redhuman_webhook_verify_token_2026_x89a"
+    # Mismo string que capturas al dar de alta el webhook en Meta. SOLO del .env (2026-10-08: se quitó el default
+    # que vivía en el repo); acepta WHATSAPP_VERIFY_TOKEN o META_VERIFY_TOKEN. Vacío → el GET de verificación da 503.
+    meta_verify_token: str = Field("", validation_alias=AliasChoices("WHATSAPP_VERIFY_TOKEN", "META_VERIFY_TOKEN"))
     meta_app_secret: str = ""        # App Secret: valida la firma X-Hub-Signature-256
-    meta_api_version: str = "v21.0"
+    # Versión de la Graph API (cada versión vive ~2 años; v21.0 vence a finales de 2026).
+    meta_api_version: str = "v24.0"
+    # Segundos que el POST del webhook espera al procesamiento antes de contestar 200 (el resto sigue en segundo
+    # plano). Meta reintenta si no recibe 200 a tiempo; los reintentos se deduplican por wamid.
+    whatsapp_webhook_espera_seg: float = 3.0
     # Plantilla aprobada para escribirle a alguien fuera de la ventana de 24 h.
     # Sin ella, esos mensajes los rechaza Meta con el error 131047.
     meta_plantilla_aviso: str = ""

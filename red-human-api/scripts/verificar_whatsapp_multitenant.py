@@ -38,6 +38,10 @@ OK = 0
 ENVIOS = []  # (tel, texto/encabezado, opciones, secciones)
 
 
+import itertools as _it
+_WAMID = _it.count(1)  # wamid único por mensaje simulado (el webhook deduplica reintentos)
+
+
 def check(cond, msg):
     global OK
     if not cond:
@@ -70,10 +74,10 @@ def filas_ultima_lista():
 
 def webhook(client, tel, texto="", sel="", receptor=""):
     if sel:
-        m = {"from": tel, "id": f"wamid.{len(ENVIOS)}.{sel}", "type": "interactive",
+        m = {"from": tel, "id": f"wamid.{next(_WAMID)}.{len(ENVIOS)}.{sel}", "type": "interactive",
              "interactive": {"type": "list_reply", "list_reply": {"id": sel, "title": "x"}}}
     else:
-        m = {"from": tel, "id": f"wamid.{len(ENVIOS)}.{texto[:8]}", "type": "text", "text": {"body": texto}}
+        m = {"from": tel, "id": f"wamid.{next(_WAMID)}.{len(ENVIOS)}.{texto[:8]}", "type": "text", "text": {"body": texto}}
     valor = {"contacts": [{"profile": {"name": "Persona WA"}, "wa_id": tel}], "messages": [m]}
     if receptor:
         valor["metadata"] = {"display_phone_number": receptor}

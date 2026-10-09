@@ -40,6 +40,7 @@ os.environ["SEMBRAR_DEMO"] = "true"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.fechas import TZ_ORG  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import usuario_actual, usuario_admin, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
@@ -248,7 +249,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["estado"] == "realizada", "«Registrar alta IMSS / nómina» = registro manual")
     s = seg(PA)
     check(s["siguienteAccion"]["tipo"] == "tarea" and s["siguienteAccion"]["texto"] == "Confirmar ingreso", "→ siguiente: Confirmar ingreso")
-    hoy = datetime.now(timezone.utc).date().isoformat()
+    hoy = datetime.now(TZ_ORG).date().isoformat()  # día de la organización (la API rechaza fechas futuras en MX)
     r = client.post(f"/onboarding/expedientes/{EA}/confirmar-ingreso", headers=H, json={"fecha_real": hoy})
     check(r.status_code == 200, "ingreso confirmado desde la ficha")
 

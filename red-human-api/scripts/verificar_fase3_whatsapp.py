@@ -37,6 +37,10 @@ import app.routers.webhooks as rw  # noqa: E402
 OK = 0
 
 
+import itertools as _it
+_WAMID = _it.count(1)  # wamid único por mensaje simulado (el webhook deduplica reintentos)
+
+
 def check(cond, msg):
     global OK
     if not cond:
@@ -64,7 +68,7 @@ _wa.enviar_mensaje = _fake_wa  # la plantilla de documentos cae aquí en modo de
 def webhook(client, tel, texto):
     return client.post("/webhooks/whatsapp", json={"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": "Karla"}, "wa_id": tel}],
-        "messages": [{"from": tel, "id": f"wamid.{len(ENVIADOS)}", "type": "text", "text": {"body": texto}}],
+        "messages": [{"from": tel, "id": f"wamid.{next(_WAMID)}.{len(ENVIADOS)}", "type": "text", "text": {"body": texto}}],
     }}]}]})
 
 

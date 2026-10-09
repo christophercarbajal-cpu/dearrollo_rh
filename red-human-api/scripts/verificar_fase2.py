@@ -40,6 +40,10 @@ from app.models import (  # noqa: E402
 OK = 0
 
 
+import itertools as _it
+_WAMID = _it.count(1)  # wamid único por mensaje simulado (el webhook deduplica reintentos)
+
+
 def check(cond, msg):
     global OK
     if not cond:
@@ -52,7 +56,7 @@ def check(cond, msg):
 def meta_texto(tel: str, texto: str, nombre: str = "Prueba Fase Dos") -> dict:
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": nombre}, "wa_id": tel}],
-        "messages": [{"from": tel, "id": f"wamid.{texto[:8]}", "type": "text", "text": {"body": texto}}],
+        "messages": [{"from": tel, "id": f"wamid.{next(_WAMID)}.{texto[:8]}", "type": "text", "text": {"body": texto}}],
     }}]}]}
 
 
@@ -62,7 +66,7 @@ def meta_boton_plantilla(tel: str, texto: str, receptor: str = "5215550000000", 
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "metadata": {"display_phone_number": receptor, "phone_number_id": "1"},
         "contacts": [{"profile": {"name": nombre}, "wa_id": tel}],
-        "messages": [{"from": tel, "id": f"wamid.btn.{texto[:8]}", "type": "button",
+        "messages": [{"from": tel, "id": f"wamid.{next(_WAMID)}.btn.{texto[:8]}", "type": "button",
                       "button": {"payload": texto, "text": texto}, "context": {"from": receptor, "id": "wamid.tpl"}}],
     }}]}]}
 
@@ -70,7 +74,7 @@ def meta_boton_plantilla(tel: str, texto: str, receptor: str = "5215550000000", 
 def meta_lista(tel: str, id_opcion: str, titulo: str = "") -> dict:
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": "Prueba Fase Dos"}, "wa_id": tel}],
-        "messages": [{"from": tel, "id": f"wamid.{id_opcion}", "type": "interactive",
+        "messages": [{"from": tel, "id": f"wamid.{next(_WAMID)}.{id_opcion}", "type": "interactive",
                       "interactive": {"type": "list_reply", "list_reply": {"id": id_opcion, "title": titulo or id_opcion}}}],
     }}]}]}
 

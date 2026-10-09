@@ -39,9 +39,13 @@ El alcance de cada canal respeta `Cuenta.canal_mensajeria` (`mensajeria.alcance_
 que se le contesta al candidato lo decide el proceso de su postulación (`services/canal_proceso.py`).
 """
 
+import asyncio
+import hmac
 import json
 import re
+import traceback
 import unicodedata
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
@@ -613,13 +617,18 @@ def verificar_webhook(
     verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
     challenge: Optional[str] = Query(None, alias="hub.challenge"),
 ):
-    """Handshake de verificación requerido por Meta al registrar el Webhook."""
-    print(f"\n[webhook-get] Verificación recibida: mode={mode}, token={verify_token}, challenge={challenge}")
-    if mode == "subscribe" and verify_token == settings.meta_verify_token:
-        print(f"[webhook-get] ✅ Handshake de Meta exitoso. Challenge: {challenge}")
+    """Handshake de verificación requerido por Meta al registrar el Webhook: regresa `hub.challenge` TAL CUAL en
+    texto plano (nunca JSON; Meta rechaza la verificación si llega envuelto). El token sale SOLO del .env
+    (`WHATSAPP_VERIFY_TOKEN` / `META_VERIFY_TOKEN`) y nunca se imprime en el log."""
+    esperado = settings.meta_verify_token or ""
+    if not esperado:
+        print("[webhook-get] ❌ WHATSAPP_VERIFY_TOKEN sin configurar: no se puede verificar el webhook.")
+        raise HTTPException(status_code=503, detail="WHATSAPP_VERIFY_TOKEN sin configurar en el servidor.")
+    if mode == "subscribe" and hmac.compare_digest((verify_token or "").encode(), esperado.encode()):
+        print("[webhook-get] ✅ Handshake de Meta exitoso.")
         return PlainTextResponse(content=challenge or "", status_code=200)
 
-    print(f"[webhook-get] ❌ Fallo de verificación: token esperado={settings.meta_verify_token}, recibido={verify_token}")
+    print(f"[webhook-get] ❌ Fallo de verificación (mode={mode}, token {'recibido' if verify_token else 'ausente'} no coincide).")
     raise HTTPException(status_code=403, detail="Token de verificación inválido o modo incorrecto.")
 
 
@@ -640,9 +649,47 @@ def verificar_firma_whatsapp(cuerpo: bytes, cabecera: str) -> bool:
     return (settings.whatsapp_provider or "").lower() != "meta"
 
 
+_WAMIDS_RECIENTES: deque = deque(maxlen=5000)  # reintentos de Meta mientras el primero aún se procesa
+_TAREAS_WEBHOOK: set = set()  # referencia fuerte a lo que sigue en segundo plano (si no, el GC podría cortarlo)
+
+
+def _primera_vez_wamid(db: Session, wamid: str) -> bool:
+    """Dedupe por `wamid` (Meta reenvía el mismo mensaje si no contestamos a tiempo): en memoria (reintento mientras
+    el primero sigue procesándose) y contra `Mensaje.wa_id` (ya guardado). Sin id (WAHA/Evolution) no se deduplica."""
+    if not wamid:
+        return True
+    if wamid in _WAMIDS_RECIENTES:
+        return False
+    from ..models import Mensaje
+
+    if db.query(Mensaje.id).filter(Mensaje.wa_id == wamid, Mensaje.rol == "user").first():
+        return False
+    _WAMIDS_RECIENTES.append(wamid)
+    return True
+
+
+async def _procesar_en_segundo_plano(app, msg: dict) -> dict:
+    """Procesa el mensaje en SU PROPIA sesión (la del request se cierra al contestar). Respeta los overrides de
+    `get_db` (verificaciones). Nunca lanza: un error queda en el log con traceback."""
+    gen = app.dependency_overrides.get(get_db, get_db)()
+    db = next(gen)
+    try:
+        with en_conversacion("whatsapp", msg["telefono"]):  # la respuesta a esta persona sale por WhatsApp
+            return await procesar_entrante(db, msg)
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        print(f"[webhook-post] Error procesando {msg.get('wa_id') or msg.get('telefono')}: {e}\n{traceback.format_exc()}")
+        return {"ok": False, "error": "error interno al procesar el mensaje"}
+    finally:
+        gen.close()
+
+
 @router.post("/webhooks/whatsapp")
 async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
-    """Agente de reclutamiento IA — recibe webhook de Meta / WAHA / Evolution. La firma se valida ANTES de leer nada."""
+    """Agente de reclutamiento IA — recibe webhook de Meta / WAHA / Evolution. La firma se valida ANTES de leer nada.
+    2026-10-08: contesta 200 RÁPIDO — el procesamiento corre en su propia tarea y sesión; si termina dentro de
+    `WHATSAPP_WEBHOOK_ESPERA_SEG` se regresa su resultado, si no se contesta `en_proceso` y sigue en segundo plano.
+    Los reintentos de Meta se ignoran por `wamid`."""
     cuerpo = await request.body()
     if not verificar_firma_whatsapp(cuerpo, request.headers.get("X-Hub-Signature-256", "")):
         print("[webhook-post] ❌ Firma X-Hub-Signature-256 ausente o inválida: webhook rechazado.")
@@ -666,8 +713,17 @@ async def whatsapp_entrante(request: Request, db: Session = Depends(get_db)):
     if not msg:
         print("[webhook-post] Webhook procesado sin mensaje de candidato (estado de entrega o evento ignorado).")
         return {"ok": True, "ignorado": True}
-    with en_conversacion("whatsapp", msg["telefono"]):  # la respuesta a esta persona sale por WhatsApp
-        return await procesar_entrante(db, msg)
+    if not _primera_vez_wamid(db, msg.get("wa_id", "")):
+        print(f"[webhook-post] Reintento de Meta ignorado (wamid {msg.get('wa_id')} ya recibido).")
+        return {"ok": True, "duplicado": True}
+    tarea = asyncio.create_task(_procesar_en_segundo_plano(request.app, msg))
+    _TAREAS_WEBHOOK.add(tarea)
+    tarea.add_done_callback(_TAREAS_WEBHOOK.discard)
+    hecho, _ = await asyncio.wait({tarea}, timeout=max(settings.whatsapp_webhook_espera_seg, 0.1))
+    if hecho:
+        return tarea.result()
+    print("[webhook-post] Procesamiento largo: se contesta 200 a Meta y el turno sigue en segundo plano.")
+    return {"ok": True, "en_proceso": True}
 
 
 def _registrar_acuses(db: Session, payload: dict) -> None:

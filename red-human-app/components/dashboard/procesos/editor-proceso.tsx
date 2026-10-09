@@ -97,8 +97,8 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
     <div className="flex flex-col gap-3">
       <p className="flex items-start gap-2 rounded-xl bg-surface-2/60 px-3 py-2 text-[12px] text-ink-2">
         <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />
-        Cada actividad define sola cuándo se cumple. El candidato avanza a la siguiente etapa en cuanto no le quedan
-        actividades obligatorias pendientes; a Onboarding pasa al completarse «Firmar documentos».
+        El candidato avanza a la siguiente etapa cuando no le quedan actividades obligatorias pendientes. Pasa a
+        Onboarding al completarse Contrato y firma.
       </p>
       {opciones.etapas.map((e) => {
         const deEtapa = pasos.filter((p) => p.etapa === e.valor);

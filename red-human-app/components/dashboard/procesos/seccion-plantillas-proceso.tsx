@@ -87,7 +87,7 @@ export function SeccionPlantillasProceso() {
         ) : lista.length === 0 ? (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-ink-3">
-              Sin procesos activos: los candidatos reciben la ruta «Corporativos sin psicometría».{" "}
+              Sin procesos activos: los candidatos reciben la ruta «Corporativos».{" "}
               <button className="font-semibold text-brand hover:underline" onClick={restaurar} disabled={Boolean(ocupado)}>Restaurar las rutas base</button> o empieza con un ejemplo:
             </p>
             <div className="grid gap-2 sm:grid-cols-3">

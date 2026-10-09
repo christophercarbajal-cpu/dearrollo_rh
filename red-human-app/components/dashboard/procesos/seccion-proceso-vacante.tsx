@@ -4,7 +4,9 @@
    personalizar sus pasos, dependencias y responsables SOLO para esta vacante (la plantilla no cambia). Los candidatos
    que ya existen conservan la versión con la que entraron. Acordeón cerrado (reglas de UI: lo opcional plegado).
    2026-10-07: «Batería psicométrica» a la vista — la vacante hereda la de la ruta y puede elegir otra del catálogo sin
-   alterar la ruta (cambia solo la copia de la vacante). */
+   alterar la ruta (cambia solo la copia de la vacante).
+   Retro 2026-10-09: toda vacante sigue una ruta — el selector ofrece las tres plantillas base (y las propias de la
+   Cuenta) o «Armar uno propio para esta vacante»; ya no existe «Sin proceso (flujo de siempre)». */
 
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
@@ -39,6 +41,14 @@ export function entradaProceso(e: EstadoProcesoVacante): ProcesoEntrada | undefi
   return { plantilla_id: e.plantillaId, pasos: e.pasos, etapas: e.etapas };
 }
 
+// Orden fijo de las plantillas base en el selector; las propias de la Cuenta van después.
+const ORDEN_BASE = ["masivos_sin_documentos", "masivos_con_documentos", "corporativo"];
+
+function ordenPlantilla(p: PlantillaProceso): number {
+  const i = ORDEN_BASE.indexOf(p.rutaBase ?? "");
+  return i === -1 ? ORDEN_BASE.length : i;
+}
+
 export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
   value: EstadoProcesoVacante;
   onChange: (e: EstadoProcesoVacante) => void;
@@ -68,7 +78,7 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
   const personalizado = Boolean(plantilla) && JSON.stringify(plantilla?.pasos) !== JSON.stringify(efectivo.pasos);
 
   function elegir(id: string) {
-    if (id === "") return onChange({ tocado: true, plantillaId: null, pasos: [], etapas: {} });
+    if (id === "") return;
     if (id === "manual") {
       setPersonalizar(true);
       return onChange({ tocado: true, plantillaId: null, pasos: value.pasos, etapas: value.etapas });
@@ -89,7 +99,7 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
 
   const resumen = efectivo.pasos.length
     ? `${plantilla?.nombre ?? "Proceso propio"}${personalizado ? " (personalizado)" : ""} · ${efectivo.pasos.length} pasos`
-    : "Sin proceso: flujo de siempre";
+    : "Elige la ruta de esta vacante";
 
   return (
     <section className="rounded-2xl border border-border-soft">
@@ -115,8 +125,10 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
               value={efectivo.pasos.length ? (efectivo.plantillaId ?? "manual") : ""}
               onChange={(e) => elegir(e.target.value)}
             >
-              <option value="">Sin proceso (flujo de siempre)</option>
-              {plantillas.map((p) => <option key={p.id} value={p.id}>{p.nombre}{p.predeterminada ? " · predeterminado" : ""}</option>)}
+              {!efectivo.pasos.length && <option value="" disabled>Elige una ruta</option>}
+              {[...plantillas].sort((a, b) => ordenPlantilla(a) - ordenPlantilla(b)).map((p) => (
+                <option key={p.id} value={p.id}>{p.nombre}{p.predeterminada ? " · predeterminado" : ""}</option>
+              ))}
               <option value="manual">Armar uno propio para esta vacante</option>
             </select>
           </label>

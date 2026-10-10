@@ -25,7 +25,9 @@ import { fetchVacantePorSlug, postular } from "@/lib/api";
 import type { Vacante } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
-const pasos = ["Tus datos", "Currículum", "Unas preguntas"];
+const PASOS_CON_CV = ["Tus datos", "Currículum", "Unas preguntas"];
+// especificación 2026-10-10: si la ruta no pide CV, el paso de currículum NO existe (solo el aviso de privacidad)
+const PASOS_SIN_CV = ["Tus datos", "Privacidad", "Unas preguntas"];
 
 /** Preguntas de respaldo cuando la vacante no trae criterios de prefiltro. */
 const PREGUNTAS_BASE = [
@@ -81,6 +83,7 @@ export default function FormularioAplicar() {
 
   // 2026-10-09: el CV solo es obligatorio si la ruta de la vacante lo pide (Análisis de CV o solicitud con CV)
   const pideCv = vacante?.pideCv !== false;
+  const pasos = pideCv ? PASOS_CON_CV : PASOS_SIN_CV;
   const puedeAvanzar =
     step === 0 ? datos.nombre.trim().length > 2 && (datos.telefono.trim() || datos.correo.trim()) : step === 1 ? consent && (cv !== null || !pideCv) : true;
 
@@ -95,7 +98,12 @@ export default function FormularioAplicar() {
       return;
     }
 
-    // Validaciones previas al envío
+    // Validaciones previas al envío — el consentimiento de privacidad es SIEMPRE obligatorio (LFPDPPP)
+    if (!consent) {
+      setError("Necesitamos tu autorización del Aviso de Privacidad para continuar.");
+      setStep(1);
+      return;
+    }
     if (!cv && pideCv) {
       setError("El currículum es obligatorio. Por favor sube tu CV en formato PDF o imagen.");
       setStep(1);
@@ -111,7 +119,7 @@ export default function FormularioAplicar() {
         correo: datos.correo,
         consentimiento: consent,
         respuestas: preguntas.map((p) => ({ pregunta: p, respuesta: respuestas[p] ?? "" })),
-        cv,
+        cv: pideCv ? cv : null,
       });
       setEnviando(false);
       if (!r.ok) {
@@ -190,7 +198,7 @@ export default function FormularioAplicar() {
         )}
 
         {done ? (
-          <Exito titulo={titulo} conCv={Boolean(cv)} canal={canal} />
+          <Exito titulo={titulo} conCv={pideCv && Boolean(cv)} canal={canal} />
         ) : (
           <Card className="mt-6 overflow-hidden">
             {/* Progreso */}
@@ -262,7 +270,7 @@ export default function FormularioAplicar() {
 
                   {step === 1 && (
                     <div className="flex flex-col gap-5">
-                      {cv ? (
+                      {!pideCv ? null : cv ? (
                         <button
                           onClick={() => setCv(null)}
                           className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-good bg-good-soft/40 p-8 text-center transition"

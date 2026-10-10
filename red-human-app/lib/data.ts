@@ -350,6 +350,8 @@ export interface Candidato {
   vacancy_id?: string;
   stage?: "prefiltro" | "filtro_ia" | "filtro_humano" | "contratacion" | "onboarding";
   filter_status?: "cumple" | "revisar" | "no_cumple" | null;
+  /** 2026-10-10: códigos de las postulaciones de la MISMA persona a esta vacante que se fusionaron en esta tarjeta. */
+  fusionadas?: string[];
   /** Score del agente IA (Análisis de CV real + Entrevista Red Human evaluada); null = sin evaluación real. */
   card_score?: number | null;
   score_reason?: { fortaleza: string; faltante: string } | null;

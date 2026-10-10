@@ -442,7 +442,20 @@ def listar(
             .group_by(func.lower(Candidato.correo))
             .having(func.count(Candidato.id) > 1)
         ).scalar_subquery()
-        q = q.filter(or_(Candidato.telefono.in_(tel_dup), func.lower(Candidato.correo).in_(correo_dup)))
+        # 2026-10-10: también las fusionadas (teléfono normalizado a 10 dígitos o correo, misma vacante)
+        from ..services import conteos as _cdup
+
+        _ocultos, _fusion = _cdup.fusion_duplicados(db, cuenta.id)
+        en_grupo = set(_ocultos) | set(_fusion)
+        q = q.filter(or_(Candidato.telefono.in_(tel_dup), func.lower(Candidato.correo).in_(correo_dup),
+                         Postulacion.id.in_(en_grupo) if en_grupo else Postulacion.id.is_(None)))
+    # Especificación 2026-10-10: una persona aparece UNA sola vez por vacante (duplicados por teléfono/correo fusionados;
+    # misma regla que los contadores, `conteos.fusion_duplicados`). «Duplicados» y las cerradas los muestran todos.
+    from ..services import conteos as _conteos
+
+    ocultos, fusion = _conteos.fusion_duplicados(db, cuenta.id)
+    if ocultos and not duplicados and activa is not False:
+        q = q.filter(Postulacion.id.notin_(ocultos))
     # Hotfix concurrencia 2026-09-24 (N+1): todo lo que lee `postulacion_dict` se trae en un puñado
     # de consultas por listado, no ~10 por tarjeta. Los mensajes solo se CUENTAN (una consulta agrupada).
     postulaciones = q.options(
@@ -467,7 +480,8 @@ def listar(
     from ..services.envios import precarga_tablero
 
     precargas = precarga_tablero(db, postulaciones, evaluaciones_por_p)
-    return [postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0), evaluaciones=evaluaciones_por_p[p.id], precarga=precargas[p.id])
+    return [{**postulacion_dict(p, n_mensajes=n_mensajes.get(p.id, 0), evaluaciones=evaluaciones_por_p[p.id], precarga=precargas[p.id]),
+             "fusionadas": fusion.get(p.id, [])}
             for p in postulaciones]
 
 
@@ -883,7 +897,12 @@ async def postular(
     )
 
     resultado_cv = {"ok": False, "avisos": []}
-    if cv and cv.filename:
+    from ..services import guiones as _sgui
+
+    # especificación 2026-10-10: si la ruta NO pide CV, no se procesa ni se calcula Score de CV (el formulario ni lo muestra)
+    if cv and cv.filename and not _sgui.pide_cv((p.proceso or {}).get("pasos")):
+        resultado_cv = {"ok": False, "avisos": ["La ruta de esta vacante no pide CV: no se procesó."]}
+    elif cv and cv.filename:
         try:
             resultado_cv = await _procesar_cv(db, cv, vac, "Formulario", c.codigo, vac.cuenta_id, postulacion=p, origen="formulario")
         except Exception as e:
@@ -1986,14 +2005,13 @@ def actividad_agente(db: Session = Depends(get_db), _: Usuario = Depends(usuario
     """Contador REAL del sidebar («Prefiltrando N candidatos por WhatsApp»): postulaciones activas en
     Prefiltro sin terminar, de personas con WhatsApp (wa_id) y con mensaje en las últimas 24 h (ventana
     de sesión de Meta). Antes era un número quemado (3)."""
+    from ..services import conteos
+
     corte = datetime.now(timezone.utc) - timedelta(hours=24)
+    # especificación 2026-10-10: MISMA base que el tablero y las vacantes (`conteos.postulaciones_visibles`)
+    visibles = conteos.postulaciones_visibles(db, cuenta.id)
     filas = (
-        db.query(Postulacion)
-        .join(Candidato, Postulacion.candidato_id == Candidato.id)
-        .filter(
-            Postulacion.cuenta_id == cuenta.id, Postulacion.activa.is_(True), Postulacion.etapa == "Prefiltro",
-            Postulacion.prefiltro_completo.is_(False), Candidato.eliminado_en.is_(None), Candidato.wa_id != "",
-        )
+        visibles.filter(Postulacion.etapa == "Prefiltro", Postulacion.prefiltro_completo.is_(False), Candidato.wa_id != "")
         .all()
     )
     prefiltrando = 0
@@ -2008,11 +2026,7 @@ def actividad_agente(db: Session = Depends(get_db), _: Usuario = Depends(usuario
     # conversaba en las últimas 24 h). `enPrefiltro` se conserva (chat sin terminar); `prefiltroTotal` = TODAS las
     # activas en Prefiltro (cualquier canal); `procesados` = activas cuyo prefiltro ya cerró el agente;
     # `nuevas24h` = postulaciones que llegaron en las últimas 24 h.
-    base = (
-        db.query(func.count(Postulacion.id))
-        .join(Candidato, Postulacion.candidato_id == Candidato.id)
-        .filter(Postulacion.cuenta_id == cuenta.id, Postulacion.activa.is_(True), Candidato.eliminado_en.is_(None))
-    )
+    base = visibles.with_entities(func.count(Postulacion.id))
     en_prefiltro = base.filter(Postulacion.etapa == "Prefiltro").scalar() or 0
     procesados = base.filter(Postulacion.prefiltro_completo.is_(True)).scalar() or 0
     nuevas = base.filter(Postulacion.creado_en >= corte).scalar() or 0

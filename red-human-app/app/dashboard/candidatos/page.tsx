@@ -855,6 +855,7 @@ function CandidatosContenido() {
                 <th className="px-4 py-3 text-left">Vacante</th>
                 <th className="px-4 py-3 text-left">Cliente</th>
                 <th className="px-4 py-3 text-left">Etapa</th>
+                <th className="px-4 py-3 text-left">Prefiltro</th>
                 <th className="px-4 py-3 text-left">Evaluación integral</th>
                 <th className="px-4 py-3 text-left">Score</th>
                 <th className="px-4 py-3 text-left">Fuente</th>
@@ -907,7 +908,15 @@ function CandidatosContenido() {
                               </span>
                             )}
                           </div>
-                          <p className="font-mono text-[11px] text-ink-3">{c.id}</p>
+                          <p className="font-mono text-[11px] text-ink-3">
+                            {c.id}
+                            {c.fusionadas?.length ? (
+                              <span title={`Misma persona también registrada como ${c.fusionadas.join(", ")} (se muestra una sola vez)`}
+                                className="ml-1.5 rounded bg-surface-2 px-1 font-sans text-[9px] font-bold text-ink-2">
+                                +{c.fusionadas.length} fusionada{c.fusionadas.length === 1 ? "" : "s"}
+                              </span>
+                            ) : null}
+                          </p>
                         </div>
                       </div>
                     </td>
@@ -929,6 +938,9 @@ function CandidatosContenido() {
                         <span className="h-1.5 w-1.5 rounded-full" style={{ background: etapaColor[c.etapa] }} />
                         {nombreEtapa(c.etapa)}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <ResultadoPrefiltro c={c} />
                     </td>
                     <td className="px-4 py-3">
                       {c.resultadoIntegral ? <BadgeIntegral r={c.resultadoIntegral} compacto /> : <span className="text-xs text-ink-3">—</span>}
@@ -3344,4 +3356,16 @@ function Info({ icon: Icon, v }: { icon: React.ComponentType<{ className?: strin
       <Icon className="h-3.5 w-3.5 text-ink-3" /> {v}
     </span>
   );
+}
+
+
+/** Columna «Prefiltro» de la vista general (especificación 2026-10-10): el resultado que decidió el agente. */
+function ResultadoPrefiltro({ c }: { c: Candidato }) {
+  const r = c.filter_status;
+  if (r === "cumple") return <span className="rounded-full bg-good-soft px-2 py-0.5 text-[11px] font-semibold text-good">Cumple</span>;
+  if (r === "no_cumple") {
+    return <span title={c.motivoDescarte || undefined} className="rounded-full bg-bad-soft px-2 py-0.5 text-[11px] font-semibold text-bad">No cumple</span>;
+  }
+  if (c.etapa === "Prefiltro") return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-ink-2">En proceso</span>;
+  return <span className="text-xs text-ink-3">—</span>;
 }

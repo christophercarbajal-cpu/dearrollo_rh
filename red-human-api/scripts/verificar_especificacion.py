@@ -132,6 +132,47 @@ with TestClient(app) as client:
     p = db.query(Postulacion).filter_by(codigo=p.codigo).one()
     check(r.status_code == 200 and p.activa and not p.motivo_cierre and any(h.get("evento") == "reactivada" for h in p.historial),
           "«Reactivar» a un candidato sin respuesta: vuelve activo y queda en el historial")
+
+    # ================= 4. Duplicados fusionados y contadores con la misma base =================
+    print("\n--- 4. Una persona, una sola vez por vacante; contadores sincronizados ---")
+    from app.services import conteos
+
+    v2 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id != v.id).first()
+    v2.cuenta_id = cuenta.id
+    s1 = _crear_candidato(db, cuenta.id, "Sandra Ríos", "Formulario", False, telefono="5512340001", correo="sandra@correo.mx")
+    s2 = _crear_candidato(db, cuenta.id, "Sandra Rios", "WhatsApp", False, telefono="5215512340001", correo="")
+    s3 = _crear_candidato(db, cuenta.id, "Sandra R.", "Formulario", False, telefono="", correo="SANDRA@correo.mx")
+    pa = crear_postulacion(db, s1, v2, cuenta.id, "formulario", consentimiento=True)
+    pb = crear_postulacion(db, s2, v2, cuenta.id, "whatsapp", consentimiento=True)
+    pc = crear_postulacion(db, s3, v2, cuenta.id, "formulario", consentimiento=True)
+    pb.etapa = "Entrevista IA"
+    db.commit()
+    tarjetas = [t for t in client.get(f"/candidatos?vacante={v2.codigo}", headers=H).json()]
+    check(len(tarjetas) == 1 and tarjetas[0]["id"] == pb.codigo and set(tarjetas[0]["fusionadas"]) == {pa.codigo, pc.codigo},
+          "Sandra aparece UNA sola vez (por teléfono y correo): la más avanzada, con las fusionadas")
+    check(conteos.total(db, cuenta.id, v2.id) == 1 and client.get(f"/vacantes/{v2.codigo}", headers=H).json()["candidatos"] == 1,
+          "la vacante cuenta 1 (misma base que el tablero)")
+    etapas = {x["etapa"]: x["total"] for x in client.get(f"/candidatos/tablero/etapas?vacante={v2.codigo}", headers=H).json()["stats"]}
+    check(sum(etapas.values()) == 1 and etapas["Entrevista IA"] == 1, "el encabezado del tablero cuenta lo mismo")
+    total_tablero = len(client.get("/candidatos", headers=H).json())
+    agente = client.get("/candidatos/agente/actividad", headers=H).json()
+    check(agente["prefiltroTotal"] == conteos.por_etapa(db, cuenta.id).get("Prefiltro", 0) and total_tablero == conteos.total(db, cuenta.id),
+          "«Agente activo», tablero y vacantes salen de la misma consulta base")
+    check(len(client.get(f"/candidatos?vacante={v2.codigo}&duplicados=true", headers=H).json()) == 3, "«Duplicados» las sigue mostrando todas")
+    check(all(x.activa for x in (pa, pb, pc)), "la fusión no cierra ni borra nada")
+
+    # ================= 5. Formulario sin CV =================
+    print("\n--- 5. Formulario público ---")
+    v2.estado = "Publicada"
+    v2.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
+    db.commit()
+    check(client.get(f"/vacantes/slug/{v2.slug}").json().get("pideCv") is False, "la vacante de Masivos no pide CV")
+    r = client.post("/candidatos/postular", data={"vacante": v2.slug, "nombre": "Nora Sin CV", "telefono": "5512349999",
+                                                  "consentimiento": "false"})
+    check(r.status_code == 400, "sin el consentimiento de privacidad no se postula (obligatorio)")
+    r = client.post("/candidatos/postular", data={"vacante": v2.slug, "nombre": "Nora Sin CV", "telefono": "5512349999",
+                                                  "consentimiento": "true"}, files={"cv": ("cv.pdf", b"%PDF-1.4 x", "application/pdf")})
+    check(r.status_code == 201 and not r.json()["cv"]["procesado"], "si la ruta no pide CV, no se procesa ni se calcula Score de CV")
     db.close()
 
 print(f"\n🎉 {OK} comprobaciones OK — especificación")

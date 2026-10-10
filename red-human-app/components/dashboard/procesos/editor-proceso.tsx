@@ -49,7 +49,7 @@ export function pasoNuevo(t: OpcionTipoPaso, etapa: EtapaCandidato, pasos: PasoP
     tipo: t.valor,
     nombre: t.texto,
     etapa,
-    obligatorio: true,
+    obligatorio: t.obligatorio ?? true,
     depende_de: [],
     responsable: { tipo: t.responsable },
     regla: { tipo: t.regla },
@@ -203,7 +203,7 @@ function DetalleActividad({ p, catalogo = [], opciones, soloLectura, onCambio }:
           </select>
         </label>
       )}
-      {p.tipo === "psicometrica" && (
+      {p.tipo === "psicometrica" && p.modalidad !== "fisica" && (
         <div className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
           Batería predeterminada
           <span className="text-[11px] text-ink-3">

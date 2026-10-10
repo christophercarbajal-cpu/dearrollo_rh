@@ -128,11 +128,12 @@ with TestClient(app) as client:
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "No"})
     db.expire_all()
     p = db.query(Postulacion).filter_by(codigo=P).one()
-    check(p.activa and p.estado == "revision" and p.prefiltro_completo, "el dato contradice el formulario → «Revisar prefiltro» para RH (nunca no_cumple)")
+    check(p.activa and p.estado == "cumple" and p.prefiltro_completo,
+          "el dato contradice el formulario → NO descarta ni va a revisión: el agente decide y la ruta sigue (especificación 2026-10-10)")
     check(len(p.analisis["inconsistencias"]) == 1 and p.analisis["inconsistencias"][0]["web"] == "Sí", "la inconsistencia quedó registrada (formulario vs chat)")
     r2 = client.get(f"/candidatos/{P}")
     check(len(r2.json()["inconsistencias"]) == 1, "la ficha expone la inconsistencia")
-    check("RH revisará" in r.json()["respuesta"], "al candidato solo se le agradece; RH decide")
+    check("necesitamos" not in r.json()["respuesta"], "al candidato no se le comunica ningún rechazo")
 
     print("\n--- Control manual de RH: mover libre + «Omitida manualmente» ---")
     r = client.post("/candidatos", json={"nombre": "Beto Manual", "telefono": "5522220002", "vacante": VAC, "consentimiento": True, "fuente": "RH"})

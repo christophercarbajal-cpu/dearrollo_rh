@@ -39,7 +39,7 @@ import { ModalAccionTarea } from "@/components/dashboard/onboarding/accion-tarea
 import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-onboarding";
 import {
   cerrarOnboarding, fetchCandidato, fetchTareasOnboarding, type TareaOnboarding,
-  actualizarContactoCandidato, agregarActividadProceso, aprobarPrefiltro, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
+  actualizarContactoCandidato, agregarActividadProceso, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
   moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
   sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
 } from "@/lib/api";
@@ -287,16 +287,6 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     }
   }
 
-  async function aprobarPrefiltroRH() {
-    setOcupado("prefiltro");
-    const r = await aprobarPrefiltro(c.id);
-    setOcupado("");
-    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
-    setSeg(r.data.proceso);
-    onCambio(r.data.candidato);
-    setAviso({ tono: "ok", texto: "Prefiltro aprobado: la ruta continúa sola." });
-  }
-
   /** «Reintentar sincronización»: solo existe tras una falla CONFIRMADA de recuperación (el resultado llega solo). */
   async function sincronizar(paso: PasoSeguimiento) {
     if (!paso.evaluacion) return;
@@ -334,10 +324,9 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const pasoSig = sig?.paso ? pasos.find((p) => p.id === sig.paso) : undefined;
   // un solo evaluador de condiciones: la API manda `bloqueo` (todas las Cuentas) y `descarteSugerido` (ruta automática)
   const descarte = seg.bloqueo ?? seg.descarteSugerido ?? null;
-  // 2026-10-08: una postulación que el prefiltro conversacional cerró sigue ofreciendo «Continuar por decisión de RH»
-  const cerradaPrefiltro = Boolean(descarte?.cerradaPorPrefiltro);
-  const vigente = c.activa !== false || cerradaPrefiltro;
-  const pasoPrefiltro = pasos.find((p) => p.revisarPrefiltro && p.estado !== "omitida" && p.estado !== "cancelada");
+  // Especificación 2026-10-10: el agente decide el prefiltro (no hay «Aprobar prefiltro»); un descartado se revierte
+  // con «Reactivar» en el menú «…» de la ficha.
+  const vigente = c.activa !== false;
   const recRuta = seg.recomendacion ?? null;
   const rec = recRuta
     ? { texto: recRuta.tono === "bad" ? "text-bad" : recRuta.tono === "warn" ? "text-warn" : "text-good", icon: recRuta.tono === "good" ? CheckCircle2 : AlertTriangle }
@@ -351,8 +340,6 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     principal = { texto: "Cerrar Onboarding", onClick: () => void cerrarOnb(), icono: <CheckCircle2 className="h-4 w-4" /> };
   } else if (live && vigente && descarte) {
     principal = null; // el bloqueo trae SUS dos decisiones (abajo): Confirmar descarte · Continuar por decisión de RH
-  } else if (live && c.activa !== false && pasoPrefiltro) {
-    principal = { texto: "Aprobar prefiltro", onClick: () => void aprobarPrefiltroRH(), icono: <CheckCircle2 className="h-4 w-4" /> };
   } else if (live && sig && c.activa !== false) {
     if (sig.tipo === "tarea" && sig.tarea != null) {
       // Onboarding: la tarea pendiente se resuelve aquí mismo (Confirmar ingreso, Registrar alta IMSS…)
@@ -401,16 +388,14 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         {descarte && vigente && (
           <div role="alert" className="mt-3 rounded-lg border border-bad/40 bg-bad-soft/50 px-3 py-2">
             <p className="flex items-center gap-2 text-[13px] font-semibold text-bad">
-              <XCircle className="h-4 w-4 shrink-0" /> {cerradaPrefiltro ? "Prefiltro no aprobado" : seg.descarteSugerido ? "Descarte sugerido" : "No aprobada"}: {descarte.motivo}
+              <XCircle className="h-4 w-4 shrink-0" /> {seg.descarteSugerido ? "Descarte sugerido" : "No aprobada"}: {descarte.motivo}
             </p>
             <p className="mt-0.5 pl-6 text-[12px] text-ink-2">
-              {cerradaPrefiltro
-                ? "La postulación se cerró y se le avisó al candidato. Si RH decide seguir, continúa con un motivo: se reabre, se conservan sus respuestas y la liga de la entrevista sale sola."
-                : "La ruta se detuvo. Confirma el descarte o, si RH decide seguir, continúa con un motivo (el resultado se conserva)."}
+              La ruta se detuvo. Confirma el descarte o, si RH decide seguir, continúa con un motivo (el resultado se conserva).
             </p>
             {live && (
               <div className="mt-2 flex flex-wrap justify-end gap-2">
-                {onDescartar && !cerradaPrefiltro && (
+                {onDescartar && (
                   <Button size="sm" variant="outline" onClick={() => onDescartar(descarte.motivo)} disabled={Boolean(ocupado)}>
                     <ThumbsDown className="h-4 w-4" /> Confirmar descarte
                   </Button>
@@ -423,13 +408,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             )}
           </div>
         )}
-        {pasoPrefiltro && !descarte && (
-          <p className="mt-3 flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/50 px-3 py-2 text-[12px] text-ink-2">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
-            <span><b className="text-ink">Revisar prefiltro.</b> {pasoPrefiltro.espera.replace(/^Revisar prefiltro:\s*/, "")} Apruébalo o descarta al candidato desde «…».</span>
-          </p>
-        )}
-        {textoEspera && !descarte && !pasoPrefiltro && (
+        {textoEspera && !descarte && (
           <p className={cn("mt-3 flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[12px]", sig?.tipo === "fin" ? "bg-good-soft/50" : "bg-surface-2", "text-ink-2")}>
             {sig?.tipo === "fin" ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" /> : <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />}
             <span>{textoEspera}</span>

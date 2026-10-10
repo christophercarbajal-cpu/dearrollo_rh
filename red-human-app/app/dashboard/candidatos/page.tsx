@@ -81,6 +81,8 @@ import {
   reiniciarPostulacionPrueba,
   type NotificarAccion,
   moverEtapaCandidato,
+  reactivarPostulacion,
+  MOTIVOS_REACTIVABLES,
   aplicarProcesoVigente,
   reanalizarCvCandidato,
   recordatorioDocumentosCandidato,
@@ -1149,16 +1151,17 @@ function ModalCandidato({
     setAviso({ tono: "ok", texto: `Ruta actualizada a la versión ${r.data.aplicado.version}.${h.length ? ` Se conservan con su actividad: ${h.join(", ")}.` : ""}` });
   }
 
-  /** Reabrir una postulación cerrada: misma acción de siempre (mover a SU columna con `manual` la reabre). */
+  /** «Reactivar» (especificación 2026-10-10): un descartado o sin respuesta vuelve a SU etapa y retoma la ruta; queda en
+   *  el historial con tu nombre y el motivo. Sustituye a «Reabrir postulación». */
   async function reabrirPostulacion() {
     if (!reabrir) return;
     setOcupado("reabrir");
-    const r = await moverEtapaCandidato(c.id, c.etapa, reabrir.motivo.trim(), false, true);
+    const r = await reactivarPostulacion(c.id, reabrir.motivo.trim());
     setOcupado("");
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     setReabrir(null);
     onCambio(r.data);
-    setAviso({ tono: "ok", texto: "Postulación reabierta." });
+    setAviso({ tono: "ok", texto: "Candidato reactivado: retoma su ruta." });
   }
 
   const notificarAltaRef = useRef<NotificarAccion | undefined>(undefined);
@@ -1234,8 +1237,8 @@ function ModalCandidato({
       ? [{ etiqueta: "Cambiar ruta…", icono: <Route />, onClick: () => setCambiarRuta(true), disabled: Boolean(ocupado),
            title: "Hay una versión más nueva de la ruta" }] : []),
     ...(c.activa !== false ? [{ etiqueta: "Agregar actividad a este candidato…", icono: <Plus />, onClick: () => setActividad(true) }] : []),
-    ...(c.activa === false && c.motivoCierre !== "contratado"
-      ? [{ etiqueta: "Reabrir postulación…", icono: <RotateCw />, onClick: () => setReabrir({ motivo: "" }), disabled: Boolean(ocupado) }] : []),
+    ...(c.activa === false && MOTIVOS_REACTIVABLES.includes(c.motivoCierre ?? "")
+      ? [{ etiqueta: "Reactivar…", icono: <RotateCw />, onClick: () => setReabrir({ motivo: "" }), disabled: Boolean(ocupado) }] : []),
     ...(modoPrueba
       ? [{ etiqueta: "Prueba · Reiniciar postulación", icono: <FlaskConical />, onClick: () => void reiniciarPrueba(), disabled: Boolean(ocupado),
            title: "Cierra la postulación actual y crea una limpia para volver a probar desde cero (solo Modo Prueba)." }] : []),
@@ -1522,18 +1525,18 @@ function ModalCandidato({
         </ModalMarco>
       )}
       {reabrir && (
-        <ModalMarco titulo="Reabrir postulación" subtitulo={`Vuelve a quedar activa en ${nombreEtapa(c.etapa)}; queda en la bitácora con tu nombre.`} onClose={() => setReabrir(null)}>
+        <ModalMarco titulo="Reactivar candidato" subtitulo={`Vuelve a quedar activo en ${nombreEtapa(c.etapa)} y retoma su ruta; queda en el historial con tu nombre.`} onClose={() => setReabrir(null)}>
           <input
             autoFocus
             value={reabrir.motivo}
             onChange={(e) => setReabrir({ motivo: e.target.value })}
-            placeholder="Motivo (obligatorio)"
+            placeholder="Motivo (obligatorio, al menos 10 caracteres)"
             className="h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
           />
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setReabrir(null)}>Cancelar</Button>
-            <Button size="sm" onClick={reabrirPostulacion} disabled={ocupado === "reabrir" || reabrir.motivo.trim().length < 5}>
-              {ocupado === "reabrir" ? "Reabriendo…" : "Reabrir"}
+            <Button size="sm" onClick={reabrirPostulacion} disabled={ocupado === "reabrir" || reabrir.motivo.trim().length < 10}>
+              {ocupado === "reabrir" ? "Reactivando…" : "Reactivar"}
             </Button>
           </div>
         </ModalMarco>

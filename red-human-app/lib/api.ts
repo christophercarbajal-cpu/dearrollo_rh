@@ -3619,6 +3619,8 @@ export interface OpcionTipoPaso {
   etapas: EtapaCandidato[];
   regla: ReglaPaso["tipo"];
   responsable: ResponsablePaso["tipo"];
+  /** 2026-10-10: obligatoria por defecto (la «Carta de intención (opcional)» nace opcional). */
+  obligatorio?: boolean;
   dictamenes: { valor: string; texto: string }[];
 }
 export interface OpcionesProceso {
@@ -3680,10 +3682,13 @@ export function fetchSeguimiento(codigoPostulacion: string) {
   return get<SeguimientoProceso>(`/procesos/postulaciones/${codigoPostulacion}`);
 }
 type RespuestaPaso = { proceso: SeguimientoProceso; candidato: Candidato };
-/** Ruta automática (2026-10-08): RH resuelve un «Revisar prefiltro» a favor; el descarte va por «Descartar». */
-export function aprobarPrefiltro(codigoPostulacion: string, comentario = "") {
-  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/prefiltro/aprobar`, { comentario });
+/** «Reactivar» (especificación 2026-10-10): un descartado o sin respuesta vuelve a su etapa y retoma la ruta; queda en
+ *  el historial con el nombre de RH y el motivo (mín. 10 caracteres). Sustituye a las reaperturas previas. */
+export function reactivarPostulacion(codigoPostulacion: string, motivo: string) {
+  return post<Candidato>(`/candidatos/${codigoPostulacion}/reactivar`, { motivo });
 }
+/** Motivos de cierre que se pueden reactivar (descartados o sin respuesta). */
+export const MOTIVOS_REACTIVABLES = ["descartado", "sin_interes", "prefiltro_no_aprobado", "prueba_expirada"];
 export function omitirPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/omitir`, { motivo });
 }

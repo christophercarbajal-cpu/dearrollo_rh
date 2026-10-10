@@ -341,8 +341,8 @@ with TestClient(app) as client:
           "tras el «Sí» del formulario, el bot pide el DATO CONCRETO (cuánto tiempo, con rangos)")
     r = asyncio.run(pconv.turno(db, db.query(Postulacion).filter_by(codigo=p6.codigo).one(), "1 año", "whatsapp"))
     p6 = db.query(Postulacion).filter_by(codigo=p6.codigo).one()
-    check(p6.activa and p6.estado == "revision" and (p6.analisis.get("inconsistencias") or [{}])[-1].get("fuente") == "reconfirmacion",
-          "«1 año» contradice el «Sí» de 2 años → Inconsistencia y «Revisar prefiltro»; la postulación NO se cierra")
+    check(p6.activa and p6.estado not in ("revision", "no_cumple") and (p6.analisis.get("inconsistencias") or [{}])[-1].get("fuente") == "reconfirmacion",
+          "«1 año» contradice el «Sí» de 2 años → Inconsistencia (sin «Revisar prefiltro»); NO descarta ni detiene")
     ficha6 = client.get(f"/candidatos/{p6.codigo}", headers={"X-Cuenta-Id": str(demo.id)}).json()
     textos = ficha6.get("puntosPorValidar") or (ficha6.get("detalle") or {}).get("puntosPorValidar") or []
     check(any(t.startswith("Inconsistencia:") for t in textos), f"y aparece en Puntos por validar: {textos[:1]}")

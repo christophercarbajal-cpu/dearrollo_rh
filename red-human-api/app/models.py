@@ -2520,48 +2520,84 @@ class FirmaDocumento(Base):
 # análisis de CV, Entrevista Red Human, Evaluacion, expediente, tareas de Onboarding) en services/proceso.py.
 # Tipos de paso: nombre, etapa y regla por defecto, quién lo resuelve por defecto y en qué etapas puede ir. Los tipos
 # de evaluación son los MISMOS de TIPOS_EVALUACION_U (se ejecutan con «Agregar evaluación»).
+# Especificación para desarrollo (2026-10-10): el catálogo tiene EXACTAMENTE 22 actividades, en el orden de
+# `CATALOGO_ACTIVIDADES` (sección 4). «Solicitud y revisión de documentos» unifica las actividades viejas de documentos
+# (`solicitud_documentos` queda solo para rutas ya guardadas). «Psicometría física» es una entrada del catálogo que se
+# guarda como `psicometrica` con `modalidad: "fisica"` (se aplica en persona y se captura; nunca va al proveedor).
+_ETAPAS_EVALUACION = ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación")
+_TODAS = ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")
+
+
+def _evaluacion(nombre: str, responsable: str = "rh") -> dict:
+    return {"nombre": nombre, "etapa": "Entrevista Humana", "regla": "dictamen", "responsable": responsable,
+            "etapas": _ETAPAS_EVALUACION}
+
+
 TIPOS_PASO = {
-    # 2026-10-06 (rutas base): la solicitud del candidato (portal o chat). Con `con_cv` exige el CV.
     "solicitud_web": {"nombre": "Solicitud web", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "candidato",
-                      "etapas": ("Prefiltro",)},
-    "prefiltro_whatsapp": {"nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
-                           "responsable": "red_human", "etapas": ("Prefiltro",)},
-    "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
                       "etapas": ("Prefiltro",)},
     "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "calificacion", "responsable": "red_human",
                     "etapas": ("Prefiltro", "Entrevista IA")},
+    "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
+                      "etapas": ("Prefiltro",)},
+    "prefiltro_whatsapp": {"nombre": "Prefiltro WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
+                           "responsable": "red_human", "etapas": ("Prefiltro",)},
     # 2026-10-09: TRES actividades de IA independientes en Filtro Red Human (nunca agruparlas en un «canal»): con avatar
     # (sala), por WhatsApp (texto en el chat) y Llamada Red Human (voz). Las tres guardan la MISMA evaluación (resumen,
     # evidencia, fortalezas, puntos por validar, recomendación) y cada una lee su guion de la vacante.
-    "entrevista_agente": {"nombre": "Entrevista Red Human con avatar", "etapa": "Entrevista IA", "regla": "calificacion",
-                          "responsable": "red_human", "etapas": ("Entrevista IA",)},
-    "entrevista_whatsapp": {"nombre": "Entrevista Red Human por WhatsApp", "etapa": "Entrevista IA", "regla": "calificacion",
-                            "responsable": "red_human", "etapas": ("Entrevista IA",)},
     "llamada_agente": {"nombre": "Llamada Red Human", "etapa": "Entrevista IA", "regla": "calificacion",
                        "responsable": "red_human", "etapas": ("Entrevista IA",)},
-    **{tipo: {"nombre": nombre, "etapa": "Entrevista Humana", "regla": "dictamen",
-              "responsable": "usuario" if tipo == "entrevista_humana" else "rh",
-              "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación")}
-       for tipo, nombre in TIPOS_EVALUACION_U.items()},
-    # Documentos ANTES de Contratación (Masivos): «Solicitar documentos por liga» abre el expediente con anticipación y
-    # «Validar documentos» valida lo SOLICITADO; en Contratación/Onboarding valida todos los obligatorios.
-    "solicitud_documentos": {"nombre": "Solicitar documentos por liga", "etapa": "Prefiltro", "regla": "ninguna",
-                             "responsable": "rh", "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
-    "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion", "responsable": "rh",
-                   "etapas": ("Prefiltro", "Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
-    # retro 2026-10-09: nombres del bloque de cierre — Propuesta y aceptación → Documentos de ingreso → Contrato y firma
-    # → Tareas de onboarding → Confirmación de ingreso
+    "entrevista_whatsapp": {"nombre": "Entrevista Red Human por WhatsApp", "etapa": "Entrevista IA", "regla": "calificacion",
+                            "responsable": "red_human", "etapas": ("Entrevista IA",)},
+    "entrevista_agente": {"nombre": "Entrevista Red Human con avatar", "etapa": "Entrevista IA", "regla": "calificacion",
+                          "responsable": "red_human", "etapas": ("Entrevista IA",)},
+    # Evaluaciones: mismas claves que TIPOS_EVALUACION_U (se ejecutan con «Agregar actividad»)
+    "psicometrica": _evaluacion("Psicometría digital"),
+    "entrevista_humana": _evaluacion("Entrevista humana", "usuario"),
+    "medica": _evaluacion("Evaluación médica"),
+    "tecnica": _evaluacion("Evaluación técnica o práctica"),
+    "socioeconomica": _evaluacion("Estudio socioeconómico"),
+    "referencias": _evaluacion("Referencias laborales"),
+    # Documentos: en Prefiltro manda la liga y valida lo solicitado; en Contratación/Onboarding valida los obligatorios
+    "documentos": {"nombre": "Solicitud y revisión de documentos", "etapa": "Contratación", "regla": "validacion",
+                   "responsable": "rh", "etapas": _TODAS},
     "condiciones": {"nombre": "Propuesta y aceptación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                     "etapas": ("Contratación",)},
+    # 2026-10-10: la carta de intención como actividad propia y OPCIONAL por defecto (se cumple enviada o firmada)
+    "carta_intencion": {"nombre": "Carta de intención (opcional)", "etapa": "Contratación", "regla": "ninguna",
+                        "responsable": "rh", "etapas": ("Contratación",), "obligatorio": False},
     "carta_contrato": {"nombre": "Contrato y firma", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                        "etapas": ("Contratación", "Onboarding")},
-    "induccion": {"nombre": "Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
+    "induccion": {"nombre": "Capacitación / Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                   "etapas": ("Onboarding",)},
     "onboarding": {"nombre": "Tareas de onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                    "etapas": ("Onboarding",)},
     "alta": {"nombre": "Confirmación de ingreso", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
              "etapas": ("Onboarding",)},
+    "otra": {**_evaluacion("Otra actividad"), "etapas": _TODAS},
+    # LEGADO (fuera del catálogo): rutas guardadas antes de unificar documentos. Se sigue derivando, nunca se ofrece.
+    "solicitud_documentos": {"nombre": "Solicitar documentos por liga", "etapa": "Prefiltro", "regla": "ninguna",
+                             "responsable": "rh", "etapas": _TODAS, "legado": True},
 }
+# Entradas del catálogo que se GUARDAN como otro tipo (alias → tipo real + campos propios)
+ALIAS_CATALOGO = {"psicometria_fisica": ("psicometrica", {"modalidad": "fisica", "nombre": "Psicometría física"})}
+# Las 22 actividades del catálogo, en el orden de la especificación (sección 4)
+CATALOGO_ACTIVIDADES = (
+    "solicitud_web", "analisis_cv", "prefiltro_web", "prefiltro_whatsapp", "llamada_agente", "entrevista_whatsapp",
+    "entrevista_agente", "psicometrica", "psicometria_fisica", "entrevista_humana", "medica", "tecnica", "socioeconomica",
+    "referencias", "documentos", "condiciones", "carta_intencion", "carta_contrato", "induccion", "onboarding", "alta",
+    "otra",
+)
+
+
+def opcion_catalogo(valor: str) -> dict:
+    """Definición de una entrada del catálogo (alias incluidos) con su nombre visible."""
+    if valor in ALIAS_CATALOGO:
+        real, extra = ALIAS_CATALOGO[valor]
+        return {**TIPOS_PASO[real], "nombre": extra["nombre"], "tipo_real": real, **{k: v for k, v in extra.items() if k != "nombre"}}
+    return {**TIPOS_PASO[valor], "tipo_real": valor}
+
+
 # Catálogo único (2026-10-09): cada actividad define SOLA a qué otras de su MISMA etapa espera (el editor ya no tiene
 # «En paralelo / Esperar a…»). Lo que no aparece aquí corre en paralelo dentro de su etapa; entre etapas manda la
 # compuerta. `proceso.normalizar_pasos` las convierte en `depende_de` contra los pasos reales de la ruta.
@@ -2570,6 +2606,7 @@ ESPERA_DEL_CATALOGO = {
     "prefiltro_web": ("solicitud_web",),
     "solicitud_documentos": ("prefiltro_whatsapp", "prefiltro_web"),
     "documentos": ("solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web"),  # retro 2026-10-09: Documentos iniciales tras el prefiltro
+    "carta_intencion": ("condiciones",),
     "carta_contrato": ("condiciones", "documentos"),  # retro 2026-10-09: el contrato se firma con el expediente completo
     "alta": ("documentos", "induccion", "onboarding"),
 }

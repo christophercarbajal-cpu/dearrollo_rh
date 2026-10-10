@@ -187,7 +187,7 @@ with TestClient(app) as client:
     # compuerta: avanzar a Contratación sin el prefiltro (obligatorio) → 409; omitir requiere justificación + permiso
     P1b = nueva("Paula Pendiente", V1)
     r = client.patch(f"/candidatos/{P1b}/etapa", json={"etapa": "Contratación"})
-    check(r.status_code == 409 and "Prefiltro por WhatsApp" in r.json()["detail"], "avanzar con un obligatorio sin cumplir → 409 con lo que falta")
+    check(r.status_code == 409 and "Prefiltro WhatsApp" in r.json()["detail"], "avanzar con un obligatorio sin cumplir → 409 con lo que falta")
     r = client.patch(f"/candidatos/{P1b}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "corto"})
     check(r.status_code == 400 and "justificación" in r.json()["detail"], "omitir un obligatorio exige justificación (≥10 caracteres)")
     actual["u"] = operadora
@@ -224,13 +224,13 @@ with TestClient(app) as client:
     check(docs["espera"].startswith("Falta ") and "comprobante de domicilio" in docs["espera"],
           f"documentos en espera dicen exactamente qué falta → «{docs['espera'][:70]}…»")
     cond = paso(s, "condiciones")
-    check(cond["disponible"] is False and "Falta completar: Documentos" in cond["espera"], "condiciones depende de documentos (dependencia explícita)")
+    check(cond["disponible"] is False and "Falta completar: Solicitud y revisión de documentos" in cond["espera"], "condiciones depende de documentos (dependencia explícita)")
     r = client.patch(f"/candidatos/{P1}/condiciones-contratacion", json={"puesto": "Operador", "sueldo": "$12,000 mensuales",
                                                                           "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
     check(r.status_code == 200, "una dependencia no bloquea capturar las condiciones (no frena actividades en paralelo)")
     exp_id = post(P1).expediente.id
     r = client.post(f"/onboarding/expedientes/{exp_id}/iniciar", json={"documentos": [{"tipo": "CURP", "obligatorio": True}]})
-    check(r.status_code == 409 and "Documentos" in r.json()["detail"], "«Iniciar Onboarding» respeta los obligatorios de Contratación")
+    check(r.status_code == 409 and "documentos" in r.json()["detail"], "«Iniciar Onboarding» respeta los obligatorios de Contratación")
     for d in post(P1).expediente.documentos:
         rr = client.post(f"/contratacion/expedientes/{exp_id}/documentos/estado", json={"tipo": d.tipo, "estado": "recibido", "recibido_fisico": True})
         assert rr.status_code == 200, rr.text
@@ -274,7 +274,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and post(P2).etapa == "Entrevista Humana", "con el proceso cumplido avanza a Filtro humano (sin exigir la entrevista agregada)")
     s = seg(P2)
     eh = paso(s, "entrevista_humana")
-    check(paso(s, "psicometria")["disponible"] and eh["disponible"] is False and "Falta completar: Psicométrica" in eh["espera"]
+    check(paso(s, "psicometria")["disponible"] and eh["disponible"] is False and "Falta completar: Psicometría digital" in eh["espera"]
           and eh["accion"] is None, "la entrevista humana espera a la psicometría (dependencia) y no ofrece «Iniciar»")
     check(paso(s, "psicometria")["accion"]["clave"] == "iniciar_evaluacion" and s["siguienteAccion"]["paso"] == "psicometria",
           "la siguiente acción principal es «Iniciar: Psicométrica» (reutiliza «Agregar evaluación»)")
@@ -304,7 +304,7 @@ with TestClient(app) as client:
     check(post(P2).etapa == "Contratación", "avance automático en TODAS las Cuentas (2026-10-09): Filtro humano completo → Contratación")
     integral = client.get(f"/candidatos/{P2}").json()["resultadoIntegral"]
     nombres = {v["nombre"]: v for v in integral["validaciones"]}
-    check(nombres.get("Psicométrica", {}).get("obligatoria") and nombres.get("Entrevista Red Human con avatar", {}).get("score") == 82,
+    check(nombres.get("Psicometría digital", {}).get("obligatoria") and nombres.get("Entrevista Red Human con avatar", {}).get("score") == 82,
           "la evaluación integral toma las validaciones obligatorias del proceso")
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación"})
     s = seg(P2)
@@ -366,14 +366,14 @@ with TestClient(app) as client:
           "…y eso no frena a la socioeconómica en paralelo")
     check(resultado(e_med["codigo"], "apto").status_code == 409, "el consentimiento médico bloquea la captura hasta ser aceptado")
     r = client.patch(f"/candidatos/{P3}/etapa", json={"etapa": "Contratación"})
-    check(r.status_code == 409 and "Médica" in r.json()["detail"] and "Socioeconómica" in r.json()["detail"],
+    check(r.status_code == 409 and "Evaluación médica" in r.json()["detail"] and "Estudio socioeconómico" in r.json()["detail"],
           "ambas obligatorias antes de Contratación (409 las lista)")
     # plazo vencido = solo alerta
     p3 = post(P3)
     p3.etapa_desde = datetime.now(timezone.utc) - timedelta(days=9)
     db.commit()
     s = seg(P3)
-    check(paso(s, "medica")["vencido"] and any("Médica" in a["texto"] for a in s["alertas"]) and post(P3).activa and post(P3).etapa == "Entrevista Humana",
+    check(paso(s, "medica")["vencido"] and any("Evaluación médica" in a["texto"] for a in s["alertas"]) and post(P3).activa and post(P3).etapa == "Entrevista Humana",
           "plazo vencido: alerta en el seguimiento, el candidato sigue activo y en su etapa")
     tok = db.query(Evaluacion).filter_by(codigo=e_med["codigo"]).one().consentimiento_token
     r = client.post(f"/evaluaciones/publica/consentimiento/{tok}/aceptar", json={"nombre": "Carla Paralelo", "acepto": True})

@@ -114,6 +114,17 @@ async def lifespan(app: FastAPI):
             print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)
         rutas = sproc.asignar_rutas_faltantes(db)
         db.commit()
+        # Especificación 2026-10-10: «Revisar prefiltro» ya no existe — los que estaban ahí siguen activos y el agente
+        # decide con su siguiente mensaje. Una sola vez, NO fatal.
+        try:
+            from .services import prefiltro_conversacional as _pconv
+
+            with db.begin_nested():
+                _pconv.liberar_revisiones(db)
+            db.commit()
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[prefiltro] ⚠️ no se liberaron las revisiones: {ex}", flush=True)
         # 2026-10-08: ajustes de la ruta de demostración (solo demo-grupak): retira «Persona bajo la lluvia» (los
         # candidatos que esperaban esa prueba quedan liberados) y fija los criterios del prefiltro de «Ayudante general».
         # Idempotente y NO fatal.

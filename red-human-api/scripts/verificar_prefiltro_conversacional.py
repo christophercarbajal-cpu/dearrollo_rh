@@ -285,24 +285,22 @@ with TestClient(app) as client:
     esperado = ("Gracias por tu interés. Para esta vacante necesitamos disponibilidad para rolar turnos, por lo que en esta ocasión "
                 "no continuaremos con tu postulación.")
     check(salida == [esperado], "mensaje de cierre con el requisito exacto, por Telegram")
-    check(not pt.activa and pt.motivo_cierre == "prefiltro_no_aprobado" and pt.estado == "no_cumple",
-          "postulación cerrada (No aprobado)")
+    check(not pt.activa and pt.motivo_cierre == "descartado" and pt.estado == "no_cumple",
+          "el agente decide: «Descartado» (mismo cierre que el descarte de RH)")
     check(pt.analisis["prefiltro_web"]["motivo"] == "No cumple el requisito indispensable: Disponibilidad para rolar turnos"
-          and any(h.get("evento") == "prefiltro_no_aprobado" for h in pt.historial), "motivo exacto en el prefiltro y en el historial")
+          and any(h.get("evento") == "descartado" for h in pt.historial), "motivo exacto en el prefiltro y en el historial")
     check(not any("¿" in t for t in salida), "no se pregunta nada más después de un indispensable incumplido")
 
     # ------------------------------------------------------------------ 4. excepción de RH
-    print("\n--- 4. «Continuar por decisión de RH» → reabre y manda la liga sola ---")
+    print("\n--- 4. «Reactivar» (menú «…») → retoma la ruta y manda la liga sola ---")
     s = seg(pt.codigo)
-    check(s["bloqueo"] and s["bloqueo"]["cerradaPorPrefiltro"] and s["bloqueo"]["paso"] == "prefiltro",
-          "la ficha ofrece la decisión aunque la postulación esté cerrada")
-    check(client.post(f"/procesos/postulaciones/{pt.codigo}/pasos/prefiltro/excepcion", headers=H, json={"motivo": "corto"}).status_code == 400,
-          "sin motivo suficiente → 400 (no reabre)")
+    check(not s["bloqueo"], "una postulación descartada ya no ofrece «Continuar por decisión de RH» (la sustituye «Reactivar»)")
+    check(client.post(f"/candidatos/{pt.codigo}/reactivar", headers=H, json={"motivo": "corto"}).status_code == 400,
+          "sin motivo suficiente → 400 (no reactiva)")
     check(not recargar(pt.codigo).activa, "…y la postulación sigue cerrada")
     antes = len(TG)
-    r = client.post(f"/procesos/postulaciones/{pt.codigo}/pasos/prefiltro/excepcion", headers=H,
-                    json={"motivo": "Acordó con el supervisor el turno fijo matutino"})
-    check(r.status_code == 200, "RH aplica la excepción")
+    r = client.post(f"/candidatos/{pt.codigo}/reactivar", headers=H, json={"motivo": "Acordó con el supervisor el turno fijo matutino"})
+    check(r.status_code == 200, "RH la reactiva")
     pt = recargar(pt.codigo)
     check(pt.activa and not pt.motivo_cierre and pt.etapa == "Entrevista IA", "se reabre y la ruta sigue sola a Filtro Red Human")
     exc = pt.proceso_estado["prefiltro"]["excepcion"]
@@ -314,8 +312,8 @@ with TestClient(app) as client:
     check(len(pt.entrevistas) == 1 and len(nuevos) == 1 and liga in nuevos[0] and "continúa" in nuevos[0],
           "la liga de la entrevista sale SOLA por el canal conectado (Telegram), sin esperas")
     check(paso(seg(pt.codigo), "prefiltro")["estadoUnificado"] == "aprobada_excepcion", "Prefiltro «Continúa por decisión de RH»")
-    check(db.query(Bitacora).filter(Bitacora.accion == "proceso_excepcion_rh", Bitacora.entidad_id == pt.codigo).count() == 1,
-          "queda en bitácora")
+    check(db.query(Bitacora).filter(Bitacora.accion == "postulacion_reactivada", Bitacora.entidad_id == pt.codigo).count() == 1
+          and any(h.get("evento") == "reactivada" for h in recargar(pt.codigo).historial), "queda en la bitácora y en el historial")
 
     # ------------------------------------------------------------------ 5. aislamiento
     print("\n--- 5. Aislamiento ---")

@@ -273,6 +273,7 @@ def _sintesis_global(p: Postulacion) -> dict:
         for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
     puntos_por_validar = _dedupe_cap(
         [*inconsistencias_txt,
+         *[str(x) for x in (a.get("puntos_validar_prefiltro") or [])],  # 2026-10-10: lo que el prefiltro no pudo concluir
          *(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],
          *(a.get("brechas") or []),

@@ -17,7 +17,7 @@ from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
     ENFOQUES_ENTREVISTA, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
-    RESULTADOS_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, Cuenta, PlantillaProceso, Usuario, Vacante, conclusiones_de,
+    RESULTADOS_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, CATALOGO_ACTIVIDADES, opcion_catalogo, Cuenta, PlantillaProceso, Usuario, Vacante, conclusiones_de,
     es_cuenta_demo, nombre_etapa, registrar,
 )
 from ..services import proceso as sproc
@@ -38,10 +38,12 @@ def opciones(_: Usuario = Depends(usuario_actual)):
     return {
         "etapas": [{"valor": e, "texto": nombre_etapa(e), "permiteAvanceAutomatico": e not in ETAPAS_SIN_AVANCE_AUTOMATICO}
                    for e in ETAPAS_CANDIDATO],
+        # 2026-10-10: las 22 actividades del catálogo, en el orden de la especificación (sin las de legado)
         "tiposPaso": [{"valor": k, "texto": d["nombre"], "etapa": d["etapa"], "etapas": list(d["etapas"]), "regla": d["regla"],
-                       "responsable": d["responsable"],
-                       "dictamenes": [{"valor": c, "texto": t} for c, t in conclusiones_de(k).items()] if k in sproc.TIPOS_PASO_EVALUACION else []}
-                      for k, d in TIPOS_PASO.items()],
+                       "responsable": d["responsable"], "obligatorio": d.get("obligatorio", True),
+                       "dictamenes": [{"valor": c, "texto": t} for c, t in conclusiones_de(d["tipo_real"]).items()]
+                       if d["tipo_real"] in sproc.TIPOS_PASO_EVALUACION else []}
+                      for k, d in ((k, opcion_catalogo(k)) for k in CATALOGO_ACTIVIDADES)],
         "reglas": [{"valor": k, "texto": t} for k, t in REGLAS_APROBACION.items()],
         "responsables": [{"valor": k, "texto": t} for k, t in RESPONSABLES_PASO.items()],
         "tiposEntrevistaHumana": [{"valor": k, "texto": t} for k, t in TIPOS_ENTREVISTA_HUMANA.items()],
@@ -348,25 +350,10 @@ async def cancelar_paso(codigo: str, paso_id: str, datos: MotivoIn, db: Session 
     return _salida(p)
 
 
-class AprobarPrefiltroIn(BaseModel):
-    comentario: str = ""
-
-
 @router.post("/postulaciones/{codigo}/prefiltro/aprobar")
-async def aprobar_prefiltro(codigo: str, datos: AprobarPrefiltroIn, db: Session = Depends(get_db),
-                            u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
-    """Ruta automática (2026-10-08): RH resuelve un «Revisar prefiltro» a favor; el motor sigue solo. El descarte va
-    por «Descartar» (motivo obligatorio). Queda con su nombre en bitácora."""
-    from ..services import motor_ruta
-
-    p = _postulacion(db, codigo, cuenta.id)
-    try:
-        motor_ruta.aprobar_prefiltro(db, p, u, datos.comentario)
-    except sproc.ErrorProceso as e:
-        raise _error(e)
-    db.commit()
-    await sproc.avanzar_seguro(db, p)
-    return _salida(p)
+def aprobar_prefiltro(codigo: str, _: Usuario = Depends(usuario_decisor)):
+    """Retirado (especificación 2026-10-10): el agente decide el prefiltro. Un descarte se revierte con «Reactivar»."""
+    raise HTTPException(410, "«Aprobar prefiltro» ya no existe: Red Human decide el prefiltro. Para revertir un descarte usa «Reactivar».")
 
 
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/reactivar")

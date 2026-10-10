@@ -1208,6 +1208,14 @@ async def _auto_decision_zero_touch(db: Session, p: Postulacion, resultado_prefi
             "por si surge una oportunidad más adelante. ¡Mucho éxito en tu búsqueda! 🙌"
         )
         registrar(db, "agente-ia", "auto_descartado_zero_touch", "postulacion", p.codigo, {"prefiltro": resultado_prefiltro or "score", "score_cv": p.score})
+        # especificación 2026-10-10: el agente DECIDE el prefiltro — no cumple = «Descartado» (RH lo revierte con «Reactivar»)
+        sello = datetime.now(timezone.utc)
+        p.historial = list(p.historial or []) + [{
+            "evento": "descartado", "usuario": "Red Human (prefiltro)", "fecha": sello.isoformat(), "etapa": p.etapa,
+            "motivo": "No cumple los requisitos indispensables del prefiltro", "origen": "prefiltro",
+            "texto": "Descartado por Red Human en el prefiltro. RH puede reactivarlo desde «…» → «Reactivar».",
+        }]
+        p.cerrar("descartado")
         envio = await _enviar_whatsapp(p, texto)
         # Se guarda igual sin teléfono (p.ej. pruebas por simulador): así el veredicto real
         # siempre queda en el historial, aunque no haya salido por WhatsApp.
@@ -1910,6 +1918,66 @@ async def decision(
         {"candidato": p.candidato.codigo, "recomendacion_ia": recomendacion_ia, "comentario": datos.comentario, "correo_rh": u.correo},
     )
     db.commit()
+    return postulacion_dict(p, detalle=True)
+
+
+# Especificación 2026-10-10: «Reactivar» (menú «…» de la ficha) sustituye a las reaperturas previas («Reabrir
+# postulación» y «Continuar por decisión de RH» sobre un prefiltro cerrado). Solo descartados o sin respuesta.
+MOTIVOS_REACTIVABLES = ("descartado", "sin_interes", "prefiltro_no_aprobado", "prueba_expirada")
+MOTIVO_MINIMO_REACTIVAR = 10
+
+
+class ReactivarIn(BaseModel):
+    motivo: str = ""
+
+
+@router.post("/{codigo}/reactivar")
+async def reactivar(codigo: str, datos: ReactivarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                    cuenta: Cuenta = Depends(cuenta_actual)):
+    """Reactiva una postulación DESCARTADA o SIN RESPUESTA: vuelve a estar activa en SU etapa y retoma la ruta (si el
+    prefiltro la descartó, el prefiltro queda «Continúa por decisión de RH» y la ruta sigue sola). Las respuestas,
+    resultados e historial se conservan; queda en el historial y la bitácora con el nombre de RH y el motivo."""
+    from ..services import prefiltro_conversacional as pconv
+
+    p = _por_codigo(db, codigo, cuenta.id)
+    motivo = datos.motivo.strip()
+    if p.activa:
+        raise HTTPException(409, "La postulación ya está activa.")
+    if p.motivo_cierre not in MOTIVOS_REACTIVABLES:
+        raise HTTPException(409, "Solo se reactivan candidatos descartados o sin respuesta.")
+    if len(motivo) < MOTIVO_MINIMO_REACTIVAR:
+        raise HTTPException(400, f"Escribe el motivo de la reactivación (al menos {MOTIVO_MINIMO_REACTIVAR} caracteres).")
+    otra = (db.query(Postulacion).filter(Postulacion.candidato_id == p.candidato_id, Postulacion.vacante_id == p.vacante_id,
+                                         Postulacion.activa.is_(True), Postulacion.id != p.id).first() if p.vacante_id else None)
+    if otra is not None:
+        raise HTTPException(409, f"Esta persona ya tiene una postulación activa a esta vacante ({otra.codigo}).")
+    cierre_anterior = p.motivo_cierre
+    por_prefiltro = ((p.analisis or {}).get("prefiltro_web") or {}).get("resultado") == "no_cumple"
+    p.activa, p.motivo_cierre, p.cerrada_en = True, "", None
+    p.estado = "cumple" if p.prefiltro_completo else "pendiente"
+    liberado = None
+    if por_prefiltro and sproc.tiene_proceso(p):
+        bloqueo = sproc.bloqueo_no_aprobada(p, sproc.estado_pasos(p))
+        if bloqueo is not None:
+            try:
+                sproc.excepcion_rh(db, p, bloqueo["paso"], u, motivo, por_reactivacion=True)
+                liberado = bloqueo["nombre"]
+            except sproc.ErrorProceso:
+                liberado = None
+    sello = datetime.now(timezone.utc)
+    p.historial = list(p.historial or []) + [{
+        "evento": "reactivada", "usuario": u.nombre, "fecha": sello.isoformat(), "etapa": p.etapa, "motivo": motivo[:500],
+        "cierre_anterior": cierre_anterior,
+        "texto": f"Reactivada por {u.nombre} en {nombre_etapa(p.etapa)} — {_fecha_hora_mx(sello)}: {motivo[:300]}"
+                 + (f" («{liberado}» continúa por decisión de RH)" if liberado else ""),
+    }]
+    _actualizar_ultima_actividad(p)
+    registrar(db, u.nombre, "postulacion_reactivada", "postulacion", p.codigo,
+              {"cierre_anterior": cierre_anterior, "motivo": motivo[:500], "paso_liberado": liberado, "correo_rh": u.correo})
+    _recalcular_resultado_apto(p)
+    db.commit()
+    await sproc.avanzar_seguro(db, p)  # retoma la ruta: si quedó lista, avanza y dispara lo que toque
+    db.refresh(p)
     return postulacion_dict(p, detalle=True)
 
 

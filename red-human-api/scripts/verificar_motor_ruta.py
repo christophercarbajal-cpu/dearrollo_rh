@@ -165,18 +165,29 @@ with TestClient(app) as client:
     tarjeta = client.get(f"/candidatos/{PA}", headers=HG).json()
     check(tarjeta["suggested_discard"]["paso"] == "entrevista_red_human", "la tarjeta del tablero trae el descarte sugerido")
 
-    print("\n--- 3. Criterio indispensable incumplido → postulación CERRADA con su motivo (prefiltro conversacional) ---")
+    print("\n--- 3. Criterio indispensable incumplido → «Descartado» con su motivo; RH lo revierte con «Reactivar» ---")
     PB = postular("demo-grupak", "Beto No", "5512347002", "beto@correo.mx", respuestas("Sí", "No", "Sí"))
     db.expire_all()
     pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
     check(pb.estado == "no_cumple" and "Rolar turnos" in pb.analisis["prefiltro_web"]["motivo"], "No cumple con el criterio indispensable como motivo")
-    check(not pb.activa and pb.motivo_cierre == "prefiltro_no_aprobado" and pb.etapa == "Prefiltro",
-          "la postulación se cierra (No aprobado) y se queda en su columna")
+    check(not pb.activa and pb.motivo_cierre == "descartado" and pb.etapa == "Prefiltro"
+          and any(h.get("evento") == "descartado" and "Rolar turnos" in h.get("motivo", "") for h in pb.historial),
+          "el agente decide: «Descartado» (mismo cierre que RH) con su motivo, y se queda en su columna")
     s = seg(PB)
-    check(s["bloqueo"] and s["bloqueo"]["cerradaPorPrefiltro"] and paso(s, "prefiltro")["estadoUnificado"] == "no_aprobada",
-          "la ficha ofrece «Continuar por decisión de RH» + Prefiltro «No aprobada»")
+    check(not s["bloqueo"] and paso(s, "prefiltro")["estadoUnificado"] == "no_aprobada", "sin «Continuar por decisión de RH»: Prefiltro «No aprobada»")
+    check("Rolar turnos" in client.get(f"/candidatos/{PB}", headers=HG).json()["motivoDescarte"], "la tarjeta muestra el motivo del descarte")
     check(not db.query(Evaluacion).filter(Evaluacion.postulacion_id == pb.id).count() and not pb.entrevistas,
-          "cerrada por el prefiltro no se dispara nada más")
+          "descartada por el prefiltro no se dispara nada más")
+    check(client.post(f"/candidatos/{PB}/reactivar", headers=HG, json={"motivo": "corto"}).status_code == 400, "«Reactivar» exige motivo")
+    r = client.post(f"/candidatos/{PB}/reactivar", headers=HG, json={"motivo": "Acordó turno fijo matutino con el supervisor"})
+    db.expire_all()
+    pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
+    check(r.status_code == 200 and pb.activa and pb.etapa == "Entrevista IA" and len(pb.entrevistas) == 1,
+          "«Reactivar»: vuelve activa, retoma la ruta (avanza sola y sale la liga de la entrevista)")
+    check(any(h.get("evento") == "reactivada" and h.get("usuario") == admin.nombre for h in pb.historial)
+          and paso(seg(PB), "prefiltro")["estadoUnificado"] == "aprobada_excepcion", "queda en el historial; el prefiltro continúa por decisión de RH")
+    check(client.post(f"/candidatos/{PB}/reactivar", headers=HG, json={"motivo": "Segunda vez sin sentido"}).status_code == 409,
+          "una postulación activa no se reactiva")
 
     print("\n--- 4. «Parcial» en un indispensable nunca aprueba ---")
     PP = postular("demo-grupak", "Pau Parcial", "5512347005", "pau@correo.mx", respuestas("Parcial", "Sí", "Sí"))
@@ -184,17 +195,17 @@ with TestClient(app) as client:
     x = paso(s, "prefiltro")
     check(x["estadoUnificado"] == "esperando_candidato" and "Secundaria" in x["espera"] and s["etapaActual"] == "Prefiltro",
           "con teléfono → «Esperando candidato»: el bot le preguntará solo lo que falta")
-    print("\n--- 4b. Indeterminado sin teléfono para preguntar → «Revisar prefiltro» → RH aprueba ---")
+    print("\n--- 4b. Indeterminado sin teléfono para preguntar → el agente decide (Puntos por validar) ---")
     PC = postular("demo-grupak", "Caro Parcial", "", "caro@correo.mx", respuestas("Parcial", "Sí", "Sí"))
     s = seg(PC)
-    x = paso(s, "prefiltro")
-    check(x["revisarPrefiltro"] and "Revisar prefiltro" in x["espera"] and x["estadoUnificado"] == "pendiente_revision",
-          "Parcial en excluyente y sin teléfono → «Revisar prefiltro» (Pendiente de revisión)")
-    check(s["etapaActual"] == "Prefiltro", "sin decisión de RH no avanza")
-    r = client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={"comentario": "Validado por teléfono"})
-    check(r.status_code == 200 and r.json()["proceso"]["etapaActual"] == "Entrevista IA", "RH aprueba → avanza y la ruta sigue sola")
-    check(client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={}).status_code == 409,
-          "aprobar dos veces → 409")
+    db.expire_all()
+    pc = db.query(Postulacion).filter(Postulacion.codigo == PC).first()
+    check(s["etapaActual"] == "Entrevista IA" and pc.activa and not any(x.get("revisarPrefiltro") for e in s["etapas"] for x in e["pasos"]),
+          "sin «Revisar prefiltro»: Parcial sin teléfono → el agente lo pasa y la ruta sigue sola")
+    check(any("Secundaria" in t for t in pc.analisis.get("puntos_validar_prefiltro") or []),
+          "lo no concluyente queda en «Puntos por validar»")
+    check(client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={}).status_code == 410,
+          "«Aprobar prefiltro» ya no existe (410)")
 
     print("\n--- 5. Aislamiento: otra Cuenta con la MISMA ruta ---")
     PM = postular("manual-sa", "Mario Manual", "5512347004", "mario@correo.mx", respuestas("Sí", "Sí", "Sí"))
@@ -209,7 +220,8 @@ with TestClient(app) as client:
 
     print("\n--- 6. Vocabulario único de estados ---")
     VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
-               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error"}
+               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error",
+               "aprobada_excepcion"}
     todos = [x for c, h in ((PA, HG), (PB, HG), (PC, HG), (PP, HG), (PM, HM)) for e in seg(c, h)["etapas"] for x in e["pasos"]]
     check(all(x["estadoUnificado"] in VALIDOS for x in todos), "toda actividad usa una de las 8 etiquetas")
     db.close()

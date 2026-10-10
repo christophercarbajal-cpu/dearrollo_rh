@@ -98,6 +98,10 @@ def resolver_prefiltro_web(db: Session, p: Postulacion) -> Optional[str]:
         return None
     preguntas = list((p.vacante.preguntas_filtro if p.vacante else None) or [])
     resultado, motivo, criterios = evaluar_prefiltro_web(a["respuestas_web"], preguntas)
+    if resultado == "revision":
+        # especificación 2026-10-10: el agente decide — lo no concluyente va a «Puntos por validar», no a revisión
+        a["puntos_validar_prefiltro"] = list(a.get("puntos_validar_prefiltro") or []) + [f"Prefiltro web no concluyente: {motivo}"]
+        resultado, motivo = "cumple", f"Cumple (con puntos por validar: {motivo})"
     a["prefiltro_web"] = {"resultado": resultado, "motivo": motivo, "criterios": criterios,
                           "en": datetime.now(timezone.utc).isoformat(), "decidido_por": "Red Human"}
     p.analisis = a
@@ -107,20 +111,8 @@ def resolver_prefiltro_web(db: Session, p: Postulacion) -> Optional[str]:
     return resultado
 
 
-def aprobar_prefiltro(db: Session, p: Postulacion, u, comentario: str = "") -> None:
-    """RH resuelve un «Revisar prefiltro» a favor (el descarte va por «Descartar»). No hace commit."""
-    a = dict(p.analisis or {})
-    pw = dict(a.get("prefiltro_web") or {})
-    if pw.get("resultado") != "revision":
-        raise sproc.ErrorProceso(409, "El prefiltro no está en «Revisar prefiltro».")
-    pw.update({"resultado": "cumple", "motivo": (comentario or "").strip()[:300] or "Aprobado por RH tras revisión",
-               "decidido_por": u.nombre, "en": datetime.now(timezone.utc).isoformat(), "revision_previa": pw.get("motivo", "")})
-    a["prefiltro_web"] = pw
-    p.analisis = a
-    flag_modified(p, "analisis")
-    p.estado = "cumple"
-    registrar(db, u.nombre, "prefiltro_aprobado_por_rh", "postulacion", p.codigo,
-              {"comentario": comentario[:300], "correo_rh": getattr(u, "correo", "")})
+# Especificación 2026-10-10: ya no existe «Aprobar prefiltro» — el agente decide (cumple → sigue la ruta en el mismo
+# chat; incumple un indispensable → «Descartado»). RH revierte un descarte con «Reactivar».
 
 
 # ============================================================ 3. disparo de actividades
@@ -295,6 +287,8 @@ async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
             continue
         if x["tipo"] == "documentos" and not x.get("sinSolicitar"):
             continue  # documentos ya pedidos (o sin expediente todavía): RH valida
+        if x["tipo"] == "psicometrica" and x.get("modalidad") == "fisica":
+            continue  # psicometría física: se aplica en persona, nunca se dispara al proveedor
         _marcar(p, x["id"], {"en": datetime.now(timezone.utc).isoformat(), "ok": None})
         db.commit()
         codigo = p.codigo

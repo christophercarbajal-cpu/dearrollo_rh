@@ -68,6 +68,8 @@ export interface PasoProceso {
   documentos?: string[];
   /** Psicometría (2026-10-07): batería predeterminada = ids del catálogo de pruebas psicométricas. */
   pruebas?: number[];
+  /** 2026-10-10: «Psicometría física» = psicometría que se aplica en persona y se captura (sin proveedor). */
+  modalidad?: "fisica";
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {

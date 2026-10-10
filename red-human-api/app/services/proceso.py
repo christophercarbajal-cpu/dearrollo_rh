@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session, object_session
 from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
-    TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
+    ALIAS_CATALOGO, CATALOGO_ACTIVIDADES, TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
     PlantillaProceso, Postulacion, Usuario,
     conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
 )
@@ -124,8 +124,14 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
         if not isinstance(crudo, dict):
             raise ErrorProceso(400, "Cada paso debe ser un objeto.")
         tipo = str(crudo.get("tipo") or "").strip()
+        if tipo in ALIAS_CATALOGO:
+            # 2026-10-10: «Psicometría física» se guarda como psicometría con modalidad física
+            real, extra = ALIAS_CATALOGO[tipo]
+            crudo = {**crudo, "tipo": real, "modalidad": extra.get("modalidad"),
+                     "nombre": crudo.get("nombre") or extra["nombre"]}
+            tipo = real
         if tipo not in TIPOS_PASO:
-            raise ErrorProceso(400, f"Tipo de paso inválido: «{tipo}». Usa uno de: {', '.join(TIPOS_PASO)}.")
+            raise ErrorProceso(400, f"Tipo de paso inválido: «{tipo}». Usa uno de: {', '.join(CATALOGO_ACTIVIDADES)}.")
         defs = TIPOS_PASO[tipo]
         etapa = crudo.get("etapa") or defs["etapa"]
         if etapa not in defs["etapas"] and not (crudo.get("adhoc") and etapa in ETAPAS_CANDIDATO):
@@ -148,7 +154,7 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
             "tipo": tipo,
             "nombre": str(crudo.get("nombre") or "").strip()[:200] or defs["nombre"],
             "etapa": etapa,
-            "obligatorio": bool(crudo.get("obligatorio", True)),
+            "obligatorio": bool(crudo.get("obligatorio", defs.get("obligatorio", True))),
             "depende_de": [str(d) for d in (crudo.get("depende_de", crudo.get("dependeDe")) or []) if str(d).strip()],
             "responsable": _responsable(crudo.get("responsable"), tipo),
             "regla": _regla(crudo.get("regla"), tipo),
@@ -167,6 +173,9 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
                 except (TypeError, ValueError):
                     raise ErrorProceso(400, f"La batería de «{defs['nombre']}» debe ser una lista de pruebas del catálogo.")
             paso["pruebas"] = list(dict.fromkeys(ids))
+            if crudo.get("modalidad") == "fisica":
+                paso["modalidad"] = "fisica"  # se aplica en persona y se captura; nunca va al proveedor
+                paso["pruebas"] = []
         if tipo == "documentos" and crudo.get("documentos"):
             paso["documentos"] = [str(d).strip()[:120] for d in crudo["documentos"] if str(d).strip()]
         for bandera in ("adhoc", "heredado"):  # actividad agregada solo a ESTA postulación / fuera del proceso vigente
@@ -913,8 +922,8 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
         pw = a["prefiltro_web"]
         res = pw["resultado"]
         if res == "revision":
-            return {**base, "estado": "en_curso", "espera": "Revisar prefiltro: " + (pw.get("motivo") or "respuesta no concluyente"),
-                    "detalle": "Revisar prefiltro", "revisar_prefiltro": True}
+            # legado (especificación 2026-10-10: ya no existe «Revisar prefiltro»): decide el agente con el siguiente mensaje
+            return {**base, "estado": "en_curso", "espera": "Red Human decide con el siguiente mensaje del candidato"}
         cumple = res == "cumple"
         por = pw.get("decidido_por") or "Red Human"
         return {**base, "estado": "completada", "resultado": "favorable" if cumple else "no_favorable", "cumple": cumple,
@@ -1018,6 +1027,8 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
         return _paso_documentos_previos(base, paso, exp)
     if tipo == "carta_contrato":
         return _paso_carta_contrato(base, p, exp)
+    if tipo == "carta_intencion":
+        return _paso_carta_intencion(base, p, exp)
     if tipo == "induccion":
         return _paso_induccion(base, p)
     if tipo == "documentos":
@@ -1155,6 +1166,24 @@ def _paso_carta_contrato(base: dict, p: Postulacion, exp) -> dict:
     return {**base, "espera": "Falta «Firmar documentos» (carta de intención y contrato)"}
 
 
+def _paso_carta_intencion(base: dict, p: Postulacion, exp) -> dict:
+    """«Carta de intención (opcional)» (2026-10-10): se cumple con la carta FIRMADA (cualquier modo) o ENVIADA al
+    candidato (bitácora `carta_intencion_enviada` con envío confirmado)."""
+    from ..models import TIPO_CARTA_FIRMADA
+
+    if exp is None:
+        return {**base, "espera": "El expediente se abre al llegar a Contratación"}
+    firmada = next((d for d in (exp.documentos or []) if getattr(d, "interno", False) and d.tipo == TIPO_CARTA_FIRMADA), None)
+    if firmada is not None:
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Carta firmada",
+                "revisadoPor": "Revisado por: RH", "terminado_en": _aware(getattr(firmada, "recibido_en", None))}
+    enviada = [b for b in _bitacora(p, ("carta_intencion_enviada",), "expediente", str(exp.id)) if (b.detalle or {}).get("enviado")]
+    if enviada:
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Carta enviada al candidato",
+                "revisadoPor": f"Revisado por: {enviada[-1].actor or 'RH'}", "terminado_en": _aware(enviada[-1].ts)}
+    return {**base, "espera": "Falta generar y enviar la carta de intención"}
+
+
 def _paso_induccion(base: dict, p: Postulacion) -> dict:
     """El curso de inducción asignado a la postulación (Capacitación); el curso filtro de la vacante no cuenta."""
     db = object_session(p)
@@ -1248,7 +1277,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         tipo = paso["tipo"]
         if tipo in TIPOS_PASO_EVALUACION:
             r = _paso_evaluacion(paso, por_paso.get(paso["id"]))
-            if tipo == "psicometrica":
+            if es_psicometria_digital(paso):
                 r["psicometria"] = bloque_psicometria(paso, por_paso.get(paso["id"]))
                 if r["psicometria"]["status"] == "error_envio":
                     r["error"] = "Error de envío: la prueba se generó, pero no le llegó al candidato"
@@ -1299,7 +1328,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         if tipo in TIPOS_PASO_EVALUACION and paso.get("config") and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada"):
             r = {**r, "cuello": {"clave": "lista_para_iniciar", "texto": "Lista para iniciar", "quien": None},
                  "espera": r.get("espera") or "Configurada: «Iniciar» la ejecuta tal cual"}
-        if tipo == "psicometrica" and falta_correo_psicometria(p, paso["id"], r, ev_paso):
+        if es_psicometria_digital(paso) and falta_correo_psicometria(p, paso["id"], r, ev_paso):
             # 2026-10-08: no es «Error de envío» (eso es una falla HTTP del proveedor): falta un DATO y se resuelve con
             # «Agregar correo»; al guardarlo, el envío pendiente se retoma solo (`actividades.reanudar_por_correo`).
             r = {**r, "error": None, "falta_correo": True, "espera": "Falta el correo del candidato para enviar la prueba",
@@ -1370,6 +1399,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "excepcionRH": r.get("excepcion"),
             "faltaCorreo": bool(r.get("falta_correo")),
             "sinSolicitar": bool(r.get("sin_solicitar")),
+            "modalidad": paso.get("modalidad"),
             "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
             # a quién se espera (cuello de botella real) y el estado de cada destinatario (intento/enviado/entregado/fallido)
@@ -1701,10 +1731,9 @@ def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional
     «Continuar por decisión de RH» (`excepcion_rh`). Nunca se descarta ni se libera solo.
     2026-10-08: también la postulación que el prefiltro conversacional CERRÓ por un indispensable (`cerradaPorPrefiltro`):
     «Continuar por decisión de RH» la reabre y la ruta sigue sola."""
-    from .prefiltro_conversacional import MOTIVO_CIERRE
-
-    cerrada_prefiltro = not p.activa and p.motivo_cierre == MOTIVO_CIERRE
-    if not pasos or not (p.activa or cerrada_prefiltro):
+    # Especificación 2026-10-10: una postulación DESCARTADA (también por el prefiltro) se revierte con «Reactivar»
+    cerrada_prefiltro = False
+    if not pasos or not p.activa:
         return None
     actual = _indice(p.etapa)
     x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
@@ -1729,7 +1758,7 @@ def falta_correo_psicometria(p: Postulacion, paso_id: str, r: dict, ev: Optional
     return paso_id in pendientes and psi.configurado()
 
 
-def excepcion_rh(db: Session, p: Postulacion, paso_id: str, u, motivo: str) -> dict:
+def excepcion_rh(db: Session, p: Postulacion, paso_id: str, u, motivo: str, por_reactivacion: bool = False) -> dict:
     """«Continuar por decisión de RH» sobre una actividad «No aprobada»: la libera para la compuerta SIN cambiar su
     resultado ni su score y SIN omitirla. Motivo obligatorio; en una obligatoria exige el permiso «Autorizar omisiones».
     No hace commit."""
@@ -1742,7 +1771,7 @@ def excepcion_rh(db: Session, p: Postulacion, paso_id: str, u, motivo: str) -> d
         raise ErrorProceso(409, f"«{paso['nombre']}» ya continúa por decisión de RH.")
     if len(motivo) < MOTIVO_MINIMO:
         raise ErrorProceso(400, f"Escribe el motivo de la decisión (al menos {MOTIVO_MINIMO} caracteres).")
-    if paso["obligatorio"] and not u.puede_autorizar_omisiones():
+    if paso["obligatorio"] and not por_reactivacion and not u.puede_autorizar_omisiones():
         raise ErrorProceso(403, f"«{paso['nombre']}» es obligatoria: continuar pese al resultado requiere el permiso «Autorizar omisiones».")
     sello = _ahora()
     decisiones = dict(p.proceso_estado or {})
@@ -1809,14 +1838,16 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
             return {"clave": "consultar_evaluacion", "texto": "Consultar", "evaluacion": r["evaluacion"]}
         if disponible:
             # psicometría: abre la vista limpia con la batería de la ruta/vacante y «Asignar y enviar»
-            texto = {"psicometrica": "Asignar y enviar", "referencias": "Solicitar referencias"}.get(tipo, "Iniciar")
+            texto = ("Asignar y enviar" if es_psicometria_digital(paso) else
+                     "Solicitar referencias" if tipo == "referencias" else "Iniciar")
             return {"clave": "iniciar_evaluacion", "texto": texto}
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
                "entrevista_agente": "evaluaciones", "entrevista_whatsapp": "evaluaciones", "llamada_agente": "evaluaciones",
                "documentos": "contratacion", "condiciones": "contratacion",
                "onboarding": "contratacion", "alta": "contratacion", "solicitud_web": "resumen",
-               "solicitud_documentos": "contratacion", "carta_contrato": "contratacion", "induccion": "contratacion"}[tipo]
+               "solicitud_documentos": "contratacion", "carta_contrato": "contratacion", "induccion": "contratacion",
+               "carta_intencion": "contratacion"}.get(tipo, "resumen")
     previo = _indice(paso["etapa"]) < _indice("Contratación")
     if tipo in ("documentos", "solicitud_documentos") and previo:
         destino = "documentos"  # antes de Contratación los documentos se ven y validan en «CV y documentos»
@@ -1830,7 +1861,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
     texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "alta": "Dar de alta",
-             "onboarding": "Ver tareas", "carta_contrato": "Generar carta / contrato", "induccion": "Ver inducción"}.get(tipo, "Consultar")
+             "onboarding": "Ver tareas", "carta_contrato": "Firmar documentos", "induccion": "Ver inducción",
+             "carta_intencion": "Generar carta de intención"}.get(tipo, "Consultar")
     return {"clave": "abrir", "texto": texto, "pestana": destino}
 
 
@@ -2140,6 +2172,11 @@ def aplicar_version_vigente(db: Session, p: Postulacion, u) -> dict:
 
 
 # ============================================================ conexión con la ejecución real
+
+def es_psicometria_digital(paso: dict) -> bool:
+    """Psicometría por el proveedor (digital). La física (`modalidad: "fisica"`) se aplica en persona y se captura."""
+    return paso.get("tipo") == "psicometrica" and paso.get("modalidad") != "fisica"
+
 
 def paso_de_tipo(p: Postulacion, tipo: str) -> Optional[dict]:
     return next((x for x in (p.proceso or {}).get("pasos", []) if x["tipo"] == tipo and not x.get("heredado")), None)

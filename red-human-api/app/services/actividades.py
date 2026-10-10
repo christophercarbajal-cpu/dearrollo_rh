@@ -156,11 +156,13 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
                 "mensaje": f"«{x['nombre']}» ya estaba iniciada ({ev.codigo}). Para volver a avisar usa «Reenviar»."}
     # 2026-10-08: lo configurado al AGREGAR la actividad se ejecuta tal cual; `datos` solo trae lo que faltaba
     datos = {**(paso.get("config") or {}), **{k: v for k, v in (datos or {}).items() if v not in (None, "", [], {})}}
-    if tipo == "psicometrica" and (datos.get("forma") or "integrada") == "integrada":
+    fisica = tipo == "psicometrica" and paso.get("modalidad") == "fisica"
+    if tipo == "psicometrica" and not fisica and (datos.get("forma") or "integrada") == "integrada":
         return await _iniciar_psicometria(db, p, paso, u, cuenta, datos)
     from ..routers.evaluaciones import CitaIn, CrearEvaluacionIn, EvaluadorIn, crear_evaluacion
 
-    forma = (datos.get("forma") or "").strip() or "asignada"
+    # Psicometría física (2026-10-10): se aplica en persona y RH captura el resultado (nunca va al proveedor)
+    forma = (datos.get("forma") or "").strip() or ("registro_directo" if fisica else "asignada")
     evaluador = datos.get("evaluador") or None
     if forma == "asignada" and not evaluador:
         evaluador = _evaluador_configurado(db, p, paso, u)
@@ -173,7 +175,7 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
         instrucciones = f"Examen solicitado: {datos['examen']}" + (f"\n{instrucciones}" if instrucciones else "")
     cuerpo = CrearEvaluacionIn(
         tipo=tipo, forma=forma, paso_id=paso_id,
-        nombre=paso["nombre"] if tipo == "otra" or paso.get("adhoc") and paso["nombre"] != sproc.TIPOS_PASO[tipo]["nombre"] else "",
+        nombre=paso["nombre"] if tipo == "otra" or fisica or paso.get("adhoc") and paso["nombre"] != sproc.TIPOS_PASO[tipo]["nombre"] else "",
         evaluador=EvaluadorIn(**evaluador) if evaluador else None,
         instrucciones=instrucciones,
         liga_externa_candidato=str(datos.get("liga_externa_candidato") or ""),
@@ -287,8 +289,11 @@ def validar_config(tipo: str, config: dict, ya_realizada: bool, resultado: dict,
 def precarga(db: Session, p: Postulacion, tipo: str) -> dict:
     """Lo que ya define la VACANTE (su copia de la ruta) para ese tipo de actividad: el formulario lo trae lleno y solo
     pide lo faltante. `origen` dice de dónde salió cada campo."""
-    from ..models import TIPOS_PASO, conclusiones_de
+    from ..models import ALIAS_CATALOGO, TIPOS_PASO, conclusiones_de
 
+    alias = ALIAS_CATALOGO.get(tipo)
+    if alias:
+        tipo = alias[0]
     if tipo not in TIPOS_PASO:
         raise HTTPException(400, "Tipo de actividad inválido.")
     v = p.vacante
@@ -304,7 +309,11 @@ def precarga(db: Session, p: Postulacion, tipo: str) -> dict:
         if uid:
             config["evaluador"] = {"tipo": "interno", "usuario_id": uid}
             origen["evaluador"] = "vacante"
-    if tipo == "psicometrica" and "prueba_ids" not in config:
+    if alias:
+        config.setdefault("forma", "registro_directo")
+        origen.setdefault("forma", "vacante")
+        plantilla = {**(plantilla or {}), "nombre": alias[1]["nombre"]}
+    elif tipo == "psicometrica" and "prueba_ids" not in config:
         ids = list((plantilla or {}).get("pruebas") or [])
         if not ids and v is not None:
             ids = [s.get("prueba_id") for s in (v.evaluaciones_sugeridas or []) if s.get("tipo") == "psicometrica" and s.get("prueba_id")]
@@ -335,6 +344,14 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
     config = sproc.limpiar_config(datos.get("config") or {}) if isinstance(datos.get("config"), dict) else {}
     ya = bool(datos.get("ya_realizada"))
     resultado = datos.get("resultado") if isinstance(datos.get("resultado"), dict) else {}
+    from ..models import ALIAS_CATALOGO
+
+    extra_alias: dict = {}
+    if tipo in ALIAS_CATALOGO:  # «Psicometría física» → psicometría con modalidad física y captura manual
+        tipo, extra_alias = ALIAS_CATALOGO[tipo][0], dict(ALIAS_CATALOGO[tipo][1])
+        nombre = nombre or extra_alias.pop("nombre")
+        extra_alias.pop("nombre", None)
+        config.setdefault("forma", "registro_directo")
     if tipo not in sproc.TIPOS_PASO:
         raise HTTPException(400, "Elige el tipo de actividad.")
     es_eval = tipo in sproc.TIPOS_PASO_EVALUACION
@@ -342,7 +359,7 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
         validar_config(tipo, config, ya, resultado, nombre)
         if tipo != "entrevista_humana" and not p.consentimiento:
             raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
-    crudo = {"tipo": tipo, "obligatorio": bool(datos.get("obligatorio")), **({"nombre": nombre} if nombre else {})}
+    crudo = {"tipo": tipo, "obligatorio": bool(datos.get("obligatorio")), **({"nombre": nombre} if nombre else {}), **extra_alias}
     if es_eval and not ya:
         crudo["config"] = config
     try:

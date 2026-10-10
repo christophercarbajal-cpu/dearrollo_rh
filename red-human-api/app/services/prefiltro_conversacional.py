@@ -42,7 +42,10 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..models import Postulacion, registrar, ruta_automatica
 
 ENTIDAD = "prefiltro_conversacional"
-MOTIVO_CIERRE = "prefiltro_no_aprobado"
+# Especificación 2026-10-10: el AGENTE decide el prefiltro (no existe «Revisar prefiltro»). Incumplir un indispensable
+# = «Descartado» (el MISMO cierre que el descarte de RH, con motivo y mensaje); RH lo revierte con «Reactivar».
+MOTIVO_CIERRE = "descartado"
+MOTIVO_CIERRE_LEGADO = "prefiltro_no_aprobado"  # cierres anteriores a la especificación
 ACTOR = "Red Human (prefiltro)"
 MAX_ACLARACIONES = 2
 
@@ -295,11 +298,7 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         r = respuestas.get(c["id"])
         if r and c["indispensable"] and r.get("valor") and r["valor"] != c["esperada"]:
             return "no_cumple", c, None
-    for c in criterios:
-        r = respuestas.get(c["id"])
-        if c.get("reconfirma") and r and r.get("valor") == "no":
-            return "inconsistencia", c, None  # el dato concreto contradice el «Sí» del formulario: nunca descarta
-
+    # una contradicción con el formulario (reconfirmación «no») NO detiene el prefiltro: queda en «Puntos por validar»
     def falta(c: dict) -> bool:
         if c["id"] in respuestas:
             return False
@@ -322,6 +321,8 @@ def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
             veredicto = "sin_respuesta"
         elif not c["indispensable"]:
             veredicto = "registrado"
+        elif r.get("valor") is None:
+            veredicto = "no_concluyente"  # pasó a «Puntos por validar»
         else:
             veredicto = "cumple" if r.get("valor") == c["esperada"] else "no_cumple"
         if c.get("reconfirma") and r:
@@ -389,8 +390,8 @@ def _resolver(db: Session, p: Postulacion, criterios: List[dict], e: dict, resul
 
 
 def registrar_inconsistencia(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> None:
-    """El dato concreto contradice lo que contestó en el formulario: «Inconsistencia» para RH (Puntos por validar) y
-    «Revisar prefiltro» — la postulación sigue activa (nunca se descarta por una contradicción). No hace commit."""
+    """El dato concreto contradice lo que contestó en el formulario: «Inconsistencia» en Puntos por validar. Nunca
+    descarta ni detiene el prefiltro (especificación 2026-10-10: no existe «Revisar prefiltro»). No hace commit."""
     respuestas = e.get("respuestas") or {}
     web = (respuestas.get(c["reconfirma"]) or {}).get("respuesta", "")
     chat = (respuestas.get(c["id"]) or {}).get("respuesta", "")
@@ -399,9 +400,23 @@ def registrar_inconsistencia(db: Session, p: Postulacion, criterios: List[dict],
         "criterio": c["criterio"], "web": web, "whatsapp": chat, "aclarada": False, "fuente": "reconfirmacion", "en": _ahora()}]
     p.analisis = a
     flag_modified(p, "analisis")
-    _resolver(db, p, criterios, e, "revision", f"Inconsistencia en «{c['criterio']}»: el formulario dice «{web}» y el chat «{chat}»")
     registrar(db, ACTOR, "prefiltro_inconsistencia_detectada", "postulacion", p.codigo,
               {"criterio": c["criterio"], "web": web, "chat": chat})
+
+
+def punto_por_validar(p: Postulacion, texto: str) -> None:
+    """Lo que el prefiltro no pudo concluir va a «Puntos por validar» (nunca a una revisión que frene al candidato)."""
+    a = dict(p.analisis or {})
+    a["puntos_validar_prefiltro"] = list(a.get("puntos_validar_prefiltro") or []) + [texto[:300]]
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def _no_concluyente(db: Session, p: Postulacion, e: dict, c: dict, respuesta: str, fuente: str) -> None:
+    e["respuestas"] = {**(e.get("respuestas") or {}),
+                       c["id"]: {"respuesta": respuesta[:300], "valor": None, "fuente": fuente, "en": _ahora(), "no_concluyente": True}}
+    punto_por_validar(p, f"Respuesta no concluyente en «{c['criterio']}»" + (f": «{respuesta[:120]}»" if respuesta else " (sin respuesta)"))
+    registrar(db, ACTOR, "prefiltro_no_concluyente", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": respuesta[:200]})
 
 
 def _texto_cierre(c: dict) -> str:
@@ -416,18 +431,63 @@ def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: di
     _resolver(db, p, criterios, e, "no_cumple", motivo)
     sello = datetime.now(timezone.utc)
     p.historial = list(p.historial or []) + [{
-        "evento": "prefiltro_no_aprobado", "usuario": ACTOR, "fecha": sello.isoformat(), "motivo": motivo,
-        "texto": f"Prefiltro no aprobado — {motivo}. Postulación cerrada automáticamente (RH puede continuar por decisión de RH).",
+        "evento": "descartado", "usuario": ACTOR, "fecha": sello.isoformat(), "motivo": motivo, "origen": "prefiltro",
+        "texto": f"Descartado por Red Human en el prefiltro — {motivo}. RH puede reactivarlo desde «…» → «Reactivar».",
     }]
     p.cerrar(MOTIVO_CIERRE)
     registrar(db, ACTOR, "postulacion_cerrada_prefiltro", "postulacion", p.codigo, {"motivo": motivo, "criterio": c["criterio"]})
     return _texto_cierre(c)
 
 
+MARCA_LIBERACION = "prefiltro_revision_liberada_2026_10_10"
+
+
+def liberar_revisiones(db: Session) -> dict:
+    """UNA vez (marca en bitácora; migración aprobada 2026-10-10): las postulaciones ACTIVAS que quedaron en «Revisar
+    prefiltro» siguen activas y el agente decide en su siguiente mensaje. Se conservan las respuestas válidas; las no
+    concluyentes se vuelven a preguntar; la contradicción con el formulario ya no detiene (sigue en Puntos por validar).
+    Nada se cierra ni se borra. Idempotente y no fatal. No hace commit."""
+    from ..models import Bitacora
+
+    try:
+        if db.query(Bitacora.id).filter(Bitacora.accion == MARCA_LIBERACION).first():
+            return {"liberadas": 0, "yaAplicada": True}
+        candidatas = db.query(Postulacion).filter(Postulacion.activa.is_(True)).all()
+    except Exception:  # noqa: BLE001
+        return {"liberadas": 0}
+    liberadas = []
+    for p in candidatas:
+        a = dict(p.analisis or {})
+        e = dict(a.get(ENTIDAD) or {})
+        pw = a.get("prefiltro_web") or {}
+        if e.get("resultado") != "revision" and pw.get("resultado") != "revision":
+            continue
+        for k in ("resultado", "motivo", "en", "pendiente", "aclaraciones"):
+            e.pop(k, None)
+        e["respuestas"] = {k: v for k, v in (e.get("respuestas") or {}).items() if (v or {}).get("valor") is not None}
+        if e:
+            a[ENTIDAD] = e
+        if pw.get("resultado") == "revision":
+            a.pop("prefiltro_web", None)
+            a.pop("prefiltro_resultado", None)
+        p.analisis = a
+        flag_modified(p, "analisis")
+        p.prefiltro_completo = False
+        p.estado = "pendiente"
+        p.historial = list(p.historial or []) + [{
+            "evento": "prefiltro_revision_liberada", "usuario": "sistema", "fecha": _ahora(),
+            "texto": "«Revisar prefiltro» ya no existe: Red Human decide el prefiltro con el siguiente mensaje del candidato.",
+        }]
+        liberadas.append(p.codigo)
+    registrar(db, "sistema", MARCA_LIBERACION, "postulacion", "", {"postulaciones": liberadas})
+    db.flush()
+    return {"liberadas": len(liberadas)}
+
+
 def reabrir_por_excepcion(db: Session, p: Postulacion, u) -> bool:
     """«Continuar por decisión de RH» sobre un prefiltro reprobado que cerró la postulación: la reabre conservando las
     respuestas originales (la entidad y el resultado No aprobado no se tocan). No hace commit."""
-    if p.activa or p.motivo_cierre != MOTIVO_CIERRE:
+    if p.activa or p.motivo_cierre not in (MOTIVO_CIERRE, MOTIVO_CIERRE_LEGADO):
         return False
     p.activa = True
     p.motivo_cierre = ""
@@ -470,9 +530,17 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
         db.commit()
         return "cumple"
     if not p.telefono:
-        _resolver(db, p, criterios, e, "revision", f"Falta responder: {siguiente['criterio']} (el candidato no dejó teléfono para preguntarle)")
+        # sin teléfono no se le puede preguntar: lo pendiente pasa a «Puntos por validar» y el agente decide con lo demás
+        while siguiente is not None:
+            _no_concluyente(db, p, e, siguiente, "", "web")
+            resultado, incumple, siguiente = _evaluar(criterios, e)
+        if resultado == "no_cumple":
+            texto = cerrar_no_aprobado(db, p, criterios, e, incumple)
+            db.commit()
+            return "no_cumple"
+        _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables (con puntos por validar)")
         db.commit()
-        return "revision"
+        return "cumple"
     db.commit()
     return None
 
@@ -518,6 +586,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
             return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], pendiente.get("opciones")),
                                    aclaracion=True)
+        # sigue sin entender: nunca se toma como «No» — pasa a «Puntos por validar» y el agente decide con lo demás
+        _no_concluyente(db, p, e, pendiente, texto.strip(), canal_registro(canal))
+        e["pendiente"] = None
+        pendiente = None
     unidad = dict(e.get("unidad_pendiente") or {})
     if pendiente is not None and pendiente["id"] in unidad:
         # respuesta a «¿8 años o 8 meses?»: se completa el dato con la unidad elegida
@@ -536,30 +608,28 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         if valor is None and (pendiente["indispensable"] or pendiente.get("reconfirma")):
             n = aclaraciones.get(pendiente["id"], 0) + 1
             if n > MAX_ACLARACIONES:
-                e["respuestas"] = {**(e.get("respuestas") or {}),
-                                   pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": None, "fuente": canal_registro(canal), "en": _ahora()}}
-                _resolver(db, p, criterios, e, "revision", f"Respuesta no concluyente en: {pendiente['criterio']}")
-                return await responder(f"Gracias, {nombre_ficha(p).split(' ')[0]}. Una persona del equipo de RH revisará tu "
-                                       "respuesta y te escribirá por este medio. 🙌")
-            aclaraciones[pendiente["id"]] = n
-            e["aclaraciones"] = aclaraciones
-            registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
-                      {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
-            pide = ("Dime el tiempo exacto, por ejemplo «3 años» o «8 meses»." if pendiente.get("tipo") == "numero"
-                    else "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
-            return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
-        e["respuestas"] = {**(e.get("respuestas") or {}),
-                           pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
+                # el agente decide: lo no concluyente pasa a «Puntos por validar» y el prefiltro sigue
+                _no_concluyente(db, p, e, pendiente, texto.strip(), canal_registro(canal))
+                valor = None
+            else:
+                aclaraciones[pendiente["id"]] = n
+                e["aclaraciones"] = aclaraciones
+                registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
+                          {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
+                pide = ("Dime el tiempo exacto, por ejemplo «3 años» o «8 meses»." if pendiente.get("tipo") == "numero"
+                        else "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
+                return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
+        if pendiente["id"] not in (e.get("respuestas") or {}):
+            e["respuestas"] = {**(e.get("respuestas") or {}),
+                               pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
         e["pendiente"] = None
+        if pendiente.get("reconfirma") and valor == "no":
+            registrar_inconsistencia(db, p, criterios, e, pendiente)  # → Puntos por validar; el prefiltro sigue
 
     resultado, incumple, siguiente = _evaluar(criterios, e)
     if resultado == "no_cumple":
         mensaje = cerrar_no_aprobado(db, p, criterios, e, incumple)
         return await responder(mensaje, clasificacion_final="no_cumple")
-    if resultado == "inconsistencia":
-        registrar_inconsistencia(db, p, criterios, e, incumple)
-        return await responder(f"Gracias, {nombre_ficha(p).split(' ')[0]}. Una persona del equipo de RH revisará tus respuestas y "
-                               "te escribirá por este medio. 🙌", clasificacion_final="revision")
     if siguiente is not None:
         primera = not e.get("preguntadas")
         e["pendiente"] = siguiente["id"]

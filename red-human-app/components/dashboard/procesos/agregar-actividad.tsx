@@ -57,11 +57,12 @@ export interface FormActividad {
   contactos: Contacto[];
 }
 
-const EVALUACIONES = ["entrevista_humana", "medica", "psicometrica", "socioeconomica", "tecnica", "referencias", "otra"];
+// 2026-10-10: «Psicometría física» se aplica en persona y se captura (la API la guarda como psicometría física)
+const EVALUACIONES = ["entrevista_humana", "medica", "psicometrica", "psicometria_fisica", "socioeconomica", "tecnica", "referencias", "otra"];
 const CON_FORMA = ["tecnica", "socioeconomica", "otra"];
 const QUIEN: Record<string, string> = {
   entrevista_humana: "Entrevistador", medica: "Médico o proveedor", referencias: "Responsable de verificar", tecnica: "Evaluador",
-  socioeconomica: "Evaluador o empresa", otra: "Evaluador",
+  socioeconomica: "Evaluador o empresa", otra: "Evaluador", psicometria_fisica: "Quién la aplica",
 };
 const FORMAS_PSICO: { valor: Forma; texto: string }[] = [
   { valor: "integrada", texto: "Proveedor integrado" }, { valor: "liga_otro_sistema", texto: "Liga externa" }, { valor: "registro_directo", texto: "Captura manual" },

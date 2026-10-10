@@ -151,7 +151,7 @@ export interface UsuarioRH {
   ultimoAcceso: string | null;
   /** Lista de Cuentas activas a las que tiene acceso este usuario.
    * Cuando solo hay una, el frontend no muestra ningún selector (regla Fase A). */
-  cuentas: { id: number; nombre: string; nombreComercial: string; slug?: string; psicometriaSimple?: boolean }[];
+  cuentas: { id: number; nombre: string; nombreComercial: string; slug?: string; psicometriaSimple?: boolean; demo?: boolean }[];
   /** Fase 2: Cuenta con la que arranca la sesión (null = la primera vinculada). */
   cuentaPredeterminadaId?: number | null;
 }

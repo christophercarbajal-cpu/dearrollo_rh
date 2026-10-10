@@ -102,7 +102,7 @@ import {
   ETAPAS_PIPELINE,
   lineasResultados,
 } from "@/lib/api";
-import { usePuedeDecidir, useModoPrueba, useSesion } from "@/components/sesion";
+import { useCuentaDemo, usePuedeDecidir, useModoPrueba, useSesion } from "@/components/sesion";
 import {
   ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta,
   type AlertaTablero, type OrdenTablero,
@@ -1360,21 +1360,18 @@ function ModalCandidato({
           </div>
         )}
 
-        {/* Pestañas: Contratación (ruta + acción principal; antes «Resumen») · Evaluación integral · Documentos · WhatsApp ·
-            [Expediente] · Historial — 2026-10-09 */}
+        {/* Pestañas FIJAS (especificación 2026-10-10): Resumen · Evaluación integral · Documentos · WhatsApp · Contratación ·
+            Historial — siempre las seis, en este orden */}
         <div className="border-b border-border-soft bg-surface-2/70 pt-2">
           <div className="scroll-x gap-1 px-3 sm:px-5">
             {(
               [
-                { id: "resumen", label: "Contratación", icon: User, tone: "brand" },
+                { id: "resumen", label: "Resumen", icon: User, tone: "brand" },
                 { id: "evaluaciones", label: "Evaluación integral", icon: Sparkles, tone: "human" },
                 { id: "documentos", label: "Documentos", icon: FileText, tone: "brand" },
-                // 2026-10-09: la conversación es de ESTA postulación — la pestaña lleva el nombre del puesto
-                { id: "whatsapp", label: c.puesto || "Conversación", icon: MessageCircle, tone: "good", badge: c.mensajes },
-                // la pestaña del expediente vive en Contratación Y Onboarding
-                ...(c.etapa === "Contratación" || c.etapa === "Onboarding"
-                  ? [{ id: "contratacion", label: "Expediente", icon: Briefcase, tone: "warn" }]
-                  : []),
+                // la conversación es de ESTA postulación: el encabezado del chat lleva el nombre del puesto
+                { id: "whatsapp", label: "WhatsApp", icon: MessageCircle, tone: "good", badge: c.mensajes },
+                { id: "contratacion", label: "Contratación", icon: Briefcase, tone: "warn" },
                 { id: "historial", label: "Historial", icon: Clock, tone: "brand" },
               ] as { id: TabCandidato; label: string; icon: typeof User; tone: string; badge?: number }[]
             ).map((t) => (
@@ -1453,6 +1450,11 @@ function ModalCandidato({
           {tab === "whatsapp" && <PestanaWhatsApp c={c} live={live} onCambio={onCambio} />}
           {tab === "contratacion" && (c.etapa === "Contratación" || c.etapa === "Onboarding") && (
             <PanelContratacion c={c} live={live} onCambio={onCambio} setAviso={setAviso} onDocumentos={setConfirmacion} />
+          )}
+          {tab === "contratacion" && c.etapa !== "Contratación" && c.etapa !== "Onboarding" && (
+            <p className="rounded-xl border border-dashed border-border-soft bg-surface-2/50 p-6 text-center text-sm text-ink-3">
+              El expediente de contratación se abre cuando el candidato llega a Contratación ({nombreEtapa(c.etapa)} por ahora).
+            </p>
           )}
           {tab === "historial" && <PestanaResumen c={c} live={live} onCambio={onCambio} setTab={setTab} seccion="historial" />}
         </div>
@@ -2449,6 +2451,7 @@ function PestanaWhatsApp({
 }) {
   const [msgs, setMsgs] = useState<MensajePrefiltro[]>([]);
   const [texto, setTexto] = useState("");
+  const cuentaDemo = useCuentaDemo(); // «Simular respuesta» solo en Cuentas demo (especificación 2026-10-10)
   const [enviando, setEnviando] = useState(false);
   const [cargandoMsgs, setCargandoMsgs] = useState(false);
 
@@ -2554,19 +2557,21 @@ function PestanaWhatsApp({
         )}
       </div>
 
-      {/* Simulador de Chat / Envío Rápido */}
+      {/* «Simular respuesta» — solo Cuentas demo */}
+      {cuentaDemo && (
       <div className="flex gap-2">
         <input
           value={texto}
           onChange={(e) => setTexto(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && enviar()}
-          placeholder="Escribir mensaje simulado (prueba de pre-filtro)…"
+          placeholder="Simular respuesta del candidato (solo demo)…"
           className="h-11 flex-1 rounded-xl border border-border-soft bg-surface px-3.5 text-xs sm:text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
         />
         <Button size="md" onClick={enviar} disabled={enviando || !texto.trim()}>
           <Send className="h-4 w-4" />
         </Button>
       </div>
+      )}
     </div>
   );
 }

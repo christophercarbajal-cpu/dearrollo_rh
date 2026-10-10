@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_admin
-from ..models import ROLES, Cuenta, Usuario, UsuarioCuenta, psicometria_simple, registrar
+from ..models import es_cuenta_demo, ROLES, Cuenta, Usuario, UsuarioCuenta, psicometria_simple, registrar
 from ..services import auth, masivo
 from ..services.whatsapp import clave_telefono
 
@@ -38,7 +38,9 @@ def usuario_dict(u: Usuario) -> dict:
        "cuentas": [
            {"id": uc.cuenta.id, "nombre": uc.cuenta.nombre_visible, "nombreComercial": uc.cuenta.nombre_comercial,
             # 2026-10-07: el frontend decide con el slug qué flujo de psicometría pinta (CUENTAS_PSICOMETRIA_SIMPLE)
-            "slug": uc.cuenta.slug or "", "psicometriaSimple": psicometria_simple(uc.cuenta)}
+            "slug": uc.cuenta.slug or "", "psicometriaSimple": psicometria_simple(uc.cuenta),
+            # especificación 2026-10-10: «Simular respuesta» (chat de la ficha) solo existe en Cuentas demo
+            "demo": es_cuenta_demo(uc.cuenta)}
            for uc in u.cuentas
            if uc.cuenta.estado == "Activa"
        ],

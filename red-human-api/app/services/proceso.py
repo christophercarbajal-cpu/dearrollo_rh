@@ -325,7 +325,9 @@ def ejemplo(clave: str) -> dict:
 # como plantillas EDITABLES en cada Cuenta (`asegurar_rutas_base`) y viven aquí como respaldo: «Corporativos» es el
 # último nivel de la cascada de asignación. Las dependencias salen del catálogo (`models.ESPERA_DEL_CATALOGO`).
 
-RUTA_RESPALDO = "corporativo"
+# Especificación 2026-10-10: vacante sin plantilla y Cuenta sin predeterminada → «Masivos sin documentos iniciales»
+# (las postulaciones que ya tienen su ruta la CONSERVAN: es una copia congelada)
+RUTA_RESPALDO = "masivos_sin_documentos"
 # Rutas base de 2026-10-06: se DESACTIVAN una vez (nunca se borran; vacantes y candidatos conservan su copia). Si una
 # era la predeterminada de la Cuenta, la nueva equivalente toma su lugar.
 RUTAS_BASE_RETIRADAS = {"masivos": "masivos_con_documentos", "corporativos": "corporativo",
@@ -630,7 +632,7 @@ def _plantilla_ruta(db: Optional[Session], cuenta_id: Optional[int], clave: str)
 
 def ruta_para(db: Optional[Session], cuenta_id: Optional[int], v=None) -> dict:
     """Cascada de asignación (documento de reglas): 1) proceso de la vacante, 2) proceso predeterminado de la Cuenta,
-    3) «Corporativos sin psicometría» (la plantilla de la Cuenta si sigue activa; si no, la ruta en código). Regresa una
+    3) «Masivos sin documentos iniciales» (la plantilla de la Cuenta si sigue activa; si no, la ruta en código). Regresa una
     COPIA lista para guardarse en la postulación, con `origen` = vacante | cuenta | base."""
     if v is not None and tiene_proceso(v):
         proc = copy.deepcopy(v.proceso)

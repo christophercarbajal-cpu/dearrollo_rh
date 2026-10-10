@@ -173,6 +173,36 @@ with TestClient(app) as client:
     r = client.post("/candidatos/postular", data={"vacante": v2.slug, "nombre": "Nora Sin CV", "telefono": "5512349999",
                                                   "consentimiento": "true"}, files={"cv": ("cv.pdf", b"%PDF-1.4 x", "application/pdf")})
     check(r.status_code == 201 and not r.json()["cv"]["procesado"], "si la ruta no pide CV, no se procesa ni se calcula Score de CV")
+
+    # ================= 6. Conservación =================
+    print("\n--- 6. Conservación de vacantes y candidatos viejos ---")
+    vieja = [{"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web sin CV"},
+             {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Continuar prefiltro por WhatsApp"},
+             {"id": "solicitar-documentos", "tipo": "solicitud_documentos", "nombre": "Solicitar documentos por liga", "etapa": "Prefiltro"},
+             {"id": "validar-documentos", "tipo": "documentos", "nombre": "Revisar documentos", "etapa": "Prefiltro"},
+             {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human"},
+             {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana"},
+             {"id": "induccion", "tipo": "induccion", "nombre": "Inducción", "etapa": "Onboarding"},
+             {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding"}]
+    v3 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id])).first()
+    v3.cuenta_id, v3.proceso = cuenta.id, {}
+    c7 = _crear_candidato(db, cuenta.id, "Oscar Antiguo", "WhatsApp", False, telefono="5512348888", correo="oscar@correo.mx")
+    p7 = crear_postulacion(db, c7, v3, cuenta.id, "whatsapp", consentimiento=True)
+    p7.proceso = {"pasos": sproc.normalizar_pasos(vieja), "etapas": {}, "origen": "base", "version": 1}
+    db.commit()
+    seg7 = client.get(f"/procesos/postulaciones/{p7.codigo}", headers=H)
+    nombres = [x["nombre"] for e in seg7.json()["etapas"] for x in e["pasos"]]
+    check(seg7.status_code == 200 and "Inducción" in nombres and "Solicitar documentos por liga" in nombres and "Alta como colaborador" in nombres,
+          "un candidato en proceso CONSERVA su ruta antigua (actividades viejas incluidas) y se sigue calculando")
+    check(client.get(f"/candidatos/{p7.codigo}", headers=H).status_code == 200, "…y su ficha abre sin romperse")
+    check(not (db.get(Vacante, v3.id).proceso or {}).get("pasos"), "la vacante vieja sin plantilla NO se modifica (el editor la muestra con la ruta que tocaría)")
+    c8 = _crear_candidato(db, cuenta.id, "Paty Nueva", "WhatsApp", False, telefono="5512347777", correo="paty@correo.mx")
+    p8 = crear_postulacion(db, c8, v3, cuenta.id, "whatsapp", consentimiento=True)
+    db.commit()
+    check(p8.proceso.get("ruta_base") == "masivos_sin_documentos" or p8.proceso.get("plantilla_nombre") == "Masivos sin documentos iniciales",
+          "un candidato NUEVO de esa vacante recibe «Masivos sin documentos iniciales»")
+    yo = client.get("/auth/yo", headers=H).json()
+    check(any(x["id"] == cuenta.id and x["demo"] is False for x in yo["cuentas"]), "/auth/yo dice si la Cuenta es demo («Simular respuesta» solo ahí)")
     db.close()
 
 print(f"\n🎉 {OK} comprobaciones OK — especificación")

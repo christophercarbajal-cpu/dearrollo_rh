@@ -69,9 +69,11 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
     if (codigoVacante) fetchProcesoVacante(codigoVacante).then((r) => setActivos(r?.candidatosActivos ?? null));
   }, [codigoVacante]);
 
-  const predeterminada = plantillas.find((p) => p.predeterminada);
-  // Alta sin tocar: se mostrará la predeterminada (la API la copia sola)
-  const efectivo = !value.tocado && !codigoVacante && predeterminada
+  // Sin ruta propia (alta nueva o vacante VIEJA sin plantilla) se muestra la que recibirán sus candidatos: la
+  // predeterminada de la Cuenta o «Masivos sin documentos iniciales» (especificación 2026-10-10). Solo visual: nada se
+  // guarda hasta que RH la toque, y los candidatos que ya están en proceso conservan su ruta.
+  const predeterminada = plantillas.find((p) => p.predeterminada) ?? plantillas.find((p) => p.rutaBase === "masivos_sin_documentos");
+  const efectivo = !value.tocado && !value.pasos.length && predeterminada
     ? { plantillaId: predeterminada.id, pasos: predeterminada.pasos, etapas: predeterminada.etapas }
     : value;
   const plantilla = plantillas.find((p) => p.id === efectivo.plantillaId);

@@ -81,6 +81,19 @@ with TestClient(app) as client:
         c.cuenta_id = cuenta.id
         for p in c.postulaciones:
             p.cuenta_id, p.consentimiento = cuenta.id, True
+    # especificación 2026-10-10: el respaldo de la cascada ya es «Masivos sin documentos»; esta prueba usa la ruta con
+    # Entrevista con avatar (agenda) y Análisis de CV, así que sus vacantes y candidatos sembrados toman «Corporativos».
+    from app.models import Postulacion as _Post
+    from app.services import proceso as _sproc
+
+    _corp = _sproc.ruta_base("corporativo")
+    for _v in db.query(Vacante).all():
+        if not (_v.proceso or {}).get("pasos"):
+            _v.proceso = _sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": _corp["pasos"]})
+    for _p in db.query(_Post).all():
+        if (_p.proceso or {}).get("origen") == "base":
+            _p.proceso = None
+            _sproc.congelar(_p, _p.vacante, db)
     db.commit()
     app.dependency_overrides[usuario_actual] = lambda: admin
     app.dependency_overrides[usuario_decisor] = lambda: admin

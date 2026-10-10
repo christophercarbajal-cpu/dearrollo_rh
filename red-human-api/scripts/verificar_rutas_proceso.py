@@ -204,8 +204,8 @@ with TestClient(app) as client:
     client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"predeterminada": False})
     P_BASE = nueva("Berta Base", V_SIN)
     s = seg(P_BASE)
-    check(s["tieneProceso"] and s["origen"] == "base" and s["plantilla"] == "Corporativos (editada)",
-          "vacante sin proceso y Cuenta sin predeterminado → «Corporativos» (nivel 3)")
+    check(s["tieneProceso"] and s["origen"] == "base" and s["plantilla"] == "Masivos sin documentos iniciales",
+          "vacante sin proceso y Cuenta sin predeterminado → «Masivos sin documentos iniciales» (nivel 3, especificación 2026-10-10)")
     client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"predeterminada": True})
     P_CTA = nueva("Carla Cuenta", V_SIN)
     check(seg(P_CTA)["origen"] == "cuenta" and seg(P_CTA)["plantilla"] == "Masivos sin documentos iniciales",
@@ -216,8 +216,8 @@ with TestClient(app) as client:
     P_VAC = nueva("Vero Vacante", V_MAS)
     check(seg(P_VAC)["origen"] == "vacante" and seg(P_VAC)["plantilla"] == "Masivos con documentos iniciales", "con proceso de la vacante → ese (nivel 1)")
     antes = [x["nombre"] for x in post(P_BASE).proceso["pasos"]]
-    pasos_edit = [dict(x) for x in pls["corporativo"]["pasos"]] + [{"tipo": "referencias", "etapa": "Entrevista Humana", "nombre": "Referencias", "obligatorio": False}]
-    client.patch(f"/procesos/plantillas/{pls['corporativo']['id']}", json={"pasos": pasos_edit})
+    pasos_edit = [dict(x) for x in pls["masivos_sin_documentos"]["pasos"]] + [{"tipo": "referencias", "etapa": "Entrevista Humana", "nombre": "Referencias", "obligatorio": False}]
+    client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"pasos": pasos_edit})
     check([x["nombre"] for x in post(P_BASE).proceso["pasos"]] == antes, "copia ESTÁTICA: editar la plantilla después no toca a la postulación")
     # postulación nacida sin vacante (menú de WhatsApp): ruta provisional que se reemplaza al elegir vacante
     c = db.query(Candidato).filter(Candidato.cuenta_id == cuenta.id).first()
@@ -258,7 +258,9 @@ with TestClient(app) as client:
 
     # ================= 4. Corporativos de punta a punta hasta el Alta =================
     print("\n--- 4. Corporativos: de Prefiltro al Alta ---")
-    P = nueva("Diana Corporativa", V_SIN)  # ruta: Corporativos (cascada nivel 3)
+    r = client.put(f"/procesos/vacantes/{V_SIN}", json={"plantilla_id": pls["corporativo"]["id"]})
+    check(r.status_code == 200, "la vacante toma la ruta «Corporativos»")
+    P = nueva("Diana Corporativa", V_SIN)  # ruta: Corporativos (de la vacante)
     s = seg(P)
     check(paso(s, "solicitud-web")["estado"] == "en_curso" and "cv" in paso(s, "solicitud-web")["espera"].lower(),
           "Solicitud web con CV: en curso hasta que el candidato comparta su CV")
@@ -386,7 +388,7 @@ with TestClient(app) as client:
     check({p.id: (p.etapa, p.activa) for p in db.query(Postulacion).all()} == etapas_antes, "ninguna etapa ni estado cambió")
     check(db.query(Mensaje).count() == mensajes_antes, "no se reenvió ningún mensaje ni solicitud")
     s1 = seg(h1.codigo)
-    check(paso(s1, "entrevista-humana")["estado"] == "pendiente" and paso(s1, "analisis_cv")["estado"] == "pendiente",
+    check(paso(s1, "entrevista-humana")["estado"] == "pendiente" and paso(s1, "prefiltro-whatsapp")["estado"] == "pendiente",
           "en Contratación SIN registros: sus pasos previos siguen pendientes (nada se completa por la etapa)")
     s2 = client.get(f"/procesos/postulaciones/{h2.codigo}").json()
     check(paso(s2, "entrevista-humana")["estado"] == "completada" and paso(s2, "entrevista-humana")["resultado"] == "favorable",

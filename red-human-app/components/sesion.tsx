@@ -157,6 +157,13 @@ export function useCuentaActualId() {
  * marca con `psicometriaSimple` (hoy solo el slug «demo-grupak», `models.CUENTAS_PSICOMETRIA_SIMPLE`). El resto de
  * las Cuentas conserva el flujo anterior tal cual. */
 export const CUENTAS_PSICOMETRIA_SIMPLE = ["demo-grupak"];
+/** Especificación 2026-10-10: ¿la Cuenta actual es de demostración? (p. ej. «Simular respuesta» solo existe ahí). */
+export function useCuentaDemo() {
+  const { usuario, cuentaActualId } = useSesion();
+  const cuenta = usuario?.cuentas.find((c) => c.id === cuentaActualId);
+  return Boolean(cuenta?.demo);
+}
+
 export function usePsicometriaSimple() {
   const { usuario, cuentaActualId } = useSesion();
   const cuenta = usuario?.cuentas.find((c) => c.id === cuentaActualId);

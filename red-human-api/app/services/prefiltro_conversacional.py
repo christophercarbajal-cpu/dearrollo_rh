@@ -120,7 +120,9 @@ def criterios_de(v) -> List[dict]:
             continue
         usados.add(f"rc-{base['id']}")
         opciones = [str(o) for o in pw.get("opciones") or [] if str(o).strip()]
-        chat = str(pw["pregunta"]).strip() + ("\n" + "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1)) if opciones else "")
+        # especificación 2026-10-10: el chat NUNCA ofrece opciones múltiples ni numeradas — el candidato contesta con
+        # sus palabras y el bot interpreta (las opciones solo sirven para evaluar)
+        chat = str(pw["pregunta"]).strip()
         salida.append({
             "id": f"rc-{base['id']}", "clave": "reconfirma", "criterio": base["criterio"], "pregunta": str(pw["pregunta"]).strip(),
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
@@ -148,6 +150,44 @@ def _anos(t: str) -> Optional[float]:
     return n
 
 
+# Especificación 2026-10-10: el bot interpreta lenguaje natural libre e IGNORA el tono (una grosería con respuesta
+# válida cuenta). Emoji de sí/no cuentan como respuesta.
+_EMOJI_SI = ("👍", "✅", "👌", "💯", "☑", "✔", "🙌", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿")
+_EMOJI_NO = ("👎", "❌", "🚫", "✖", "⛔")
+_RE_GROSERIAS = re.compile(r"\b(pinche\w*|chingad\w*|chingue\w*|chingo|carajo|verga\w*|pendej\w*|put[oa]s?|putamadre|madres?|"
+                           r"cabr[oó]n\w*|cabrona|wey|guey|we|joder|mierda|chale|alv|ptm|nmms|neta|ching[ao]\w*|culer[oa]s?|"
+                           r"idiota|estupid\w*|imbecil\w*|bot)\b")
+_RE_RELLENO = re.compile(r"^(?:(?:oye|mira|bueno|pues|este|ah|eh|ok|okay|a ver|ya te dije|te dije|que|jaja\w*)\s+)+")
+
+
+def limpiar(texto: str) -> str:
+    """Normaliza una respuesta libre: emoji de sí/no → «si»/«no», sin groserías ni muletillas al inicio."""
+    crudo = (texto or "").strip()
+    if crudo and any(x in crudo for x in _EMOJI_SI) and not any(x in crudo for x in _EMOJI_NO):
+        if not re.search(r"[A-Za-zÁÉÍÓÚáéíóúñÑ0-9]", crudo):
+            return "si"
+    if crudo and any(x in crudo for x in _EMOJI_NO) and not re.search(r"[A-Za-zÁÉÍÓÚáéíóúñÑ0-9]", crudo):
+        return "no"
+    t = _RE_GROSERIAS.sub(" ", _norm(crudo))
+    t = re.sub(r"\s+", " ", t).strip()
+    return _RE_RELLENO.sub("", t).strip()
+
+
+_RE_DUDA_SI = re.compile(r"^(creo|pienso|supongo|me parece|yo creo|casi seguro|seguramente) (que )?(si|sip)\b")
+
+
+def es_duda(texto: str) -> bool:
+    """«creo que sí»: cuenta como «sí», pero queda en Puntos por validar."""
+    return bool(_RE_DUDA_SI.match(limpiar(texto)))
+
+
+def es_pregunta_de_vuelta(texto: str) -> bool:
+    """El candidato pregunta en lugar de responder («¿qué procesos?»): hay que reformular, no repetir."""
+    crudo = (texto or "").strip()
+    t = limpiar(crudo)
+    return ("?" in crudo or "¿" in crudo) and not re.match(r"^(si|no)\b", t) and len(t.split()) <= 8
+
+
 _RE_SOLO_NUMERO = re.compile(r"(?:como |unos |unas |mas o menos |aprox\w* )?(\d+(?:[.,]\d+)?|" + "|".join(_NUMEROS) + r")")
 
 
@@ -155,20 +195,19 @@ def numero_sin_unidad(c: dict, texto: str) -> Optional[str]:
     """«8» en una pregunta de tiempo: ¿años o meses? Regresa el número (texto) si hay que aclarar la unidad."""
     if c.get("tipo") != "numero":
         return None
-    m = _RE_SOLO_NUMERO.fullmatch(_norm(texto))
+    m = _RE_SOLO_NUMERO.fullmatch(limpiar(texto))
     return m.group(1) if m else None
 
 
 def clasificar_dato(c: dict, texto: str) -> Optional[str]:
-    """Reconfirmación con dato concreto: «si» si el dato cumple, «no» si lo contradice, None si no se entiende."""
-    t = _norm(texto)
+    """Reconfirmación con dato concreto: «si» si el dato cumple, «no» si lo contradice, None si no se entiende. El
+    candidato contesta con sus palabras (nunca se le muestran opciones numeradas)."""
+    t = limpiar(texto)
     if not t:
         return None
     opciones = c.get("opciones") or []
     validas = {_norm(o) for o in c.get("opciones_validas") or []}
     elegida = None
-    if re.fullmatch(r"\d", t) and 1 <= int(t) <= len(opciones) and c.get("tipo") != "numero":
-        elegida = opciones[int(t) - 1]
     if elegida is None:
         elegida = next((o for o in opciones if _norm(o) == t), None) or next((o for o in sorted(opciones, key=len, reverse=True)
                                                                               if _norm(o) and _norm(o) in t), None)
@@ -182,7 +221,7 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
     if validas:
         if _RE_NO.match(t):
             return "no" if not any(x.startswith("no") for x in validas) else "si"
-        if _RE_SI.match(t) and any(x.startswith("si") for x in validas):
+        if (_RE_SI.match(t) or _RE_DUDA_SI.match(t)) and any(x.startswith("si") for x in validas):
             return "si"
     return None
 
@@ -208,8 +247,10 @@ _RE_AMBIGUA = re.compile(r"\b(depende|tal vez|quiza|quizas|a veces|mas o menos|n
                          r"algunos?|algunas?|casi|todavia no se|lo veo|lo pienso|puede ser|en ocasiones)\b")
 _RE_SI_SIN_PROBLEMA = re.compile(r"\b(no hay problema|sin problema|no tengo problema|ningun problema|no me molesta|no importa)\b")
 _RE_NO = re.compile(r"^(no|nop|nel|negativo|nunca|para nada|tampoco|aun no|todavia no)\b")
-_RE_SI = re.compile(r"^(si|sii+|sip|simon|claro|por supuesto|afirmativo|correcto|asi es|exacto|yes|ok|okey|va|vale|dale|desde luego|"
-                    r"con gusto|cuento con|tengo|puedo|termine|acabe|vivo|estoy)\b")
+_RE_SI = re.compile(r"^(?:ya |obvio |claro que |por supuesto que |desde luego que )?(?:la |lo |las |los )?"
+                    r"(si|sii+|sip|simon|claro|obvio|por supuesto|afirmativo|correcto|asi es|exacto|yes|ok|okey|va|vale|dale|"
+                    r"desde luego|con gusto|cuento con|tengo|puedo|termine|acabe|vivo|estoy|manejo|se manejar|he trabajado|"
+                    r"trabaje|estudie|si tengo|ya tengo|listo|sale)\b")
 _RE_NO_ENTIENDE = re.compile(r"(no (le )?entiendo( la pregunta)?|no entendi( la pregunta)?|no le entendi|no comprendo|que|como|mande|"
                              r"perdon|a que te refieres|que quieres decir|que significa( eso)?|no se a que te refieres|explicame|me explicas)")
 _RE_SUPERIOR = re.compile(r"\b(prepa|preparatoria|bachiller\w*|licenciatura|universidad|carrera|ingenier\w*|tecnico|cbtis|conalep|cetis|cecyt\w*)\b")
@@ -225,9 +266,11 @@ def es_saludo(texto: str) -> bool:
 
 def clasificar(c: dict, texto: str) -> Optional[str]:
     """«si» / «no» / None (ambigua). Determinista primero; la IA solo desempata lo que el léxico no resuelve."""
-    t = _norm(texto)
+    t = limpiar(texto)
     if not t:
         return None
+    if _RE_DUDA_SI.match(t):
+        return "si"  # «creo que sí» cuenta como sí (queda en Puntos por validar, ver `turno`)
     base = _norm(c["criterio"] + " " + c["pregunta"])
     if "secundaria" in base:
         if _RE_SUPERIOR.search(t):
@@ -404,6 +447,32 @@ def registrar_inconsistencia(db: Session, p: Postulacion, criterios: List[dict],
               {"criterio": c["criterio"], "web": web, "chat": chat})
 
 
+_PALABRAS_VACIAS = {"para", "como", "este", "esta", "tienes", "cuentas", "puedes", "experiencia", "vacante", "puesto", "trabajo",
+                    "disponibilidad", "requisito", "tener", "contar", "minimo", "menos", "sobre", "donde", "desde"}
+
+
+def _claves(c: dict) -> set:
+    return {w for w in re.findall(r"[a-z]{5,}", _norm(c["criterio"] + " " + c["pregunta"])) if w not in _PALABRAS_VACIAS}
+
+
+def _respuestas_adelantadas(criterios: List[dict], e: dict, texto: str, actual: str, fuente: str) -> None:
+    """«Respuestas en otro orden» (especificación 2026-10-10): si en el mismo mensaje el candidato ya contestó OTRO
+    indispensable pendiente («sí, y también puedo rolar turnos»), se registra y no se le vuelve a preguntar."""
+    respuestas = dict(e.get("respuestas") or {})
+    partes = [x.strip() for x in re.split(r"[.;,\n]| y | pero | tambien ", limpiar(texto)) if x.strip()]
+    for c in criterios:
+        if c["id"] == actual or c["id"] in respuestas or not c["indispensable"] or c.get("reconfirma"):
+            continue
+        claves = _claves(c)
+        for parte in partes:
+            palabras = set(re.findall(r"[a-z]{5,}", parte))
+            if claves and palabras & claves:
+                v = "no" if re.search(r"\b(no|nunca|tampoco)\b", parte) else "si"
+                respuestas[c["id"]] = {"respuesta": parte[:300], "valor": v, "fuente": fuente, "en": _ahora(), "adelantada": True}
+                break
+    e["respuestas"] = respuestas
+
+
 def punto_por_validar(p: Postulacion, texto: str) -> None:
     """Lo que el prefiltro no pudo concluir va a «Puntos por validar» (nunca a una revisión que frene al candidato)."""
     a = dict(p.analisis or {})
@@ -575,7 +644,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if pendiente is not None and (reconexion or es_saludo(texto)):
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
         return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
-    if pendiente is not None and _RE_NO_ENTIENDE.fullmatch(_norm(texto)):
+    if pendiente is not None and (_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto)):
         # retro 2026-10-09: «no entiendo» → la MISMA pregunta con otras palabras (cuenta como aclaración)
         n = aclaraciones.get(pendiente["id"], 0) + 1
         if n <= MAX_ACLARACIONES:
@@ -584,8 +653,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             from . import ia
 
             registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
-            return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], pendiente.get("opciones")),
-                                   aclaracion=True)
+            return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], None, intento=n,
+                                                          tipo=pendiente.get("tipo") or "si_no"), aclaracion=True)
         # sigue sin entender: nunca se toma como «No» — pasa a «Puntos por validar» y el agente decide con lo demás
         _no_concluyente(db, p, e, pendiente, texto.strip(), canal_registro(canal))
         e["pendiente"] = None
@@ -617,7 +686,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                 registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                           {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
                 pide = ("Dime el tiempo exacto, por ejemplo «3 años» o «8 meses»." if pendiente.get("tipo") == "numero"
-                        else "Elige una de las opciones, por favor." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
+                        else "Cuéntame con tus palabras." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
                 return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
         if pendiente["id"] not in (e.get("respuestas") or {}):
             e["respuestas"] = {**(e.get("respuestas") or {}),
@@ -625,6 +694,9 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         e["pendiente"] = None
         if pendiente.get("reconfirma") and valor == "no":
             registrar_inconsistencia(db, p, criterios, e, pendiente)  # → Puntos por validar; el prefiltro sigue
+        if valor == "si" and es_duda(texto):
+            punto_por_validar(p, f"Respondió con duda en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
+        _respuestas_adelantadas(criterios, e, texto, pendiente["id"], canal_registro(canal))
 
     resultado, incumple, siguiente = _evaluar(criterios, e)
     if resultado == "no_cumple":

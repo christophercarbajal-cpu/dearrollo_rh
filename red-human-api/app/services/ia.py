@@ -831,7 +831,11 @@ def prefiltro_turno(
             "concreto) sobre los criterios indispensables (DESCARTA); NUNCA preguntes autopercepciones («¿te consideras "
             "organizado?», «¿eres responsable?»); si ya respondió en el formulario web, pide el DATO EXACTO (cuántos años, en "
             "qué empresa); si la respuesta es ambigua (p. ej. «8» sin unidad) pide aclaración («¿8 años o 8 meses?»); si "
-            "dice que no entiende, reformula la MISMA pregunta con otras palabras más sencillas; (2) recorre los criterios en orden "
+            "dice que no entiende, reformula la MISMA pregunta con otras palabras más sencillas — NUNCA repitas el mismo texto; "
+            "(1c) PROHIBIDO ofrecer opciones múltiples o numeradas: el candidato contesta con sus palabras; interpreta lenguaje "
+            "natural libre («ya la acabé», «claro» = sí); IGNORA el tono (si hay groserías pero responde, la respuesta vale); "
+            "una contradicción entre el formulario web y el chat NUNCA descarta: anótala para «Puntos por validar»; "
+            "(2) recorre los criterios en orden "
             "y no repitas los que ya quedaron contestados — no es necesario agotarlos todos: en cuanto "
             "puedas clasificar con confianza, cierra antes (ver regla 5); (3) si el candidato pregunta "
             "sobre sueldo, ubicación, beneficios o el puesto, contesta con los datos de la vacante que "
@@ -2545,16 +2549,23 @@ def es_autopercepcion(texto: str) -> bool:
     return bool(_RE_AUTOPERCEPCION.search(texto or ""))
 
 
-def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[str]] = None) -> str:
-    """«No entiendo»: la MISMA pregunta con otras palabras, más sencilla y cerrada. Determinista; la IA solo la pule."""
-    if opciones:
-        lista = "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1))
-        base = f"Te lo pregunto de otra forma: {pregunta.strip()}\nEscríbeme el número de la opción que te corresponde:\n{lista}"
+def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[str]] = None, intento: int = 1,
+                        tipo: str = "si_no") -> str:
+    """«No entiendo» / «¿qué procesos?»: la MISMA pregunta con OTRAS palabras (nunca el mismo texto: cambia en cada
+    intento), sencilla y sin opciones numeradas (especificación 2026-10-10). Determinista; la IA solo la pule."""
+    req = (criterio or pregunta).strip().rstrip(".?¿")
+    req = req[:1].lower() + req[1:]
+    if tipo == "numero":
+        base = (f"Te lo pregunto de otra forma: ¿cuánto tiempo llevas con esto: {req}? Puedes decirme, por ejemplo, «2 años» o «6 meses»."
+                if intento <= 1 else f"En pocas palabras: ¿cuántos años o meses de experiencia tienes en {req}?")
+    elif tipo == "opcion":
+        base = (f"Te lo pregunto de otra forma: para esta vacante se necesita {req}. ¿Me cuentas con tus palabras si lo cumples?"
+                if intento <= 1 else f"En pocas palabras: ¿cumples con {req}? Con un «sí» o un «no» me basta.")
     else:
-        req = (criterio or pregunta).strip().rstrip(".?¿")
-        base = f"Te lo pregunto de otra forma: para esta vacante se necesita {req[:1].lower() + req[1:]}. ¿Cumples con eso? Respóndeme *Sí* o *No*."
+        base = (f"Te lo pregunto de otra forma: para esta vacante se necesita {req}. ¿Cumples con eso? Respóndeme *Sí* o *No*."
+                if intento <= 1 else f"En pocas palabras: ¿tienes {req}? Con un «sí» o un «no» me basta.")
     client = _client()
-    if client is None or opciones:
+    if client is None or tipo != "si_no":
         return base
     try:
         resp = client.responses.create(
@@ -2579,8 +2590,10 @@ def clasificar_respuesta_prefiltro(pregunta: str, respuesta: str) -> Optional[st
     try:
         resp = client.responses.parse(
             model=MODEL,
-            instructions=("Interpretas UNA respuesta de un candidato a una pregunta cerrada de prefiltro (Sí/No). Regresa «si» o «no» "
-                          "SOLO si la respuesta lo dice con claridad; si es condicional, parcial o no responde la pregunta, «ambigua»."),
+            instructions=("Interpretas UNA respuesta de un candidato a una pregunta cerrada de prefiltro (Sí/No). Es lenguaje natural "
+                          "libre y coloquial de México («ya la acabé», «claro», «simón» = sí). IGNORA el tono: si hay groserías "
+                          "pero responde la pregunta, la respuesta vale. Regresa «si» o «no» SOLO si la respuesta lo dice con "
+                          "claridad; si es condicional, parcial o no responde la pregunta, «ambigua»."),
             input=f"Pregunta: {pregunta[:300]}\nRespuesta del candidato: {respuesta[:300]}",
             text_format=ClasificacionRespuesta,
         )

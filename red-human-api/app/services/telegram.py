@@ -355,6 +355,8 @@ def parsear_update(update: dict) -> Optional[dict]:
     elif m.get("document"):
         d = m["document"]
         tipo, media = "document", {"id": d.get("file_id", ""), "mime_type": d.get("mime_type", ""), "filename": d.get("file_name", "")}
+    elif m.get("voice") or m.get("audio"):
+        tipo = "audio"  # especificación 2026-10-10: el bot no escucha audios — pide que lo escriba
     elif contacto:
         tipo = "contact"
     texto = m.get("text") or m.get("caption") or ""

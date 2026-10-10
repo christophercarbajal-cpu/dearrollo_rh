@@ -807,6 +807,17 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     if msg.get("tipo") in ("image", "document") and msg.get("media") and p.etapa in ETAPAS_DOCUMENTOS and p.expediente:
         resultado = await _recibir_documento_whatsapp(db, p, msg, telefono)
         return {"ok": True, "accion": "documento_whatsapp", "candidato": c.codigo, "postulacion": p.codigo, **resultado}
+    if msg.get("tipo") in ("audio", "voice") and not texto:
+        # especificación 2026-10-10: mensaje de voz — el bot no escucha audios; pide que lo escriba y repite la pregunta
+        from ..services import prefiltro_conversacional as _pconv
+
+        pendiente = _pconv.pregunta_pendiente(p) if p.vacante_id and p.consentimiento else None
+        aviso_voz = "Por ahora no puedo escuchar mensajes de voz 🙏 ¿Me lo escribes?" + (f"\n\n{pendiente}" if pendiente else "")
+        envio_voz = await enviar_mensaje(telefono, aviso_voz)
+        guardar_mensaje(db, p, "user", "[🎤 mensaje de voz]", "whatsapp", wa_id=msg.get("wa_id", ""))
+        guardar_mensaje(db, p, "assistant", aviso_voz, "whatsapp", envio_voz)
+        db.commit()
+        return {"ok": True, "accion": "audio_no_soportado", "candidato": c.codigo, "postulacion": p.codigo, "respuesta": aviso_voz}
     if msg.get("tipo") in ("image", "document") and not texto:
         # adjunto sin pie de foto fuera de Contratación/Onboarding: no hay nada que procesar como turno
         aviso_adj = "Recibí tu archivo, pero por ahora solo puedo leer mensajes de texto en esta etapa. ¿Me lo cuentas por escrito? 🙂"

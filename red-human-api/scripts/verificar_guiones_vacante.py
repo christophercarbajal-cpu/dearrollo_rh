@@ -337,8 +337,8 @@ with TestClient(app) as client:
     check(pconv.aplica(p6) and any(c.get("reconfirma") for c in pconv.criterios_de(v6)),
           "el prefiltro conversacional suma la reconfirmación de WhatsApp al indispensable del web")
     r = asyncio.run(pconv.turno(db, p6, "Hola", "whatsapp"))
-    check("cuánto tiempo" in r["respuesta"].lower() and "2 a 4 años" in r["respuesta"],
-          "tras el «Sí» del formulario, el bot pide el DATO CONCRETO (cuánto tiempo, con rangos)")
+    check("cuánto tiempo" in r["respuesta"].lower() and "2 a 4 años" not in r["respuesta"],
+          "tras el «Sí» del formulario, el bot pide el DATO CONCRETO (cuánto tiempo) sin opciones numeradas")
     r = asyncio.run(pconv.turno(db, db.query(Postulacion).filter_by(codigo=p6.codigo).one(), "1 año", "whatsapp"))
     p6 = db.query(Postulacion).filter_by(codigo=p6.codigo).one()
     check(p6.activa and p6.estado not in ("revision", "no_cumple") and (p6.analisis.get("inconsistencias") or [{}])[-1].get("fuente") == "reconfirmacion",

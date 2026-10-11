@@ -165,8 +165,9 @@ with TestClient(app) as client:
     check(r.status_code == 409 and n_pasos(P) == antes, "médica «ya realizada» → 409 (consentimiento LFPDPPP), nada creado")
 
     print("\n--- 3. Guardar = UNA actividad configurada · «Lista para iniciar» · «Iniciar» sin reconfigurar ---")
+    CITA = {"fecha": "2026-12-15", "hora": "10:00", "modalidad": "Presencial", "direccion": "Av. Reforma 100, CDMX"}  # 2026-10-10: entrevista humana, médica y técnica presenciales se agendan para iniciarse
     r = agregar(P, {"tipo": "entrevista_humana", "nombre": "Entrevista con gerente", "config": {
-        "evaluador": {"tipo": "interno", "usuario_id": admin.id}, "iniciar_al_guardar": False}})
+        "evaluador": {"tipo": "interno", "usuario_id": admin.id}, "cita": CITA, "iniciar_al_guardar": False}})
     pid = r.json()["paso"]["id"]
     x = paso(r.json()["proceso"], pid)
     check(r.status_code == 201 and n_pasos(P) == antes + 1 and x["etapa"] == etapa0 and post(P).etapa == etapa0,
@@ -191,7 +192,7 @@ with TestClient(app) as client:
     print("\n--- 4. Médica y referencias configuradas ---")
     ENVIOS.clear()
     r = agregar(P, {"tipo": "medica", "config": {"evaluador": {"tipo": "externo", "nombre": "Dra. Salud", "correo": "dra@clinica.mx"},
-                                                 "examen": "Examen general + antidoping", "iniciar_al_guardar": True}})
+                                                 "examen": "Examen general + antidoping", "cita": CITA, "iniciar_al_guardar": True}})
     pid_m = r.json()["paso"]["id"]
     e = evs(P, pid_m)
     check(r.json()["iniciada"] and e[0].consentimiento == "pendiente" and "Examen solicitado: Examen general + antidoping" in e[0].instrucciones,
@@ -228,7 +229,7 @@ with TestClient(app) as client:
 
     print("\n--- 6. A «Iniciar» le falta un dato crítico → pide SOLO ese ---")
     r = agregar(P, {"tipo": "tecnica", "config": {"forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
-                                                  "iniciar_al_guardar": False}})
+                                                  "cita": CITA, "iniciar_al_guardar": False}})
     pid_x = r.json()["paso"]["id"]
     p = post(P)
     proc = json.loads(json.dumps(p.proceso))

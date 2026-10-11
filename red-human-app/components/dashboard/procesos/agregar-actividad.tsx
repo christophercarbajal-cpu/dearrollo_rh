@@ -18,8 +18,8 @@ import { CalendarClock, ClipboardCheck, Info, Loader2, Sparkles } from "lucide-r
 import { Badge, Button } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import {
-  CamposCita, SelectorEvaluador, citaEntrada, citaVacia, evaluadorEntrada, evaluadorVacio, useCatalogoEvaluadores, useTeamsConectado,
-  validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
+  AdjuntosCita, CamposCita, SelectorEvaluador, citaEntrada, citaVacia, evaluadorEntrada, evaluadorVacio, useCatalogoEvaluadores, useTeamsConectado,
+  validarAdjuntosCita, validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
 } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import {
   agregarActividadConfigurada, fetchOpcionesProceso, fetchPrecargaActividad, fetchPruebasPsicometricas, nombreEtapa, proveedorVisible,
@@ -79,6 +79,17 @@ const vacio = (tipo = ""): FormActividad => ({
 
 const esUrl = (v: string) => /^https?:\/\/\S+$/i.test(v.trim());
 export const esEvaluacion = (tipo: string) => EVALUACIONES.includes(tipo);
+/** 2026-10-10 (citas presenciales): entrevista humana, médica, psicometría física y técnica (salvo en línea) se agendan;
+ * sin cita quedan «Pendiente de agendar» — no se inician ni se avisa a nadie. */
+export const conCitaPresencial = (f: Pick<FormActividad, "tipo" | "forma">) =>
+  ["entrevista_humana", "medica", "psicometria_fisica"].includes(f.tipo) || (f.tipo === "tecnica" && f.forma !== "liga_otro_sistema");
+
+function citaSnakeDe(c: EstadoCita, teams: boolean): NonNullable<ConfigActividad["cita"]> {
+  const ci = citaEntrada(c, teams);
+  return { fecha: ci.fecha, hora: ci.hora, modalidad: ci.modalidad, direccion: ci.direccion ?? "", liga_videollamada: ci.ligaVideollamada ?? "",
+    telefono: ci.telefono ?? "", usar_teams: ci.usarTeams ?? true, hasta: ci.hasta ?? "" };
+}
+
 /** ¿Este tipo y forma necesitan evaluador? */
 export const pideEvaluador = (f: Pick<FormActividad, "tipo" | "forma">) =>
   ["entrevista_humana", "medica", "referencias"].includes(f.tipo) || (CON_FORMA.includes(f.tipo) && f.forma === "asignada");
@@ -113,7 +124,7 @@ export function validarActividad(f: FormActividad, teams: boolean): Partial<Reco
   }
   if (f.tipo === "medica" && !f.examen.trim()) e.examen = "Indica el examen solicitado.";
   if (f.tipo === "referencias" && (f.refCantidad < 1 || f.refCantidad > 5)) e.refCantidad = "Pide entre 1 y 5 referencias.";
-  if (f.conCita && ["entrevista_humana", "medica"].includes(f.tipo)) {
+  if (f.conCita && conCitaPresencial(f)) {
     const m = validarCita(f.cita, teams);
     if (m) e.cita = m;
   }
@@ -128,11 +139,7 @@ export function configDe(f: FormActividad, teams: boolean): ConfigActividad {
     const ev = evaluadorEntrada(f.evaluador);
     c.evaluador = { tipo: ev.tipo, usuario_id: ev.usuarioId ?? null, contacto_id: ev.contactoId ?? null, nombre: ev.nombre ?? "", correo: ev.correo ?? "", whatsapp: ev.whatsapp ?? "" };
   }
-  if (f.conCita && ["entrevista_humana", "medica"].includes(f.tipo)) {
-    const ci = citaEntrada(f.cita, teams);
-    c.cita = { fecha: ci.fecha, hora: ci.hora, modalidad: ci.modalidad, direccion: ci.direccion ?? "", liga_videollamada: ci.ligaVideollamada ?? "",
-      telefono: ci.telefono ?? "", usar_teams: ci.usarTeams ?? true };
-  }
+  if (f.conCita && conCitaPresencial(f)) c.cita = citaSnakeDe(f.cita, teams);
   if (f.instrucciones.trim()) c.instrucciones = f.instrucciones.trim();
   if (f.tipo === "medica") c.examen = f.examen.trim();
   if (f.tipo === "psicometrica" && f.forma === "integrada") c.prueba_ids = f.pruebaIds;
@@ -158,6 +165,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
   const [intentado, setIntentado] = useState(false);
   const [error, setError] = useState("");
   const [archivos, setArchivos] = useState<File[]>([]);
+  const [adjuntosCita, setAdjuntosCita] = useState<File[]>([]);
   const [guardando, setGuardando] = useState(false);
   const candado = useRef(false);
 
@@ -201,9 +209,10 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
   const deVacante = (k: keyof ConfigActividad) => precarga?.origen?.[k] === "vacante";
   const set = <K extends keyof FormActividad>(k: K, v: FormActividad[K]) => setF((x) => ({ ...x, [k]: v }));
 
+  const conAdjuntos = !f.yaRealizada && f.conCita && conCitaPresencial(f);
   async function guardar() {
     setIntentado(true);
-    if (candado.current || Object.keys(errores).length) return;
+    if (candado.current || Object.keys(errores).length || (conAdjuntos && validarAdjuntosCita(adjuntosCita))) return;
     candado.current = true;
     setGuardando(true);
     setError("");
@@ -214,14 +223,14 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
             conclusion: f.conclusion, score: f.score.trim() ? Number(f.score) : null, realizada_por: f.realizadaPor.trim(), comentarios: f.comentarios.trim(),
             referencias: f.contactos.filter((x) => x.nombre.trim()).map((x) => ({ ...x, contactado: true })) } }
         : { config: evaluacion ? configDe(f, teams) : undefined }),
-    }, archivos);
+    }, archivos, conAdjuntos ? adjuntosCita : []);
     setGuardando(false);
     candado.current = false;
     if (!r.ok) return setError(r.error);
     const d = r.data;
     const adv = d.advertencias?.length ? ` ${d.advertencias.join(" ")}` : "";
     onAgregada(d, {
-      tono: d.bloqueo || d.faltan?.length || adv ? "warn" : "ok",
+      tono: d.bloqueo || d.faltan?.length || d.pendienteAgendar || adv ? "warn" : "ok",
       texto: `${d.mensaje}${d.bloqueo ? ` ${d.bloqueo}.` : ""}${d.faltan?.includes("correo") ? " Falta el correo del candidato: agrégalo y la prueba se envía sola." : ""}${adv}`,
     });
   }
@@ -255,7 +264,8 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
 
             {evaluacion && !f.yaRealizada && (
               <CamposConfiguracion f={f} set={set} ver={ver} catalogo={catalogo} internos={internos} contactos={contactos} teams={teams}
-                deVacante={deVacante} precarga={precarga} clienteNombre={c.clienteVacante ?? null} />
+                deVacante={deVacante} precarga={precarga} clienteNombre={c.clienteVacante ?? null}
+                adjuntosCita={adjuntosCita} onAdjuntosCita={setAdjuntosCita} />
             )}
 
             {evaluacion && f.yaRealizada && (
@@ -299,8 +309,12 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
   mensaje: string;
   ocupado: boolean;
   onClose: () => void;
-  onEnviar: (datos: { evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string }; correo?: string }) => void;
+  onEnviar: (datos: { evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string };
+    correo?: string; cita?: NonNullable<ConfigActividad["cita"]> }, adjuntosCita?: File[]) => void;
 }) {
+  const teams = useTeamsConectado();
+  const [cita, setCita] = useState<EstadoCita>({ ...citaVacia, modalidad: "Presencial" });
+  const [adjuntos, setAdjuntos] = useState<File[]>([]);
   const { internos, contactos } = useCatalogoEvaluadores(c.clienteIdVacante ?? null);
   const [evaluador, setEvaluador] = useState<EstadoEvaluador>({
     ...evaluadorVacio, tipo: paso.tipo === "medica" || paso.tipo === "socioeconomica" ? "externo" : "interno",
@@ -309,7 +323,14 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
   const [intentado, setIntentado] = useState(false);
   const pideEvaluador = faltan.includes("evaluador");
   const pideCorreo = faltan.includes("correo");
-  const errores: { evaluador?: string; correo?: string } = {};
+  const pideCita = faltan.includes("cita");
+  const errores: { evaluador?: string; correo?: string; cita?: string; adjuntos?: string } = {};
+  if (pideCita) {
+    const m = validarCita(cita, teams);
+    if (m) errores.cita = m;
+    const a = validarAdjuntosCita(adjuntos);
+    if (a) errores.adjuntos = a;
+  }
   if (pideEvaluador) {
     const m = validarEvaluador(evaluador);
     if (m) errores.evaluador = m;
@@ -327,7 +348,8 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
         correo: ev.correo ?? "", whatsapp: ev.whatsapp ?? "" };
     }
     if (pideCorreo) datos.correo = correo.trim();
-    onEnviar(datos);
+    if (pideCita) datos.cita = citaSnakeDe(cita, teams);
+    onEnviar(datos, pideCita ? adjuntos : []);
   }
 
   return (
@@ -343,9 +365,15 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
             <input className={inputRH} type="email" value={correo} onChange={(e) => setCorreo(e.target.value)} />
           </Fila>
         )}
+        {pideCita && (
+          <Fila etiqueta="Programar cita" error={intentado ? errores.cita ?? errores.adjuntos : undefined}>
+            <CamposCita valor={cita} onChange={setCita} teams={teams} />
+            <AdjuntosCita valor={adjuntos} onChange={setAdjuntos} />
+          </Fila>
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onClose} disabled={ocupado}>Cancelar</Button>
-          <Button size="sm" onClick={enviar} disabled={ocupado}>{ocupado ? "Iniciando…" : "Iniciar"}</Button>
+          <Button size="sm" onClick={enviar} disabled={ocupado}>{ocupado ? "Iniciando…" : pideCita ? "Programar y avisar" : "Iniciar"}</Button>
         </div>
       </div>
     </ModalMarco>
@@ -382,10 +410,11 @@ function Segmentos({ valor, opciones, onChange }: { valor: string; opciones: { v
   );
 }
 
-function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams, deVacante, precarga, clienteNombre }: {
+function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams, deVacante, precarga, clienteNombre, adjuntosCita, onAdjuntosCita }: {
   f: FormActividad; set: Setter; ver: Ver; catalogo: PruebaPsicometrica[];
   internos: Parameters<typeof SelectorEvaluador>[0]["internos"]; contactos: Parameters<typeof SelectorEvaluador>[0]["contactos"];
   teams: boolean; deVacante: (k: keyof ConfigActividad) => boolean; precarga: PrecargaActividad | null; clienteNombre: string | null;
+  adjuntosCita: File[]; onAdjuntosCita: (a: File[]) => void;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-border-soft p-3">
@@ -491,16 +520,29 @@ function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams
             <textarea className={cn(inputRH, "h-16 py-2")} value={f.instrucciones} onChange={(e) => set("instrucciones", e.target.value)}
               placeholder={f.tipo === "medica" ? "Ayuno de 8 horas, identificación oficial…" : "Qué traer, con quién preguntar al llegar…"} />
           </Fila>
+        </>
+      )}
+
+      {conCitaPresencial(f) && (
+        <>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.conCita}
               onChange={(e) => { set("conCita", e.target.checked); if (e.target.checked) set("iniciarAlGuardar", true); }} />
             <CalendarClock className="h-4 w-4 text-ink-3" /> Programar cita
           </label>
-          {f.conCita && (
+          {f.conCita ? (
             <Fila etiqueta="Cita" error={ver("cita")}>
               <CamposCita valor={f.cita} onChange={(v) => set("cita", v)} teams={teams} />
-              <span className="text-[11px] text-ink-3">Con la cita completa se avisa solo al candidato y {f.tipo === "medica" ? "al médico (después de su consentimiento)" : "al entrevistador"}.</span>
+              <AdjuntosCita valor={adjuntosCita} onChange={onAdjuntosCita} />
+              <span className="text-[11px] text-ink-3">
+                Con la cita completa se avisa solo al candidato{f.tipo === "psicometria_fisica" ? "" : f.tipo === "medica" ? " y al médico (después de su consentimiento)" : " y a quien la aplica"}.
+              </span>
             </Fila>
+          ) : (
+            <p className="flex items-start gap-1.5 rounded-lg bg-warn-soft px-2.5 py-1.5 text-[12px] text-ink-2">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
+              Sin cita la actividad queda «Pendiente de agendar»: no se inicia ni se avisa a nadie hasta que la programes.
+            </p>
           )}
         </>
       )}

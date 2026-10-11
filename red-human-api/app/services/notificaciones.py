@@ -89,6 +89,9 @@ def datos_entrevista_humana(db: Session, eh: EntrevistaHumana, c: Postulacion) -
         "detalle_conexion": detalle,
         "liga_conexion": liga_conexion,
         "ubicacion": eh.ubicacion or "",
+        # 2026-10-10 (Cambio 2): rango de hora y liga de mapa de la cita presencial
+        "hora_hasta": plantillas_correo.fecha_hora_mx(eh.hasta)[1] if getattr(eh, "hasta", None) else "",
+        "mapa": getattr(eh, "mapa", "") or "",
         "telefono_contacto": eh.telefono_contacto or "",
         "telefono_candidato": c.telefono or "",
         "comentario": eh.comentario or "",
@@ -437,6 +440,24 @@ EVENTO_LEGADO_EVALUACION = {
 
 def _mensaje_evaluacion(evento: str, audiencia: str, canal: str, c: Postulacion, eh, extra: dict):
     d = extra.get("_datos_evaluacion") or {}
+    if (audiencia == "candidato" and d.get("presencial") and d.get("con_cita") and d.get("modalidad") == "Presencial"
+            and evento != "evaluacion_cancelada" and (canal == "whatsapp" or d.get("tipo") != "entrevista_humana")):
+        # 2026-10-10 (Cambio 2): aviso FIJO de la cita al candidato — fecha, rango de hora, lugar, mapa y adjuntos
+        from .citas import texto_candidato
+
+        primer = c.nombre.split(" ")[0] if c.nombre and not c.nombre.startswith("Candidato") else "candidato(a)"
+        actividad = {"entrevista_humana": "entrevista", "medica": "evaluación médica", "tecnica": "evaluación técnica",
+                     "psicometrica": "psicometría"}.get(d.get("tipo"), "evaluación")
+        puesto = d.get("vacante") or (c.vacante.titulo if c.vacante else "la vacante")
+        texto = texto_candidato(evento, primer, actividad, puesto, d.get("empresa") or "", d)
+        if canal == "whatsapp":
+            return texto
+        filas = [(k, v) for k, v in (("Fecha", d.get("fecha_texto")), ("Hora", d.get("horario_texto")), ("Lugar", d.get("direccion")),
+                                      ("Indicaciones", d.get("instrucciones"))) if v]
+        cta = ("Cómo llegar", d["mapa"]) if d.get("mapa") else None
+        asunto = {"evaluacion_asignada": f"Tu cita — {puesto}", "evaluacion_reprogramada": f"Cambio en tu cita — {puesto}",
+                  "recordatorio_evaluacion": f"Recordatorio de tu cita — {puesto}"}[evento]
+        return plantillas_correo.html_aviso(asunto, texto, d.get("empresa") or "", filas, cta)
     if d.get("tipo") == "entrevista_humana" and d.get("con_cita") and eh is not None:
         # misma redacción y mismas plantillas corporativas de siempre para la entrevista humana con cita
         return _mensaje(EVENTO_LEGADO_EVALUACION[evento], audiencia, canal, c, eh, "", extra)
@@ -523,6 +544,7 @@ async def _enviar_y_registrar(
     db: Session, p: Postulacion, evento: str, destinatario_tipo: str, canal: str, destino: str, contenido,
     plantilla_valores: Optional[dict] = None,
     plantilla_entrevista: Optional[List[str]] = None,
+    adjuntos: Optional[List[dict]] = None,
 ) -> dict:
     """Regresa {destinatario, canal, destino, enviado, proveedor, detalle} — Fase 7A: el detalle de
     por qué NO salió un envío (sin correo, RESEND_API_KEY sin configurar, Meta rechazó…) ya no se
@@ -550,9 +572,19 @@ async def _enviar_y_registrar(
         elif canal == "whatsapp":
             with de_cuenta(cuenta_canal):
                 envio = await enviar_mensaje(destino, contenido)
+                # 2026-10-10: adjuntos de la cita (imágenes/PDF), tal cual, después del texto
+                if adjuntos and envio.get("enviado"):
+                    from .whatsapp import enviar_documento
+
+                    for a in adjuntos:
+                        await enviar_documento(destino, a["content"], a["filename"], mime=a.get("mime") or "application/pdf",
+                                               cuenta_id=cuenta_canal)
         else:
             asunto, html = contenido
-            envio = await enviar_correo(destino, asunto, html)
+            if adjuntos:
+                envio = await enviar_correo(destino, asunto, html, adjuntos=[{"filename": a["filename"], "content": a["content"]} for a in adjuntos])
+            else:
+                envio = await enviar_correo(destino, asunto, html)
     except Exception as ex:  # que un proveedor falle no debe tumbar el flujo que disparó el evento
         envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}
     db.add(NotificacionEnviada(
@@ -696,10 +728,12 @@ async def disparar(
     if regla.candidato_whatsapp:
         texto = _mensaje(evento, "candidato", "whatsapp", c, eh, liga, extra)
         valores = _valores_plantilla_documentos(c, liga, extra) if evento in EVENTOS_PLANTILLA_DOCUMENTOS else None
-        resultados.append(await _enviar_y_registrar(db, c, evento, "candidato", "whatsapp", c.telefono, texto, plantilla_valores=valores))
+        resultados.append(await _enviar_y_registrar(db, c, evento, "candidato", "whatsapp", c.telefono, texto, plantilla_valores=valores,
+                                                    adjuntos=extra.get("_adjuntos_candidato")))
     if regla.candidato_correo:
         contenido = _mensaje(evento, "candidato", "correo", c, eh, liga, extra)
-        resultados.append(await _enviar_y_registrar(db, c, evento, "candidato", "correo", c.correo, contenido))
+        resultados.append(await _enviar_y_registrar(db, c, evento, "candidato", "correo", c.correo, contenido,
+                                                    adjuntos=extra.get("_adjuntos_candidato")))
 
     # --- Entrevistador: Usuario si es interno, datos ya registrados en la EntrevistaHumana si
     # es externo (punto 23) — sin ronda vigente no hay a quién resolver, se omite. ---

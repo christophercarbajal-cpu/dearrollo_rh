@@ -268,6 +268,7 @@ class CitaIn(BaseModel):
     liga_videollamada: str = ""  # obligatoria en Videollamada salvo que la cree Teams
     telefono: str = ""
     usar_teams: bool = True  # Fase 7B: con Teams conectado la videollamada se crea sola
+    hasta: str = ""  # 2026-10-10: fin del rango de hora (opcional, 11:00)
 
 
 class CrearEvaluacionIn(BaseModel):
@@ -284,6 +285,8 @@ class CrearEvaluacionIn(BaseModel):
     # Proceso configurable (2026-10-06): paso del proceso que cumple esta evaluación («Iniciar» en el seguimiento). Vacío
     # = se liga sola al primer paso de ese tipo que aún no tenga evaluación; sin paso, queda fuera del proceso.
     paso_id: str = ""
+    # 2026-10-10: adjuntos de la cita YA guardados al configurar la actividad (metadata de services/citas)
+    cita_adjuntos: List[dict] = []
 
 
 def _guion_entrevista_humana(p: Postulacion, paso: Optional[dict]) -> dict:
@@ -374,8 +377,14 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
             raise HTTPException(400, "Elige una prueba del catálogo conectada a un proveedor integrado.")
         campos.update({"prueba_id": prueba.id, "proveedor": prueba.proveedor or "", "id_proveedor": prueba.id_proveedor or "",
                        "nombre": nombre or prueba.nombre, "paso_integrada": "asignada"})
-    if datos.cita and datos.forma != "registro_directo":
+    from ..services import citas as scitas
+
+    # 2026-10-10: la psicometría FÍSICA (registro directo) también se agenda: el candidato va a aplicarla en persona
+    cita_registro = datos.forma == "registro_directo" and scitas.requiere_cita(paso)
+    if datos.cita and (datos.forma != "registro_directo" or cita_registro):
         campos.update(await _cita_con_teams(db, p, datos.cita, evaluador))
+        if datos.cita_adjuntos:
+            campos["cita_adjuntos"] = scitas.sanear_metadata(datos.cita_adjuntos)
 
     ev = sev.nueva(p, cuenta.id, u.nombre, u.id, **campos)
     sev.asegurar_ligas(ev)
@@ -398,7 +407,7 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
 
         movida = mover_por_entrevista_humana(db, p, u, ev.codigo)
     resultados: list = []
-    if datos.forma != "registro_directo":
+    if datos.forma != "registro_directo" or ev.cita_fecha_hora:
         resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
     # 2026-10-08 — flujos de DOS fases, fase 1 automática al crear (la fase 2, al evaluador/médico, sale sola después):
     #   médica: la solicitud de consentimiento va al candidato; el médico NO recibe nada hasta que acepte.
@@ -483,9 +492,10 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
         anteriores["cita_fecha_hora"] = fechas.iso(ev.cita_fecha_hora)
         if ev.teams_evento_id:
             aviso_teams = await _teams_best_effort(db, p, ev, "cancelar")
-        for k in ("cita_fecha_hora",):
+        for k in ("cita_fecha_hora", "cita_hasta"):
             setattr(ev, k, None)
         ev.cita_zona_horaria = ev.cita_modalidad = ev.cita_direccion = ev.cita_liga_videollamada = ev.cita_telefono = ev.teams_evento_id = ""
+        ev.cita_mapa = ""
     elif datos.cita is not None:
         cita = await _cita_con_teams(db, p, datos.cita, {"evaluador_correo": ev.evaluador_correo, "evaluador_nombre": ev.evaluador_nombre}) \
             if not (datos.cita.modalidad == "Videollamada" and ev.teams_evento_id and not datos.cita.liga_videollamada) else None
@@ -494,7 +504,11 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
                 cita = sev.armar_cita({**datos.cita.model_dump(), "liga_videollamada": ev.cita_liga_videollamada})
             aviso_teams = await _teams_best_effort(db, p, ev, "actualizar", inicio=cita["cita_fecha_hora"])
             cita["teams_evento_id"] = ev.teams_evento_id
-        if cita["cita_fecha_hora"] != ev.cita_fecha_hora:
+        # 2026-10-10: cambiar fecha, rango de hora, modalidad o lugar es reprogramar (avisa a candidato y evaluador);
+        # la PRIMERA cita de una evaluación que no tenía se avisa como asignación
+        primera = ev.cita_fecha_hora is None
+        clave_cita = ("cita_fecha_hora", "cita_hasta", "cita_modalidad", "cita_direccion", "cita_liga_videollamada", "cita_telefono")
+        if any(cita.get(k) != getattr(ev, k) for k in clave_cita):
             reprogramada = True
             anteriores["cita_fecha_hora"] = fechas.iso(ev.cita_fecha_hora)
         for k, v in cita.items():
@@ -503,7 +517,8 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
         return _respuesta(db, ev, u)
     sev.evento(db, ev, "reprogramada" if reprogramada else "modificada", u.nombre, anteriores=anteriores, usuario_id=u.id,
                cita=fechas.iso(ev.cita_fecha_hora))
-    resultados = await sev.notificar(db, ev, p, "evaluacion_reprogramada" if reprogramada else "evaluacion_asignada", u.nombre,
+    evento_aviso = "evaluacion_reprogramada" if reprogramada and not (datos.cita is not None and primera) else "evaluacion_asignada"
+    resultados = await sev.notificar(db, ev, p, evento_aviso, u.nombre,
                                      override=override_de(datos.notificar)) if (reprogramada or "evaluador" in anteriores) else []
     registrar(db, u.nombre, "evaluacion_modificada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "cambios": list(anteriores), "reprogramada": reprogramada, "correo_rh": u.correo, "notificaciones": resultados})
@@ -1096,6 +1111,33 @@ def descargar_adjunto(codigo: str, aid: str, descargar: bool = False, db: Sessio
     # «Abrir» = inline en el navegador; «Descargar» = ?descargar=true
     return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto",
                         content_disposition_type="attachment" if descargar else "inline")
+
+
+@router.get("/{codigo}/cita/adjuntos/{aid}")
+def descargar_adjunto_cita(codigo: str, aid: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """2026-10-10 (Cambio 2): un adjunto de la cita (lo que se le mandó al candidato, tal cual)."""
+    ev = _ev(db, codigo, cuenta.id)
+    a = next((x for x in ev.cita_adjuntos or [] if isinstance(x, dict) and x.get("id") == aid), None)
+    if a is None or not fs.existe(a.get("archivo")):
+        raise HTTPException(404, "Adjunto no encontrado.")
+    return FileResponse(a["archivo"], media_type=a.get("mime") or "application/octet-stream", filename=a.get("nombre") or "adjunto",
+                        content_disposition_type="inline")
+
+
+@router.delete("/{codigo}/cita/adjuntos/{aid}")
+def quitar_adjunto_cita(codigo: str, aid: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Quita un adjunto de la cita (lo ya enviado no se puede «desenviar»; solo deja de salir en avisos futuros)."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    ev = _ev(db, codigo, cuenta.id)
+    antes = list(ev.cita_adjuntos or [])
+    ev.cita_adjuntos = [x for x in antes if not (isinstance(x, dict) and x.get("id") == aid)]
+    if len(ev.cita_adjuntos) == len(antes):
+        raise HTTPException(404, "Adjunto no encontrado.")
+    flag_modified(ev, "cita_adjuntos")
+    sev.evento(db, ev, "cita_adjunto_quitado", u.nombre, usuario_id=u.id, adjunto=aid)
+    db.commit()
+    return _respuesta(db, ev, u)
 
 
 @router.post("/{codigo}/consentimiento/enviar")

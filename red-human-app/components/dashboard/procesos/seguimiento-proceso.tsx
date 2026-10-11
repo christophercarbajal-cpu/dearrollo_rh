@@ -39,7 +39,7 @@ import { ModalAccionTarea } from "@/components/dashboard/onboarding/accion-tarea
 import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-onboarding";
 import {
   cerrarOnboarding, fetchCandidato, fetchTareasOnboarding, type TareaOnboarding,
-  actualizarContactoCandidato, agregarActividadProceso, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad,
+  actualizarContactoCandidato, agregarActividadProceso, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad, subirAdjuntosCitaPaso,
   moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
   sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
 } from "@/lib/api";
@@ -545,7 +545,14 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
           mensaje={faltan.mensaje}
           ocupado={Boolean(ocupado)}
           onClose={() => setFaltan(null)}
-          onEnviar={(datos) => void iniciar(faltan.paso, datos)}
+          onEnviar={(datos, adjuntos) => void (async () => {
+            // 2026-10-10: los adjuntos de la cita se suben ANTES de iniciar para que salgan con el aviso
+            if (adjuntos?.length) {
+              const a = await subirAdjuntosCitaPaso(c.id, faltan.paso.id, adjuntos);
+              if (!a.ok) return setAviso({ tono: "error", texto: a.error });
+            }
+            await iniciar(faltan.paso, datos);
+          })()}
         />
       )}
 

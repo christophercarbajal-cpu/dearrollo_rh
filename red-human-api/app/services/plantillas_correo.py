@@ -237,11 +237,13 @@ def html_candidato(d: dict, evento: str = "agendada") -> tuple[str, str]:
         _fila("Entrevista con", escape(d.get("entrevistador") or "el equipo de Recursos Humanos"))
         + _fila("Vacante", escape(d.get("vacante", "")))
         + _fila("Fecha", escape(d.get("fecha") or "Por confirmar"))
-        + _fila("Hora", escape(d.get("hora") or "Por confirmar"))
+        + _fila("Hora", escape((d.get("hora") or "Por confirmar") + (f" a {d['hora_hasta']}" if d.get("hora_hasta") else "")))
         + _fila("Modalidad", escape(modalidad))
         + conexion
     )
     boton = _boton(t["cta"], d["liga_conexion"]) if d.get("liga_conexion") and t["cta"] else ""
+    if not boton and d.get("mapa") and not cancelada:
+        boton = _boton("Cómo llegar", d["mapa"])  # 2026-10-10: liga de mapa de la cita presencial
     contenido = (
         f'<p style="margin:0;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:{ROJO};font-weight:700;">{t["eyebrow"]}</p>'
         f'<h1 class="titulo" style="margin:8px 0 12px;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:26px;line-height:1.2;color:{INK};">{t["titulo"].format(**ctx)}</h1>'

@@ -500,6 +500,7 @@ def precarga_actividad(codigo: str, tipo: str, db: Session = Depends(get_db), _:
 @router.post("/postulaciones/{codigo}/actividades", status_code=201)
 async def agregar_actividad_configurada(
     codigo: str, datos: str = Form(...), archivos: Optional[List[UploadFile]] = File(None),
+    adjuntos_cita: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual),
 ):
     """UNA actividad completamente configurada (o ya realizada con su resultado) en un solo paso. `datos` (JSON):
@@ -515,9 +516,26 @@ async def agregar_actividad_configurada(
     except ValueError:
         raise HTTPException(400, "Datos de la actividad inválidos.")
     p = _postulacion(db, codigo, cuenta.id)
-    r = await actividades.agregar(db, p, u, cuenta, cuerpo if isinstance(cuerpo, dict) else {}, archivos)
+    r = await actividades.agregar(db, p, u, cuenta, cuerpo if isinstance(cuerpo, dict) else {}, archivos, adjuntos_cita)
     db.refresh(p)
     return {**r, **_salida(p)}
+
+
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/cita/adjuntos")
+async def adjuntos_cita_actividad(
+    codigo: str, paso_id: str, archivos: List[UploadFile] = File(...),
+    db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """2026-10-10 (Cambio 2): adjuntos de la cita (máx. 5 imágenes/PDF ≤ 10 MB). Antes de iniciar quedan en la
+    configuración de la actividad y salen con el aviso; con la evaluación ya creada se le agregan a ella."""
+    from ..services import actividades
+    from ..services.citas import adjuntos_publicos
+
+    p = _postulacion(db, codigo, cuenta.id)
+    lista = await actividades.adjuntos_de_paso(db, p, paso_id, u, archivos)
+    registrar(db, u.nombre, "cita_adjuntos_agregados", "postulacion", p.codigo, {"paso": paso_id, "total": len(lista), "correo_rh": u.correo})
+    db.commit()
+    return {"adjuntos": adjuntos_publicos(lista)}
 
 
 @router.post("/postulaciones/{codigo}/aplicar-vigente")

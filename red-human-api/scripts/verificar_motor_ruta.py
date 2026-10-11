@@ -221,7 +221,7 @@ with TestClient(app) as client:
     print("\n--- 6. Vocabulario único de estados ---")
     VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
                "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error",
-               "aprobada_excepcion"}
+               "aprobada_excepcion", "pendiente_agendar"}
     todos = [x for c, h in ((PA, HG), (PB, HG), (PC, HG), (PP, HG), (PM, HM)) for e in seg(c, h)["etapas"] for x in e["pasos"]]
     check(all(x["estadoUnificado"] in VALIDOS for x in todos), "toda actividad usa una de las 8 etiquetas")
     db.close()

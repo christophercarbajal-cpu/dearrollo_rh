@@ -164,12 +164,22 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
     # Psicometría física (2026-10-10): se aplica en persona y RH captura el resultado (nunca va al proveedor)
     forma = (datos.get("forma") or "").strip() or ("registro_directo" if fisica else "asignada")
     evaluador = datos.get("evaluador") or None
+    faltan, que = [], []
     if forma == "asignada" and not evaluador:
         evaluador = _evaluador_configurado(db, p, paso, u)
         if evaluador is None:
-            quien = {"medica": "el médico", "entrevista_humana": "el entrevistador"}.get(tipo, "quién la aplicará")
-            return {"iniciada": False, "faltan": ["evaluador"],
-                    "mensaje": f"Para iniciar «{x['nombre']}» solo falta elegir {quien}."}
+            faltan.append("evaluador")
+            que.append("elegir " + {"medica": "el médico", "entrevista_humana": "el entrevistador"}.get(tipo, "quién la aplicará"))
+    from . import citas as scitas
+
+    if scitas.requiere_cita({**paso, "config": {**(paso.get("config") or {}), "forma": forma}}) and forma != "liga_otro_sistema" \
+            and not scitas.tiene_cita(datos):
+        # 2026-10-10 (Cambio 2): sin cita queda «Pendiente de agendar» — no se crea nada ni se avisa a nadie
+        faltan.append("cita")
+        que.append("programar la cita")
+    if faltan:
+        return {"iniciada": False, "faltan": faltan, "pendienteAgendar": "cita" in faltan,
+                "mensaje": f"Para iniciar «{x['nombre']}» falta " + " y ".join(que) + "."}
     instrucciones = str(datos.get("instrucciones") or "")
     if tipo == "medica" and datos.get("examen"):
         instrucciones = f"Examen solicitado: {datos['examen']}" + (f"\n{instrucciones}" if instrucciones else "")
@@ -180,7 +190,8 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
         instrucciones=instrucciones,
         liga_externa_candidato=str(datos.get("liga_externa_candidato") or ""),
         proveedor=str(datos.get("proveedor") or ""),
-        cita=CitaIn(**datos["cita"]) if isinstance(datos.get("cita"), dict) else None,
+        cita=CitaIn(**{k: v for k, v in datos["cita"].items() if k in CitaIn.model_fields}) if isinstance(datos.get("cita"), dict) else None,
+        cita_adjuntos=list(datos.get("cita_adjuntos") or []),
     )
     if tipo == "referencias" and isinstance(datos.get("referencias"), dict):
         _SOLICITUD_REFERENCIAS[p.id] = datos["referencias"]  # la toma `crear_evaluacion` antes de mandar la liga
@@ -284,6 +295,8 @@ def validar_config(tipo: str, config: dict, ya_realizada: bool, resultado: dict,
         c = config["cita"]
         if not (c.get("fecha") and c.get("hora") and c.get("modalidad")):
             raise HTTPException(400, "La cita necesita fecha, hora y modalidad.")
+        if c.get("hasta") and str(c["hasta"]) <= str(c["hora"]):
+            raise HTTPException(400, "La hora «Hasta» debe ser posterior a la hora de inicio.")
 
 
 def precarga(db: Session, p: Postulacion, tipo: str) -> dict:
@@ -332,7 +345,7 @@ def precarga(db: Session, p: Postulacion, tipo: str) -> dict:
     }
 
 
-async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, archivos=None) -> dict:
+async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, archivos=None, adjuntos_cita=None) -> dict:
     """«Agregar actividad» COMPLETAMENTE configurada en un paso: inserta UNA actividad (etapa actual, solo este
     candidato) con su configuración; si es «ya realizada» registra su resultado en ese mismo momento; si no y puede
     iniciar, la inicia (y el motor de las Cuentas automáticas la dispara si le toca); si no, queda «Lista para iniciar»
@@ -360,6 +373,12 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
         if tipo != "entrevista_humana" and not p.consentimiento:
             raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
     crudo = {"tipo": tipo, "obligatorio": bool(datos.get("obligatorio")), **({"nombre": nombre} if nombre else {}), **extra_alias}
+    config.pop("cita_adjuntos", None)  # nunca metadata de archivos enviada por el cliente (solo lo que se sube aquí)
+    if adjuntos_cita and es_eval and not ya:
+        # 2026-10-10: adjuntos de la cita (imágenes/PDF, máx. 5) — se guardan tal cual y salen con el aviso al candidato
+        from . import citas as scitas
+
+        config["cita_adjuntos"] = await scitas.guardar_adjuntos(adjuntos_cita, f"citas/{p.id}", u.nombre)
     if es_eval and not ya:
         crudo["config"] = config
     try:
@@ -393,9 +412,35 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
                        "mensaje": f"«{paso['nombre']}» agregada e iniciada." if r.get("iniciada") else r.get("mensaje") or salida["mensaje"]})
     elif x is not None and not x["disponible"]:
         salida.update({"bloqueo": x["espera"] or "Aún no se habilita en la ruta", "mensaje": f"«{paso['nombre']}» agregada; se iniciará al habilitarse."})
+    elif x is not None and x.get("estadoUnificado") == "pendiente_agendar":
+        salida.update({"pendienteAgendar": True, "mensaje": f"«{paso['nombre']}» agregada: queda pendiente de agendar (no se avisó a nadie)."})
     else:
         salida["mensaje"] = f"«{paso['nombre']}» agregada y lista para iniciar."
+    if salida.get("faltan") and "cita" in salida["faltan"]:
+        salida.update({"pendienteAgendar": True, "mensaje": f"«{paso['nombre']}» agregada: queda pendiente de agendar (no se avisó a nadie)."})
     return salida
+
+
+async def adjuntos_de_paso(db: Session, p: Postulacion, paso_id: str, u: Usuario, archivos) -> List[dict]:
+    """Adjuntos de la cita ANTES de iniciar la actividad (quedan en su configuración); si ya tiene su evaluación viva,
+    van directo a ella. Máximo 5 por cita."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from . import citas as scitas
+
+    paso = sproc._paso(p, paso_id)
+    ev = evaluacion_de_paso(db, p, paso_id)
+    if ev is not None and ev.estado != "cancelada":
+        nuevos = await scitas.guardar_adjuntos(archivos, f"evaluaciones/{ev.id}/cita", u.nombre, ev.cita_adjuntos)
+        ev.cita_adjuntos = list(ev.cita_adjuntos or []) + nuevos
+        flag_modified(ev, "cita_adjuntos")
+        return ev.cita_adjuntos
+    config = dict(paso.get("config") or {})
+    nuevos = await scitas.guardar_adjuntos(archivos, f"citas/{p.id}", u.nombre, config.get("cita_adjuntos"))
+    config["cita_adjuntos"] = list(config.get("cita_adjuntos") or []) + nuevos
+    paso["config"] = config
+    flag_modified(p, "proceso")
+    return config["cita_adjuntos"]
 
 
 # ------------------------------------------------------------ reenvíos granulares

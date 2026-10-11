@@ -516,11 +516,24 @@ def armar_cita(datos: dict) -> dict:
     liga = (datos.get("liga_videollamada") or "").strip()
     if modalidad == "Presencial" and not direccion:
         raise ErrorEvaluacion(400, "Falta la dirección de la cita.")
+    # 2026-10-10 (Cambio 2): rango de hora opcional («Hasta») y liga de mapa generada con la dirección
+    hasta = (datos.get("hasta") or "").strip()
+    fin = None
+    if hasta:
+        try:
+            fin = fechas.desde_local(fecha, hasta)
+        except ValueError:
+            raise ErrorEvaluacion(400, "La hora «Hasta» es inválida (formato 16:30).")
+        if fin <= cuando:
+            raise ErrorEvaluacion(400, "La hora «Hasta» debe ser posterior a la hora de inicio.")
+    from .citas import liga_mapa
+
     return {
         "cita_fecha_hora": cuando, "cita_zona_horaria": fechas.TZ_ORG.key, "cita_modalidad": modalidad,
         "cita_direccion": direccion[:300] if modalidad == "Presencial" else "",
         "cita_liga_videollamada": liga[:500] if modalidad == "Videollamada" else "",
         "cita_telefono": (datos.get("telefono") or "").strip()[:30] if modalidad == "Teléfono" else "",
+        "cita_hasta": fin, "cita_mapa": liga_mapa(direccion)[:500] if modalidad == "Presencial" else "",
     }
 
 
@@ -641,6 +654,8 @@ class CitaComoEntrevista:
         self.modalidad = ev.cita_modalidad or ""
         self.liga = ev.cita_liga_videollamada or ""
         self.ubicacion = ev.cita_direccion or ""
+        self.hasta = ev.cita_hasta
+        self.mapa = ev.cita_mapa or ""
         self.telefono_contacto = ev.cita_telefono or ""
         self.comentario = ev.instrucciones or ""
         self.token = ev.token_evaluador
@@ -653,14 +668,19 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
     from ..serial import nombre_empresa_candidato
     from . import plantillas_correo
 
+    from . import citas
+
     fecha, hora = plantillas_correo.fecha_hora_mx(ev.cita_fecha_hora) if ev.cita_fecha_hora else ("", "")
     cita = ""
     if ev.cita_fecha_hora:
         from .notificaciones import _fecha_hora_legible_mx
 
-        cita = f"Cita: {_fecha_hora_legible_mx(ev.cita_fecha_hora)}, modalidad {ev.cita_modalidad}."
+        cita = f"Cita: {_fecha_hora_legible_mx(ev.cita_fecha_hora)}"
+        if ev.cita_hasta:
+            cita += f" (hasta las {citas._hora(ev.cita_hasta)})"
+        cita += f", modalidad {ev.cita_modalidad}."
         if ev.cita_modalidad == "Presencial" and ev.cita_direccion:
-            cita += f" Dirección: {ev.cita_direccion}."
+            cita += f" Dirección: {ev.cita_direccion}." + (f" Mapa: {ev.cita_mapa}" if ev.cita_mapa else "")
         elif ev.cita_modalidad == "Videollamada" and ev.cita_liga_videollamada:
             cita += f" Liga de videollamada: {ev.cita_liga_videollamada}."
         elif ev.cita_modalidad == "Teléfono" and ev.cita_telefono:
@@ -672,6 +692,11 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
         "liga_videollamada": ev.cita_liga_videollamada or "", "instrucciones": ev.instrucciones or "", "cita_texto": cita,
         "liga_evaluador": liga_evaluador(ev) if ev.forma == "asignada" else "",
         "liga_externa": ev.liga_externa_candidato if ev.forma == "liga_otro_sistema" else "",
+        # 2026-10-10 (Cambio 2): datos de la cita presencial para el aviso fijo al candidato
+        "presencial": ev.tipo in citas.TIPOS_CITA_PRESENCIAL or (ev.tipo == "psicometrica" and ev.forma == "registro_directo"),
+        "fecha_texto": citas.texto_fecha(ev.cita_fecha_hora), "horario_texto": citas.texto_horario(ev.cita_fecha_hora, ev.cita_hasta),
+        "hora_hasta": citas._hora(ev.cita_hasta) if ev.cita_hasta else "", "mapa": ev.cita_mapa or "",
+        "adjuntos": len(ev.cita_adjuntos or []),
     }
 
 
@@ -702,10 +727,14 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         if not permitido:
             forzado[f"{aud}_correo"] = False
             forzado[f"{aud}_whatsapp"] = False
+    extra = {"_datos_evaluacion": datos_evaluacion(ev, p)}
+    if evento_ in ("evaluacion_asignada", "evaluacion_reprogramada") and matriz["candidato"] and ev.cita_adjuntos:
+        from .citas import leer_adjuntos
+
+        extra["_adjuntos_candidato"] = leer_adjuntos(ev.cita_adjuntos)  # tal cual, sin IA
     try:
         resultados = await notificaciones.disparar(
-            db, evento_, p, actor, eh=CitaComoEntrevista(ev), override=forzado,
-            extra={"_datos_evaluacion": datos_evaluacion(ev, p)},
+            db, evento_, p, actor, eh=CitaComoEntrevista(ev), override=forzado, extra=extra,
         )
     except Exception as ex:  # noqa: BLE001 — un aviso caído nunca rompe la acción de RH
         resultados = [{"destinatario": "sistema", "canal": "", "destino": "", "enviado": False, "detalle": f"No se pudo avisar: {ex}"[:300]}]

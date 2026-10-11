@@ -2352,6 +2352,11 @@ class Evaluacion(Base):
     cita_direccion: Mapped[str] = mapped_column(String(300), default="")  # obligatoria si Presencial
     cita_liga_videollamada: Mapped[str] = mapped_column(String(500), default="")  # obligatoria si Videollamada
     cita_telefono: Mapped[str] = mapped_column(String(30), default="")
+    # 2026-10-10 (Cambio 2, citas presenciales): fin del rango de hora, liga de mapa AUTOGENERADA con la dirección y
+    # adjuntos para el candidato (máx. 5 imágenes/PDF de ≤ 10 MB; se mandan tal cual, nunca pasan por la IA)
+    cita_hasta: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    cita_mapa: Mapped[str] = mapped_column(String(500), default="")
+    cita_adjuntos: Mapped[list] = mapped_column(JSON, default=list)  # [{id, archivo, nombre, mime, tamano, subido_por, subido_en}]
     teams_evento_id: Mapped[str] = mapped_column(String(300), default="")
     # --- estado + condición de consentimiento ---
     estado: Mapped[str] = mapped_column(String(30), default="pendiente")  # ESTADOS_EVALUACION_U

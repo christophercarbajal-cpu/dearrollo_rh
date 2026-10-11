@@ -1309,6 +1309,7 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
     tiene permiso (`Usuario.puede_ver_informe_medico`) o al evaluador por su liga (`publico=True`); el resto ve estado
     y conclusión. `acciones` = lo que la interfaz ofrece en este estado (botón principal, secundario y menú «⋯»)."""
     from .models import CONSENTIMIENTOS, ESTADOS_EVALUACION_U, FORMAS_EVALUACION, TIPOS_EVALUACION_U, conclusiones_de
+    from .services import citas as scitas
     from .services import evaluaciones as sev
 
     restringido = ev.tipo == "medica" and not publico and not (usuario is not None and usuario.puede_ver_informe_medico())
@@ -1377,6 +1378,9 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
             "fechaHora": iso(ev.cita_fecha_hora), "zona": ev.cita_zona_horaria or "", "modalidad": ev.cita_modalidad or "",
             "direccion": ev.cita_direccion or "", "ligaVideollamada": ev.cita_liga_videollamada or "",
             "telefono": ev.cita_telefono or "", "porTeams": bool(ev.teams_evento_id),
+            # 2026-10-10 (Cambio 2): rango de hora, liga de mapa y adjuntos de la cita
+            "hasta": iso(ev.cita_hasta), "mapa": ev.cita_mapa or "",
+            "adjuntos": scitas.adjuntos_publicos(ev.cita_adjuntos),
         } if ev.cita_fecha_hora else None,
         "conclusion": ev.conclusion or None,
         "conclusionTexto": opciones.get(ev.conclusion, "") if ev.conclusion else "",

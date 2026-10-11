@@ -42,6 +42,7 @@ from ..models import (
     PlantillaProceso, Postulacion, Usuario,
     conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
 )
+from . import citas as scitas
 
 ACTOR_AUTOMATICO = "Red Human (avance automático)"
 CONCLUSION_NEGATIVA = ("no_avanzar", "no_apto", "desfavorable")
@@ -236,7 +237,7 @@ def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
 
 
 CAMPOS_CONFIG = ("forma", "evaluador", "cita", "instrucciones", "liga_externa_candidato", "proveedor", "prueba_ids", "examen",
-                 "referencias", "iniciar_al_guardar")
+                 "referencias", "iniciar_al_guardar", "cita_adjuntos")
 
 
 def limpiar_config(config: dict) -> dict:
@@ -1330,6 +1331,11 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         if tipo in TIPOS_PASO_EVALUACION and paso.get("config") and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada"):
             r = {**r, "cuello": {"clave": "lista_para_iniciar", "texto": "Lista para iniciar", "quien": None},
                  "espera": r.get("espera") or "Configurada: «Iniciar» la ejecuta tal cual"}
+        if (tipo in TIPOS_PASO_EVALUACION and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada")
+                and scitas.requiere_cita(paso) and not scitas.tiene_cita(paso.get("config"))):
+            # 2026-10-10 (Cambio 2): sin cita no se inicia ni se avisa — «Programar cita» es su acción
+            r = {**r, "pendiente_agendar": True, "espera": "Falta programar la cita",
+                 "cuello": {"clave": "pendiente_agendar", "texto": scitas.TEXTO_PENDIENTE, "quien": None}}
         if es_psicometria_digital(paso) and falta_correo_psicometria(p, paso["id"], r, ev_paso):
             # 2026-10-08: no es «Error de envío» (eso es una falla HTTP del proveedor): falta un DATO y se resuelve con
             # «Agregar correo»; al guardarlo, el envío pendiente se retoma solo (`actividades.reanudar_por_correo`).
@@ -1652,6 +1658,8 @@ ESTADOS_UNIFICADOS = {
     # 2026-10-08: no aprobada, pero RH decidió continuar (el resultado reprobatorio se conserva) · falta un dato
     "aprobada_excepcion": "Continúa por decisión de RH", "falta_correo": "Falta correo para enviar la prueba",
     "lista_para_iniciar": "Lista para iniciar",
+    # 2026-10-10 (Cambio 2): entrevista humana, médica, técnica o psicometría física sin cita: no se inicia ni se avisa
+    "pendiente_agendar": "Pendiente de agendar",
     # 2026-10-09: actividad de una etapa que el candidato YA dejó atrás sin completarla: nunca «En curso» ni «Sin iniciar»
     "superada": "Etapa superada",
 }
@@ -1841,7 +1849,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         if disponible:
             # psicometría: abre la vista limpia con la batería de la ruta/vacante y «Asignar y enviar»
             texto = ("Asignar y enviar" if es_psicometria_digital(paso) else
-                     "Solicitar referencias" if tipo == "referencias" else "Iniciar")
+                     "Solicitar referencias" if tipo == "referencias" else
+                     "Programar cita" if r.get("pendiente_agendar") else "Iniciar")
             return {"clave": "iniciar_evaluacion", "texto": texto}
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",

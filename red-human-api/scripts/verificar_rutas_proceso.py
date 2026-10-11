@@ -412,7 +412,8 @@ with TestClient(app) as client:
 
     # 2026-10-08: vocabulario único con el cuello de botella real («Enviada» ya no es estado)
     VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",
-               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error"}
+               "pendiente_resultado", "en_curso", "pendiente_revision", "completada", "aprobada", "no_aprobada", "omitida", "error",
+               "pendiente_agendar"}  # 2026-10-10: citas presenciales sin agendar
     P8 = nueva("Elsa Estados", V_SIN)
     s8 = seg(P8)
     check(all(x.get("estadoUnificado") in VALIDOS and x.get("estadoUnificadoTexto") for e in s8["etapas"] for x in e["pasos"]),

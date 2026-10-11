@@ -31,7 +31,7 @@ import {
 import {
   avanzarEvaluacionIntegrada, cancelarEvaluacion, confirmarInicioEvaluacion, dictaminarReferencia, enviarEvaluacionProveedor, enviarLigaEvaluacion, fetchEvaluacion,
   fetchEvaluaciones, lineasResultados, marcarEvaluacionNoRealizada, marcarEvaluacionRealizada, modificarEvaluacion, recordatorioEvaluacion,
-  registrarResultadoEvaluacion, reprogramarEvaluacion, revisarEvaluacion, sincronizarEvaluacion, urlAdjuntoEvaluacion,
+  registrarResultadoEvaluacion, reprogramarEvaluacion, revisarEvaluacion, sincronizarEvaluacion, urlAdjuntoCita, urlAdjuntoEvaluacion,
   type Evaluacion, type EventoEvaluacion, type LigaEvaluacion, type RespuestaEvaluacion, type Resultado,
   proveedorVisible,
 } from "@/lib/api";
@@ -557,9 +557,24 @@ export function ModalVerResultado({ codigo, live, onClose, onComplementar, onRev
         <div className="flex flex-col gap-5">
           {e.cita && (
             <section className="grid gap-3 rounded-xl border border-border-soft bg-surface-2/40 p-4 sm:grid-cols-2">
-              <Dato etiqueta="Cita">{textoCita(e.cita.fechaHora, { dateStyle: "full", timeStyle: "short" })}</Dato>
+              <Dato etiqueta="Cita">
+                {textoCita(e.cita.fechaHora, { dateStyle: "full", timeStyle: "short" })}
+                {e.cita.hasta ? ` · hasta ${textoCita(e.cita.hasta, { timeStyle: "short" })}` : ""}
+              </Dato>
               <Dato etiqueta="Modalidad">{e.cita.modalidad}{e.cita.porTeams ? " (Microsoft Teams)" : ""}</Dato>
-              {e.cita.direccion && <Dato etiqueta="Dirección">{e.cita.direccion}</Dato>}
+              {e.cita.direccion && (
+                <Dato etiqueta="Dirección">
+                  {e.cita.direccion}
+                  {e.cita.mapa && <a className="ml-1.5 text-brand hover:underline" href={e.cita.mapa} target="_blank" rel="noreferrer">Ver mapa</a>}
+                </Dato>
+              )}
+              {Boolean(e.cita.adjuntos?.length) && (
+                <Dato etiqueta="Adjuntos enviados al candidato">
+                  {e.cita.adjuntos!.map((a) => (
+                    <a key={a.id} className="mr-2 inline-block text-brand hover:underline" href={urlAdjuntoCita(e.codigo, a.id)} target="_blank" rel="noreferrer">{a.nombre}</a>
+                  ))}
+                </Dato>
+              )}
               {e.cita.ligaVideollamada && <Dato etiqueta="Liga de videollamada"><a className="break-all text-brand hover:underline" href={e.cita.ligaVideollamada} target="_blank" rel="noreferrer">{e.cita.ligaVideollamada}</a></Dato>}
               {e.cita.telefono && <Dato etiqueta="Teléfono">{e.cita.telefono}</Dato>}
             </section>
@@ -771,6 +786,7 @@ function citaDesde(e: Evaluacion): EstadoCita {
   return {
     fecha: p.fecha, hora: p.hora, modalidad: (e.cita.modalidad || "Videollamada") as EstadoCita["modalidad"], direccion: e.cita.direccion,
     liga: e.cita.porTeams ? "" : e.cita.ligaVideollamada, telefono: e.cita.telefono, otraLiga: !e.cita.porTeams && Boolean(e.cita.ligaVideollamada),
+    hasta: e.cita.hasta ? partesLocales(e.cita.hasta).hora : "",
   };
 }
 

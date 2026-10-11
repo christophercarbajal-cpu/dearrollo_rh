@@ -3393,6 +3393,28 @@ export interface LigaEvaluacion {
 export interface AdjuntoEvaluacion { id: string; nombre: string; mime: string; subidoPor: string; subidoVia: string; subidoEn: string | null }
 export interface CitaEvaluacion {
   fechaHora: string | null; zona: string; modalidad: ModalidadCita | ""; direccion: string; ligaVideollamada: string; telefono: string; porTeams: boolean;
+  /** 2026-10-10 (citas presenciales): fin del rango de hora, liga de mapa autogenerada y adjuntos para el candidato. */
+  hasta?: string | null; mapa?: string; adjuntos?: AdjuntoCita[];
+}
+export interface AdjuntoCita { id: string; nombre: string; mime: string; tamano: number; subidoPor?: string; subidoEn?: string }
+/** Liga de mapa que genera el servidor con la dirección (misma fórmula, para la vista previa). */
+export function ligaMapa(direccion: string) {
+  const d = direccion.trim().replace(/\s+/g, " ");
+  return d ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d).replace(/%20/g, "+")}` : "";
+}
+export const MAX_ADJUNTOS_CITA = 5;
+export const MAX_MB_ADJUNTO_CITA = 10;
+export function urlAdjuntoCita(codigoEvaluacion: string, id: string) {
+  return urlArchivo(`/evaluaciones/${codigoEvaluacion}/cita/adjuntos/${id}`);
+}
+export function quitarAdjuntoCita(codigoEvaluacion: string, id: string) {
+  return eliminar<RespuestaEvaluacion>(`/evaluaciones/${codigoEvaluacion}/cita/adjuntos/${id}`);
+}
+/** Adjuntos de la cita de una actividad (antes de iniciarla quedan en su configuración; ya iniciada, en su evaluación). */
+export function subirAdjuntosCitaPaso(codigoPostulacion: string, pasoId: string, archivos: File[]) {
+  const form = new FormData();
+  archivos.forEach((f) => form.append("archivos", f));
+  return subir<{ adjuntos: AdjuntoCita[] }>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/cita/adjuntos`, form);
 }
 /** Guion de apoyo de la entrevista humana según su tipo (proceso configurable, 2026-10-06). */
 export interface GuionEntrevistaHumana { tipo?: string; tipoTexto?: string; enfoque?: string; temas?: string[]; preguntas?: string[] }
@@ -3444,7 +3466,7 @@ export interface RespuestaEvaluacion {
   envioCandidato?: { enviado: boolean; conLiga: boolean; canales?: string[]; detalle?: string };
 }
 export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
-export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean }
+export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean; hasta?: string }
 export interface DatosResultado {
   conclusion: string; comentarios: string; realizadaPor: string; archivos: File[]; version: number; modo: "registrar" | "corregir" | "complementar";
 }
@@ -3455,7 +3477,7 @@ function evaluadorSnake(e?: EvaluadorEntrada | null) {
 }
 function citaSnake(c?: CitaEntrada | null) {
   if (!c) return undefined;
-  return { fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "", usar_teams: c.usarTeams ?? true };
+  return { fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "", usar_teams: c.usarTeams ?? true, hasta: c.hasta ?? "" };
 }
 function formResultado(d: DatosResultado) {
   const form = new FormData();
@@ -3728,12 +3750,16 @@ export function cancelarPasoProceso(codigoPostulacion: string, pasoId: string, m
 }
 /** «Iniciar» en UN paso (2026-10-08): ejecuta lo configurado; si falta un dato crítico regresa `faltan` sin crear nada. */
 export type RespuestaIniciar = RespuestaPaso & {
-  iniciada: boolean; faltan?: ("evaluador" | "correo" | "pruebas")[]; mensaje: string; evaluacion?: string;
+  iniciada: boolean; faltan?: ("evaluador" | "correo" | "pruebas" | "cita")[]; mensaje: string; evaluacion?: string;
   yaExistia?: boolean; simulado?: boolean; advertencias?: string[];
+  /** 2026-10-10: sin cita la actividad presencial queda «Pendiente de agendar» (nada se creó ni se avisó). */
+  pendienteAgendar?: boolean;
 };
 export function iniciarActividad(codigoPostulacion: string, pasoId: string, datos: {
   forma?: string; evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; nombre?: string; correo?: string; whatsapp?: string } | null;
   correo?: string; prueba_ids?: number[];
+  /** 2026-10-10: «Programar cita» de una actividad pendiente de agendar. */
+  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string };
 } = {}) {
   return post<RespuestaIniciar>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/iniciar`, datos);
 }
@@ -3761,7 +3787,7 @@ export function registrarResultadoActividad(codigoPostulacion: string, pasoId: s
 export interface ConfigActividad {
   forma?: "asignada" | "registro_directo" | "liga_otro_sistema" | "integrada";
   evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string };
-  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean };
+  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string };
   instrucciones?: string;
   liga_externa_candidato?: string;
   proveedor?: string;
@@ -3786,14 +3812,15 @@ export function fetchPrecargaActividad(codigoPostulacion: string, tipo: string) 
 }
 export type RespuestaAgregarActividad = RespuestaPaso & {
   paso: PasoProceso; iniciada: boolean; yaRealizada: boolean; mensaje: string; bloqueo: string; evaluacion?: string;
-  faltan?: string[]; advertencias?: string[];
+  faltan?: string[]; advertencias?: string[]; pendienteAgendar?: boolean;
 };
 export function agregarActividadConfigurada(codigoPostulacion: string, datos: {
   tipo: string; nombre?: string; obligatorio?: boolean; config?: ConfigActividad; ya_realizada?: boolean; resultado?: ResultadoYaRealizada;
-}, archivos: File[] = []) {
+}, archivos: File[] = [], adjuntosCita: File[] = []) {
   const form = new FormData();
   form.append("datos", JSON.stringify(datos));
   archivos.forEach((f) => form.append("archivos", f));
+  adjuntosCita.forEach((f) => form.append("adjuntos_cita", f));
   return subir<RespuestaAgregarActividad>(`/procesos/postulaciones/${codigoPostulacion}/actividades`, form);
 }
 

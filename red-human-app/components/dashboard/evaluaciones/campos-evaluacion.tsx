@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  MODALIDADES_CITA, fetchCliente, fetchEntrevistadores, fetchIntegracionTeams,
+  MAX_ADJUNTOS_CITA, MAX_MB_ADJUNTO_CITA, MODALIDADES_CITA, fetchCliente, fetchEntrevistadores, fetchIntegracionTeams, ligaMapa,
   type CitaEntrada, type ContactoCliente, type Entrevistador, type EvaluadorEntrada, type ModalidadCita,
 } from "@/lib/api";
 import { ETIQUETA_ZONA } from "@/lib/fechas";
@@ -180,8 +180,8 @@ export function SelectorEvaluador({ valor, onChange, internos, contactos, client
 
 /* ---------------- Cita ---------------- */
 
-export type EstadoCita = { fecha: string; hora: string; modalidad: ModalidadCita; direccion: string; liga: string; telefono: string; otraLiga: boolean };
-export const citaVacia: EstadoCita = { fecha: "", hora: "", modalidad: "Videollamada", direccion: "", liga: "", telefono: "", otraLiga: false };
+export type EstadoCita = { fecha: string; hora: string; modalidad: ModalidadCita; direccion: string; liga: string; telefono: string; otraLiga: boolean; hasta: string };
+export const citaVacia: EstadoCita = { fecha: "", hora: "", modalidad: "Videollamada", direccion: "", liga: "", telefono: "", otraLiga: false, hasta: "" };
 
 export function useTeamsConectado() {
   const [conectado, setConectado] = useState(false);
@@ -193,6 +193,7 @@ export function useTeamsConectado() {
 
 export function validarCita(c: EstadoCita, teams: boolean): string {
   if (!c.fecha || !c.hora) return "Completa fecha y hora de la cita.";
+  if (c.hasta && c.hasta <= c.hora) return "La hora «Hasta» debe ser posterior a la de inicio.";
   if (c.modalidad === "Presencial" && !c.direccion.trim()) return "Falta la dirección de la cita.";
   if (c.modalidad === "Videollamada" && !(teams && !c.otraLiga) && !c.liga.trim()) return "Falta la liga de la videollamada.";
   return "";
@@ -202,7 +203,7 @@ export function citaEntrada(c: EstadoCita, teams: boolean): CitaEntrada {
   const porTeams = c.modalidad === "Videollamada" && teams && !c.otraLiga;
   return {
     fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion.trim(),
-    ligaVideollamada: porTeams ? "" : c.liga.trim(), telefono: c.telefono.trim(), usarTeams: porTeams,
+    ligaVideollamada: porTeams ? "" : c.liga.trim(), telefono: c.telefono.trim(), usarTeams: porTeams, hasta: c.hasta || "",
   };
 }
 
@@ -210,21 +211,30 @@ export function CamposCita({ valor, onChange, teams }: { valor: EstadoCita; onCh
   const porTeams = valor.modalidad === "Videollamada" && teams && !valor.otraLiga;
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-3">
-        <Campo etiqueta={<>Fecha <span className="text-bad">*</span></>}>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Campo etiqueta={<>Fecha <span className="text-bad">*</span></>} className="col-span-2 sm:col-span-1">
           <input type="date" value={valor.fecha} onChange={(e) => onChange({ ...valor, fecha: e.target.value })} className={inputEv} />
         </Campo>
-        <Campo etiqueta={<>Hora <span className="text-bad">*</span> <span className="font-normal text-ink-3">({ETIQUETA_ZONA})</span></>}>
+        <Campo etiqueta={<>Hora <span className="text-bad">*</span></>}>
           <input type="time" value={valor.hora} onChange={(e) => onChange({ ...valor, hora: e.target.value })} className={inputEv} />
         </Campo>
+        <Campo etiqueta="Hasta (opcional)">
+          <input type="time" value={valor.hasta} onChange={(e) => onChange({ ...valor, hasta: e.target.value })} className={inputEv} />
+        </Campo>
       </div>
+      <p className="-mt-1.5 text-[11px] text-ink-3">Horas en {ETIQUETA_ZONA}. Con «Hasta» el candidato recibe el rango (p. ej. de 9:00 a 11:00).</p>
       {/* grupo de botones: fieldset (un <label> los fusionaría con su etiqueta) */}
       <fieldset className="flex flex-col gap-1.5">
         <legend className="mb-1.5 text-sm font-medium text-ink-2">Modalidad <span className="text-bad">*</span></legend>
         <Opciones valor={valor.modalidad} onChange={(m) => onChange({ ...valor, modalidad: m })} columnas={3} opciones={MODALIDADES_CITA.map((m) => ({ valor: m, texto: m }))} />
       </fieldset>
       {valor.modalidad === "Presencial" && (
-        <Campo etiqueta={<>Dirección <span className="text-bad">*</span></>}>
+        <Campo
+          etiqueta={<>Dirección <span className="text-bad">*</span></>}
+          ayuda={valor.direccion.trim() ? (
+            <>Liga de mapa (se genera sola): <a className="break-all text-brand hover:underline" href={ligaMapa(valor.direccion)} target="_blank" rel="noreferrer">ver en el mapa</a></>
+          ) : "La liga de mapa se genera sola con la dirección."}
+        >
           <input value={valor.direccion} onChange={(e) => onChange({ ...valor, direccion: e.target.value })} placeholder="Calle, número, colonia, ciudad" className={inputEv} />
         </Campo>
       )}
@@ -247,5 +257,45 @@ export function CamposCita({ valor, onChange, teams }: { valor: EstadoCita; onCh
         </Campo>
       )}
     </div>
+  );
+}
+
+/* ---------------- Adjuntos de la cita (2026-10-10) ---------------- */
+
+const TIPOS_ADJUNTO_CITA = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
+
+/** Valida en el navegador lo mismo que la API: máx. 5, solo imágenes o PDF, ≤ 10 MB cada uno. */
+export function validarAdjuntosCita(archivos: File[], yaTiene = 0): string {
+  if (archivos.length + yaTiene > MAX_ADJUNTOS_CITA) return `Una cita admite hasta ${MAX_ADJUNTOS_CITA} adjuntos.`;
+  const malo = archivos.find((f) => !TIPOS_ADJUNTO_CITA.includes(f.type));
+  if (malo) return `«${malo.name}»: solo imágenes (PNG, JPG, WEBP) o PDF.`;
+  const grande = archivos.find((f) => f.size > MAX_MB_ADJUNTO_CITA * 1024 * 1024);
+  if (grande) return `«${grande.name}» pesa más de ${MAX_MB_ADJUNTO_CITA} MB.`;
+  return "";
+}
+
+export function AdjuntosCita({ valor, onChange, yaTiene = 0 }: { valor: File[]; onChange: (v: File[]) => void; yaTiene?: number }) {
+  const error = validarAdjuntosCita(valor, yaTiene);
+  return (
+    <Campo
+      etiqueta="Adjuntos para el candidato (opcional)"
+      ayuda={error ? <span className="font-semibold text-bad">{error}</span> : `Hasta ${MAX_ADJUNTOS_CITA} imágenes o PDF de máx. ${MAX_MB_ADJUNTO_CITA} MB (croquis, indicaciones). Se envían tal cual con el aviso.`}
+    >
+      <input
+        type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp"
+        onChange={(e) => onChange([...valor, ...Array.from(e.target.files ?? [])])}
+        className="text-[13px]"
+      />
+      {valor.length > 0 && (
+        <ul className="mt-1.5 flex flex-col gap-1">
+          {valor.map((f, i) => (
+            <li key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 rounded-lg bg-surface-2/60 px-2.5 py-1 text-[12px] text-ink-2">
+              <span className="truncate">{f.name} · {(f.size / 1024 / 1024).toFixed(1)} MB</span>
+              <button type="button" className="font-semibold text-bad hover:underline" onClick={() => onChange(valor.filter((_, j) => j !== i))}>Quitar</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Campo>
   );
 }

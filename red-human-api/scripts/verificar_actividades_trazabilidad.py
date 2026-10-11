@@ -157,18 +157,19 @@ with TestClient(app) as client:
         return db.query(Evaluacion).filter(Evaluacion.postulacion_id == post(codigo).id, Evaluacion.paso_id == paso_id).all()
 
     MEDICO = {"tipo": "externo", "nombre": "Dra. Salud", "correo": "dra@clinica.mx", "whatsapp": "5511112222"}
+    CITA = {"fecha": "2026-12-15", "hora": "10:00", "modalidad": "Presencial", "direccion": "Av. Reforma 100, CDMX"}  # 2026-10-10: las presenciales no se inician sin cita
 
     # ================= 1. Configuración en un paso =================
     print("\n--- 1. «Iniciar» en un paso, sin duplicados ---")
     P = nueva("Ana Actividades")
     r = client.post(f"/procesos/postulaciones/{P}/pasos/eh/iniciar", json={})
-    check(r.status_code == 200 and r.json()["iniciada"] is False and r.json()["faltan"] == ["evaluador"] and not evs(P, "eh"),
-          "entrevista humana sin entrevistador en la ruta → pide SOLO el entrevistador y no crea nada")
-    r = client.post(f"/procesos/postulaciones/{P}/pasos/eh/iniciar", json={"evaluador": {"tipo": "interno", "usuario_id": admin.id}})
-    check(r.status_code == 200 and r.json()["iniciada"] and len(evs(P, "eh")) == 1, "con el dato que faltaba se inicia (una evaluación ligada a la actividad)")
-    r = client.post(f"/procesos/postulaciones/{P}/pasos/eh/iniciar", json={"evaluador": {"tipo": "interno", "usuario_id": admin.id}})
+    check(r.status_code == 200 and r.json()["iniciada"] is False and r.json()["faltan"] == ["evaluador", "cita"] and not evs(P, "eh"),
+          "entrevista humana sin entrevistador ni cita → pide SOLO esos dos datos y no crea nada")
+    r = client.post(f"/procesos/postulaciones/{P}/pasos/eh/iniciar", json={"evaluador": {"tipo": "interno", "usuario_id": admin.id}, "cita": CITA})
+    check(r.status_code == 200 and r.json()["iniciada"] and len(evs(P, "eh")) == 1, "con los datos que faltaban se inicia (una evaluación ligada a la actividad)")
+    r = client.post(f"/procesos/postulaciones/{P}/pasos/eh/iniciar", json={"evaluador": {"tipo": "interno", "usuario_id": admin.id}, "cita": CITA})
     check(r.status_code == 200 and r.json().get("yaExistia") and len(evs(P, "eh")) == 1, "«Iniciar» otra vez nunca duplica: regresa la existente")
-    r = client.post(f"/procesos/postulaciones/{P}/pasos/tec/iniciar", json={})
+    r = client.post(f"/procesos/postulaciones/{P}/pasos/tec/iniciar", json={"cita": CITA})
     ev_tec = evs(P, "tec")
     check(r.status_code == 200 and r.json()["iniciada"] and len(ev_tec) == 1 and ev_tec[0].evaluador_usuario_id == admin.id,
           "técnica con responsable RH → se asigna al responsable de la vacante sin pedir nada")
@@ -207,9 +208,9 @@ with TestClient(app) as client:
     PM = nueva("Mara Médica")
     tel_m = post(PM).telefono
     r = client.post(f"/procesos/postulaciones/{PM}/pasos/medica/iniciar", json={})
-    check(r.json()["faltan"] == ["evaluador"], "médica sin médico en la ruta → pide SOLO al médico")
+    check(r.json()["faltan"] == ["evaluador", "cita"], "médica sin médico ni cita → pide SOLO al médico y la cita")
     ENVIOS.clear()
-    r = client.post(f"/procesos/postulaciones/{PM}/pasos/medica/iniciar", json={"evaluador": MEDICO})
+    r = client.post(f"/procesos/postulaciones/{PM}/pasos/medica/iniciar", json={"evaluador": MEDICO, "cita": CITA})
     check(r.status_code == 200 and r.json()["iniciada"], "médica iniciada con el médico capturado")
     check(any("consentimiento" in x[2] for x in envios_a(tel_m)) and not envios_a("5511112222") and not envios_a("dra@clinica.mx"),
           "fase 1: la solicitud de consentimiento sale SOLA al candidato; al médico no le sale nada")
@@ -220,7 +221,7 @@ with TestClient(app) as client:
     check([m["clave"] for m in x["menu"] if m["clave"].startswith("reenviar")] == ["reenviar_candidato"] and "registrar_resultado" not in [m["clave"] for m in x["menu"]],
           "mientras no hay consentimiento: solo «Reenviar al candidato» y no se puede registrar resultado")
     # acuse de entrega de WhatsApp → «Entregado»
-    wamid = db.query(EnvioActividad).filter(EnvioActividad.postulacion_id == post(PM).id, EnvioActividad.canal == "whatsapp").first().mensaje_id
+    wamid = db.query(EnvioActividad).filter(EnvioActividad.postulacion_id == post(PM).id, EnvioActividad.canal == "whatsapp").order_by(EnvioActividad.id.desc()).first().mensaje_id  # el último aviso (consentimiento)
     acuse = {"object": "whatsapp_business_account", "entry": [{"changes": [{"value": {"statuses": [{"id": wamid, "status": "delivered"}]}}]}]}
     cuerpo = json.dumps(acuse).encode()
     JSON_H = {"Content-Type": "application/json"}
@@ -247,7 +248,7 @@ with TestClient(app) as client:
     lotes_antes = db.query(EnvioActividad).filter(EnvioActividad.postulacion_id == post(PM).id).count()
     r = client.post(f"/procesos/postulaciones/{PM}/pasos/medica/reenviar", json={"a": "candidato"})
     x = paso(r.json()["proceso"] and seg(PM), "medica")
-    check(r.status_code == 200 and r.json()["enviado"] and x["envios"]["candidato"]["intentos"] == 2
+    check(r.status_code == 200 and r.json()["enviado"] and x["envios"]["candidato"]["intentos"] >= 2  # + el aviso de la cita (2026-10-10)
           and x["estadoUnificado"] == "esperando_consentimiento" and db.query(EnvioActividad).filter(EnvioActividad.postulacion_id == post(PM).id).count() > lotes_antes,
           "«Reenviar al candidato» agrega un envío nuevo SIN reiniciar ni cambiar el estado de la actividad")
     r = client.post(f"/procesos/postulaciones/{PM}/pasos/medica/reenviar", json={"a": "medico"})
@@ -264,7 +265,7 @@ with TestClient(app) as client:
           "ya con consentimiento: «Reenviar al médico» y «Registrar resultado» en el «…»")
     # rechazo → cancelada + No aprobada
     PR = nueva("Rita Rechazo")
-    client.post(f"/procesos/postulaciones/{PR}/pasos/medica/iniciar", json={"evaluador": MEDICO})
+    client.post(f"/procesos/postulaciones/{PR}/pasos/medica/iniciar", json={"evaluador": MEDICO, "cita": CITA})
     ev_r = evs(PR, "medica")[0]
     ENVIOS.clear()
     r = client.post(f"/evaluaciones/publica/consentimiento/{ev_r.consentimiento_token}/rechazar")
@@ -276,7 +277,7 @@ with TestClient(app) as client:
     # envío fallido → Error
     PF = nueva("Fabi Falla")
     CANAL_OK.update(whatsapp=False, correo=False)
-    client.post(f"/procesos/postulaciones/{PF}/pasos/medica/iniciar", json={"evaluador": MEDICO})
+    client.post(f"/procesos/postulaciones/{PF}/pasos/medica/iniciar", json={"evaluador": MEDICO, "cita": CITA})
     CANAL_OK.update(whatsapp=True, correo=True)
     x = paso(seg(PF), "medica")
     check(x["estadoUnificado"] == "error" and "consentimiento" in (x["error"] or "") and x["envios"]["candidato"]["estado"] == "fallido",

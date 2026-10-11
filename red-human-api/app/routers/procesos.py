@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
-    ENFOQUES_ENTREVISTA, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
+    ENFOQUES_ENTREVISTA, TEXTO_ENFOQUE, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
     RESULTADOS_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, CATALOGO_ACTIVIDADES, opcion_catalogo, Cuenta, PlantillaProceso, Usuario, Vacante, conclusiones_de,
     es_cuenta_demo, nombre_etapa, registrar,
 )
@@ -47,7 +47,7 @@ def opciones(_: Usuario = Depends(usuario_actual)):
         "reglas": [{"valor": k, "texto": t} for k, t in REGLAS_APROBACION.items()],
         "responsables": [{"valor": k, "texto": t} for k, t in RESPONSABLES_PASO.items()],
         "tiposEntrevistaHumana": [{"valor": k, "texto": t} for k, t in TIPOS_ENTREVISTA_HUMANA.items()],
-        "enfoquesEntrevistaAgente": [{"valor": k, "texto": "Profesional" if k == "profesional" else "Profesional y personal"} for k in ENFOQUES_ENTREVISTA],
+        "enfoquesEntrevistaAgente": [{"valor": k, "texto": TEXTO_ENFOQUE[k]} for k in ENFOQUES_ENTREVISTA],
         "estados": [{"valor": k, "texto": t} for k, t in ESTADOS_PASO.items()],
         "resultados": [{"valor": k, "texto": t} for k, t in RESULTADOS_PASO.items()],
         "ejemplos": [{"clave": k, "nombre": e["nombre"], "descripcion": e["descripcion"]} for k, e in sproc.PROCESOS_EJEMPLO.items()],

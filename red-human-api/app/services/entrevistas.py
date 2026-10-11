@@ -147,6 +147,12 @@ def system_prompt(e: Entrevista) -> str:
     p = e.postulacion
     v = p.vacante if p else None
     guion = e.guion or {}
+    bloque = ""
+    if guion.get("operativo"):
+        from . import entrevista_operativa as eop
+        from .evaluacion_integral import respuestas_previas
+
+        bloque = eop.bloque_prompt(guion, respuestas_previas(p) if p else [])
     return ia.prompt_entrevistador(
         v.titulo if v else "vacante general", v.requisitos if v else "", nombre_para_entrevista(e),
         list(guion.get("preguntas") or []), empresa=nombre_empresa_candidato(v) if v else "la empresa",
@@ -154,8 +160,19 @@ def system_prompt(e: Entrevista) -> str:
         enfoque_entrevista=enfoque_entrevista_agente(p, v, _paso_de(e)), ubicacion=(v.ubicacion if v else "") or "",
         modalidad=(v.modalidad if v else "") or "", sueldo=(v.sueldo if v else "") or "",
         beneficios=list(v.beneficios or []) if v else [], area=(v.area if v else "") or "",
-        canal=e.tipo, guion_de_vacante=bool(guion.get("seccion")),
+        canal=e.tipo, guion_de_vacante=bool(guion.get("seccion")), bloque_operativo=bloque,
     )
+
+
+def preguntas_de(e: Entrevista) -> list:
+    """Preguntas que se hacen en esta entrevista. Operativa: sin las de logística que ya cubrió el prefiltro."""
+    guion = e.guion or {}
+    if guion.get("operativo") and e.postulacion is not None:
+        from . import entrevista_operativa as eop
+        from .evaluacion_integral import respuestas_previas
+
+        return eop.preguntas_para_conversacion(guion, respuestas_previas(e.postulacion))
+    return list(guion.get("preguntas") or [])
 
 
 def _paso_de(e: Entrevista) -> str:
@@ -222,7 +239,7 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
     historial = list(e.transcript or []) + [{"rol": "user", "texto": texto[:2000]}]
-    turno, con_ia = ia.entrevista_turno(system_prompt(e), historial, preguntas=list((e.guion or {}).get("preguntas") or []))
+    turno, con_ia = ia.entrevista_turno(system_prompt(e), historial, preguntas=preguntas_de(e))
     e.transcript = historial + [{"rol": "assistant", "texto": turno.respuesta}]
     terminada = turno.terminada or ia.DESPEDIDA_ENTREVISTA.lower() in (turno.respuesta or "").lower()
     salida = await responder(turno.respuesta, ia_entrevista=con_ia)

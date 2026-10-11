@@ -1083,8 +1083,12 @@ DATOS_SENSIBLES_PROHIBIDOS = (
     "económica o deudas personales"
 )
 
-# Qué cubre cada enfoque de entrevista (Punto 6). Solo estos dos niveles.
+# Qué cubre cada enfoque de entrevista (Punto 6). 2026-10-10: + «operativo» (guion ARMADO, ver entrevista_operativa).
 ENFOQUE_ENTREVISTA_TEMAS = {
+    "operativo": (
+        "trayectoria laboral, experiencia REAL en el oficio (datos concretos y un procedimiento), indispensables del puesto, "
+        "situación laboral actual, motivación y logística (traslado, horario, inicio)"
+    ),
     "profesional": (
         "experiencia real, conocimientos del puesto, nivel de responsabilidad, criterio, resolución "
         "de problemas, toma de decisiones, comunicación, manejo de presión y errores, manejo de "
@@ -1297,8 +1301,10 @@ def prompt_entrevistador(
     area: str = "",
     canal: str = "avatar",
     guion_de_vacante: bool = False,
+    bloque_operativo: str = "",
 ) -> str:
     """System prompt compartido por el avatar (Anam) y el modo texto — misma personalidad en ambos.
+    2026-10-10: con `bloque_operativo` (enfoque operativo) las preguntas son las del guion ARMADO, en orden.
     2026-10-09: también para la Entrevista por WhatsApp y la Llamada Red Human (`canal`). Con `guion_de_vacante` las
     preguntas son las de la plantilla de conversación de la vacante (aprobadas o editadas por RH): se cubren todas.
 
@@ -1332,7 +1338,8 @@ def prompt_entrevistador(
         f"Objetivo de la entrevista: {enfoque or 'validar experiencia real, criterio y motivación para el puesto'}.\n"
         f"Enfoque: {enfoque_entrevista} — cubre: {ENFOQUE_ENTREVISTA_TEMAS[enfoque_entrevista]}.\n"
         f"Temas a cubrir (en este orden aproximado):\n{lista_temas}\n"
-        + ((f"GUION DE LA VACANTE (definido por RH): cubre TODAS estas preguntas, en este orden, adaptando solo el tono y "
+        + (bloque_operativo if bloque_operativo else
+           (f"GUION DE LA VACANTE (definido por RH): cubre TODAS estas preguntas, en este orden, adaptando solo el tono y "
              f"repreguntando brevemente cuando haga falta; no agregues preguntas de otros temas:\n{referencia}\n") if referencia and guion_de_vacante
            else (f"Preguntas de referencia (inspiración de tono, NO script; no tienes que hacerlas todas ni tal cual):\n{referencia}\n" if referencia else ""))
         + (f"{CANAL_ENTREVISTA[canal]}\n" if canal in CANAL_ENTREVISTA else "")
@@ -2647,6 +2654,8 @@ class FichaGuion(BaseModel):
     sueldo: str = ""
     empresa: str = ""
     enfoque_entrevista: str = "profesional"
+    # 2026-10-10: perfil del oficio (copia de la Biblioteca de Perfiles ajustada por vacante) para el enfoque operativo
+    perfil_operativo: Optional[dict] = None
 
 
 ESTILO_GUION = {
@@ -2821,7 +2830,19 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
     con_ia = False
     crudo = GuionesIA()
     client = _client()
-    if client is not None and claves:
+    # 2026-10-10 (Cambio 1): con enfoque OPERATIVO los guiones NO los inventa la IA — se ARMAN con piezas fijas, la
+    # Biblioteca de Perfiles y los indispensables (estos sí los redacta la IA, UNA sola vez para todas las secciones).
+    armados: dict = {}
+    if enfoque == "operativo" and guion_claves:
+        from . import entrevista_operativa as eop
+
+        preguntas_indisp, ia_indisp = eop.redactar_indispensables(ficha.titulo, ficha.requisitos_indispensables)
+        for c in guion_claves:
+            armados[c] = eop.armar_guion(ficha.titulo, ficha.perfil_operativo, ficha.requisitos_indispensables, preguntas_indisp,
+                                         ubicacion=ficha.ubicacion, horario=ficha.horario)
+        con_ia = con_ia or ia_indisp
+        guion_claves = []
+    if client is not None and claves and [c for c in claves if c not in armados]:
         def lista(xs: List[str]) -> str:
             return ("\n" + "\n".join(f"  - {x}" for x in xs)) if xs else " (sin dato)"
 
@@ -2883,4 +2904,5 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
         if g is None or not g.preguntas:
             g = guion_demo_seccion(c, ficha)
         salida[c] = {"enfoque": g.enfoque, "temas": list(g.temas or []), "preguntas": abrir_preguntas(list(g.preguntas))}
+    salida.update(armados)
     return salida, con_ia

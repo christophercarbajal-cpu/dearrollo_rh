@@ -94,8 +94,12 @@ DATOS_HUELLA = ("titulo", "responsabilidades", "requisitos", "requisitos_deseabl
 
 
 def huella_datos(datos: dict) -> str:
-    """Huella de los datos de la vacante que alimentan los guiones: si cambia, lo generado quedó desactualizado."""
-    return _hash({k: datos.get(k) for k in DATOS_HUELLA})
+    """Huella de los datos de la vacante que alimentan los guiones: si cambia, lo generado quedó desactualizado. El
+    perfil del oficio solo cuenta con enfoque operativo (las vacantes de otros enfoques conservan su huella)."""
+    base = {k: datos.get(k) for k in DATOS_HUELLA}
+    if datos.get("enfoque_entrevista") == "operativo":
+        base["perfil_operativo"] = datos.get("perfil_operativo")
+    return _hash(base)
 
 
 def datos_de_vacante(v) -> dict:
@@ -104,7 +108,14 @@ def datos_de_vacante(v) -> dict:
     return {"titulo": v.titulo or "", "responsabilidades": list(v.responsabilidades or []),
             "requisitos": requisitos_lista(v.requisitos), "requisitos_deseables": list(v.requisitos_deseables or []),
             "ubicacion": v.ubicacion or "", "modalidad": v.modalidad or "", "sueldo": v.sueldo or "",
-            "enfoque_entrevista": v.enfoque_entrevista or "profesional", "horario": ""}
+            "enfoque_entrevista": v.enfoque_entrevista or "profesional", "horario": "",
+            **({"perfil_operativo": _perfil_operativo(v)} if (v.enfoque_entrevista or "") == "operativo" else {})}
+
+
+def _perfil_operativo(v) -> Optional[dict]:
+    from . import entrevista_operativa as eop
+
+    return eop.perfil_de_vacante(v)
 
 
 # ============================================================ normalización (lo que RH edita y lo que genera la IA)
@@ -170,8 +181,15 @@ def normalizar_guion(g) -> dict:
     temas = [_texto(x, 160) for x in (g.get("temas") or []) if _texto(x)][:MAX_PREGUNTAS]
     if not preguntas and not temas:
         return {}
-    return {"enfoque": _texto(g.get("enfoque"), 500), "temas": temas or [p.rstrip("?.").lstrip("¿") for p in preguntas],
-            "preguntas": preguntas}
+    salida = {"enfoque": _texto(g.get("enfoque"), 500), "temas": temas or [p.rstrip("?.").lstrip("¿") for p in preguntas],
+              "preguntas": preguntas}
+    # 2026-10-10: guion OPERATIVO — se conserva su estructura (secciones, oficio y perfil congelado para la evaluación)
+    from . import entrevista_operativa as eop
+
+    op = eop.normalizar_operativo(g.get("operativo"))
+    if op:
+        salida["operativo"] = op
+    return salida
 
 
 def contenido_de(v, clave: str):
@@ -207,8 +225,15 @@ def vista(v, pasos: Optional[list] = None, db: Optional[Session] = None) -> dict
             "editado": bool(m.get("editado")), "editadoPor": m.get("editado_por") or "", "editadoEn": m.get("editado_en"),
             "desactualizado": bool(m.get("huella")) and m.get("huella") != huella and not vacio(contenido),
         })
+    perfil = None
+    if (getattr(v, "enfoque_entrevista", "") or "") == "operativo":
+        from . import entrevista_operativa as eop
+
+        perfil = eop.perfil_de_vacante(v)
     return {"secciones": salida, "aplican": aplican, "meta": meta, "huella": huella,
-            "desactualizado": any(x["desactualizado"] for x in salida if x["aplica"])}
+            "desactualizado": any(x["desactualizado"] for x in salida if x["aplica"]),
+            # 2026-10-10: perfil del oficio de la entrevista operativa (copia de la vacante o el detectado en la biblioteca)
+            "perfilOperativo": perfil, "perfilOperativoPropio": bool((v.guiones or {}).get("perfil_operativo"))}
 
 
 def _marcar(v) -> None:
@@ -265,6 +290,8 @@ def guardar_desde_formulario(v, entrada: Optional[dict], por: str, preguntas_web
     meta_in = entrada.get("meta") if isinstance(entrada.get("meta"), dict) else {}
     g = copy.deepcopy(v.guiones or {})
     g.setdefault("meta", {})
+    if "perfil_operativo" in entrada:  # 2026-10-10: copia del perfil del oficio SOLO para esta vacante
+        g = guardar_perfil_operativo(v, entrada.get("perfil_operativo"), g)
     for clave, m in meta_in.items():
         # solo la meta de GENERACIÓN (de la respuesta de /generar); `editado` lo recalcula el servidor
         if clave in SECCIONES and isinstance(m, dict) and m.get("generado_hash"):
@@ -288,13 +315,40 @@ def guardar_desde_formulario(v, entrada: Optional[dict], por: str, preguntas_web
     return cambiaron
 
 
+def guardar_perfil_operativo(v, entrada, g: Optional[dict] = None) -> dict:
+    """Guarda (o quita, con None) la copia del perfil del oficio en la vacante. La Biblioteca de Perfiles nunca se edita."""
+    from . import entrevista_operativa as eop
+
+    g = copy.deepcopy(v.guiones or {}) if g is None else g
+    actual = g.get("perfil_operativo") or {}
+    if isinstance(entrada, dict) and set(entrada) <= {"oficio"} and entrada.get("oficio") == actual.get("oficio"):
+        return g  # el formulario solo reafirma el oficio: se conservan los ajustes de la vacante
+    if entrada in (None, {}, ""):
+        g.pop("perfil_operativo", None)
+    else:
+        try:
+            g["perfil_operativo"] = eop.normalizar_perfil(entrada)
+        except ValueError as e:
+            raise ErrorGuion(400, str(e))
+    v.guiones = g
+    _marcar(v)
+    return g
+
+
 # ============================================================ generación (Bloque 2)
 
 
 def ficha_guion(datos: dict, empresa: str = "") -> "ia.FichaGuion":
+    from . import entrevista_operativa as eop
     from . import ia
 
-    return ia.FichaGuion(titulo=datos.get("titulo") or "", responsabilidades=list(datos.get("responsabilidades") or []),
+    perfil = None
+    if (datos.get("enfoque_entrevista") or "") == "operativo":
+        perfil = datos.get("perfil_operativo")
+        if not isinstance(perfil, dict) or perfil.get("oficio") not in eop.BIBLIOTECA:
+            oficio = eop.detectar_oficio(datos.get("titulo") or "", list(datos.get("responsabilidades") or []))
+            perfil = eop.perfil_base(oficio) if oficio else None
+    return ia.FichaGuion(perfil_operativo=perfil, titulo=datos.get("titulo") or "", responsabilidades=list(datos.get("responsabilidades") or []),
                          requisitos_indispensables=list(datos.get("requisitos") or []),
                          requisitos_deseables=list(datos.get("requisitos_deseables") or []), ubicacion=datos.get("ubicacion") or "",
                          modalidad=datos.get("modalidad") or "", horario=datos.get("horario") or "",

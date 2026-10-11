@@ -113,7 +113,7 @@ class Vacante(Base):
     curso_filtro_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cursos.id"), nullable=True)
     curso_filtro: Mapped[Optional["Curso"]] = relationship(foreign_keys=[curso_filtro_id])
     plataformas: Mapped[list] = mapped_column(JSON, default=list)
-    # Fase 4 (Punto 6): qué cubre la Entrevista IA — ver ENFOQUES_ENTREVISTA. Solo 2 niveles.
+    # Fase 4 (Punto 6): qué cubre la Entrevista IA — ver ENFOQUES_ENTREVISTA (+ «operativo», 2026-10-10).
     enfoque_entrevista: Mapped[str] = mapped_column(String(30), default="profesional")
     # Plantillas de conversación (2026-10-09): guiones de ESTA vacante por actividad de su ruta — nunca de la Cuenta ni de
     # la plantilla de vacante. {"secciones": {entrevista_whatsapp|entrevista_avatar|llamada: {enfoque, temas[],
@@ -1181,8 +1181,11 @@ def texto_sueldo(desde: Optional[int], hasta: Optional[int], moneda: str = "MXN"
     monto = hasta if not desde else desde
     return f"${monto:,}{cola}"
 
-# Fase 4 (Punto 6): enfoque de la Entrevista IA por vacante. Solo estos 2 niveles — nunca más.
-ENFOQUES_ENTREVISTA = ["profesional", "profesional_personal"]
+# Fase 4 (Punto 6): enfoque de la Entrevista IA por vacante. 2026-10-10 (Cambio 1, decisión del usuario): + «operativo»
+# (sugerido para Masivos) — guion ARMADO por secciones fijas + Biblioteca de Perfiles (services/entrevista_operativa.py).
+ENFOQUES_ENTREVISTA = ["profesional", "profesional_personal", "operativo"]
+TEXTO_ENFOQUE = {"profesional": "Profesional", "profesional_personal": "Profesional y personal",
+                 "operativo": "Operativo (sugerido para Masivos)"}
 
 
 class UsuarioCuenta(Base):
@@ -2638,7 +2641,7 @@ ESTADOS_PASO = {"pendiente": "Pendiente", "en_curso": "En curso", "completada": 
                 "cancelada": "Cancelada"}
 RESULTADOS_PASO = {"favorable": "Favorable", "con_observaciones": "Con observaciones", "no_favorable": "No favorable"}
 # Tipos de entrevista HUMANA: cada uno genera su guion (ia.guion_entrevista_humana). La Entrevista Red Human usa
-# ENFOQUES_ENTREVISTA (solo dos niveles; no agregar más).
+# ENFOQUES_ENTREVISTA.
 TIPOS_ENTREVISTA_HUMANA = {"general": "General de RH", "tecnica": "Técnica con el área", "jefe_directo": "Con jefe directo",
                            "valores": "Cultura y valores"}
 # Avance automático: nunca SALE de Contratación (a Onboarding solo con «Iniciar Onboarding») ni de Onboarding.

@@ -575,6 +575,31 @@ export interface GuionConversacion {
   enfoque: string;
   temas: string[];
   preguntas: string[];
+  /** 2026-10-10: guion OPERATIVO armado por secciones (fijo · biblioteca · IA). */
+  operativo?: { oficio: string; nombre_oficio: string; secciones: { clave: string; titulo: string; origen: string; preguntas: string[] }[]; indispensables: string[] };
+}
+
+/** Entrevista operativa (2026-10-10): perfil de un oficio de la Biblioteca (fija) o su copia ajustada para UNA vacante. */
+export interface PerfilOperativo {
+  oficio: string;
+  nombre?: string;
+  datos: string[];
+  situacion: { pregunta: string; esperado?: unknown[] };
+  sinonimos?: string[];
+  excluyentes?: string[];
+  editado?: boolean;
+}
+export interface OficioBiblioteca {
+  oficio: string;
+  nombre: string;
+  sinonimos: string[];
+  excluyentes: string[];
+  datos: string[];
+  situacion: { pregunta: string; esperado: string[] };
+}
+
+export function fetchPerfilesOperativos() {
+  return get<{ oficios: OficioBiblioteca[]; maxIndispensables: number }>("/vacantes/perfiles-operativos");
 }
 export interface MetaGuion {
   generado_en?: string;
@@ -606,6 +631,9 @@ export interface VistaGuiones {
   meta: Record<string, MetaGuion>;
   huella: string;
   desactualizado: boolean;
+  /** Enfoque operativo: el perfil del oficio (copia propia de la vacante o el detectado en la biblioteca). */
+  perfilOperativo?: PerfilOperativo | null;
+  perfilOperativoPropio?: boolean;
 }
 /** Lo que regresa «Generar»: solo las secciones de la ruta (los prefiltros viajan en preguntas_filtro*). */
 export interface GuionesGenerados {
@@ -698,6 +726,8 @@ export interface DatosVacante extends SueldoEstructurado {
   enfoque_entrevista?: EnfoqueEntrevista;
   /** Ruta elegida en el formulario; sin ella, la predeterminada de la Cuenta. */
   proceso?: ProcesoEntrada;
+  /** Enfoque operativo: oficio de la Biblioteca ajustado para esta vacante (sin él, se detecta por el puesto). */
+  perfil_operativo?: PerfilOperativo | null;
   guiones_actuales?: { preguntas_filtro?: CriterioFiltro[]; preguntas_filtro_whatsapp?: CriterioFiltro[]; secciones?: Partial<Record<ClaveGuion, GuionConversacion>> };
   /** Secciones con ediciones de RH que NO se regeneran. */
   conservar?: ClaveGuion[];
@@ -806,7 +836,7 @@ export function crearVacante(
     /** Proceso configurable (2026-10-06): sin mandar = la plantilla predeterminada de la Cuenta. */
     proceso?: ProcesoEntrada;
     /** Plantillas de conversación (2026-10-09). */
-    guiones?: { secciones: Partial<Record<ClaveGuion, GuionConversacion>>; meta: Record<string, MetaGuion> };
+    guiones?: { secciones: Partial<Record<ClaveGuion, GuionConversacion>>; meta: Record<string, MetaGuion>; perfil_operativo?: PerfilOperativo | null };
   },
 ) {
   return post<Vacante>("/vacantes", datos);
@@ -835,9 +865,10 @@ export function nombreEtapa(etapa: string): string {
   return ETIQUETA_ETAPA[etapa] ?? etapa;
 }
 
-/** Fase 4 (Punto 6): solo 2 niveles, nunca más. */
-export type EnfoqueEntrevista = "profesional" | "profesional_personal";
+/** Fase 4 (Punto 6) + 2026-10-10: «operativo» (guion ARMADO con la Biblioteca de Perfiles, sugerido para Masivos). */
+export type EnfoqueEntrevista = "profesional" | "profesional_personal" | "operativo";
 export const ENFOQUES_ENTREVISTA: { valor: EnfoqueEntrevista; texto: string; detalle: string }[] = [
+  { valor: "operativo", texto: "Operativo (sugerido para Masivos)", detalle: "Guion armado en 6 secciones: trayectoria, verificación del oficio (Biblioteca de Perfiles), hasta 3 indispensables, situación actual, motivación y logística. Recomendación por experiencia, procedimiento, indispensables y logística." },
   { valor: "profesional", texto: "Profesional", detalle: "Experiencia, conocimientos, responsabilidades, criterio, decisiones, comunicación, presión, motivadores laborales, estilo de trabajo, objetivos profesionales." },
   { valor: "profesional_personal", texto: "Profesional + personal", detalle: "Lo anterior más objetivos personales no sensibles, prioridades, motivadores amplios, disciplina, valores y visión de futuro." },
 ];

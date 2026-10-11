@@ -599,7 +599,7 @@ export interface Vacante {
   cliente?: string | null;
   clienteId?: number | null;
   /** Fase 4 (Punto 6): enfoque de la Entrevista IA. */
-  enfoqueEntrevista?: "profesional" | "profesional_personal";
+  enfoqueEntrevista?: "profesional" | "profesional_personal" | "operativo";
   responsable?: string | null;
   colaboradores?: string[];
   mostrarClienteCandidato?: boolean;

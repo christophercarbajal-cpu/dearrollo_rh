@@ -248,6 +248,7 @@ class GenerarIn(BaseModel):
     proceso: Optional[dict] = None
     guiones_actuales: Optional[dict] = None  # {preguntas_filtro, preguntas_filtro_whatsapp, secciones: {clave: guion}}
     conservar: List[str] = []
+    perfil_operativo: Optional[dict] = None  # 2026-10-10: oficio de la Biblioteca (ajustado para esta vacante), enfoque operativo
 
     def ubicacion_texto(self) -> str:
         return texto_ubicacion(self.ubicacion_estado, self.ubicacion_municipio, self.ubicacion)
@@ -334,6 +335,13 @@ def generar(
                "requisitos": list(resultado.requisitos_indispensables), "requisitos_deseables": list(resultado.requisitos_deseables),
                "ubicacion": datos.ubicacion_texto(), "modalidad": datos.modalidad, "sueldo": datos.sueldo_texto() or "A convenir",
                "enfoque_entrevista": datos.enfoque_entrevista if datos.enfoque_entrevista in ENFOQUES_ENTREVISTA else "profesional", "horario": ""}
+    if datos.enfoque_entrevista == "operativo" and datos.perfil_operativo:
+        from ..services import entrevista_operativa as eop
+
+        try:
+            datos_g["perfil_operativo"] = eop.normalizar_perfil(datos.perfil_operativo)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     try:
         g = sgui.generar(datos_g, pasos_ruta, vigentes, conservar=datos.conservar, empresa=empresa)
     except sgui.ErrorGuion as e:
@@ -540,6 +548,45 @@ def _proceso_nuevo(db: Session, cuenta_id: int, datos: Optional[dict]) -> dict:
         return sproc.proceso_para_vacante(db, cuenta_id, {}, datos)
     except sproc.ErrorProceso as e:
         raise HTTPException(e.status, e.mensaje)
+
+
+@router.get("/perfiles-operativos")
+def perfiles_operativos(_: Usuario = Depends(usuario_actual)):
+    """Biblioteca de Perfiles de la entrevista operativa (2026-10-10): 10 oficios fijos. Solo lectura — se ajustan
+    por vacante (`PUT /vacantes/{codigo}/perfil-operativo`), nunca globalmente."""
+    from ..services import entrevista_operativa as eop
+
+    return {"oficios": eop.biblioteca_publica(), "secciones": [{"clave": k, "titulo": t, "origen": o} for k, t, o in eop.SECCIONES],
+            "maxIndispensables": eop.MAX_INDISPENSABLES}
+
+
+class PerfilOperativoIn(BaseModel):
+    oficio: Optional[str] = None  # None = volver al de la biblioteca detectado por el puesto
+    datos: Optional[List[str]] = None
+    situacion: Optional[dict] = None
+    sinonimos: Optional[List[str]] = None
+    excluyentes: Optional[List[str]] = None
+
+
+@router.put("/{codigo}/perfil-operativo")
+def guardar_perfil_operativo(
+    codigo: str, datos: PerfilOperativoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """Ajusta el perfil del oficio SOLO para esta vacante (copia de la biblioteca). Los guiones ya generados quedan
+    «desactualizados» hasta que RH los vuelva a generar; las entrevistas en curso conservan el suyo."""
+    from ..services import guiones as sgui
+
+    v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    entrada = None if not datos.oficio else {k: x for k, x in datos.model_dump().items() if x is not None}
+    try:
+        sgui.guardar_perfil_operativo(v, entrada)
+    except sgui.ErrorGuion as e:
+        raise HTTPException(e.status, e.mensaje)
+    registrar(db, u.nombre, "perfil_operativo_actualizado", "vacante", v.codigo,
+              {"oficio": datos.oficio or "biblioteca", "editado": bool(((v.guiones or {}).get("perfil_operativo") or {}).get("editado"))})
+    db.commit()
+    return _salida_rh(db, v)
 
 
 @router.get("/slug/{slug}")

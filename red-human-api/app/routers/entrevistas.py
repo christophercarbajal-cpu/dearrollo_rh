@@ -373,7 +373,9 @@ def turno(token: str, datos: TurnoIn, db: Session = Depends(get_db)):
         raise HTTPException(403, "La entrevista no está en curso.")
 
     historial = list(e.transcript or []) + [{"rol": "user", "texto": datos.texto}]
-    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial, preguntas=list((e.guion or {}).get("preguntas") or []))
+    from ..services.entrevistas import preguntas_de
+
+    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial, preguntas=preguntas_de(e))
     e.transcript = historial + [{"rol": "assistant", "texto": t.respuesta}]
     e.ultima_actividad_en = datetime.now(timezone.utc)
     db.commit()
@@ -540,7 +542,15 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
     )
     if faltante and not ev.faltante:
         ev.faltante = faltante
-    e.evaluacion = ev.model_dump()
+    operativa = None
+    if (e.guion or {}).get("operativo"):
+        # 2026-10-10 (Cambio 1): entrevista OPERATIVA — criterios A-D + alertas; la recomendación sale de la regla estricta
+        # (falla en indispensables o logística → «No recomendable»), nunca descarta.
+        from ..services import entrevista_operativa as eop
+
+        operativa, _ = eop.evaluar(e.transcript or [], e.guion or {}, respuestas_previas(p) if p else [], v.titulo if v else "")
+        ev = eop.aplicar(ev, operativa)
+    e.evaluacion = {**ev.model_dump(), **({"operativa": operativa} if operativa else {})}
     e.estado = "evaluada"
     # p.score / p.evidencia son el resultado de Luna sobre el CV (ver ia.AjustePerfil,
     # candidatos._aplicar_cv) — NUNCA se tocan aquí. El resultado del avatar vive completo y

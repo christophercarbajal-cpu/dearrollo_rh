@@ -1942,7 +1942,10 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
   const ultimaEntrevista = c.entrevistas?.[c.entrevistas.length - 1];
   // 2026-09-13: solo una entrevista EVALUADA alimenta la Evaluación Integral (interrumpida/parcial no)
   const evalAvatar = (ultimaEntrevista?.estado === "evaluada" ? ultimaEntrevista?.evaluacion : null) as
-    | { resumen?: string; fortalezas?: string[]; riesgos?: string[]; areas_desarrollo?: string[]; perfil?: PerfilProfundo | null; match_perfil?: number; recomendacion?: string; faltante?: string[] }
+    | { resumen?: string; fortalezas?: string[]; riesgos?: string[]; areas_desarrollo?: string[]; perfil?: PerfilProfundo | null; match_perfil?: number; recomendacion?: string; faltante?: string[];
+        /* 2026-10-10: entrevista operativa — criterios A-D y recomendación estricta (nunca descarta) */
+        operativa?: { nombre_oficio?: string; recomendacion_texto: string; recomendacion: string; alertas: string[];
+          criterios: Record<string, { nombre: string; resultado: string; texto: string; evidencia: string }> } }
     | null
     | undefined;
 
@@ -2054,6 +2057,31 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
             </div>
           </div>
           <p className="mt-2 text-sm leading-relaxed text-ink">{evalAvatar.resumen}</p>
+          {evalAvatar.operativa && (
+            <div className="mt-3 rounded-xl border border-border-soft bg-surface p-3">
+              <p className="font-mono text-[11px] font-bold uppercase tracking-wider text-ink-3">
+                Entrevista operativa{evalAvatar.operativa.nombre_oficio ? ` · ${evalAvatar.operativa.nombre_oficio}` : ""}
+              </p>
+              <p className={cn("mt-1 text-sm font-bold", evalAvatar.operativa.recomendacion === "no_recomendable" ? "text-bad"
+                : evalAvatar.operativa.recomendacion === "recomendable" ? "text-good" : "text-warn")}>
+                {evalAvatar.operativa.recomendacion_texto}
+                <span className="ml-1 text-xs font-normal text-ink-3">— solo recomienda; la decisión es de RH.</span>
+              </p>
+              <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                {["A", "B", "C", "D"].map((k) => {
+                  const cr = evalAvatar.operativa!.criterios[k];
+                  if (!cr) return null;
+                  return (
+                    <li key={k} className="text-xs leading-relaxed text-ink-2">
+                      <b className="text-ink">{k} · {cr.nombre}:</b>{" "}
+                      <span className={cr.resultado === "cumple" ? "text-good" : cr.resultado === "no_cumple" ? "text-bad" : "text-warn"}>{cr.texto}</span>
+                      {cr.evidencia ? <span className="block text-ink-3">{cr.evidencia}</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
           {Boolean(evalAvatar.faltante?.length) && (
             <p className="mt-2 text-xs leading-relaxed text-warn">La entrevista no cubrió: {evalAvatar.faltante!.join(", ")} — validar en la Entrevista Humana.</p>
           )}

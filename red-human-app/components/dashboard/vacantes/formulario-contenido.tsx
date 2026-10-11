@@ -34,6 +34,7 @@ import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
 import type { Vacante } from "@/lib/data";
+import { PerfilOperativoCampo, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
 import {
   generarVacanteIA,
   ENFOQUES_ENTREVISTA,
@@ -51,6 +52,7 @@ import {
   type PeriodicidadSueldo,
   type Plantilla,
   type VacanteGenerada,
+  type PerfilOperativo,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -103,9 +105,13 @@ export interface GuionesForm {
   editadas: ClaveGuion[];
   /** La API dice que los datos de la vacante cambiaron después de generar. */
   desactualizado: boolean;
+  /** 2026-10-10 (enfoque operativo): oficio de la Biblioteca ajustado SOLO para esta vacante; null = se detecta por el puesto. */
+  perfil_operativo?: PerfilOperativo | null;
+  /** Nombre del oficio que detectó la API (cuando no hay perfil propio). */
+  perfil_detectado?: string;
 }
 
-export const GUIONES_VACIOS: GuionesForm = { secciones: {}, meta: {}, aplican: [], editadas: [], desactualizado: false };
+export const GUIONES_VACIOS: GuionesForm = { secciones: {}, meta: {}, aplican: [], editadas: [], desactualizado: false, perfil_operativo: null };
 
 export const CONTENIDO_VACIO: ContenidoVacante = {
   titulo: "",
@@ -227,7 +233,14 @@ export function guionesDesdeVacante(v: Vacante): GuionesForm {
     aplican: g.aplican ?? [],
     editadas: g.secciones.filter((s) => s.editado).map((s) => s.clave),
     desactualizado: Boolean(g.desactualizado),
+    perfil_operativo: g.perfilOperativoPropio && g.perfilOperativo ? perfilForm(g.perfilOperativo) : null,
+    perfil_detectado: g.perfilOperativo?.nombre ?? "",
   };
+}
+
+/** Lo que RH ajusta del perfil del oficio para ESTA vacante: el oficio, sus 3 datos y la situación (lo esperado se conserva). */
+export function perfilForm(p: PerfilOperativo): PerfilOperativo {
+  return { oficio: p.oficio, nombre: p.nombre, datos: [...(p.datos ?? [])].slice(0, 3), situacion: { pregunta: p.situacion?.pregunta ?? "" } };
 }
 
 /** CRUD (2026-09-15): el formulario compartido en MODO EDICIÓN — se puebla con la vacante existente
@@ -306,6 +319,8 @@ export function aplicarGuionesGenerados(base: ContenidoVacante, g: VacanteGenera
       aplican: gg.aplican,
       editadas: base.guiones.editadas.filter((k) => conservadas.has(k)),
       desactualizado: false,
+      perfil_operativo: base.guiones.perfil_operativo ?? null,
+      perfil_detectado: base.guiones.perfil_detectado,
     },
   };
 }
@@ -386,7 +401,11 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     avisos_cumplimiento: avisosVigentes(c),
     texto_whatsapp: c.texto_whatsapp,
     texto_bolsa: c.texto_bolsa,
-    guiones: { secciones: c.guiones.secciones, meta: c.guiones.meta },
+    guiones: {
+      secciones: c.guiones.secciones,
+      meta: c.guiones.meta,
+      ...(c.enfoque_entrevista === "operativo" ? { perfil_operativo: c.guiones.perfil_operativo ?? null } : {}),
+    },
   };
 }
 
@@ -664,6 +683,7 @@ export function FormularioContenidoVacante({
       mostrar_cliente_candidato: mostrarCliente,
       responsabilidades: p.responsabilidades,
       enfoque_entrevista: value.enfoque_entrevista,
+      ...(value.enfoque_entrevista === "operativo" && value.guiones.perfil_operativo ? { perfil_operativo: value.guiones.perfil_operativo } : {}),
       ...(conGuiones
         ? {
             proceso: rutaGeneracion,
@@ -751,6 +771,21 @@ export function FormularioContenidoVacante({
             {ENFOQUES_ENTREVISTA.find((e) => e.valor === value.enfoque_entrevista)?.detalle}
           </p>
         </div>
+        {conGuiones && value.enfoque_entrevista !== "operativo" && rutaMasiva(rutaGeneracion) && (
+          <p className="text-xs text-ink-3">
+            Para rutas Masivos se sugiere el enfoque Operativo.{" "}
+            <button type="button" className="font-semibold text-brand underline" onClick={() => set("enfoque_entrevista")("operativo")}>
+              Usar Operativo
+            </button>
+          </p>
+        )}
+        {conGuiones && value.enfoque_entrevista === "operativo" && (
+          <PerfilOperativoCampo
+            value={value.guiones.perfil_operativo ?? null}
+            detectado={value.guiones.perfil_detectado ?? ""}
+            onChange={(p) => onChange({ ...value, guiones: { ...value.guiones, perfil_operativo: p } })}
+          />
+        )}
       </Seccion>
 
       {/* 2026-10-09: «Proceso de selección» ANTES de generar — se genera solo lo de las actividades de la ruta */}

@@ -532,8 +532,25 @@ function CriteriosEditor({ items, onChange, cerradas = false }: { items: Criteri
 /** Guion de entrevista o llamada: enfoque + preguntas ABIERTAS (los temas se derivan de las preguntas). */
 function GuionEditor({ valor, onChange }: { valor: GuionConversacion | undefined; onChange: (g: GuionConversacion) => void }) {
   const g = valor ?? { enfoque: "", temas: [], preguntas: [] };
+  const rev = g.operativo?.revision;
   return (
     <div className="flex flex-col gap-3">
+      {/* 2026-10-11: revisión automática del guion operativo; si no pasó tras regenerar, RH ve qué falló */}
+      {rev && (rev.ok ? (
+        <p className="rounded-lg bg-good-soft px-3 py-2 text-[12px] text-good">
+          Revisión automática aprobada{rev.intentos > 1 ? ` (en el intento ${rev.intentos})` : ""}. Las preguntas marcadas
+          «[Solo si responde sí/no]» se hacen solo según la respuesta anterior.
+        </p>
+      ) : (
+        <div className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2">
+          <p className="font-semibold text-warn">
+            La revisión automática no pasó{rev.intentos > 1 ? ` después de ${rev.intentos} intentos` : ""}. Corrige esto antes de usarlo:
+          </p>
+          <ul className="mt-1 list-disc pl-4">
+            {rev.problemas.map((p) => <li key={p}>{p}</li>)}
+          </ul>
+        </div>
+      ))}
       <Area label="Enfoque" value={g.enfoque} onChange={(enfoque) => onChange({ ...g, enfoque })} rows={2} />
       <ListaEditable
         label="Preguntas (abiertas, en orden)"

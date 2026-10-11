@@ -2844,17 +2844,20 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
     con_ia = False
     crudo = GuionesIA()
     client = _client()
-    # 2026-10-10 (Cambio 1): con enfoque OPERATIVO los guiones NO los inventa la IA — se ARMAN con piezas fijas, la
-    # Biblioteca de Perfiles y los indispensables (estos sí los redacta la IA, UNA sola vez para todas las secciones).
+    # 2026-10-11 (versión definitiva): con enfoque OPERATIVO el guion lo redacta la IA con su prompt propio (6 secciones,
+    # ≤ 15 palabras, condicionales) y pasa por la REVISIÓN automática (regenera hasta 2 veces); UNA generación para todas
+    # las secciones. Sin IA: el guion determinista (Biblioteca de Perfiles + piezas fijas).
     armados: dict = {}
     if enfoque == "operativo" and guion_claves:
+        import copy as _copy
+
         from . import entrevista_operativa as eop
 
-        preguntas_indisp, ia_indisp = eop.redactar_indispensables(ficha.titulo, ficha.requisitos_indispensables)
+        guion_op, ia_op = eop.generar_guion(ficha.titulo, ficha.perfil_operativo, ficha.requisitos_indispensables,
+                                            ubicacion=ficha.ubicacion, horario=ficha.horario, responsabilidades=ficha.responsabilidades)
         for c in guion_claves:
-            armados[c] = eop.armar_guion(ficha.titulo, ficha.perfil_operativo, ficha.requisitos_indispensables, preguntas_indisp,
-                                         ubicacion=ficha.ubicacion, horario=ficha.horario)
-        con_ia = con_ia or ia_indisp
+            armados[c] = _copy.deepcopy(guion_op)
+        con_ia = con_ia or ia_op
         guion_claves = []
     if client is not None and claves and [c for c in claves if c not in armados]:
         def lista(xs: List[str]) -> str:

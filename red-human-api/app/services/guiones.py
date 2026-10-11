@@ -37,6 +37,7 @@ SECCION_DE_PASO = {"entrevista_agente": "entrevista_avatar", "entrevista_whatsap
                    "solicitud_web": "prefiltro_web"}
 TIPOS_PREGUNTA_CERRADA = ("si_no", "numero", "opcion")
 MAX_PREGUNTAS = 15
+MAX_PREGUNTAS_OPERATIVO = 20  # 6 secciones con condicionales
 
 
 class ErrorGuion(Exception):
@@ -176,19 +177,26 @@ def normalizar_guion(g) -> dict:
     from . import ia
 
     g = g if isinstance(g, dict) else {}
-    preguntas = [_texto(x, 300) for x in (g.get("preguntas") or []) if _texto(x)][:MAX_PREGUNTAS]
-    preguntas = ia.abrir_preguntas(preguntas)
+    from . import entrevista_operativa as eop
+
+    op = eop.normalizar_operativo(g.get("operativo"))
+    # 2026-10-11: el guion OPERATIVO lleva preguntas de sí/no con condicionales («[Solo si responde sí] …»): no se «abren»
+    # y admite las 6 secciones completas
+    preguntas = [_texto(x, 300) for x in (g.get("preguntas") or []) if _texto(x)][:MAX_PREGUNTAS_OPERATIVO if op else MAX_PREGUNTAS]
+    if not op:
+        preguntas = ia.abrir_preguntas(preguntas)
     temas = [_texto(x, 160) for x in (g.get("temas") or []) if _texto(x)][:MAX_PREGUNTAS]
     if not preguntas and not temas:
         return {}
     salida = {"enfoque": _texto(g.get("enfoque"), 500), "temas": temas or [p.rstrip("?.").lstrip("¿") for p in preguntas],
               "preguntas": preguntas}
-    # 2026-10-10: guion OPERATIVO — se conserva su estructura (secciones, oficio y perfil congelado para la evaluación)
-    from . import entrevista_operativa as eop
-
-    op = eop.normalizar_operativo(g.get("operativo"))
+    # 2026-10-10: guion OPERATIVO — se conserva su estructura (secciones, oficio y perfil congelado para la evaluación).
+    # 2026-10-11: la revisión automática se recalcula sobre las preguntas vigentes (si RH edita, ve lo que ya no cumple)
     if op:
         salida["operativo"] = op
+        rev = op.get("revision") or {"intentos": 1, "con_ia": False}
+        problemas = eop.revisar_guion(salida)
+        op["revision"] = {**rev, "ok": not problemas, "problemas": problemas[:20]}
     return salida
 
 

@@ -12,6 +12,14 @@ En lugar de que la IA invente todo el guion, el enfoque «operativo» ARMA la en
 Biblioteca de Perfiles = 10 oficios en código (`BIBLIOTECA`): nunca se editan globalmente. Cada vacante guarda SU copia
 (`Vacante.guiones["perfil_operativo"]`) y solo esa copia se ajusta.
 
+Generación (2026-10-11, versión definitiva): `generar_guion` pide a la IA el guion completo con `PROMPT_GENERACION`
+(«Eres un reclutador experto en personal operativo en México…»): 6 secciones en orden estricto, una pregunta por línea,
+máximo 15 palabras, y condicionales «[Solo si responde sí]» / «[Solo si responde no]» (aplican a la pregunta anterior de sí
+o no). `revisar_guion` lo valida (un solo «?», ≤ 15 palabras, sin palabras prohibidas, 6 secciones, sin pedir documentos
+ni escolaridad); si falla se regenera con los problemas como retroalimentación (máximo 2 veces) y, si el tercer intento
+tampoco pasa, se guarda con `operativo.revision.problemas` para que RH vea qué falló. Sin IA se usa el guion determinista
+(`armar_guion`), que cumple las mismas reglas.
+
 Evaluación (garantizada en código, `evaluar` + `aplicar`): cuatro criterios — A Experiencia en el oficio, B Procedimiento
 (la situación esperada), C Indispensables, D Logística. Si C o D fallan la recomendación es «No recomendable» (solo
 recomienda: NUNCA descarta; la decisión es de RH). Las alertas (empleo < 3 meses, despido, traslado > 90 min, …) van a
@@ -27,6 +35,10 @@ from pydantic import BaseModel, Field
 
 ENFOQUE = "operativo"
 MAX_INDISPENSABLES = 3
+MAX_PALABRAS = 15
+MAX_REGENERACIONES = 2  # 1 intento + 2 regeneraciones; al tercero que falle se guarda con los problemas a la vista de RH
+MARCA_SI = "[Solo si responde sí]"
+MARCA_NO = "[Solo si responde no]"
 TRASLADO_MAX_MIN = 90
 EMPLEO_MIN_MESES = 3
 
@@ -44,11 +56,11 @@ BIBLIOTECA: Dict[str, dict] = {
         "palabras_excluyentes": ["acomodar en tienda", "piso de venta"],
         "datos": [
             "¿Qué tipo de mercancía manejabas y en qué volumen aproximado?",
-            "¿Con qué sistema registrabas las entradas y salidas: papel, Excel, escáner o algún sistema como SAP?",
-            "¿Cómo hacían los inventarios o conteos y cada cuándo?",
+            "¿Cómo registrabas entradas y salidas: papel, Excel, escáner o sistema?",
+            "¿Cómo y cada cuándo hacían los inventarios o conteos?",
         ],
         "situacion": {
-            "pregunta": "Si al hacer un conteo te faltan 10 piezas contra el sistema, ¿qué haces paso a paso?",
+            "pregunta": "Si en un conteo faltan 10 piezas contra el sistema, ¿qué haces?",
             "esperado": [
                 {"texto": "Vuelve a contar", "palabras": ["recont", "volver a contar", "vuelvo a contar", "contar de nuevo", "otra vez"]},
                 {"texto": "Revisa movimientos y documentos", "palabras": ["revis", "movimiento", "remision", "factura", "salida", "entrada", "document"]},
@@ -64,12 +76,12 @@ BIBLIOTECA: Dict[str, dict] = {
         "excluyentes": ["Ayudar en casa o a familiares sin un empleo no cuenta como experiencia laboral."],
         "palabras_excluyentes": ["en mi casa", "a mi familia", "a mi papa", "a mi mama"],
         "datos": [
-            "¿En qué tipo de lugar trabajaste (fábrica, almacén, obra, tienda) y qué hacías en un día normal?",
+            "¿En qué tipo de lugar trabajaste y qué hacías en un día normal?",
             "¿Qué herramientas o equipo usabas en tu trabajo?",
             "¿Cómo era tu turno y cuántas horas pasabas de pie o cargando?",
         ],
         "situacion": {
-            "pregunta": "Si tu supervisor te pide terminar algo urgente pero falta tu equipo de seguridad, ¿qué haces?",
+            "pregunta": "Si te piden algo urgente y falta tu equipo de seguridad, ¿qué haces?",
             "esperado": [
                 {"texto": "No empieza sin equipo de seguridad", "palabras": ["no empiez", "no lo hago", "no trabajo sin", "sin equipo no", "primero el equipo"]},
                 {"texto": "Avisa al supervisor", "palabras": ["avis", "supervisor", "jefe", "report"]},
@@ -85,11 +97,11 @@ BIBLIOTECA: Dict[str, dict] = {
         "palabras_excluyentes": ["mudanza de un amigo", "de vez en cuando"],
         "datos": [
             "¿Qué cargabas y cuánto pesaba más o menos cada bulto o caja?",
-            "¿Cargabas a mano o con algún equipo como diablito o patín?",
+            "¿Cargabas a mano o con equipo como diablito o patín?",
             "¿Cuántos camiones o tráileres cargaban o descargaban en un turno?",
         ],
         "situacion": {
-            "pregunta": "Si al descargar un camión notas cajas dañadas o mojadas, ¿qué haces?",
+            "pregunta": "Si al descargar notas cajas dañadas o mojadas, ¿qué haces?",
             "esperado": [
                 {"texto": "Separa la mercancía dañada", "palabras": ["separ", "apart", "hago a un lado"]},
                 {"texto": "Reporta al supervisor o a recibo", "palabras": ["avis", "report", "supervisor", "encargado", "jefe", "recibo"]},
@@ -105,9 +117,9 @@ BIBLIOTECA: Dict[str, dict] = {
         "excluyentes": ["Usar patín manual (hidráulico) o diablito NO cuenta como operar montacargas."],
         "palabras_excluyentes": ["patin", "diablito", "patin hidraulico"],
         "datos": [
-            "¿Qué tipo de montacargas operabas: de combustión, eléctrico, retráctil o contrabalanceado?",
+            "¿Qué montacargas operabas: combustión, eléctrico, retráctil o contrabalanceado?",
             "¿Qué capacidad tenía y a qué altura acomodabas las tarimas?",
-            "¿Qué constancia o licencia tienes para operar montacargas (por ejemplo, la DC-3) y de qué año es?",
+            "¿Qué capacitación formal tienes para operar montacargas, como la DC-3?",
         ],
         "situacion": {
             "pregunta": "Antes de empezar tu turno, ¿qué le revisas al montacargas?",
@@ -130,11 +142,11 @@ BIBLIOTECA: Dict[str, dict] = {
         "palabras_excluyentes": ["en mi casa", "por mi cuenta"],
         "datos": [
             "¿Qué producto fabricabas o ensamblabas?",
-            "¿Qué máquina o estación operabas: recta, overlock, prensa o línea de ensamble?",
-            "¿Cuál era tu meta de producción por hora o por turno y cómo te iba con ella?",
+            "¿Qué máquina o estación operabas: recta, overlock, prensa o línea?",
+            "¿Cuál era tu meta de producción por turno y cómo te iba?",
         ],
         "situacion": {
-            "pregunta": "Si notas que las piezas que salen de tu estación traen un defecto, ¿qué haces?",
+            "pregunta": "Si las piezas de tu estación salen con un defecto, ¿qué haces?",
             "esperado": [
                 {"texto": "Detiene la máquina o la producción", "palabras": ["detengo", "par", "deten", "apag"]},
                 {"texto": "Separa las piezas defectuosas", "palabras": ["separ", "apart", "rechaz", "scrap"]},
@@ -154,7 +166,7 @@ BIBLIOTECA: Dict[str, dict] = {
             "¿Qué rutas o zonas cubrías y cuántas entregas hacías por día?",
         ],
         "situacion": {
-            "pregunta": "Si en la ruta el cliente no está para recibir la mercancía, ¿qué haces?",
+            "pregunta": "Si en la ruta el cliente no está para recibir, ¿qué haces?",
             "esperado": [
                 {"texto": "Intenta contactar al cliente", "palabras": ["llam", "marc", "contact", "busco al cliente"]},
                 {"texto": "Avisa a su base o supervisor", "palabras": ["avis", "base", "supervisor", "despacho", "jefe", "trafico"]},
@@ -170,12 +182,12 @@ BIBLIOTECA: Dict[str, dict] = {
         "excluyentes": ["Cobrar en un negocio familiar sin hacer corte de caja no cuenta igual."],
         "palabras_excluyentes": ["negocio de mi familia", "tienda de mi"],
         "datos": [
-            "¿Qué tipo de negocio era y a cuántos clientes atendías en un día?",
+            "¿Qué tipo de negocio era y cuántos clientes atendías al día?",
             "¿Qué formas de pago manejabas: efectivo, tarjeta, vales o transferencias?",
             "¿Cómo hacías tu corte de caja al cerrar?",
         ],
         "situacion": {
-            "pregunta": "Al hacer tu corte te faltan 200 pesos. ¿Qué haces?",
+            "pregunta": "Si al hacer tu corte te faltan 200 pesos, ¿qué haces?",
             "esperado": [
                 {"texto": "Vuelve a contar", "palabras": ["recont", "vuelvo a contar", "contar de nuevo", "otra vez"]},
                 {"texto": "Revisa tickets y movimientos", "palabras": ["revis", "ticket", "voucher", "movimiento", "cambio"]},
@@ -191,12 +203,12 @@ BIBLIOTECA: Dict[str, dict] = {
         "excluyentes": ["Cuidar un negocio familiar sin funciones formales de vigilancia no cuenta igual."],
         "palabras_excluyentes": ["negocio de mi familia", "cuidaba la casa"],
         "datos": [
-            "¿Qué tipo de instalación cuidabas: planta, plaza, residencial u oficinas?",
-            "¿Qué funciones hacías: control de accesos, rondines o revisión de vehículos?",
-            "¿Qué cursos o capacitación de seguridad privada has tomado?",
+            "¿Qué instalación cuidabas: planta, plaza, residencial u oficinas?",
+            "¿Qué funciones hacías: accesos, rondines o revisión de vehículos?",
+            "¿Qué cursos de seguridad privada has tomado?",
         ],
         "situacion": {
-            "pregunta": "Llega una persona que dice ser proveedor, pero no está en la lista de accesos. ¿Qué haces?",
+            "pregunta": "Si llega un proveedor que no está en la lista, ¿qué haces?",
             "esperado": [
                 {"texto": "No la deja pasar", "palabras": ["no la dejo", "no lo dejo", "no pasa", "esperar afuera", "espere"]},
                 {"texto": "Pide identificación", "palabras": ["identific", "ine", "gafete", "credencial"]},
@@ -212,12 +224,12 @@ BIBLIOTECA: Dict[str, dict] = {
         "excluyentes": ["La limpieza de tu propia casa no cuenta como experiencia laboral."],
         "palabras_excluyentes": ["mi casa", "en casa"],
         "datos": [
-            "¿Qué tipo de lugar limpiabas: oficinas, hospital, planta o plaza?",
-            "¿Qué productos químicos o máquinas usabas, como pulidora o hidrolavadora?",
-            "¿Cómo se organizaban las áreas y los horarios de limpieza?",
+            "¿Qué lugar limpiabas: oficinas, hospital, planta o plaza?",
+            "¿Qué químicos o máquinas usabas, como pulidora o hidrolavadora?",
+            "¿Cómo se organizaban las áreas y horarios de limpieza?",
         ],
         "situacion": {
-            "pregunta": "Si encuentras un derrame de un químico en un pasillo, ¿qué haces?",
+            "pregunta": "Si encuentras un químico derramado en un pasillo, ¿qué haces?",
             "esperado": [
                 {"texto": "Señaliza o acordona el área", "palabras": ["senal", "letrero", "acordon", "aislar", "cono", "piso mojado"]},
                 {"texto": "Usa equipo de protección", "palabras": ["guantes", "proteccion", "cubrebocas", "lentes", "equipo"]},
@@ -235,11 +247,11 @@ BIBLIOTECA: Dict[str, dict] = {
         "palabras_excluyentes": ["catalogo", "por mi cuenta", "por mi lado"],
         "datos": [
             "¿Qué producto vendías y en qué tipo de tienda?",
-            "¿Qué meta de venta tenías y cómo te iba con ella normalmente?",
+            "¿Qué meta de venta tenías y cómo te iba normalmente?",
             "¿Qué hacías además de vender: acomodo, inventario o cobro?",
         ],
         "situacion": {
-            "pregunta": "Un cliente se queja porque el precio del anaquel es menor que el que le cobran en caja. ¿Qué haces?",
+            "pregunta": "Si un cliente reclama que en caja le cobran más, ¿qué haces?",
             "esperado": [
                 {"texto": "Escucha al cliente", "palabras": ["escuch", "disculp", "calma", "atiend"]},
                 {"texto": "Verifica el precio", "palabras": ["verific", "revis", "checo", "confirm"]},
@@ -372,10 +384,20 @@ def biblioteca_publica() -> List[dict]:
 # ============================================================ ensamblaje de las 6 secciones
 
 
+def palabras(texto: str) -> int:
+    return len(str(texto or "").split())
+
+
+def _recorta(texto: str, n: int) -> str:
+    ws = str(texto or "").split()
+    return " ".join(ws[:n])
+
+
 def pregunta_indispensable_demo(req: str) -> str:
+    """Pregunta ABIERTA sobre un indispensable (≤ 15 palabras: el requisito se recorta si es largo)."""
     r = req.strip().rstrip(".")
     r = r[0].lower() + r[1:] if len(r) > 1 and not r[:2].isupper() else r
-    return f"Platícame dónde y cómo has cumplido con esto: {r}. Dame un ejemplo concreto."
+    return f"Sobre {_recorta(r, MAX_PALABRAS - 7)}, ¿dónde lo has hecho y cuánto tiempo?"
 
 
 class IndispensablesIA(BaseModel):
@@ -411,12 +433,39 @@ def redactar_indispensables(titulo: str, indispensables: List[str]) -> Tuple[Lis
     return [pregunta_indispensable_demo(r) for r in reqs], False
 
 
+def _si_cabe(pregunta: str, alterna: str) -> str:
+    return pregunta if palabras(pregunta) <= MAX_PALABRAS else alterna
+
+
 def preguntas_logistica(ubicacion: str = "", horario: str = "") -> List[str]:
-    traslado = (f"¿Cuánto tiempo harías de tu casa a {ubicacion.strip()} y en qué te transportarías?" if (ubicacion or "").strip()
-                else "¿Cuánto tiempo harías de tu casa al trabajo y en qué te transportarías?")
-    turno = (f"El horario es {horario.strip()}. ¿Cómo te acomoda con tus demás actividades?" if (horario or "").strip()
-             else "¿Qué horario o turno puedes cubrir?")
+    """Traslado, horario e inicio con los datos REALES de la vacante (≤ 15 palabras; si el dato es largo, versión corta)."""
+    general = "¿Cuánto tiempo haces de tu casa al trabajo y en qué transporte?"
+    traslado = _si_cabe(f"¿Cuánto tiempo haces de tu casa a {ubicacion.strip()} y en qué transporte?", general) \
+        if (ubicacion or "").strip() else general
+    turno = _si_cabe(f"El horario es {horario.strip()}, ¿cómo te acomoda?", "¿Qué horario o turno puedes cubrir?") \
+        if (horario or "").strip() else "¿Qué horario o turno puedes cubrir?"
     return [traslado, turno, "¿Cuándo podrías empezar a trabajar?"]
+
+
+def condicion_de(pregunta: str) -> Tuple[str, str]:
+    """(«si» | «no» | «», texto sin la marca). La condición aplica a la pregunta ANTERIOR (que es de sí o no)."""
+    t = " ".join(str(pregunta or "").split())
+    m = _RE_MARCA.match(t)
+    if m:
+        return ("no" if m.group(1).lower() == "no" else "si"), t[m.end():].strip()
+    return "", t
+
+
+_RE_MARCA = re.compile(r"^\[\s*solo si (?:responde|contesta|dice)\s+(s[ií]|no)\s*\]\s*", re.I)
+
+
+def con_condicion(texto: str, condicion: str) -> str:
+    texto = " ".join(str(texto or "").split())
+    return f"{MARCA_SI if condicion == 'si' else MARCA_NO} {texto}" if condicion in ("si", "no") else texto
+
+
+def texto_pregunta(pregunta: str) -> str:
+    return condicion_de(pregunta)[1]
 
 
 def armar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], preguntas_indisp: List[str], *,
@@ -427,23 +476,29 @@ def armar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], 
     reqs = [r for r in (indispensables or []) if str(r or "").strip()][:MAX_INDISPENSABLES]
     secciones = []
     secciones.append({"clave": "trayectoria", "titulo": "Trayectoria", "origen": "fijo", "preguntas": [
-        "Cuéntame de tu trabajo más reciente: dónde fue, qué hacías y cuánto tiempo estuviste.",
+        "¿Cuál fue tu trabajo más reciente y qué hacías ahí?",
+        "¿Cuánto tiempo trabajaste ahí?",
         "¿Por qué saliste de ese trabajo?",
     ]})
     if perfil:
         oficio = list(perfil.get("datos") or [])[:3] + [str((perfil.get("situacion") or {}).get("pregunta") or "")]
     else:
-        oficio = [f"¿Qué experiencia tienes en un puesto de {puesto}?", "¿Qué tareas hacías en un día normal?"]
+        oficio = [_si_cabe(f"¿Qué experiencia tienes como {puesto}?", "¿Qué experiencia tienes en este tipo de puesto?"),
+                  "¿Qué hacías en un día normal de trabajo?"]
     secciones.append({"clave": "oficio", "titulo": "Verificación del oficio", "origen": "biblioteca" if perfil else "fijo",
                       "preguntas": [q for q in oficio if q.strip()]})
-    if reqs:
-        secciones.append({"clave": "indispensables", "titulo": "Indispensables", "origen": "ia",
-                          "preguntas": list(preguntas_indisp or [])[:len(reqs)] or [pregunta_indispensable_demo(r) for r in reqs],
-                          "requisitos": reqs})
-    secciones.append({"clave": "situacion_actual", "titulo": "Situación actual", "origen": "fijo",
-                      "preguntas": ["Platícame cómo está tu situación laboral ahora mismo."]})
+    # 2026-10-11: las 6 secciones SIEMPRE están; sin indispensables por explorar, una pregunta general del puesto
+    secciones.append({"clave": "indispensables", "titulo": "Indispensables", "origen": "ia" if reqs else "fijo",
+                      "preguntas": (list(preguntas_indisp or [])[:len(reqs)] or [pregunta_indispensable_demo(r) for r in reqs]) if reqs
+                      else ["¿Hay algo del puesto que se te complique cumplir?"],
+                      "requisitos": reqs})
+    secciones.append({"clave": "situacion_actual", "titulo": "Situación actual", "origen": "fijo", "preguntas": [
+        "¿Estás trabajando actualmente?",
+        con_condicion("¿Por qué quieres cambiar de trabajo?", "si"),
+        con_condicion("¿Desde cuándo no trabajas?", "no"),
+    ]})
     secciones.append({"clave": "motivacion", "titulo": "Motivación", "origen": "fijo",
-                      "preguntas": [f"¿Qué te interesa de este trabajo de {puesto}?"]})
+                      "preguntas": [_si_cabe(f"¿Qué te interesa de este trabajo de {puesto}?", "¿Qué te interesa de este trabajo?")]})
     secciones.append({"clave": "logistica", "titulo": "Logística", "origen": "fijo", "preguntas": preguntas_logistica(ubicacion, horario)})
     preguntas = [q for s in secciones for q in s["preguntas"]]
     perfil_congelado = None
@@ -460,6 +515,156 @@ def armar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], 
     }
 
 
+# ============================================================ generación con IA + revisión automática (2026-10-11)
+
+PROMPT_GENERACION = (
+    "Eres un reclutador experto en personal operativo en México (almacén, producción, logística, reparto, limpieza, "
+    "seguridad y ventas de piso). Redactas el guion de una entrevista por chat para UNA vacante, en español mexicano, de tú "
+    "y con palabras sencillas.\n"
+    "REGLAS ESTRICTAS:\n"
+    "1. Una sola pregunta por línea, con UN solo signo de interrogación (nada de dos preguntas en una).\n"
+    f"2. Máximo {MAX_PALABRAS} palabras por pregunta.\n"
+    "3. Estructura estricta de 6 secciones, en este orden y todas presentes: 1. Trayectoria, 2. Oficio, 3. Indispensables, "
+    "4. Situación actual, 5. Motivación, 6. Logística.\n"
+    "   - Trayectoria: último trabajo, qué hacía, cuánto tiempo estuvo y por qué salió.\n"
+    "   - Oficio: verifica la experiencia REAL con los 3 datos del perfil del oficio y termina con su situación TAL CUAL.\n"
+    f"   - Indispensables: una pregunta abierta por requisito (máximo {MAX_INDISPENSABLES}) que explore dónde y cuánto tiempo lo "
+    "ha cumplido; el candidato ya dijo en el prefiltro que lo cumple: nunca le preguntes si lo tiene.\n"
+    "   - Situación actual: si trabaja hoy, con preguntas condicionales para cada caso.\n"
+    "   - Motivación: qué le interesa de este trabajo.\n"
+    "   - Logística: traslado, horario e inicio, con los datos reales de la vacante.\n"
+    "4. Condicionales: una pregunta puede llevar condicion «si» (solo si responde sí) o «no» (solo si responde no); aplica "
+    "a la pregunta ANTERIOR, que debe contestarse con sí o no.\n"
+    "5. PROHIBIDO: preguntas de manual de RH (fortalezas, debilidades, virtudes, trabajo bajo presión, errores, «¿dónde te "
+    "ves en 5 años?»), pedir documentos (INE, CURP, RFC, comprobantes, actas, certificados) o hablar de escolaridad o "
+    "estudios, e inventar condiciones (sueldo, horario, ubicación) que no estén en los datos."
+)
+
+_RE_PROHIBIDAS = re.compile(r"\b(error|errores|equivocaste|presion|fortaleza|fortalezas|debilidad|debilidades|virtud|virtudes|"
+                            r"cualidad|cualidades|punto debil|puntos debiles|donde te ves|en cinco anos|en 5 anos|"
+                            r"deberiamos contratarte|te definirias)\b")
+
+
+def revisar_guion(guion: dict) -> List[str]:
+    """Revisión AUTOMÁTICA del guion operativo. Regresa la lista de problemas (vacía = aprobado)."""
+    problemas: List[str] = []
+    op = (guion or {}).get("operativo") or {}
+    preguntas = [q for q in (guion or {}).get("preguntas") or [] if str(q or "").strip()]
+    claves = [s.get("clave") for s in op.get("secciones") or [] if any(q in preguntas for q in s.get("preguntas") or [])]
+    faltan = [TITULO_SECCION[k] for k, _, _ in SECCIONES if k not in claves]
+    if faltan:
+        problemas.append("Faltan secciones: " + ", ".join(faltan) + ".")
+    orden = [k for k, _, _ in SECCIONES if k in claves]
+    if [k for k in claves if k in orden] != orden:
+        problemas.append("Las secciones no van en el orden 1. Trayectoria → 6. Logística.")
+    anterior = ""
+    for q in preguntas:
+        cond, t = condicion_de(q)
+        corto = t if len(t) <= 70 else t[:67] + "…"
+        if t.count("?") != 1 or t.count("¿") > 1:
+            problemas.append(f"«{corto}»: debe llevar UN solo signo de interrogación.")
+        if palabras(t) > MAX_PALABRAS:
+            problemas.append(f"«{corto}»: tiene {palabras(t)} palabras (máximo {MAX_PALABRAS}).")
+        hallada = _RE_PROHIBIDAS.search(_n(t))
+        if hallada:
+            problemas.append(f"«{corto}»: usa una palabra prohibida («{hallada.group(1)}»).")
+        if _RE_ESCOLARIDAD.search(_n(t)):
+            problemas.append(f"«{corto}»: pide documentos o habla de escolaridad.")
+        if cond and not anterior:
+            problemas.append(f"«{corto}»: es condicional pero no sigue a una pregunta de sí o no.")
+        if not cond:
+            anterior = q
+    return problemas
+
+
+class PreguntaIA(BaseModel):
+    texto: str = Field(description=f"UNA pregunta, máximo {MAX_PALABRAS} palabras, un solo signo de interrogación.")
+    condicion: Literal["", "si", "no"] = Field(default="", description="«si» = solo si respondió sí a la anterior; «no» = solo si "
+                                                                         "respondió no; vacío = siempre.")
+
+
+class SeccionIA(BaseModel):
+    clave: Literal["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica"]
+    preguntas: List[PreguntaIA]
+
+
+class GuionOperativoIA(BaseModel):
+    secciones: List[SeccionIA] = Field(description="Las 6 secciones en orden: trayectoria, oficio, indispensables, "
+                                                   "situacion_actual, motivacion, logistica.")
+
+
+def _desde_ia(crudo: GuionOperativoIA, base: dict) -> dict:
+    """Guion con el formato de siempre a partir de lo que redactó la IA (perfil e indispensables salen de `base`)."""
+    g = copy.deepcopy(base)
+    op = g["operativo"]
+    origen = {s["clave"]: s.get("origen") for s in op["secciones"]}
+    requisitos = next((s.get("requisitos") for s in op["secciones"] if s["clave"] == "indispensables"), []) or []
+    situacion = str(((op.get("perfil") or {}).get("situacion") or {}).get("pregunta") or "")
+    secciones = []
+    for s in crudo.secciones:
+        qs = [con_condicion(x.texto, x.condicion) for x in s.preguntas if (x.texto or "").strip()][:6]
+        if s.clave == "oficio" and situacion and _n(situacion) not in {_n(texto_pregunta(q)) for q in qs}:
+            qs = qs[:5] + [situacion]  # la situación del oficio va TAL CUAL (la evaluación B la reconoce)
+        if qs:
+            secciones.append({"clave": s.clave, "titulo": TITULO_SECCION[s.clave], "origen": "ia" if s.clave != "oficio" else origen.get("oficio", "ia"),
+                              "preguntas": qs, **({"requisitos": requisitos} if s.clave == "indispensables" else {})})
+    op["secciones"] = secciones
+    g["preguntas"] = [q for s in secciones for q in s["preguntas"]]
+    g["temas"] = [s["titulo"] for s in secciones]
+    return g
+
+
+def con_revision(guion: dict, intentos: int, con_ia: bool, problemas: Optional[List[str]] = None) -> dict:
+    problemas = revisar_guion(guion) if problemas is None else problemas
+    guion.setdefault("operativo", {})["revision"] = {"ok": not problemas, "intentos": intentos, "con_ia": con_ia, "problemas": problemas[:20]}
+    return guion
+
+
+def generar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], *, ubicacion: str = "", horario: str = "",
+                  responsabilidades: Optional[List[str]] = None) -> Tuple[dict, bool]:
+    """Guion operativo definitivo: la IA lo redacta con `PROMPT_GENERACION`, `revisar_guion` lo valida y, si falla, se
+    regenera con los problemas como retroalimentación (máximo `MAX_REGENERACIONES`). Si el último intento también falla se
+    guarda IGUAL con `operativo.revision.problemas` (RH ve qué falló). Sin IA: guion determinista (cumple las reglas)."""
+    from . import ia
+
+    reqs = [r for r in (indispensables or []) if str(r or "").strip()][:MAX_INDISPENSABLES]
+    base = armar_guion(titulo, perfil, reqs, [], ubicacion=ubicacion, horario=horario)
+    client = ia._client()
+    if client is None:
+        return con_revision(base, 1, False), False
+    datos = "\n".join(f"- {x}" for x in (perfil or {}).get("datos") or []) or "- (sin perfil del oficio: pregunta por su experiencia en el puesto)"
+    situacion = ((perfil or {}).get("situacion") or {}).get("pregunta") or "(sin situación)"
+    entrada = (
+        f"Puesto: {titulo}\nOficio: {(perfil or {}).get('nombre') or 'no identificado'}\nDatos del oficio a verificar:\n{datos}\n"
+        f"Situación del oficio (cópiala tal cual): {situacion}\n"
+        f"Lo que NO cuenta como experiencia: {'; '.join((perfil or {}).get('excluyentes') or []) or 'n/a'}\n"
+        f"Requisitos indispensables a explorar:\n" + ("\n".join(f"- {r}" for r in reqs) or "- (ninguno: una pregunta general)") + "\n"
+        f"Responsabilidades: {'; '.join(responsabilidades or []) or '(sin dato)'}\n"
+        f"Ubicación: {ubicacion or '(sin dato)'}\nHorario: {horario or '(sin dato)'}"
+    )
+    ultimo, problemas = None, []
+    for intento in range(1, MAX_REGENERACIONES + 2):
+        retro = ("\n\nTu versión anterior NO pasó la revisión automática. Corrige EXACTAMENTE esto:\n" + "\n".join(f"- {p}" for p in problemas)) \
+            if problemas else ""
+        try:
+            resp = client.responses.parse(
+                model=ia.MODEL, instructions=PROMPT_GENERACION + f"\nPROHIBIDO preguntar sobre: {ia.DATOS_SENSIBLES_PROHIBIDOS}.",
+                input=entrada + retro, text_format=GuionOperativoIA,
+            )
+            g = _desde_ia(resp.output_parsed, base)
+        except Exception as ex:  # noqa: BLE001 — sin IA disponible: el guion determinista
+            print(f"[operativa] generar_guion (intento {intento}) cayó a modo determinista: {str(ex)[:200]}", flush=True)
+            break
+        problemas = revisar_guion(g)
+        ultimo = (g, intento, problemas)
+        if not problemas:
+            return con_revision(g, intento, True, []), True
+    if ultimo is not None:
+        print(f"[operativa] el guion de «{titulo}» no pasó la revisión tras {ultimo[1]} intentos: se guarda con sus problemas", flush=True)
+        return con_revision(ultimo[0], ultimo[1], True, ultimo[2]), True
+    return con_revision(base, 1, False), False
+
+
 def normalizar_operativo(op) -> Optional[dict]:
     """Conserva el bloque `operativo` de un guion (lo que RH edita del guion son las preguntas; esto es la estructura)."""
     if not isinstance(op, dict) or not isinstance(op.get("secciones"), list):
@@ -472,9 +677,14 @@ def normalizar_operativo(op) -> Optional[dict]:
                                                                                    if s.get("requisitos") else {})})
     if not secciones:
         return None
-    return {"oficio": op.get("oficio") if op.get("oficio") in BIBLIOTECA else "", "nombre_oficio": str(op.get("nombre_oficio") or "")[:80],
-            "secciones": secciones, "indispensables": _textos(op.get("indispensables"), 200, MAX_INDISPENSABLES),
-            "perfil": op.get("perfil") if isinstance(op.get("perfil"), dict) else None}
+    salida = {"oficio": op.get("oficio") if op.get("oficio") in BIBLIOTECA else "", "nombre_oficio": str(op.get("nombre_oficio") or "")[:80],
+              "secciones": secciones, "indispensables": _textos(op.get("indispensables"), 200, MAX_INDISPENSABLES),
+              "perfil": op.get("perfil") if isinstance(op.get("perfil"), dict) else None}
+    rev = op.get("revision")
+    if isinstance(rev, dict):
+        salida["revision"] = {"ok": bool(rev.get("ok")), "intentos": int(rev.get("intentos") or 1), "con_ia": bool(rev.get("con_ia")),
+                              "problemas": _textos(rev.get("problemas"), 300, 20)}
+    return salida
 
 
 # ============================================================ conversación: no repetir lo del prefiltro
@@ -607,7 +817,7 @@ def respuestas_por_seccion(transcript: List[dict], guion: dict) -> Dict[str, Lis
     """[(pregunta, respuesta)] por sección: cada mensaje de la entrevistadora se asigna a la pregunta del guion con más
     palabras en común; la respuesta es el siguiente mensaje del candidato."""
     op = (guion or {}).get("operativo") or {}
-    catalogo = [(s["clave"], q, set(_n(q).split())) for s in op.get("secciones") or [] for q in s.get("preguntas") or []]
+    catalogo = [(s["clave"], q, set(_n(texto_pregunta(q)).split())) for s in op.get("secciones") or [] for q in s.get("preguntas") or []]
     salida: Dict[str, List[Tuple[str, str]]] = {}
     actual: Optional[Tuple[str, str]] = None
     for m in transcript or []:
@@ -633,9 +843,9 @@ def alertas_deterministas(transcript: List[dict], guion: dict) -> List[str]:
     alertas: List[str] = []
     trayectoria = " ".join(r for _, r in por.get("trayectoria", []))
     candidato = " ".join(str(m.get("texto") or "") for m in transcript or [] if m.get("rol") == "user")
-    for _, r in por.get("trayectoria", []) or [("", candidato)]:
+    for q, r in por.get("trayectoria", []) or [("", candidato)]:
         meses = _meses(r)
-        if meses is not None and meses < EMPLEO_MIN_MESES and _RE_CONTEXTO_EMPLEO.search(_n(r)):
+        if meses is not None and meses < EMPLEO_MIN_MESES and (_RE_CONTEXTO_EMPLEO.search(_n(r)) or "cuanto tiempo" in _n(q)):
             alertas.append(f"Empleo reciente de menos de {EMPLEO_MIN_MESES} meses («{r.strip()[:90]}»).")
             break
     if _RE_DESPIDO.search(_n(trayectoria or candidato)):
@@ -649,7 +859,9 @@ def alertas_deterministas(transcript: List[dict], guion: dict) -> List[str]:
         elif tema in ("horario", "inicio") and _RE_NEGATIVA_LOGISTICA.search(_n(r)):
             alertas.append(("Horario condicionado" if tema == "horario" else "Fecha de inicio condicionada") + f": «{r.strip()[:90]}».")
     actual = " ".join(r for _, r in por.get("situacion_actual", []))
-    if _RE_TRABAJA.search(_n(actual)):
+    afirma_trabajar = any("trabajando actualmente" in _n(q) and _n(r).split()[:1] in (["si"], ["claro"], ["sip"], ["simon"])
+                          for q, r in por.get("situacion_actual", []) if _n(r))
+    if _RE_TRABAJA.search(_n(actual)) or afirma_trabajar:
         alertas.append("Trabaja actualmente: confirmar su fecha de salida y disponibilidad de inicio.")
     return alertas
 
@@ -667,6 +879,11 @@ def evaluar_demo(transcript: List[dict], guion: dict, previas: Optional[List[dic
 
     # A — experiencia en el oficio (trayectoria + datos del oficio)
     situacion_q = str((perfil.get("situacion") or {}).get("pregunta") or "")
+    if situacion_q and not any(q == situacion_q for q, _ in por.get("oficio", [])):
+        # guion redactado por la IA: la situación es la ÚLTIMA pregunta de la sección del oficio
+        sec = next((s for s in op.get("secciones") or [] if s.get("clave") == "oficio"), None)
+        if sec and sec.get("preguntas"):
+            situacion_q = sec["preguntas"][-1]
     resp_oficio = [r for q, r in por.get("oficio", []) if q != situacion_q]
     texto_a = " ".join([r for _, r in por.get("trayectoria", [])] + resp_oficio)
     if not texto_a.strip():

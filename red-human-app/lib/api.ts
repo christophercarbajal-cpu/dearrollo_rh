@@ -576,7 +576,11 @@ export interface GuionConversacion {
   temas: string[];
   preguntas: string[];
   /** 2026-10-10: guion OPERATIVO armado por secciones (fijo · biblioteca · IA). */
-  operativo?: { oficio: string; nombre_oficio: string; secciones: { clave: string; titulo: string; origen: string; preguntas: string[] }[]; indispensables: string[] };
+  operativo?: {
+    oficio: string; nombre_oficio: string; secciones: { clave: string; titulo: string; origen: string; preguntas: string[] }[]; indispensables: string[];
+    /** 2026-10-11: revisión automática (un solo «?», ≤ 15 palabras, sin palabras prohibidas, 6 secciones, sin documentos). */
+    revision?: { ok: boolean; intentos: number; con_ia: boolean; problemas: string[] };
+  };
 }
 
 /** Entrevista operativa (2026-10-10): perfil de un oficio de la Biblioteca (fija) o su copia ajustada para UNA vacante. */

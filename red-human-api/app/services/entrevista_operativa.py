@@ -755,7 +755,13 @@ def bloque_prompt(guion: dict, previas: List[dict]) -> str:
     return (
         "MODO OPERATIVO (guion ARMADO por Red Human; no inventes preguntas nuevas):\n"
         "Recorre las secciones EN ESTE ORDEN, una pregunta por mensaje, con las preguntas tal cual (solo adapta el tono). "
-        "Si la respuesta es vaga, repregunta UNA vez pidiendo un dato concreto (dónde, cuánto tiempo, qué equipo) y sigue.\n"
+        "Tu primer mensaje es directamente la primera pregunta: sin saludo ni presentación (ya se hizo).\n"
+        "CONDICIONALES: una pregunta marcada «[Solo si responde sí]» se hace SOLO si contestó que sí a la pregunta anterior; "
+        "«[Solo si responde no]», SOLO si contestó que no. Si no aplica, sáltala. Nunca escribas la marca.\n"
+        "RESPUESTA VAGA («normal», «de todo», «varias cosas»): pide UN solo dato concreto (dónde, cuánto tiempo o qué equipo) "
+        "y continúa con la siguiente pregunta aunque la segunda respuesta siga siendo general.\n"
+        "«NO ENTIENDO» o una pregunta de vuelta: reformula la MISMA pregunta con otras palabras más sencillas, sin cambiar de "
+        "tema ni pasar a la siguiente.\n"
         + "\n".join(lineas) + "\n"
         + (f"EXCLUYENTES DEL OFICIO ({perfil.get('nombre') or 'oficio'}): {excl} Si su experiencia es con algo excluyente, "
            "pregúntale con naturalidad si tiene experiencia con lo que pide el puesto; no le expliques la regla.\n" if excl else "")
@@ -763,6 +769,74 @@ def bloque_prompt(guion: dict, previas: List[dict]) -> str:
            + "\n".join(f"- {x}" for x in previo) + "\n" if previo else "")
         + "No hables de escolaridad ni pidas documentos: eso se valida en Documentos.\n"
     )
+
+
+# ============================================================ conversación sin IA (demo / respaldo) — 2026-10-11
+
+_RE_NO_ENTIENDE = re.compile(r"^(no (le )?entiendo( la pregunta)?|no entendi( la pregunta)?|no le entendi|no comprendo|como|que|mande|"
+                             r"a que te refieres|que quieres decir|que significa( eso)?|explicame|me explicas|perdon|no se a que te refieres)$")
+_RE_VAGA = re.compile(r"^(pues |este |mmm+ |eh )?(normal|lo normal|bien|muy bien|si bien|varias cosas|de todo|de todo un poco|"
+                      r"lo que sea|lo que me pidieran|lo que me pedian|nada en especial|cosas|muchas cosas|mas o menos|ahi nomas|"
+                      r"lo de siempre|pues nada|todo)$")
+_RE_SI_CHAT = re.compile(r"^(si|sii+|sip|simon|claro|obvio|por supuesto|afirmativo|asi es|correcto|exacto|ya|yes|ajam?|aja)\b")
+_RE_NO_CHAT = re.compile(r"^(no|nop|nel|negativo|nunca|para nada|tampoco|aun no|todavia no|ahorita no|ya no)\b")
+PREFIJO_REFORMULA = "Te lo pregunto de otra forma"
+PREFIJO_DATO = "Para tenerlo claro"
+
+
+def es_si(texto: str) -> bool:
+    return bool(_RE_SI_CHAT.match(_n(texto)))
+
+
+def es_no(texto: str) -> bool:
+    return bool(_RE_NO_CHAT.match(_n(texto)))
+
+
+def _reformula(q: str) -> str:
+    t = texto_pregunta(q).strip().lstrip("¿").rstrip("?").strip()
+    return f"{PREFIJO_REFORMULA}, con tus palabras: ¿{t[:1].lower() + t[1:]}?"
+
+
+def turno_demo(preguntas: List[str], historial: List[dict]) -> Tuple[str, bool]:
+    """Siguiente mensaje de la entrevistadora SIN IA (guion operativo). Respeta las condicionales «[Solo si responde
+    sí/no]», ante una respuesta vaga pide UN dato concreto (una sola vez por pregunta) y ante «no entiendo» reformula la
+    MISMA pregunta (máximo 2 veces). Regresa (texto, terminada)."""
+    qs = [q for q in preguntas or [] if str(q or "").strip()]
+    textos = [_n(texto_pregunta(q)) for q in qs]
+    actual, desde = -1, 0
+    respuestas: Dict[int, List[str]] = {}
+    for i, m in enumerate(historial or []):
+        t = _n(m.get("texto") or "")
+        if m.get("rol") == "assistant":
+            j = next((k for k in range(actual + 1, len(qs)) if textos[k] and textos[k] in t), None)
+            if j is not None:
+                actual, desde = j, i
+        elif actual >= 0 and t:
+            respuestas.setdefault(actual, []).append(m.get("texto") or "")
+    if not qs:
+        return "", True
+    if actual < 0:
+        return texto_pregunta(qs[0]), False
+    ultimo = _n((historial or [{}])[-1].get("texto") or "") if (historial or [{}])[-1].get("rol") == "user" else ""
+    tras = [_n(m.get("texto") or "") for m in (historial or [])[desde + 1:] if m.get("rol") == "assistant"]
+    if ultimo and _RE_NO_ENTIENDE.match(ultimo) and sum(1 for x in tras if x.startswith(_n(PREFIJO_REFORMULA))) < 2:
+        return _reformula(qs[actual]), False
+    es_parental = actual + 1 < len(qs) and bool(condicion_de(qs[actual + 1])[0])
+    if ultimo and _RE_VAGA.match(ultimo) and not es_parental and not any(x.startswith(_n(PREFIJO_DATO)) for x in tras):
+        return f"{PREFIJO_DATO}, dame un dato concreto: ¿dónde, cuánto tiempo o con qué equipo?", False
+    k = actual + 1
+    while k < len(qs):
+        cond, _ = condicion_de(qs[k])
+        if not cond:
+            break
+        padre = max((x for x in range(k) if not condicion_de(qs[x])[0]), default=None)
+        r = " ".join((respuestas.get(padre) or [""])[:1]) if padre is not None else ""
+        if (cond == "si" and es_si(r)) or (cond == "no" and es_no(r)):
+            break
+        k += 1
+    if k >= len(qs):
+        return "", True
+    return texto_pregunta(qs[k]), False
 
 
 # ============================================================ evaluación A · B · C · D + alertas

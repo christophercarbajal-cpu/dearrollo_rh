@@ -375,7 +375,7 @@ def turno(token: str, datos: TurnoIn, db: Session = Depends(get_db)):
     historial = list(e.transcript or []) + [{"rol": "user", "texto": datos.texto}]
     from ..services.entrevistas import preguntas_de
 
-    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial, preguntas=preguntas_de(e))
+    t, con_ia = ia.entrevista_turno(_system_prompt(e), historial, preguntas=preguntas_de(e), operativo=bool((e.guion or {}).get("operativo")))
     e.transcript = historial + [{"rol": "assistant", "texto": t.respuesta}]
     e.ultima_actividad_en = datetime.now(timezone.utc)
     db.commit()

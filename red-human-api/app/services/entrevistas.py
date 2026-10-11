@@ -175,6 +175,17 @@ def preguntas_de(e: Entrevista) -> list:
     return list(guion.get("preguntas") or [])
 
 
+def mensaje_inicial(p: Postulacion) -> str:
+    """«Listo, [nombre], cumples con los requisitos. Ahora te haré unas preguntas…» (2026-10-11): sin saludo; lo de
+    «cumples» solo si el prefiltro de esta postulación quedó «cumple»."""
+    from ..routers.candidatos import nombre_ficha
+
+    a = p.analisis or {}
+    cumple = (a.get("prefiltro_web") or {}).get("resultado") == "cumple" or a.get("prefiltro_resultado") == "cumple"
+    nombre = nombre_ficha(p).split(" ")[0] if nombre_ficha(p) and not nombre_ficha(p).startswith("Candidato") else ""
+    return ia.mensaje_inicial_entrevista_whatsapp(p.vacante.titulo if p.vacante else "", nombre, cumple)
+
+
 def _paso_de(e: Entrevista) -> str:
     from ..models import paso_de_entrevista
 
@@ -198,7 +209,7 @@ async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str
         db.flush()
     if not p.telefono:
         return False, "El candidato no tiene teléfono: la entrevista por WhatsApp no se puede iniciar.", None, e
-    texto = ia.mensaje_inicial_entrevista_whatsapp(p.vacante.titulo if p.vacante else "")
+    texto = mensaje_inicial(p)
     e.ultima_actividad_en = datetime.now(timezone.utc)
     entregado, detalle = await _avisar(db, p, texto, "Tu entrevista con Red Human", "", motivo="entrevista", paso_id=paso_id, actor=actor)
     return True, (f"Entrevista iniciada por {detalle}" if entregado else f"Entrevista creada; el mensaje no salió ({detalle})"), entregado, e
@@ -234,12 +245,12 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         e.consentimiento_fecha = ahora
         e.estado = "en_curso"
         e.iniciada_en = ahora
-        intro = ia.mensaje_inicial_entrevista_whatsapp(p.vacante.titulo if p.vacante else "")
+        intro = mensaje_inicial(p)
         e.transcript = [{"rol": "assistant", "texto": intro}]
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
     historial = list(e.transcript or []) + [{"rol": "user", "texto": texto[:2000]}]
-    turno, con_ia = ia.entrevista_turno(system_prompt(e), historial, preguntas=preguntas_de(e))
+    turno, con_ia = ia.entrevista_turno(system_prompt(e), historial, preguntas=preguntas_de(e), operativo=bool((e.guion or {}).get("operativo")))
     e.transcript = historial + [{"rol": "assistant", "texto": turno.respuesta}]
     terminada = turno.terminada or ia.DESPEDIDA_ENTREVISTA.lower() in (turno.respuesta or "").lower()
     salida = await responder(turno.respuesta, ia_entrevista=con_ia)

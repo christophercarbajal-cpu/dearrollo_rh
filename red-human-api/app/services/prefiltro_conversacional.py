@@ -83,7 +83,7 @@ def criterios_de(v) -> List[dict]:
 
         if ia.es_autopercepcion(pregunta):
             continue  # retro 2026-10-09: una autopercepción no se puede verificar — el bot nunca la pregunta
-        chat = str(pv.get("pregunta_chat") or "").strip() or pregunta
+        chat = ia.chat_natural(str(pv.get("pregunta_chat") or "").strip() or pregunta, str(pv.get("valida") or ""))
         if es_ubicacion:
             chat = f"¿Vives en {ubic} o te queda cerca para trasladarte?"
         salida.append({
@@ -108,7 +108,7 @@ def criterios_de(v) -> List[dict]:
         cid = f"wa{i + 1}"
         usados.add(cid)
         salida.append({"id": cid, "clave": cid, "criterio": criterio, "pregunta": pregunta,
-                       "chat": str(pw.get("pregunta_chat") or "").strip() or pregunta, "indispensable": True,
+                       "chat": ia.chat_natural(str(pw.get("pregunta_chat") or "").strip() or pregunta, criterio), "indispensable": True,
                        "esperada": "no" if _norm(pw.get("respuesta_esperada") or "Sí") == "no" else "si"})
     # 2026-10-09: reconfirmaciones de WhatsApp (dato concreto) de los indispensables del web
     por_criterio = {_norm(c["criterio"]): c for c in salida if c["indispensable"]}
@@ -122,7 +122,7 @@ def criterios_de(v) -> List[dict]:
         opciones = [str(o) for o in pw.get("opciones") or [] if str(o).strip()]
         # especificación 2026-10-10: el chat NUNCA ofrece opciones múltiples ni numeradas — el candidato contesta con
         # sus palabras y el bot interpreta (las opciones solo sirven para evaluar)
-        chat = str(pw["pregunta"]).strip()
+        chat = ia.chat_natural(str(pw["pregunta"]).strip(), base["criterio"])
         salida.append({
             "id": f"rc-{base['id']}", "clave": "reconfirma", "criterio": base["criterio"], "pregunta": str(pw["pregunta"]).strip(),
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
@@ -205,6 +205,11 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
     t = limpiar(texto)
     if not t:
         return None
+    if c.get("tipo") != "numero" and _RE_NIVEL_REQ.search(_norm(c["criterio"] + " " + (c.get("pregunta") or ""))):
+        # 2026-10-11: nivel de estudios — «sí, 1er año de secundaria» NO cumple «secundaria terminada» (antes de leer opciones)
+        v = clasificar({**c, "chat": c.get("chat") or c.get("pregunta") or ""}, texto)
+        if v is not None:
+            return v
     opciones = c.get("opciones") or []
     validas = {_norm(o) for o in c.get("opciones_validas") or []}
     elegida = None
@@ -219,6 +224,10 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
             return "si" if n >= float(c["minimo"]) else "no"
         return None
     if validas:
+        # 2026-10-11: un dato que indica que NO cumple («1er año de secundaria») se interpreta con la regla del requisito
+        base = clasificar({**c, "chat": c.get("chat") or c.get("pregunta") or ""}, texto)
+        if base is not None:
+            return base
         if _RE_NO.match(t):
             return "no" if not any(x.startswith("no") for x in validas) else "si"
         if (_RE_SI.match(t) or _RE_DUDA_SI.match(t)) and any(x.startswith("si") for x in validas):
@@ -255,6 +264,12 @@ _RE_NO_ENTIENDE = re.compile(r"(no (le )?entiendo( la pregunta)?|no entendi( la 
                              r"perdon|a que te refieres|que quieres decir|que significa( eso)?|no se a que te refieres|explicame|me explicas)")
 _RE_SUPERIOR = re.compile(r"\b(prepa|preparatoria|bachiller\w*|licenciatura|universidad|carrera|ingenier\w*|tecnico|cbtis|conalep|cetis|cecyt\w*)\b")
 _RE_INCOMPLETA = re.compile(r"\b(trunca|no (la )?termine|sin terminar|inconclus\w*|me falto|incomplet\w*|la deje|no la acabe)\b")
+# 2026-10-11: «1er año de secundaria», «llegué hasta segundo», «me quedé en primero» = el nivel NO está terminado
+_RE_GRADO_PARCIAL = re.compile(r"\b(1er|1ro|1o|1ero|primer|primero|2do|2o|segundo|un ano|1 ano|dos anos|2 anos|medio ano|"
+                               r"me quede en|me sali en|sali en|deje en|nomas (hice|curse|estudie)|solo (hice|curse|estudie)|hasta (el )?"
+                               r"(1|2|primer|primero|segundo))\b")
+_RE_TERMINADA = re.compile(r"\b(termine|terminada|terminado|concluida|concluido|conclui|completa|completo|acabe|certificado)\b")
+_RE_NIVEL_REQ = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato)\b")
 SALUDOS = {"hola", "holi", "ola", "buenas", "buen dia", "buenos dias", "buenas tardes", "buenas noches", "hey", "hi", "hello",
            "start", "/start", "continuar", "seguir", "retomar", "sigo aqui", "ya regrese", "inicio", "empezar", "menu"}
 
@@ -272,12 +287,21 @@ def clasificar(c: dict, texto: str) -> Optional[str]:
     if _RE_DUDA_SI.match(t):
         return "si"  # «creo que sí» cuenta como sí (queda en Puntos por validar, ver `turno`)
     base = _norm(c["criterio"] + " " + c["pregunta"])
-    if "secundaria" in base:
-        if _RE_SUPERIOR.search(t):
-            return "si"  # bachillerato o más (aunque esté trunco): la secundaria está terminada
-        if "secundaria" in t:
-            return "no" if (_RE_INCOMPLETA.search(t) or _RE_NO.match(t)) else "si"
-        if "primaria" in t:
+    nivel = _RE_NIVEL_REQ.search(base)
+    if nivel:
+        # 2026-10-11: un nivel CURSADO a medias no cumple un nivel «terminado» → el agente descarta (nunca aprueba)
+        parcial = bool(_RE_GRADO_PARCIAL.search(t)) and not _RE_TERMINADA.search(t)
+        if nivel.group(1) == "secundaria":
+            if _RE_SUPERIOR.search(t) and not parcial:
+                return "si"  # bachillerato o más (aunque esté trunco): la secundaria está terminada
+            if "secundaria" in t:
+                return "no" if (_RE_INCOMPLETA.search(t) or _RE_NO.match(t) or parcial) else "si"
+            if "primaria" in t:
+                return "no"
+        elif nivel.group(1) in t or ("prepa" in t and nivel.group(1) in ("preparatoria", "bachillerato")):
+            if _RE_INCOMPLETA.search(t) or parcial or _RE_NO.match(t):
+                return "no"
+        if parcial:
             return "no"
     if _RE_AMBIGUA.search(t):
         return None
@@ -337,11 +361,15 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
 def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[dict], Optional[dict]]:
     """(resultado, criterio que incumple, siguiente criterio por preguntar). resultado ∈ cumple | no_cumple | None."""
     respuestas = e.get("respuestas") or {}
+    por_id = {c["id"]: c for c in criterios}
     for c in criterios:
         r = respuestas.get(c["id"])
         if r and c["indispensable"] and r.get("valor") and r["valor"] != c["esperada"]:
             return "no_cumple", c, None
-    # una contradicción con el formulario (reconfirmación «no») NO detiene el prefiltro: queda en «Puntos por validar»
+        # 2026-10-11 (descarte estricto): si la reconfirmación de un indispensable indica que NO lo cumple («1er año de
+        # secundaria» cuando se pide terminada), el agente DESCARTA — la contradicción queda además en Puntos por validar
+        if r and c.get("reconfirma") and r.get("valor") == "no" and por_id.get(c["reconfirma"], {}).get("indispensable"):
+            return "no_cumple", por_id[c["reconfirma"]], None
     def falta(c: dict) -> bool:
         if c["id"] in respuestas:
             return False

@@ -1265,14 +1265,17 @@ def mensaje_inicial_entrevista(titulo_vacante: str) -> str:
     )
 
 
-def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str) -> str:
-    """Presentación de la Entrevista Red Human por WhatsApp (2026-10-09). En el chat no hay pantalla de consentimiento:
-    este mensaje la sustituye — dice que la conduce la IA y que la revisa una persona, y el «Sí» es el consentimiento."""
+def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str, nombre: str = "", cumple: bool = False) -> str:
+    """Presentación de la Entrevista Red Human por WhatsApp. En el chat no hay pantalla de consentimiento: este mensaje la
+    sustituye — dice que la conduce la IA y que la revisa una persona, y el «Sí» es el consentimiento.
+    2026-10-11: empieza SIN saludo, en el mismo chat del prefiltro: «Listo, [nombre], cumples con los requisitos. Ahora te
+    haré unas preguntas…» (lo de «cumples» solo cuando el prefiltro de verdad quedó «cumple»)."""
     puesto = (titulo_vacante or "").strip() or "el puesto"
+    inicio = f"Listo, {nombre}" if (nombre or "").strip() else "Listo"
+    inicio += ", cumples con los requisitos." if cumple else "."
     return (
-        f"Hola, soy Red Human. Gracias por participar en el proceso para {puesto}. Vamos a conversar por aquí sobre tu "
-        "experiencia, tus intereses y algunos aspectos relevantes para el puesto (unos 10 minutos). Esta entrevista la "
-        "conduce una inteligencia artificial y tus respuestas las revisa una persona del equipo de RH. ¿Comenzamos?"
+        f"{inicio} Ahora te haré unas preguntas sobre tu experiencia para {puesto}, una a la vez (unos 10 minutos). Las hace "
+        "una inteligencia artificial y tus respuestas las revisa una persona del equipo de RH. ¿Comenzamos?"
     )
 
 
@@ -1376,10 +1379,27 @@ class TurnoEntrevista(BaseModel):
     terminada: bool = Field(description="true solo cuando ya cubriste los temas y te despediste en este mensaje.")
 
 
-def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optional[List[str]] = None) -> Tuple[TurnoEntrevista, bool]:
+def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optional[List[str]] = None,
+                     operativo: bool = False) -> Tuple[TurnoEntrevista, bool]:
     """Modo texto (demo o fallback sin avatar). historial: [{"rol","texto"}], el último es del candidato.
-    `preguntas` (2026-10-09): las del guion de la vacante — en modo demo se hacen tal cual, en orden."""
+    `preguntas` (2026-10-09): las del guion de la vacante — en modo demo se hacen tal cual, en orden.
+    `operativo` (2026-10-11): el guion operativo respeta sus condicionales, pide UN dato concreto ante una respuesta vaga
+    y reformula sin cambiar de tema ante «no entiendo» (`entrevista_operativa.turno_demo`)."""
     client = _client()
+    if client is None and operativo:
+        from .entrevista_operativa import turno_demo
+
+        n_agente = sum(1 for m in historial if m["rol"] == "assistant")
+        n_usuario = sum(1 for m in historial if m["rol"] == "user")
+        ultimo = (historial[-1]["texto"] if historial else "").strip().lower()
+        if n_usuario == 1 and n_agente == 1 and not any(w in ultimo for w in ("si", "sí", "listo", "lista", "adelante", "vamos", "claro",
+                                                                               "ok", "dale", "comencemos", "empecemos")):
+            return TurnoEntrevista(respuesta=ESPERA_INICIO, terminada=False), False
+        texto, fin = turno_demo([q for q in (preguntas or []) if (q or "").strip()], historial)
+        if not fin:
+            return TurnoEntrevista(respuesta=texto, terminada=False), False
+        return TurnoEntrevista(respuesta=f"{DESPEDIDA_ENTREVISTA}, gracias. ¡Muchas gracias por tu tiempo! El equipo de RH revisará tu "
+                                         "entrevista y te contactará pronto. 😊", terminada=True), False
     if client is None:
         n_agente = sum(1 for m in historial if m["rol"] == "assistant")
         n_usuario = sum(1 for m in historial if m["rol"] == "user")
@@ -1412,6 +1432,8 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
     )
     turno = resp.output_parsed
     turno.respuesta = sin_promesas(turno.respuesta)  # retro 2026-10-09: garantizado en código, no solo en el prompt
+    # 2026-10-11: la marca de una condicional del guion («[Solo si responde sí]») nunca llega al candidato
+    turno.respuesta = re.sub(r"\[\s*solo si (?:responde|contesta|dice)[^\]]*\]\s*", "", turno.respuesta, flags=re.IGNORECASE).strip()
     return turno, True
 
 
@@ -2739,10 +2761,54 @@ def pregunta_reconfirmacion(req: str) -> dict:
         return {"pregunta": f"Para confirmar: ¿cuánto tiempo {_de_experiencia(_tema_experiencia(req))} tienes?", "tipo": "numero",
                 "valida": req.strip(), "respuesta_esperada": f">= {int(n) if n == int(n) else n} años", "descarta": False,
                 "opciones": ops, "reconfirma": req.strip(), "minimo": n, "opciones_validas": validas}
-    ops = ["Sí, y lo puedo comprobar", "Sí, pero no lo puedo comprobar", "No"]
-    return {"pregunta": f"Para confirmar «{req.strip().rstrip('.')}»: ¿cuál de estas opciones te describe?", "tipo": "opcion",
-            "valida": req.strip(), "respuesta_esperada": ops[0], "descarta": False, "opciones": ops, "reconfirma": req.strip(),
-            "opciones_validas": ops[:2]}
+    # 2026-10-11: sí/no en lenguaje natural — nunca «¿cuál de estas opciones te describe?»
+    q = pregunta_si_no_natural(req)
+    return {"pregunta": f"Para confirmar, {q[0] + q[1].lower() + q[2:]}", "tipo": "si_no", "valida": req.strip(),
+            "respuesta_esperada": "Sí", "descarta": False, "opciones": ["Sí", "No"], "reconfirma": req.strip(), "opciones_validas": ["Sí"]}
+
+
+_VERBOS_TU = {"saber": "sabes", "conocer": "conoces", "manejar": "manejas", "tener": "tienes", "vivir": "vives", "poder": "puedes",
+              "hablar": "hablas", "leer": "lees", "escribir": "escribes", "operar": "operas", "contar con": "cuentas con"}
+_RE_NIVEL = re.compile(r"^(?:la |el )?(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|carrera t[eé]cnica)\s+"
+                       r"(?:terminad[ao]|concluid[ao]|complet[ao]|acabad[ao])", re.IGNORECASE)
+_RE_FRASE_CERRADA = re.compile(r"^\s*¿\s*(cumples con(?: este requisito)?|cuentas con(?: este requisito)?)\s*:\s*(.+?)\s*\?\s*$", re.IGNORECASE)
+_RE_CUAL_OPCION = re.compile(r"cu[aá]l de estas opciones", re.IGNORECASE)
+
+
+def pregunta_si_no_natural(req: str) -> str:
+    """Un requisito como pregunta de sí/no en lenguaje natural: «Secundaria terminada» → «¿Terminaste la secundaria?»,
+    «Disponibilidad para rolar turnos» → «¿Tienes disponibilidad para rolar turnos?», «Saber leer y escribir» → «¿Sabes
+    leer y escribir?». Lo demás → «¿Cuentas con …?»."""
+    r = " ".join(str(req or "").split()).strip(" .")
+    if not r:
+        return "¿Cumples con este requisito?"
+    m = _RE_NIVEL.match(r)
+    if m:
+        nivel = m.group(1).lower()
+        return f"¿Terminaste {'el' if nivel == 'bachillerato' else 'la'} {nivel}?"
+    bajo = r[0].lower() + r[1:] if len(r) > 1 and not r[:2].isupper() else r
+    for inf, tu in sorted(_VERBOS_TU.items(), key=lambda x: -len(x[0])):
+        if bajo.lower().startswith(inf + " "):
+            return f"¿{tu[0].upper() + tu[1:]} {bajo[len(inf) + 1:]}?"
+    m = re.match(r"^disponibilidad (?:para|de) (.+)$", bajo, re.IGNORECASE)
+    if m:
+        return f"¿Tienes disponibilidad para {m.group(1)}?"
+    if re.match(r"^(licencia|constancia|certificaci[oó]n|curso|conocimient)", bajo, re.IGNORECASE):
+        return f"¿Tienes {bajo}?"
+    return f"¿Cuentas con {bajo}?"
+
+
+def chat_natural(pregunta: str, criterio: str = "") -> str:
+    """Texto que ve el candidato en el chat: las preguntas armadas como «¿Cumples con este requisito: X?» o «¿cuál de
+    estas opciones te describe?» (vacantes guardadas antes del 2026-10-11) se dicen como sí/no en lenguaje natural."""
+    t = " ".join(str(pregunta or "").split())
+    m = _RE_FRASE_CERRADA.match(t)
+    if m:
+        return pregunta_si_no_natural(m.group(2))
+    if _RE_CUAL_OPCION.search(t):
+        q = pregunta_si_no_natural(criterio or re.sub(r"^.*?«(.+?)».*$", r"\1", t))
+        return f"Para confirmar, {q[0] + q[1].lower() + q[2:]}"
+    return t
 
 
 def _pregunta_dict(p: "PreguntaPrefiltroIA") -> dict:
@@ -2789,7 +2855,8 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
     if hay_whatsapp:
         if hay_web:
             reconf = {_norm_req(q.get("reconfirma", "")): q for q in whatsapp
-                      if q.get("reconfirma") and q.get("tipo") in ("numero", "opcion") and len(q.get("opciones") or []) >= 2}
+                      if q.get("reconfirma") and q.get("tipo") in ("numero", "opcion", "si_no") and len(q.get("opciones") or []) >= 2
+                      and not _RE_CUAL_OPCION.search(q.get("pregunta") or "")}
             for q in [x for x in salida_web if x.get("descarta")]:
                 det = pregunta_reconfirmacion(q["valida"])
                 propia = reconf.get(_norm_req(q["valida"]))
@@ -2871,7 +2938,8 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
             pedido.append(
                 "prefiltro_whatsapp: preguntas CERRADAS en tono de chat. " + (
                     "La ruta TAMBIÉN tiene prefiltro web: cada requisito INDISPENSABLE se RECONFIRMA pidiendo un DATO CONCRETO "
-                    "como pregunta cerrada (tipo numero con rangos u opcion), con `reconfirma` = el requisito exacto. Ejemplo: web "
+                    "como pregunta cerrada (tipo numero con rangos, o si_no en lenguaje natural: «¿Terminaste la secundaria?»; "
+                    "NUNCA «¿cuál de estas opciones te describe?»), con `reconfirma` = el requisito exacto. Ejemplo: web "
                     "«¿Tienes experiencia operando montacargas?» → WhatsApp «¿Cuánto tiempo llevas operando montacargas?» con "
                     "rangos. NO repitas nada que no sea indispensable." if hay_web else
                     "Es el PRIMER filtro: una pregunta por requisito indispensable (descarta=true), cerradas."))

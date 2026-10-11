@@ -91,7 +91,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and len(r.json()["preguntas_filtro"]) >= 3, f"generar: prefiltro web con {len(r.json()['preguntas_filtro'])} preguntas")
     wa = r.json()["preguntas_filtro_whatsapp"]
     # 2026-10-09: con web + WhatsApp en la ruta, WhatsApp RECONFIRMA cada indispensable con un dato concreto (cerrado)
-    check(len(wa) == 3 and all(q["tipo"] in ("numero", "opcion") and q.get("reconfirma") for q in wa),
+    check(len(wa) == 3 and all(q["tipo"] in ("numero", "opcion", "si_no") and q.get("reconfirma") and "cuál de estas" not in q["pregunta"] for q in wa),
           f"generar: prefiltro WhatsApp = {len(wa)} reconfirmaciones cerradas de los indispensables")
     check(not {q["pregunta"] for q in r.json()["preguntas_filtro"]} & {w["pregunta"] for w in wa} and wa[0]["pregunta"].startswith("Para confirmar"),
           "las de WhatsApp piden el dato concreto, no copian la lista web")
@@ -121,19 +121,21 @@ with TestClient(app) as client:
     # concreto; si el dato lo contradice es «Inconsistencia» y RH revisa (nunca descarta)
     ENVIOS.clear()
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Hola"})
-    check(r.status_code == 200 and v["criterios"][1]["pregunta"] in r.json()["respuesta"],
+    from app.services.ia import chat_natural  # 2026-10-11: el chat la dice como sí/no en lenguaje natural
+    check(r.status_code == 200 and chat_natural(v["criterios"][1]["pregunta"], v["criterios"][1].get("valida", "")) in r.json()["respuesta"],
           "el chat pregunta primero el indispensable que el formulario no respondió")
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Sí"})
     check("Para confirmar" in r.json()["respuesta"], "el «Sí» del formulario se RECONFIRMA en el chat pidiendo un dato concreto")
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "No"})
     db.expire_all()
     p = db.query(Postulacion).filter_by(codigo=P).one()
-    check(p.activa and p.estado == "cumple" and p.prefiltro_completo,
-          "el dato contradice el formulario → NO descarta ni va a revisión: el agente decide y la ruta sigue (especificación 2026-10-10)")
+    # 2026-10-11 (descarte estricto): el dato concreto indica que NO cumple el indispensable → el agente DESCARTA de inmediato
+    check(not p.activa and p.motivo_cierre == "descartado" and p.estado == "no_cumple",
+          "la reconfirmación indica que NO cumple el indispensable → el agente DESCARTA (no aprueba)")
     check(len(p.analisis["inconsistencias"]) == 1 and p.analisis["inconsistencias"][0]["web"] == "Sí", "la inconsistencia quedó registrada (formulario vs chat)")
     r2 = client.get(f"/candidatos/{P}")
     check(len(r2.json()["inconsistencias"]) == 1, "la ficha expone la inconsistencia")
-    check("necesitamos" not in r.json()["respuesta"], "al candidato no se le comunica ningún rechazo")
+    check("necesitamos" in r.json()["respuesta"], "al candidato se le manda el mensaje de cierre con el requisito")
 
     print("\n--- Control manual de RH: mover libre + «Omitida manualmente» ---")
     r = client.post("/candidatos", json={"nombre": "Beto Manual", "telefono": "5522220002", "vacante": VAC, "consentimiento": True, "fuente": "RH"})

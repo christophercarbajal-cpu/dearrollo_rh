@@ -1590,6 +1590,12 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     else:
         historial = mensajes_db + [{"rol": "user", "texto": texto}]
 
+    # 2026-10-10 (Cambio 3): propuesta de trabajo enviada → el chat espera «sí» o «no» (nada más)
+    from ..services import propuesta as sprop
+
+    if sprop.esperando_respuesta(p):
+        return await sprop.turno(db, p, texto, canal)
+
     # Zero-Touch fase 2: ya en Onboarding -> el agente solo acompaña documentos. Va ANTES que las
     # ramas de fase 1 a propósito: sin este check, una postulación en Onboarding (que ya trae
     # prefiltro_completo=True y estado="cumple") caería en "ya tienes tu videollamada agendada".
@@ -2523,6 +2529,66 @@ def guardar_condiciones_contratacion(
 
 
 # ------------------------------------------------------------
+# Propuesta de trabajo (2026-10-10, Cambio 3): capturar condiciones → «Enviar propuesta» → «sí»/«no» del candidato
+# ------------------------------------------------------------
+
+
+@router.get("/{codigo}/propuesta")
+def ver_propuesta(codigo: str, db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Precarga: puesto, sueldo y ubicación de la vacante; jefe de la entrevista humana (lo del expediente manda)."""
+    from ..services import propuesta as sprop
+
+    p = _por_codigo(db, codigo, cuenta.id)
+    if not p.expediente:
+        raise HTTPException(404, "La postulación todavía no tiene expediente de contratación.")
+    return sprop.precarga(db, p)
+
+
+@router.post("/{codigo}/propuesta")
+async def enviar_propuesta(
+    codigo: str, datos: CondicionesContratacionIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """«Enviar propuesta»: guarda las condiciones (misma validación de siempre) y las manda al candidato con
+    «¿Aceptas? Responde sí o no». Puesto, sueldo, tipo y fecha de ingreso son obligatorios."""
+    from ..services import propuesta as sprop
+
+    faltan = [n for n, v in (("puesto", datos.puesto), ("sueldo", datos.sueldo), ("tipo de contratación", datos.tipo_contratacion),
+                             ("fecha de ingreso", datos.fecha_ingreso)) if not (v or "").strip()]
+    if faltan:
+        raise HTTPException(400, f"Para enviar la propuesta falta: {', '.join(faltan)}.")
+    guardar_condiciones_contratacion(codigo, datos, db=db, u=u, cuenta=cuenta)
+    p = _por_codigo(db, codigo, cuenta.id)
+    if not p.activa:
+        raise HTTPException(409, "La postulación está cerrada.")
+    r = await sprop.enviar(db, p, u.nombre)
+    _actualizar_ultima_actividad(p)
+    db.commit()
+    return {**r, "propuesta": sprop.publica(p), "candidato": postulacion_dict(p, detalle=True)}
+
+
+class RespuestaPropuestaIn(BaseModel):
+    acepta: bool
+    comentario: str = ""
+
+
+@router.post("/{codigo}/propuesta/respuesta")
+async def registrar_respuesta_propuesta(
+    codigo: str, datos: RespuestaPropuestaIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """RH registra la respuesta que obtuvo por otro medio (llamada, en persona). Mismo efecto que el «sí»/«no» del chat."""
+    from ..services import propuesta as sprop
+
+    p = _por_codigo(db, codigo, cuenta.id)
+    if sprop.estado(p).get("estado") != "enviada":
+        raise HTTPException(409, "No hay una propuesta enviada esperando respuesta.")
+    r = await sprop.responder(db, p, datos.acepta, u.nombre, "rh", datos.comentario.strip())
+    db.refresh(p)
+    return {**r, "propuesta": sprop.publica(p), "candidato": postulacion_dict(p, detalle=True)}
+
+
+# ------------------------------------------------------------
 # Zero-Touch fase 2 — botones de Onboarding (RH detona, la IA da seguimiento)
 # ------------------------------------------------------------
 #
@@ -2547,6 +2613,8 @@ async def _disparar_mensaje_onboarding(
     if evento == "recordatorio_documentos" and e:
         # 2026-09-17: mismo contador de niveles que el recordatorio del expediente y el job automático.
         extra = {"nivel": e.nivel_recordatorio, "pendientes": e.pendientes or None, "puesto": e.puesto or "tu nuevo puesto", "fecha_limite": e.documentos_hasta}
+    elif evento == "solicitud_documentos" and e:
+        extra = {"pendientes": e.pendientes or None}  # 2026-10-10: solo lo que falta
     resultados = await notificaciones.disparar(db, evento, p, u.nombre, liga=liga, override=override, extra=extra)
     from ..services import envios  # 2026-10-08: trazabilidad por destinatario (liga de documentos)
 

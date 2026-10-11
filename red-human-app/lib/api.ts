@@ -1292,6 +1292,33 @@ export function reiniciarPostulacionPrueba(codigo: string) {
    Contratación — condiciones finales (Puesto/Sueldo/Tipo/Fecha/Ubicación/Jefe directo)
    ============================================================ */
 
+/* ---------- Propuesta de trabajo por WhatsApp (2026-10-10, Cambio 3) ---------- */
+export interface EstadoPropuesta {
+  estado: "enviada" | "aceptada" | "rechazada"; enviadaEn?: string | null; enviadaPor?: string | null; respondidaEn?: string | null;
+  respuesta: string; canal: string; entregada?: boolean | null; legado: boolean;
+}
+export interface PrecargaPropuesta {
+  datos: { puesto: string; sueldo: string; ubicacion: string; jefe_directo: string; tipo_contratacion: string; fecha_ingreso: string; empresa: string };
+  /** De dónde salió cada dato: expediente | vacante | entrevista_humana. */
+  origen: Partial<Record<"puesto" | "sueldo" | "ubicacion" | "jefe_directo", string>>;
+  propuesta: EstadoPropuesta | null;
+}
+export function fetchPropuesta(codigo: string) {
+  return get<PrecargaPropuesta>(`/candidatos/${codigo}/propuesta`);
+}
+/** «Enviar propuesta»: guarda las condiciones y manda al candidato «¿Aceptas? Responde sí o no». */
+export function enviarPropuesta(codigo: string, datos: Parameters<typeof guardarCondicionesContratacion>[1]) {
+  return post<{ enviada: boolean; detalle: string; propuesta: EstadoPropuesta; candidato: Candidato }>(`/candidatos/${codigo}/propuesta`, {
+    puesto: datos.puesto ?? "", sueldo: datos.sueldo ?? "", tipo_contratacion: datos.tipoContratacion ?? "", fecha_ingreso: datos.fechaIngreso || null,
+    ubicacion: datos.ubicacion ?? "", jefe_directo: datos.jefeDirecto ?? "", instrucciones_ingreso: datos.instruccionesIngreso ?? "",
+    empresa: datos.empresa ?? "", duracion_contrato: datos.duracionContrato ?? null, duracion_unidad: datos.duracionUnidad ?? "",
+  });
+}
+/** RH registra la respuesta que obtuvo por otro medio (mismo efecto que el «sí»/«no» del chat). */
+export function responderPropuesta(codigo: string, acepta: boolean, comentario = "") {
+  return post<{ estado: string; propuesta: EstadoPropuesta; candidato: Candidato }>(`/candidatos/${codigo}/propuesta/respuesta`, { acepta, comentario });
+}
+
 export function guardarCondicionesContratacion(
   codigo: string,
   datos: {

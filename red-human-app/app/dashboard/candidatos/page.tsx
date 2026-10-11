@@ -76,6 +76,10 @@ import {
   fetchMensajes,
   fetchVacantes,
   guardarCondicionesContratacion,
+  enviarPropuesta,
+  fetchPropuesta,
+  responderPropuesta,
+  type PrecargaPropuesta,
   fetchRazonesSociales,
   type RazonSocial,
   reiniciarPostulacionPrueba,
@@ -2916,6 +2920,25 @@ function PanelContratacion({
     };
   }, []);
   const [guardando, setGuardando] = useState(false);
+  // 2026-10-10 (Cambio 3): propuesta por WhatsApp — precarga (vacante + jefe de la entrevista humana) y su estado
+  const [propuesta, setPropuesta] = useState<PrecargaPropuesta | null>(null);
+  const [enviandoProp, setEnviandoProp] = useState(false);
+  useEffect(() => {
+    if (c.etapa !== "Contratación" || c.expedienteId == null) return;
+    let vivo = true;
+    fetchPropuesta(c.id).then((r) => {
+      if (!vivo || !r) return;
+      setPropuesta(r);
+      const d = r.datos;
+      setPuesto((x) => x || d.puesto);
+      setSueldo((x) => x || d.sueldo);
+      setUbicacion((x) => x || d.ubicacion);
+      setJefe((x) => x || d.jefe_directo);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [c.id, c.etapa, c.expedienteId]);
   // 2026-09-19 (Bloque 3): vista previa en la misma pantalla de carta / contrato con 3 acciones
   const [docPreview, setDocPreview] = useState<null | "carta" | "contrato">(null);
   // 2026-09-29: firma electrónica incrustada (Dropbox Sign). Sin llaves en el servidor → vista previa del PDF como antes.
@@ -3070,6 +3093,39 @@ function PanelContratacion({
     onCambio(r.data);
   }
 
+  function datosCondiciones() {
+    return {
+      puesto, sueldo, tipoContratacion: tipo, fechaIngreso: fechaIngreso || undefined, ubicacion, jefeDirecto: jefe,
+      instruccionesIngreso: instrucciones, empresa, duracionContrato: esDeterminado ? Number(duracion) : null, duracionUnidad: esDeterminado ? unidad : "",
+    };
+  }
+
+  /** «Enviar propuesta» (2026-10-10): guarda y manda al candidato «¿Aceptas? Responde sí o no». */
+  async function enviarProp() {
+    const faltan = [["puesto", puesto], ["sueldo", sueldo], ["tipo de contratación", tipo], ["fecha de ingreso", fechaIngreso]].filter(([, v]) => !v.trim()).map(([k]) => k);
+    if (faltan.length) return setAviso({ tono: "error", texto: `Para enviar la propuesta falta: ${faltan.join(", ")}.` });
+    if (esDeterminado && (!duracion || Number(duracion) <= 0)) return setAviso({ tono: "error", texto: "Tiempo determinado: captura la duración del contrato (número mayor a cero)." });
+    setEnviandoProp(true);
+    const r = await enviarPropuesta(c.id, datosCondiciones());
+    setEnviandoProp(false);
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setPropuesta((x) => (x ? { ...x, propuesta: r.data.propuesta } : x));
+    setAviso(r.data.enviada
+      ? { tono: "ok", texto: "Propuesta enviada. Cuando el candidato responda «sí», se le piden solo los documentos que falten." }
+      : { tono: "warn", texto: `Propuesta guardada, pero no le llegó al candidato: ${r.data.detalle}` });
+    onCambio(r.data.candidato);
+  }
+
+  async function registrarRespuesta(acepta: boolean) {
+    setEnviandoProp(true);
+    const r = await responderPropuesta(c.id, acepta);
+    setEnviandoProp(false);
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setPropuesta((x) => (x ? { ...x, propuesta: r.data.propuesta } : x));
+    setAviso({ tono: acepta ? "ok" : "warn", texto: acepta ? "Aceptación registrada: se pidieron los documentos que faltan." : "Rechazo registrado. Decide el siguiente paso desde la ficha." });
+    onCambio(r.data.candidato);
+  }
+
   /** WhatsApp / Correo de la carta: trazabilidad en bitácora, aviso mínimo en pantalla. */
   async function enviarCarta(canal: "whatsapp" | "correo") {
     if (!c.expedienteId) return;
@@ -3187,14 +3243,40 @@ function PanelContratacion({
           <span className="text-[11px] text-ink-3">Al dar de alta, el colaborador recibe automáticamente su bienvenida con estos datos por WhatsApp y correo.</span>
         </label>
       </div>
+      {live && c.etapa === "Contratación" && propuesta && (
+        <p className="mt-3 text-[12px] text-ink-3">
+          Precargado: {[propuesta.origen.puesto === "vacante" && "puesto", propuesta.origen.sueldo === "vacante" && "sueldo",
+            propuesta.origen.ubicacion === "vacante" && "ubicación"].filter(Boolean).join(", ") || "—"} de la vacante
+          {propuesta.origen.jefe_directo === "entrevista_humana" ? " · jefe directo de la entrevista humana" : ""}.
+        </p>
+      )}
       {live && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button size="sm" onClick={guardar} disabled={guardando}>
+          {c.etapa === "Contratación" && propuesta?.propuesta?.estado !== "aceptada" && (
+            <Button size="sm" onClick={() => void enviarProp()} disabled={enviandoProp || guardando}>
+              <Send className="h-4 w-4" /> {enviandoProp ? "Enviando…" : propuesta?.propuesta?.estado === "enviada" ? "Reenviar propuesta" : "Enviar propuesta"}
+            </Button>
+          )}
+          <Button size="sm" variant={c.etapa === "Contratación" && propuesta?.propuesta?.estado !== "aceptada" ? "outline" : "primary"} onClick={guardar} disabled={guardando}>
             {guardando ? "Guardando…" : condicionesListas ? "Guardar cambios" : "Guardar condiciones"}
           </Button>
           <span className="text-[12px] text-ink-3">
-            {condicionesListas ? `Condiciones guardadas${cond?.guardadasEn ? ` el ${textoFecha(cond.guardadasEn)}` : ""}.` : "Captura puesto, sueldo, tipo y fecha de ingreso y guarda para habilitar los documentos."}
+            {propuesta?.propuesta?.estado === "enviada"
+              ? `Propuesta enviada${propuesta.propuesta.enviadaEn ? ` el ${textoFecha(propuesta.propuesta.enviadaEn)}` : ""}: esperando «sí» o «no» del candidato.`
+              : propuesta?.propuesta?.estado === "aceptada"
+                ? (propuesta.propuesta.legado ? "Condiciones guardadas." : "El candidato aceptó la propuesta.")
+                : propuesta?.propuesta?.estado === "rechazada"
+                  ? "El candidato no aceptó la propuesta. Puedes ajustarla y reenviarla, o decidir desde la ficha."
+                  : condicionesListas ? `Condiciones guardadas${cond?.guardadasEn ? ` el ${textoFecha(cond.guardadasEn)}` : ""}: falta enviar la propuesta.`
+                    : "Captura puesto, sueldo, tipo y fecha de ingreso y envía la propuesta al candidato."}
           </span>
+          {propuesta?.propuesta?.estado === "enviada" && (
+            <span className="flex items-center gap-2 text-[12px] text-ink-3">
+              ¿Respondió por otro medio?
+              <button type="button" className="font-semibold text-good hover:underline" disabled={enviandoProp} onClick={() => void registrarRespuesta(true)}>Aceptó</button>
+              <button type="button" className="font-semibold text-bad hover:underline" disabled={enviandoProp} onClick={() => void registrarRespuesta(false)}>No aceptó</button>
+            </span>
+          )}
         </div>
       )}
 

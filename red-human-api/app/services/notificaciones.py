@@ -164,11 +164,12 @@ def _html_correo_evaluacion_entrevistador(eh: EntrevistaHumana, c: Postulacion, 
     )
 
 
-def _texto_solicitud_documentos(liga: str) -> str:
+def _texto_solicitud_documentos(liga: str, pendientes: Optional[List[str]] = None) -> str:
+    """2026-10-10 (Cambio 3): neutral (sin felicitar ni prometer) y solo con lo que FALTA."""
+    que = f"estos documentos: {', '.join(pendientes)}" if pendientes else "tu INE y tu comprobante de domicilio"
     return (
-        "¡Felicidades por tu contratación! 🎉 Para avanzar, sube tu INE y tu comprobante de "
-        f"domicilio (foto o PDF) desde esta liga: {liga}\n\nEn cuanto los reciba los reviso y "
-        "seguimos con el resto de tu expediente."
+        f"Para continuar con tu proceso necesitamos {que}. Súbelos (foto o PDF) desde esta liga: {liga}"
+        "\n\nEn cuanto los recibamos los revisamos y seguimos con tu expediente."
     )
 
 
@@ -299,8 +300,9 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
 
     if evento == "candidato_apto":
         if audiencia == "candidato":
-            texto = f"¡Buenas noticias, {primer_nombre}! 🎉 Avanzas en el proceso para {puesto}."
-            return texto if canal == "whatsapp" else _html("¡Avanzas en el proceso!", texto, nombre_empresa_candidato(v) if v else "")
+            # 2026-10-10 (Cambio 3): ningún mensaje promete avance; al candidato le llega UN aviso de estado neutral con
+            # el siguiente paso (services/avisos_estado) — este evento ya no le escribe.
+            return None
         if audiencia == "cliente":
             texto = f"El candidato {c.nombre} avanza en el proceso para el puesto {puesto}."
             return texto if canal == "whatsapp" else _html(f"Avance de candidato — {puesto}", texto)
@@ -404,7 +406,7 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
 
     if evento == "solicitud_documentos":
         if audiencia == "candidato":
-            texto = _texto_solicitud_documentos(liga)
+            texto = _texto_solicitud_documentos(liga, extra.get("pendientes"))
             return texto if canal == "whatsapp" else _html("Solicitud de documentos", texto)
 
     if evento == "recordatorio_documentos":

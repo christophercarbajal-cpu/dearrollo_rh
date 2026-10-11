@@ -228,6 +228,10 @@ with TestClient(app) as client:
     r = client.patch(f"/candidatos/{P1}/condiciones-contratacion", json={"puesto": "Operador", "sueldo": "$12,000 mensuales",
                                                                           "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
     check(r.status_code == 200, "una dependencia no bloquea capturar las condiciones (no frena actividades en paralelo)")
+    # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato (aquí la registra RH)
+    client.post(f"/candidatos/{P1}/propuesta", json={"puesto": "Operador", "sueldo": "$12,000 mensuales",
+                                                     "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
+    client.post(f"/candidatos/{P1}/propuesta/respuesta", json={"acepta": True})
     exp_id = post(P1).expediente.id
     r = client.post(f"/onboarding/expedientes/{exp_id}/iniciar", json={"documentos": [{"tipo": "CURP", "obligatorio": True}]})
     check(r.status_code == 409 and "documentos" in r.json()["detail"], "«Iniciar Onboarding» respeta los obligatorios de Contratación")

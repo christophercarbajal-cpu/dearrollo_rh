@@ -21,6 +21,7 @@ from .migraciones import asegurar_reglas_entrevistador, migrar_pipeline_cinco_co
 from .routers import agente, auth, candidatos, procesos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, webhooks_telegram, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
 from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
+from .services.avisos_estado import revisar_inactividad
 from .services import modulos_rh, rag
 from .services.agenda import revisar_videollamadas_noshow
 from .services.recordatorios import revisar_recordatorios_documentos
@@ -114,6 +115,17 @@ async def lifespan(app: FastAPI):
             print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)
         rutas = sproc.asignar_rutas_faltantes(db)
         db.commit()
+        # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato; quien YA tenía
+        # condiciones guardadas la conserva cumplida («aceptada · legado»). Una sola vez, NO fatal.
+        try:
+            from .services import propuesta as _sprop
+
+            with db.begin_nested():
+                _sprop.marcar_legado(db)
+            db.commit()
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[propuesta] ⚠️ no se marcaron las propuestas legado: {ex}", flush=True)
         # Especificación 2026-10-10: «Revisar prefiltro» ya no existe — los que estaban ahí siguen activos y el agente
         # decide con su siguiente mensaje. Una sola vez, NO fatal.
         try:
@@ -225,6 +237,12 @@ async def lifespan(app: FastAPI):
         motor_ruta_barrido, "interval", minutes=5,
         id="motor_ruta", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=120,
+    )
+    # 2026-10-10 (Cambio 3): a los 3 días hábiles sin movimiento, UN aviso «Tu proceso sigue activo» al candidato.
+    scheduler.add_job(
+        revisar_inactividad, "interval", minutes=60,
+        id="avisos_inactividad", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
     )
     # 2026-10-08: reintento de resultados del proveedor SOLO con falla de recuperación confirmada (cuida el saldo).
     scheduler.add_job(

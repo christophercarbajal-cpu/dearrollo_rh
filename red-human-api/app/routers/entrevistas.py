@@ -567,26 +567,13 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
     if ev.inconsistencias and p:
         registrar(db, "agente-ia", "entrevista_inconsistencias", "postulacion", p.codigo,
                   {"entrevista": e.codigo, "inconsistencias": ev.inconsistencias[:4]})
-    # Por WhatsApp la despedida ya salió en el chat: no se manda un segundo «gracias»
+    # 2026-10-10 (Cambio 3): ya no sale un «gracias» aparte — al candidato le llega UN aviso de estado con el siguiente
+    # paso (services/avisos_estado, desde avanzar_seguro). Por WhatsApp la despedida ya salió en el chat.
     if p and p.etapa == "Entrevista IA" and e.tipo != "whatsapp":
         registrar(
             db, "agente-ia", "auto_evaluacion_zero_touch", "postulacion", p.codigo,
             {"candidato": p.candidato.codigo, "entrevista": e.codigo, "recomendacion": ev.recomendacion, "match": ev.match_perfil},
         )
-
-        primer_nombre = nombre_ficha(p)
-        texto = (
-            f"¡Gracias, {primer_nombre}! 🙌 Terminamos tu entrevista para {v.titulo if v else 'la vacante'} en {empresa}. "
-            "El equipo de RH va a revisar tus resultados y te contactará pronto."
-        )
-        if p.telefono:
-            try:
-                with de_cuenta(p.cuenta_id):
-                    envio = await enviar_mensaje(p.telefono, texto)
-            except Exception as ex:  # que WhatsApp falle no debe tumbar el cierre de la entrevista
-                print(f"[whatsapp-send-error] finalizar -> {e.codigo}: {ex}")
-                envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}
-            guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
 
     db.commit()
     # Proceso configurable (2026-10-06): con el avance automático de Filtro Red Human encendido y sus obligatorios

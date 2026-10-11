@@ -293,8 +293,14 @@ with TestClient(app) as client:
     EXP = post(P).expediente.id
     check(client.post(f"/onboarding/expedientes/{EXP}/iniciar", json={"documentos": [{"tipo": "CURP"}]}).status_code == 409,
           "sin condiciones no se inicia el Onboarding")
+    check(paso(seg(P), "condiciones")["estadoUnificadoTexto"] == "Pendiente: capturar condiciones", "fin de la selección → «Pendiente: capturar condiciones»")
     client.patch(f"/candidatos/{P}/condiciones-contratacion", json={"puesto": "Analista", "sueldo": "$25,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": HOY})
-    check(paso(seg(P), "condiciones")["estado"] == "completada", "Propuesta y aceptación: completada con las condiciones guardadas")
+    check(paso(seg(P), "condiciones")["estado"] == "pendiente", "guardar condiciones no basta: falta enviar la propuesta")
+    # 2026-10-10 (Cambio 3): la propuesta se envía y la aceptación (aquí registrada por RH) cumple la actividad
+    client.post(f"/candidatos/{P}/propuesta", json={"puesto": "Analista", "sueldo": "$25,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": HOY})
+    check(paso(seg(P), "condiciones")["estado"] == "en_curso", "propuesta enviada → esperando la respuesta del candidato")
+    client.post(f"/candidatos/{P}/propuesta/respuesta", json={"acepta": True})
+    check(paso(seg(P), "condiciones")["estado"] == "completada", "Propuesta y aceptación: completada con la aceptación")
     r = client.post(f"/onboarding/expedientes/{EXP}/iniciar", json={"documentos": [{"tipo": "CURP"}]})
     check(r.status_code == 409 and "Documentos de ingreso" in r.json()["detail"] and "Contrato y firma" in r.json()["detail"],
           "Contratación: faltan «Documentos de ingreso» y «Contrato y firma» (obligatorios) → 409")

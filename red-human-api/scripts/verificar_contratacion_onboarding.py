@@ -137,6 +137,7 @@ with TestClient(app) as client:
         e.puesto, e.sueldo, e.tipo_contratacion = "Auxiliar", "$12,000 mensuales", "Tiempo indeterminado"
         e.fecha_ingreso = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         e.condiciones_guardadas_en = datetime.now(timezone.utc)
+        p.analisis = {**(p.analisis or {}), "propuesta": {"estado": "aceptada", "canal": "rh"}}  # 2026-10-10: propuesta aceptada
         db.commit()
         return p
 

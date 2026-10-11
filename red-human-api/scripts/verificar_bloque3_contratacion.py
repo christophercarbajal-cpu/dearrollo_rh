@@ -95,6 +95,11 @@ with TestClient(app) as client:
         "ubicacion": "Zapopan, Jalisco", "jefe_directo": "Mariana López", "empresa": "", "instrucciones_ingreso": "Llega 8:45 a recepción.",
     })
     check(r.status_code == 200 and r.json()["expedienteCondiciones"]["completas"] is True, "condiciones guardadas y completas")
+    # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación (aquí la registra RH)
+    assert client.post(f"/candidatos/{P}/propuesta", json={
+        "puesto": "Abogada Fiscalista Sr.", "sueldo": "$32,000 mensuales netos", "tipo_contratacion": "Indeterminado", "fecha_ingreso": "2026-10-01",
+        "ubicacion": "Zapopan, Jalisco", "jefe_directo": "Mariana López", "empresa": "", "instrucciones_ingreso": "Llega 8:45 a recepción."}).status_code == 200
+    assert client.post(f"/candidatos/{P}/propuesta/respuesta", json={"acepta": True}).status_code == 200
     cond = r.json()["expedienteCondiciones"]
     check(cond["empresa"] and cond["guardadasEn"], f"empresa por default = la razón social de la Cuenta (B2) («{cond['empresa']}») y fecha de captura")
 

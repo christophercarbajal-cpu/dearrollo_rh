@@ -1052,12 +1052,28 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
         return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "100% aprobado",
                 "revisadoPor": f"Revisado por: {', '.join(revisores)}" if revisores else "Revisado por: RH"}
     if tipo == "condiciones":
+        # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple cuando el candidato ACEPTA la propuesta (WhatsApp o
+        # registrada por RH). Las postulaciones con condiciones guardadas antes de este flujo quedaron «aceptada · legado».
         if exp is None:
             return {**base, "espera": "El expediente se abre al llegar a Contratación"}
+        prop = (p.analisis or {}).get("propuesta") or {}
+        estado_prop = prop.get("estado")
+        if estado_prop == "aceptada":
+            return {**base, "estado": "completada", "resultado": "favorable", "cumple": True,
+                    "detalle": "Condiciones guardadas" if prop.get("legado") else "Propuesta aceptada por el candidato",
+                    "revisadoPor": "Revisado por: RH" if prop.get("legado") or prop.get("canal") == "rh" else "Respuesta del candidato",
+                    "terminado_en": _aware(exp.condiciones_guardadas_en)}
+        if estado_prop == "rechazada":
+            return {**base, "estado": "completada", "resultado": "no_favorable", "cumple": False,
+                    "detalle": "El candidato no aceptó la propuesta", "revisadoPor": "Respuesta del candidato"}
+        if estado_prop == "enviada":
+            return {**base, "estado": "en_curso", "espera": "Esperando la respuesta del candidato (sí o no)",
+                    "cuello": {"clave": "esperando_candidato", "texto": "Esperando respuesta del candidato", "quien": None}}
         if exp.condiciones_guardadas_en and exp.puesto and exp.sueldo and exp.tipo_contratacion and exp.fecha_ingreso:
-            return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Condiciones guardadas",
-                    "revisadoPor": "Revisado por: RH", "terminado_en": _aware(exp.condiciones_guardadas_en)}
-        return {**base, "espera": "Falta capturar las condiciones (puesto, sueldo, tipo y fecha de ingreso)"}
+            return {**base, "espera": "Condiciones capturadas: falta enviar la propuesta",
+                    "cuello": {"clave": "pendiente_condiciones", "texto": "Pendiente: enviar propuesta", "quien": None}}
+        return {**base, "espera": "Falta capturar las condiciones (puesto, sueldo, tipo y fecha de ingreso)",
+                "cuello": {"clave": "pendiente_condiciones", "texto": "Pendiente: capturar condiciones", "quien": None}}
     if tipo == "alta":
         if exp is not None and exp.estado == "alta":
             return {**base, "estado": "completada", "resultado": "favorable", "cumple": True,
@@ -1660,6 +1676,8 @@ ESTADOS_UNIFICADOS = {
     "lista_para_iniciar": "Lista para iniciar",
     # 2026-10-10 (Cambio 2): entrevista humana, médica, técnica o psicometría física sin cita: no se inicia ni se avisa
     "pendiente_agendar": "Pendiente de agendar",
+    # 2026-10-10 (Cambio 3): fin de la selección — falta capturar condiciones y enviar la propuesta
+    "pendiente_condiciones": "Pendiente: capturar condiciones",
     # 2026-10-09: actividad de una etapa que el candidato YA dejó atrás sin completarla: nunca «En curso» ni «Sin iniciar»
     "superada": "Etapa superada",
 }
@@ -1871,6 +1889,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
+    if tipo == "condiciones":  # 2026-10-10: propuesta por WhatsApp
+        return {"clave": "abrir", "texto": "Reenviar propuesta" if estado == "en_curso" else "Enviar propuesta", "pestana": destino}
     texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "alta": "Dar de alta",
              "onboarding": "Ver tareas", "carta_contrato": "Firmar documentos", "induccion": "Ver inducción",
              "carta_intencion": "Generar carta de intención"}.get(tipo, "Consultar")
@@ -2315,8 +2335,14 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
         if ruta_automatica(p.cuenta):
             from . import motor_ruta
 
-            return await motor_ruta.procesar(db, p)
-        return await avanzar_si_corresponde(db, p)
+            salida = await motor_ruta.procesar(db, p)
+        else:
+            salida = await avanzar_si_corresponde(db, p)
+        # 2026-10-10 (Cambio 3): UN aviso de estado al candidato si se completó una actividad o terminó la selección
+        from . import avisos_estado
+
+        await avisos_estado.revisar(db, p)
+        return salida
     except Exception as ex:  # noqa: BLE001
         # Sin rollback: la acción que lo disparó (un turno del prefiltro, un resultado…) puede traer cambios sin guardar.
         try:

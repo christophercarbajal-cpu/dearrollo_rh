@@ -1488,9 +1488,21 @@ class EvaluacionEntrevista(BaseModel):
 PREFIJO_INCONSISTENCIA = "Inconsistencia: "
 
 
+def _sin_escolaridad(ev: "EvaluacionEntrevista") -> "EvaluacionEntrevista":
+    """2026-10-10 (Cambio 3): la entrevista IA no genera alertas de escolaridad ni de documentos — se validan en la
+    actividad de Documentos. Garantizado en código (puntos por validar, faltantes e inconsistencias)."""
+    from .entrevista_operativa import es_alerta_escolaridad
+
+    ev.riesgos = [r for r in ev.riesgos or [] if not es_alerta_escolaridad(r)]
+    ev.faltante = [r for r in ev.faltante or [] if not es_alerta_escolaridad(r)]
+    ev.inconsistencias = [r for r in ev.inconsistencias or [] if not es_alerta_escolaridad(r)]
+    return ev
+
+
 def _aplicar_inconsistencias(ev: "EvaluacionEntrevista") -> "EvaluacionEntrevista":
     """Garantía en código: cada contradicción queda en Puntos por validar y, por sí sola, nunca lleva a «No avanzar» —
-    RH la aclara antes de decidir (la IA no descarta)."""
+    RH la aclara antes de decidir (la IA no descarta). También quita las alertas de escolaridad/documentos."""
+    ev = _sin_escolaridad(ev)
     nuevas = [x.strip() for x in ev.inconsistencias or [] if x and x.strip()]
     if not nuevas:
         return ev
@@ -1650,6 +1662,8 @@ def evaluar_entrevista(
             "INCONSISTENCIAS: compara lo que dijo en la entrevista con sus RESPUESTAS PREVIAS (formulario web, prefiltro) y con "
             "el CV SOLO para detectar contradicciones concretas; cada una va en `inconsistencias` citando ambas versiones "
             "(«En el formulario dijo X; en la entrevista dijo Y»). Una contradicción NUNCA es motivo de descarte: RH la aclara. "
+            "NO generes puntos por validar ni faltantes sobre escolaridad, estudios o documentos (INE, actas, comprobantes, "
+            "certificados): se validan aparte en Documentos. "
             "Si se te indican temas que la entrevista NO cubrió, repítelos en `faltante`, no los infieras y "
             "no los califiques. Construye el perfil profundo por dimensión; si la entrevista no cubrió una "
             "dimensión, márcala evaluado=false y déjala vacía. "

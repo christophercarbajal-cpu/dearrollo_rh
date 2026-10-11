@@ -88,6 +88,9 @@ with TestClient(app) as client:
     P = r.json()["id"]
     EXP = client.patch(f"/candidatos/{P}/etapa", headers=H, json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"}).json()["expedienteId"]
     client.patch(f"/candidatos/{P}/condiciones-contratacion", headers=H, json={"puesto": "Cajero", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
+    # 2026-10-10 (Cambio 3): la propuesta aceptada cumple «Propuesta y aceptación»
+    client.post(f"/candidatos/{P}/propuesta", headers=H, json={"puesto": "Cajero", "sueldo": "$10,000", "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
+    client.post(f"/candidatos/{P}/propuesta/respuesta", headers=H, json={"acepta": True})
     check(client.get(f"/contratacion/expedientes/{EXP}/carta-intencion").status_code == 404, "reproducción: sin cabecera (como un <iframe>) caía en la Cuenta predeterminada → 404")
     check(client.get(f"/contratacion/expedientes/{EXP}/carta-intencion?cuenta_id={B.id}").status_code == 200, "con ?cuenta_id la carta se genera (200)")
     check(client.get(f"/contratacion/expedientes/{EXP}/contrato?cuenta_id={B.id}").status_code == 409, "…y el contrato llega a su validación real (409 por documentos), ya no a 404")

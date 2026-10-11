@@ -442,6 +442,18 @@ EVENTO_LEGADO_EVALUACION = {
 
 def _mensaje_evaluacion(evento: str, audiencia: str, canal: str, c: Postulacion, eh, extra: dict):
     d = extra.get("_datos_evaluacion") or {}
+    if audiencia == "candidato" and evento == "evaluacion_cancelada" and d.get("reemplazada"):
+        # 2026-10-10: la cita anterior se canceló porque RH programó otra para la misma actividad
+        from .citas import texto_cancelacion_reemplazo
+
+        primer = c.nombre.split(" ")[0] if c.nombre and not c.nombre.startswith("Candidato") else "candidato(a)"
+        actividad = {"entrevista_humana": "entrevista", "medica": "evaluación médica", "tecnica": "evaluación técnica",
+                     "psicometrica": "psicometría"}.get(d.get("tipo"), "evaluación")
+        puesto = d.get("vacante") or (c.vacante.titulo if c.vacante else "la vacante")
+        texto = texto_cancelacion_reemplazo(primer, actividad, puesto, d)
+        if canal == "whatsapp":
+            return texto
+        return plantillas_correo.html_aviso(f"Cita cancelada — {puesto}", texto, d.get("empresa") or "", [])
     if (audiencia == "candidato" and d.get("presencial") and d.get("con_cita") and d.get("modalidad") == "Presencial"
             and evento != "evaluacion_cancelada" and (canal == "whatsapp" or d.get("tipo") != "entrevista_humana")):
         # 2026-10-10 (Cambio 2): aviso FIJO de la cita al candidato — fecha, rango de hora, lugar, mapa y adjuntos
@@ -455,9 +467,9 @@ def _mensaje_evaluacion(evento: str, audiencia: str, canal: str, c: Postulacion,
         if canal == "whatsapp":
             return texto
         filas = [(k, v) for k, v in (("Fecha", d.get("fecha_texto")), ("Hora", d.get("horario_texto")), ("Lugar", d.get("direccion")),
-                                      ("Indicaciones", d.get("instrucciones"))) if v]
+                                      ("Pregunta por", d.get("evaluador")), ("Indicaciones", d.get("instrucciones"))) if v]
         cta = ("Cómo llegar", d["mapa"]) if d.get("mapa") else None
-        asunto = {"evaluacion_asignada": f"Tu cita — {puesto}", "evaluacion_reprogramada": f"Cambio en tu cita — {puesto}",
+        asunto = {"evaluacion_asignada": f"Tu cita — {puesto}", "evaluacion_reprogramada": f"Tu cita cambió — {puesto}",
                   "recordatorio_evaluacion": f"Recordatorio de tu cita — {puesto}"}[evento]
         return plantillas_correo.html_aviso(asunto, texto, d.get("empresa") or "", filas, cta)
     if d.get("tipo") == "entrevista_humana" and d.get("con_cita") and eh is not None:

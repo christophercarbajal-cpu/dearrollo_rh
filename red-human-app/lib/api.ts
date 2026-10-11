@@ -3424,10 +3424,29 @@ export interface CitaEvaluacion {
   hasta?: string | null; mapa?: string; adjuntos?: AdjuntoCita[];
 }
 export interface AdjuntoCita { id: string; nombre: string; mime: string; tamano: number; subidoPor?: string; subidoEn?: string }
-/** Liga de mapa que genera el servidor con la dirección (misma fórmula, para la vista previa). */
-export function ligaMapa(direccion: string) {
-  const d = direccion.trim().replace(/\s+/g, " ");
-  return d ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d).replace(/%20/g, "+")}` : "";
+const sinAcentos = (s: string) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+/** Liga de mapa que genera el servidor (misma fórmula, para la vista previa): la dirección escrita + la ubicación de la
+ * vacante («Zapopan, Jalisco») que no mencione. Lo que se ve en el campo no cambia, solo la búsqueda. */
+export function ligaMapa(direccion: string, contexto = "") {
+  let d = direccion.trim().replace(/\s+/g, " ");
+  if (!d) return "";
+  const faltan = contexto.split(",").map((x) => x.trim()).filter((x) => x && !sinAcentos(d).includes(sinAcentos(x)));
+  if (faltan.length) d = `${d}, ${faltan.join(", ")}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d).replace(/%20/g, "+")}`;
+}
+/** Precarga del formulario de cita (2026-10-10): la ÚLTIMA cita agendada en la vacante (sin fecha ni hora). */
+export interface UltimaCita {
+  evaluacion: string; tipo: string; modalidad: ModalidadCita | ""; direccion: string; instrucciones: string; adjuntos: AdjuntoCita[];
+  evaluador: { tipo: "interno" | "externo"; usuario_id: number | null; contacto_id: number | null; nombre: string; correo: string; whatsapp: string } | null;
+}
+export function fetchUltimaCita(codigoPostulacion: string, tipo: string) {
+  return get<{ cita: UltimaCita | null; ubicacionVacante: string }>(`/evaluaciones/postulaciones/${codigoPostulacion}/ultima-cita?tipo=${encodeURIComponent(tipo)}`);
+}
+/** Cita como viaja a la API (snake_case). */
+export interface CitaSnake {
+  fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string;
+  /** 2026-10-10: «Instrucciones (opcional)» → «📝 Indicaciones: …» y adjuntos reutilizados de la última cita de la vacante. */
+  instrucciones?: string; adjuntos_previos?: { evaluacion: string; ids: string[] } | null;
 }
 export const MAX_ADJUNTOS_CITA = 5;
 export const MAX_MB_ADJUNTO_CITA = 10;
@@ -3493,7 +3512,10 @@ export interface RespuestaEvaluacion {
   envioCandidato?: { enviado: boolean; conLiga: boolean; canales?: string[]; detalle?: string };
 }
 export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: number | null; contactoId?: number | null; nombre?: string; correo?: string; whatsapp?: string }
-export interface CitaEntrada { fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean; hasta?: string }
+export interface CitaEntrada {
+  fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean; hasta?: string;
+  instrucciones?: string; adjuntosPrevios?: { evaluacion: string; ids: string[] } | null;
+}
 export interface DatosResultado {
   conclusion: string; comentarios: string; realizadaPor: string; archivos: File[]; version: number; modo: "registrar" | "corregir" | "complementar";
 }
@@ -3502,9 +3524,13 @@ function evaluadorSnake(e?: EvaluadorEntrada | null) {
   if (!e) return undefined;
   return { tipo: e.tipo, usuario_id: e.usuarioId ?? null, contacto_id: e.contactoId ?? null, nombre: e.nombre ?? "", correo: e.correo ?? "", whatsapp: e.whatsapp ?? "" };
 }
-function citaSnake(c?: CitaEntrada | null) {
+function citaSnake(c?: CitaEntrada | null): CitaSnake | undefined {
   if (!c) return undefined;
-  return { fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "", usar_teams: c.usarTeams ?? true, hasta: c.hasta ?? "" };
+  return {
+    fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "",
+    usar_teams: c.usarTeams ?? true, hasta: c.hasta ?? "", ...(c.instrucciones !== undefined ? { instrucciones: c.instrucciones } : {}),
+    ...(c.adjuntosPrevios ? { adjuntos_previos: c.adjuntosPrevios } : {}),
+  };
 }
 function formResultado(d: DatosResultado) {
   const form = new FormData();
@@ -3786,7 +3812,7 @@ export function iniciarActividad(codigoPostulacion: string, pasoId: string, dato
   forma?: string; evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; nombre?: string; correo?: string; whatsapp?: string } | null;
   correo?: string; prueba_ids?: number[];
   /** 2026-10-10: «Programar cita» de una actividad pendiente de agendar. */
-  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string };
+  cita?: CitaSnake;
 } = {}) {
   return post<RespuestaIniciar>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/iniciar`, datos);
 }
@@ -3814,7 +3840,7 @@ export function registrarResultadoActividad(codigoPostulacion: string, pasoId: s
 export interface ConfigActividad {
   forma?: "asignada" | "registro_directo" | "liga_otro_sistema" | "integrada";
   evaluador?: { tipo: "interno" | "externo"; usuario_id?: number | null; contacto_id?: number | null; nombre?: string; correo?: string; whatsapp?: string };
-  cita?: { fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string };
+  cita?: CitaSnake;
   instrucciones?: string;
   liga_externa_candidato?: string;
   proveedor?: string;

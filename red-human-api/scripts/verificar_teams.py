@@ -31,6 +31,13 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual  # noqa: E402
 from app.main import app  # noqa: E402
+
+import app.services.citas as _citas_fijas  # noqa: E402
+
+# 2026-10-10: esta verificación agenda con fechas FIJAS que ya pasaron; la regla «nunca una cita en el pasado» se prueba
+# en scripts/verificar_citas_ajustes.py
+_citas_fijas.en_pasado = lambda cuando: False
+
 from app.models import Candidato, Cuenta, Evaluacion, IntegracionTeams, NotificacionEnviada, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import teams  # noqa: E402
 
@@ -190,7 +197,8 @@ with TestClient(app) as client:
           "evento de calendario con reunión de Teams e invitación a candidato y entrevistador")
     check(evento["start"]["dateTime"] == "2026-10-01T16:00:00" and evento["end"]["dateTime"] == "2026-10-01T17:00:00" and "Entrevista —" in evento["subject"],
           "hora de México → UTC (10:00 CDMX = 16:00Z), 60 min, asunto con puesto y candidato")
-    env = db.query(NotificacionEnviada).filter(NotificacionEnviada.id > base).all()
+    # 2026-10-10: la cita anterior de esta misma entrevista (liga manual) se cancela sola y su aviso va aparte
+    env = db.query(NotificacionEnviada).filter(NotificacionEnviada.id > base, NotificacionEnviada.evento != "evaluacion_cancelada").all()
     check(len(env) == 3, "confirmaciones enviadas tras crear la reunión")
     texto_wa = next(x for x in env if x.canal == "whatsapp")
     from app.models import Mensaje

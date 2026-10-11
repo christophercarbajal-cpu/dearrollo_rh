@@ -3,14 +3,18 @@
 /* Campos compartidos de Evaluaciones unificadas (2026-09-29): evaluador (interno = usuario del sistema; externo =
    contacto reutilizable del Cliente o «+ Nuevo evaluador», que queda guardado como contacto) y cita (fecha y hora en
    la zona de la organización, modalidad, dirección / liga en campos propios). Los usan «Agregar evaluación»,
-   «Modificar datos» y «Reprogramar» — una sola implementación. */
+   «Modificar datos» y «Reprogramar» — una sola implementación.
+   2026-10-10 (citas, ajustes tras la prueba): siempre visibles Fecha, Hora, Modalidad y Dirección; «Hasta», «Instrucciones»
+   y «Adjuntos» viven en «▸ Más detalles» (con resumen si ya traen algo). Evaluador: UN selector con los contactos del
+   Cliente primero («Nombre · Teléfono»), luego los usuarios internos y al final «+ Nuevo evaluador» (solo entonces se
+   piden nombre/correo/WhatsApp; los números repetidos no se bloquean). */
 
 import { useEffect, useState } from "react";
 import {
   MAX_ADJUNTOS_CITA, MAX_MB_ADJUNTO_CITA, MODALIDADES_CITA, fetchCliente, fetchEntrevistadores, fetchIntegracionTeams, ligaMapa,
-  type CitaEntrada, type ContactoCliente, type Entrevistador, type EvaluadorEntrada, type ModalidadCita,
+  type AdjuntoCita, type CitaEntrada, type ContactoCliente, type Entrevistador, type EvaluadorEntrada, type ModalidadCita, type UltimaCita,
 } from "@/lib/api";
-import { ETIQUETA_ZONA } from "@/lib/fechas";
+import { ETIQUETA_ZONA, desdeLocal } from "@/lib/fechas";
 import { cn } from "@/lib/utils";
 
 export const inputEv = "h-11 w-full rounded-xl border border-border-soft bg-surface px-3.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
@@ -117,47 +121,40 @@ export function SelectorEvaluador({ valor, onChange, internos, contactos, client
     if (valor.tipo === "externo" && valor.contacto === "" && contactos && contactos.length === 0) onChange({ ...valor, contacto: "nuevo" });
   }, [valor, contactos, onChange]);
 
-  const interno = internos.find((u) => u.id === valor.usuarioId) ?? null;
-  const contacto = typeof valor.contacto === "number" ? contactos?.find((k) => k.id === valor.contacto) ?? null : null;
+  const interno = valor.tipo === "interno" ? internos.find((u) => u.id === valor.usuarioId) ?? null : null;
+  const contacto = valor.tipo === "externo" && typeof valor.contacto === "number" ? contactos?.find((k) => k.id === valor.contacto) ?? null : null;
+  const actual = valor.tipo === "interno" ? (valor.usuarioId ? `u:${valor.usuarioId}` : "")
+    : valor.contacto === "nuevo" ? "nuevo" : typeof valor.contacto === "number" ? `c:${valor.contacto}` : "";
+  const etiqueta = (nombre: string, tel?: string | null) => (tel ? `${nombre} · ${tel}` : nombre);
+  function elegir(v: string) {
+    if (v === "nuevo") return onChange({ ...valor, tipo: "externo", contacto: "nuevo", usuarioId: null });
+    if (v.startsWith("c:")) return onChange({ ...valor, tipo: "externo", contacto: Number(v.slice(2)), usuarioId: null });
+    if (v.startsWith("u:")) return onChange({ ...valor, tipo: "interno", usuarioId: Number(v.slice(2)), contacto: "" });
+    onChange({ ...valor, tipo: "externo", contacto: "", usuarioId: null });
+  }
+  const ayuda = interno ? `Se notificará a ${interno.correo}${interno.telefono ? ` · WhatsApp ${interno.telefono}` : " · sin WhatsApp en su perfil"}`
+    : contacto ? `Se notificará a ${contacto.correo || "(sin correo)"}${contacto.telefono ? ` · WhatsApp ${contacto.telefono}` : ""}`
+      : valor.contacto === "nuevo" ? "Quedará guardado como contacto del Cliente para reutilizarlo." : undefined;
   return (
     <div className="flex flex-col gap-3">
-      <Opciones
-        valor={valor.tipo}
-        onChange={(t) => onChange({ ...valor, tipo: t })}
-        opciones={[{ valor: "interno", texto: "Interno", ayuda: "Usuario del sistema" }, { valor: "externo", texto: "Externo", ayuda: "Entra con su liga, sin cuenta" }]}
-      />
-      {valor.tipo === "interno" ? (
-        <Campo
-          etiqueta="Evaluador interno"
-          ayuda={interno ? `Se notificará a ${interno.correo}${interno.telefono ? ` · WhatsApp ${interno.telefono}` : " · sin WhatsApp en su perfil"}` : undefined}
-        >
-          <select value={valor.usuarioId ?? ""} onChange={(e) => onChange({ ...valor, usuarioId: Number(e.target.value) || null })} className={inputEv}>
-            {internos.length === 0 && <option value="">Sin usuarios activos</option>}
-            {internos.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
-          </select>
-        </Campo>
-      ) : (
+      <Campo etiqueta="Evaluador" ayuda={ayuda}>
+        <select value={actual} onChange={(e) => elegir(e.target.value)} className={inputEv}>
+          <option value="">{contactos === null ? "Cargando evaluadores…" : "Elige al evaluador…"}</option>
+          {contactos && contactos.length > 0 && (
+            <optgroup label={clienteNombre ? `Contactos de ${clienteNombre}` : "Contactos del Cliente"}>
+              {contactos.map((k) => <option key={`c${k.id}`} value={`c:${k.id}`}>{etiqueta(k.nombreCompleto, k.telefono)}</option>)}
+            </optgroup>
+          )}
+          {internos.length > 0 && (
+            <optgroup label="Usuarios internos">
+              {internos.map((u) => <option key={`u${u.id}`} value={`u:${u.id}`}>{etiqueta(u.nombre, u.telefono)}</option>)}
+            </optgroup>
+          )}
+          <option value="nuevo">+ Nuevo evaluador</option>
+        </select>
+      </Campo>
+      {valor.tipo === "externo" && (
         <>
-          <Campo
-            etiqueta="Evaluador externo"
-            ayuda={contacto ? `Se notificará a ${contacto.correo || "(sin correo)"}${contacto.telefono ? ` · WhatsApp ${contacto.telefono}` : ""}` : contactos && contactos.length === 0 ? "Captura al evaluador; quedará guardado como contacto del Cliente para reutilizarlo." : undefined}
-          >
-            <select
-              value={valor.contacto}
-              onChange={(e) => onChange({ ...valor, contacto: e.target.value === "nuevo" ? "nuevo" : e.target.value === "" ? "" : Number(e.target.value) })}
-              className={inputEv}
-            >
-              {contactos === null ? (
-                <option value="">Cargando contactos…</option>
-              ) : (
-                <>
-                  {contactos.length > 0 && <option value="">Elige un contacto{clienteNombre ? ` de ${clienteNombre}` : ""}…</option>}
-                  {contactos.map((k) => <option key={k.id} value={k.id}>{k.nombreCompleto}{k.puesto ? ` — ${k.puesto}` : ""}</option>)}
-                  <option value="nuevo">+ Nuevo evaluador</option>
-                </>
-              )}
-            </select>
-          </Campo>
           {valor.contacto === "nuevo" && (
             <div className="grid gap-3 sm:grid-cols-3">
               <Campo etiqueta={<>Nombre <span className="text-bad">*</span></>} className="sm:col-span-3">
@@ -180,8 +177,29 @@ export function SelectorEvaluador({ valor, onChange, internos, contactos, client
 
 /* ---------------- Cita ---------------- */
 
-export type EstadoCita = { fecha: string; hora: string; modalidad: ModalidadCita; direccion: string; liga: string; telefono: string; otraLiga: boolean; hasta: string };
-export const citaVacia: EstadoCita = { fecha: "", hora: "", modalidad: "Videollamada", direccion: "", liga: "", telefono: "", otraLiga: false, hasta: "" };
+/** `previos` = adjuntos de la última cita de la vacante que se reutilizan (el servidor los copia). */
+export type EstadoCita = {
+  fecha: string; hora: string; modalidad: ModalidadCita; direccion: string; liga: string; telefono: string; otraLiga: boolean; hasta: string;
+  instrucciones: string; previos: { evaluacion: string; adjuntos: AdjuntoCita[] } | null;
+};
+export const citaVacia: EstadoCita = {
+  fecha: "", hora: "", modalidad: "Videollamada", direccion: "", liga: "", telefono: "", otraLiga: false, hasta: "", instrucciones: "", previos: null,
+};
+
+/** Precarga con la última cita de la vacante: evaluador, modalidad, dirección, indicaciones y adjuntos — NUNCA fecha ni hora. */
+export function citaDesdeUltima(u: UltimaCita, base: EstadoCita = citaVacia): EstadoCita {
+  return {
+    ...base, fecha: "", hora: "", hasta: "",
+    modalidad: (u.modalidad || base.modalidad) as ModalidadCita, direccion: u.direccion || base.direccion,
+    instrucciones: u.instrucciones || base.instrucciones, previos: u.adjuntos.length ? { evaluacion: u.evaluacion, adjuntos: u.adjuntos } : null,
+  };
+}
+export function evaluadorDesdeUltima(u: UltimaCita): EstadoEvaluador | null {
+  const e = u.evaluador;
+  if (!e) return null;
+  if (e.tipo === "interno") return e.usuario_id ? { ...evaluadorVacio, tipo: "interno", usuarioId: e.usuario_id } : null;
+  return { ...evaluadorVacio, tipo: "externo", contacto: e.contacto_id ?? "nuevo", nombre: e.nombre, correo: e.correo, whatsapp: e.whatsapp };
+}
 
 export function useTeamsConectado() {
   const [conectado, setConectado] = useState(false);
@@ -191,8 +209,12 @@ export function useTeamsConectado() {
   return conectado;
 }
 
-export function validarCita(c: EstadoCita, teams: boolean): string {
+/** `actual` = la fecha-hora que ya tenía la cita (editar otros datos de una cita vencida no se bloquea). */
+export function validarCita(c: EstadoCita, teams: boolean, actual?: string | null): string {
   if (!c.fecha || !c.hora) return "Completa fecha y hora de la cita.";
+  const cuando = desdeLocal(c.fecha, c.hora);
+  const igual = actual && cuando && Math.abs(new Date(actual).getTime() - cuando.getTime()) < 60_000;
+  if (cuando && cuando.getTime() <= Date.now() && !igual) return "La fecha y hora de la cita ya pasaron. Elige una fecha y hora futuras.";
   if (c.hasta && c.hasta <= c.hora) return "La hora «Hasta» debe ser posterior a la de inicio.";
   if (c.modalidad === "Presencial" && !c.direccion.trim()) return "Falta la dirección de la cita.";
   if (c.modalidad === "Videollamada" && !(teams && !c.otraLiga) && !c.liga.trim()) return "Falta la liga de la videollamada.";
@@ -204,25 +226,47 @@ export function citaEntrada(c: EstadoCita, teams: boolean): CitaEntrada {
   return {
     fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion.trim(),
     ligaVideollamada: porTeams ? "" : c.liga.trim(), telefono: c.telefono.trim(), usarTeams: porTeams, hasta: c.hasta || "",
+    instrucciones: c.instrucciones.trim(),
+    adjuntosPrevios: c.previos && c.previos.adjuntos.length ? { evaluacion: c.previos.evaluacion, ids: c.previos.adjuntos.map((a) => a.id) } : null,
   };
 }
 
-export function CamposCita({ valor, onChange, teams }: { valor: EstadoCita; onChange: (v: EstadoCita) => void; teams: boolean }) {
+const fotoOPdf = (n: { mime?: string; type?: string }) => ((n.mime ?? n.type ?? "").startsWith("image/") ? "foto" : "PDF");
+function contarAdjuntos(lista: { mime?: string; type?: string }[]): string {
+  const fotos = lista.filter((x) => fotoOPdf(x) === "foto").length;
+  const pdfs = lista.length - fotos;
+  return [fotos && `${fotos} foto${fotos > 1 ? "s" : ""}`, pdfs && `${pdfs} PDF`].filter(Boolean).join(" · ");
+}
+
+/** Resumen del desplegable: «Hasta 11:00 · Indicaciones: Pregunta en caseta… · 1 foto». */
+export function resumenMasDetalles(c: EstadoCita, archivos: File[] = [], conInstrucciones = true): string {
+  const corto = (t: string) => (t.length > 28 ? `${t.slice(0, 28).trim()}…` : t);
+  const adj = contarAdjuntos([...(c.previos?.adjuntos ?? []), ...archivos]);
+  return [c.hasta && `Hasta ${c.hasta}`, conInstrucciones && c.instrucciones.trim() && `Indicaciones: ${corto(c.instrucciones.trim())}`, adj]
+    .filter(Boolean).join(" · ");
+}
+
+/** Formulario de la cita. `adjuntos` (opcional) agrega los archivos para el candidato dentro de «Más detalles»;
+ * `conInstrucciones=false` cuando la pantalla ya tiene su propio campo de instrucciones. `contextoMapa` = ubicación de
+ * la vacante para la liga de mapa (el campo de dirección no cambia). */
+export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones = true, contextoMapa = "" }: {
+  valor: EstadoCita; onChange: (v: EstadoCita) => void; teams: boolean;
+  adjuntos?: { valor: File[]; onChange: (v: File[]) => void }; conInstrucciones?: boolean; contextoMapa?: string;
+}) {
   const porTeams = valor.modalidad === "Videollamada" && teams && !valor.otraLiga;
+  const [abierto, setAbierto] = useState(false);
+  const resumen = resumenMasDetalles(valor, adjuntos?.valor ?? [], conInstrucciones);
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Campo etiqueta={<>Fecha <span className="text-bad">*</span></>} className="col-span-2 sm:col-span-1">
+      <div className="grid grid-cols-2 gap-3">
+        <Campo etiqueta={<>Fecha <span className="text-bad">*</span></>}>
           <input type="date" value={valor.fecha} onChange={(e) => onChange({ ...valor, fecha: e.target.value })} className={inputEv} />
         </Campo>
         <Campo etiqueta={<>Hora <span className="text-bad">*</span></>}>
           <input type="time" value={valor.hora} onChange={(e) => onChange({ ...valor, hora: e.target.value })} className={inputEv} />
         </Campo>
-        <Campo etiqueta="Hasta (opcional)">
-          <input type="time" value={valor.hasta} onChange={(e) => onChange({ ...valor, hasta: e.target.value })} className={inputEv} />
-        </Campo>
       </div>
-      <p className="-mt-1.5 text-[11px] text-ink-3">Horas en {ETIQUETA_ZONA}. Con «Hasta» el candidato recibe el rango (p. ej. de 9:00 a 11:00).</p>
+      <p className="-mt-1.5 text-[11px] text-ink-3">Horas en {ETIQUETA_ZONA}.</p>
       {/* grupo de botones: fieldset (un <label> los fusionaría con su etiqueta) */}
       <fieldset className="flex flex-col gap-1.5">
         <legend className="mb-1.5 text-sm font-medium text-ink-2">Modalidad <span className="text-bad">*</span></legend>
@@ -232,7 +276,7 @@ export function CamposCita({ valor, onChange, teams }: { valor: EstadoCita; onCh
         <Campo
           etiqueta={<>Dirección <span className="text-bad">*</span></>}
           ayuda={valor.direccion.trim() ? (
-            <>Liga de mapa (se genera sola): <a className="break-all text-brand hover:underline" href={ligaMapa(valor.direccion)} target="_blank" rel="noreferrer">ver en el mapa</a></>
+            <>Liga de mapa (se genera sola{contextoMapa ? ` con ${contextoMapa}` : ""}): <a className="break-all text-brand hover:underline" href={ligaMapa(valor.direccion, contextoMapa)} target="_blank" rel="noreferrer">ver en el mapa</a></>
           ) : "La liga de mapa se genera sola con la dirección."}
         >
           <input value={valor.direccion} onChange={(e) => onChange({ ...valor, direccion: e.target.value })} placeholder="Calle, número, colonia, ciudad" className={inputEv} />
@@ -256,6 +300,46 @@ export function CamposCita({ valor, onChange, teams }: { valor: EstadoCita; onCh
           <input value={valor.telefono} onChange={(e) => onChange({ ...valor, telefono: e.target.value })} placeholder="10 dígitos" className={inputEv} />
         </Campo>
       )}
+      <div className="rounded-xl border border-border-soft">
+        <button type="button" onClick={() => setAbierto((x) => !x)} aria-expanded={abierto}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-ink-2 hover:text-ink">
+          <span className={cn("inline-block transition-transform", abierto && "rotate-90")}>▸</span>
+          <span className="truncate">{resumen || "Más detalles"}</span>
+          {!resumen && <span className="font-normal text-ink-3">(hasta, {conInstrucciones ? "instrucciones, " : ""}adjuntos)</span>}
+        </button>
+        {abierto && (
+          <div className="flex flex-col gap-3 border-t border-border-soft p-3">
+            <Campo etiqueta="Hasta (opcional)" ayuda="Con «Hasta» el candidato recibe el rango (p. ej. de 9:00 a 11:00).">
+              <input type="time" value={valor.hasta} onChange={(e) => onChange({ ...valor, hasta: e.target.value })} className={cn(inputEv, "sm:w-40")} />
+            </Campo>
+            {conInstrucciones && (
+              <Campo etiqueta="Instrucciones (opcional)" ayuda="Le llega al candidato como «📝 Indicaciones: …».">
+                <textarea value={valor.instrucciones} onChange={(e) => onChange({ ...valor, instrucciones: e.target.value })} rows={2}
+                  placeholder="Pregunta en caseta por…, trae identificación oficial…"
+                  className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
+              </Campo>
+            )}
+            {adjuntos && (
+              <>
+                {valor.previos && valor.previos.adjuntos.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[12px] text-ink-3">Adjuntos de la última cita de esta vacante</span>
+                    {valor.previos.adjuntos.map((a) => (
+                      <div key={a.id} className="flex items-center justify-between gap-2 rounded-lg bg-surface-2/60 px-2.5 py-1 text-[12px] text-ink-2">
+                        <span className="truncate">{a.nombre} · {fotoOPdf(a)}</span>
+                        <button type="button" className="font-semibold text-bad hover:underline" onClick={() => onChange({
+                          ...valor, previos: { evaluacion: valor.previos!.evaluacion, adjuntos: valor.previos!.adjuntos.filter((x) => x.id !== a.id) },
+                        })}>Quitar</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <AdjuntosCita valor={adjuntos.valor} onChange={adjuntos.onChange} yaTiene={valor.previos?.adjuntos.length ?? 0} />
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

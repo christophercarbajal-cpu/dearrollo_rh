@@ -786,7 +786,7 @@ function citaDesde(e: Evaluacion): EstadoCita {
   return {
     fecha: p.fecha, hora: p.hora, modalidad: (e.cita.modalidad || "Videollamada") as EstadoCita["modalidad"], direccion: e.cita.direccion,
     liga: e.cita.porTeams ? "" : e.cita.ligaVideollamada, telefono: e.cita.telefono, otraLiga: !e.cita.porTeams && Boolean(e.cita.ligaVideollamada),
-    hasta: e.cita.hasta ? partesLocales(e.cita.hasta).hora : "",
+    hasta: e.cita.hasta ? partesLocales(e.cita.hasta).hora : "", instrucciones: e.instrucciones ?? "", previos: null,
   };
 }
 
@@ -797,7 +797,7 @@ function ModalReprogramar({ e, onClose, onListo }: { e: Evaluacion; onClose: () 
   const [error, setError] = useState("");
   const notificar = useNotificarAccion("evaluacion_reprogramada");
   return (
-    <ModalMarco titulo={`Reprogramar · ${e.nombre}`} subtitulo="Se avisa al candidato y al evaluador con la nueva fecha." onClose={onClose}>
+    <ModalMarco titulo={`Reprogramar · ${e.nombre}`} subtitulo="Se avisa al candidato y al evaluador con UN solo mensaje («Tu cita cambió»); los adjuntos no se reenvían." onClose={onClose}>
       <CamposCita valor={cita} onChange={setCita} teams={teams || Boolean(e.cita?.porTeams)} />
       <LineaNotificar className="mt-4" value={notificar.value} onChange={notificar.setValue} hayEntrevistador={e.forma === "asignada"} />
       {error && <p className="mt-3 text-sm font-semibold text-bad">{error}</p>}
@@ -867,7 +867,7 @@ function ModalModificar({ c, e, onClose, onListo }: { c: Candidato; e: Evaluacio
             <span className="text-sm font-semibold text-ink">Cita</span>
             <input type="checkbox" role="switch" checked={conCita} onChange={(x) => setConCita(x.target.checked)} className="h-5 w-9 cursor-pointer accent-[var(--brand)]" />
           </label>
-          {conCita && <div className="mt-3"><CamposCita valor={cita} onChange={setCita} teams={teams} /></div>}
+          {conCita && <div className="mt-3"><CamposCita valor={cita} onChange={setCita} teams={teams} conInstrucciones={false} /></div>}
         </div>
         <Campo etiqueta="Instrucciones">
           <textarea value={instrucciones} onChange={(x) => setInstrucciones(x.target.value)} rows={3} className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
@@ -882,7 +882,7 @@ function ModalModificar({ c, e, onClose, onListo }: { c: Candidato; e: Evaluacio
               if (v) return setError(v);
             }
             if (conCita) {
-              const v = validarCita(cita, teams);
+              const v = validarCita(cita, teams, e.cita?.fechaHora);
               if (v) return setError(v);
             }
             setOcupado(true);

@@ -183,8 +183,8 @@ with TestClient(app) as client:
     check(r.status_code == 201 and r.json()["iniciada"] and len(e) == 1, "con cita se inicia en el mismo paso")
     e = e[0]
     check(e.cita_hasta is not None and e.cita_hasta > e.cita_fecha_hora, "«Hasta» guardado como fin del rango")
-    check(e.cita_mapa == "https://www.google.com/maps/search/?api=1&query=Av.+Insurgentes+Sur+1000%2C+Ciudad+de+M%C3%A9xico",
-          "liga de mapa AUTOGENERADA con la dirección")
+    check(e.cita_mapa.startswith("https://www.google.com/maps/search/?api=1&query=Av.+Insurgentes+Sur+1000%2C+Ciudad+de+M%C3%A9xico"),
+          "liga de mapa AUTOGENERADA con la dirección (+ la ubicación de la vacante, 2026-10-10)")
     check(len(e.cita_adjuntos) == 2 and all(os.path.isfile(a["archivo"]) for a in e.cita_adjuntos), "2 adjuntos guardados con la cita")
     texto = next((t for c, d, t in ENVIOS if c == "whatsapp" and d == tel_p), "")
     check("de 9:00 a.m. a 11:00 a.m." in texto and "hora de Ciudad de México" in texto and "Av. Insurgentes Sur 1000" in texto
@@ -222,7 +222,7 @@ with TestClient(app) as client:
     destinatarios = {n.destinatario_tipo for n in db.query(NotificacionEnviada).filter(NotificacionEnviada.evento == "evaluacion_reprogramada").all()}
     check({"candidato", "entrevistador"} <= destinatarios, "la reprogramación avisa al candidato y al evaluador")
     texto = next((t for c, d, t in ENVIOS if c == "whatsapp" and d == tel_p), "")
-    check("cambiamos" in texto.lower() and "de 12:00 p.m. a 1:30 p.m." in texto, "el candidato recibe los nuevos datos con su rango de hora")
+    check("tu cita cambió" in texto.lower() and "de 12:00 p.m. a 1:30 p.m." in texto, "el candidato recibe los nuevos datos con su rango de hora")
     r = client.delete(f"/evaluaciones/{e.codigo}/cita/adjuntos/{aid}")
     db.expire_all()
     check(r.status_code == 200 and len(db.get(Evaluacion, e.id).cita_adjuntos) == 1, "un adjunto se puede quitar (deja de salir en avisos futuros)")

@@ -18,11 +18,11 @@ import { CalendarClock, ClipboardCheck, Info, Loader2, Sparkles } from "lucide-r
 import { Badge, Button } from "@/components/ui";
 import { ModalMarco, inputRH } from "@/components/dashboard/modulos-rh";
 import {
-  AdjuntosCita, CamposCita, SelectorEvaluador, citaEntrada, citaVacia, evaluadorEntrada, evaluadorVacio, useCatalogoEvaluadores, useTeamsConectado,
-  validarAdjuntosCita, validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
+  CamposCita, SelectorEvaluador, citaDesdeUltima, citaEntrada, citaVacia, evaluadorDesdeUltima, evaluadorEntrada, evaluadorVacio, useCatalogoEvaluadores,
+  useTeamsConectado, validarAdjuntosCita, validarCita, validarEvaluador, type EstadoCita, type EstadoEvaluador,
 } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import {
-  agregarActividadConfigurada, fetchOpcionesProceso, fetchPrecargaActividad, fetchPruebasPsicometricas, nombreEtapa, proveedorVisible,
+  agregarActividadConfigurada, fetchOpcionesProceso, fetchPrecargaActividad, fetchPruebasPsicometricas, fetchUltimaCita, nombreEtapa, proveedorVisible,
   type ConfigActividad, type OpcionesProceso, type PrecargaActividad, type PruebaPsicometrica, type RespuestaAgregarActividad,
 } from "@/lib/api";
 import type { Candidato } from "@/lib/data";
@@ -84,10 +84,25 @@ export const esEvaluacion = (tipo: string) => EVALUACIONES.includes(tipo);
 export const conCitaPresencial = (f: Pick<FormActividad, "tipo" | "forma">) =>
   ["entrevista_humana", "medica", "psicometria_fisica"].includes(f.tipo) || (f.tipo === "tecnica" && f.forma !== "liga_otro_sistema");
 
-function citaSnakeDe(c: EstadoCita, teams: boolean): NonNullable<ConfigActividad["cita"]> {
+function citaSnakeDe(c: EstadoCita, teams: boolean, conInstrucciones = true): NonNullable<ConfigActividad["cita"]> {
   const ci = citaEntrada(c, teams);
   return { fecha: ci.fecha, hora: ci.hora, modalidad: ci.modalidad, direccion: ci.direccion ?? "", liga_videollamada: ci.ligaVideollamada ?? "",
-    telefono: ci.telefono ?? "", usar_teams: ci.usarTeams ?? true, hasta: ci.hasta ?? "" };
+    telefono: ci.telefono ?? "", usar_teams: ci.usarTeams ?? true, hasta: ci.hasta ?? "",
+    ...(conInstrucciones && ci.instrucciones ? { instrucciones: ci.instrucciones } : {}), adjuntos_previos: ci.adjuntosPrevios ?? null };
+}
+
+/** 2026-10-10: precarga de la cita con la ÚLTIMA cita agendada en la vacante (evaluador, modalidad, dirección,
+ * indicaciones y adjuntos; fecha y hora vacías). Regresa también la ubicación de la vacante para la liga de mapa. */
+function useUltimaCita(codigo: string, tipo: string, activo: boolean) {
+  const [r, setR] = useState<{ cita: import("@/lib/api").UltimaCita | null; ubicacionVacante: string } | null>(null);
+  useEffect(() => {
+    setR(null);
+    if (!activo || !tipo) return;
+    let vivo = true;
+    fetchUltimaCita(codigo, tipo).then((x) => vivo && setR(x ?? { cita: null, ubicacionVacante: "" }));
+    return () => { vivo = false; };
+  }, [codigo, tipo, activo]);
+  return r;
 }
 
 /** ¿Este tipo y forma necesitan evaluador? */
@@ -139,7 +154,7 @@ export function configDe(f: FormActividad, teams: boolean): ConfigActividad {
     const ev = evaluadorEntrada(f.evaluador);
     c.evaluador = { tipo: ev.tipo, usuario_id: ev.usuarioId ?? null, contacto_id: ev.contactoId ?? null, nombre: ev.nombre ?? "", correo: ev.correo ?? "", whatsapp: ev.whatsapp ?? "" };
   }
-  if (f.conCita && conCitaPresencial(f)) c.cita = citaSnakeDe(f.cita, teams);
+  if (f.conCita && conCitaPresencial(f)) c.cita = citaSnakeDe(f.cita, teams, !CON_FORMA.includes(f.tipo));
   if (f.instrucciones.trim()) c.instrucciones = f.instrucciones.trim();
   if (f.tipo === "medica") c.examen = f.examen.trim();
   if (f.tipo === "psicometrica" && f.forma === "integrada") c.prueba_ids = f.pruebaIds;
@@ -168,6 +183,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
   const [adjuntosCita, setAdjuntosCita] = useState<File[]>([]);
   const [guardando, setGuardando] = useState(false);
   const candado = useRef(false);
+  const ultima = useUltimaCita(c.id, f.tipo, conCitaPresencial({ tipo: f.tipo, forma: "" }));
 
   useEffect(() => {
     fetchOpcionesProceso().then((o) => setOpciones(o ?? null));
@@ -202,6 +218,16 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
     return () => { vivo = false; };
   }, [c.id, f.tipo]);
 
+  /** Precarga con la última cita de la vacante (evaluador solo si la vacante no define uno). */
+  const aplicada = useRef("");
+  useEffect(() => {
+    const u = ultima?.cita;
+    if (!u || cargando || !f.tipo || aplicada.current === `${f.tipo}:${u.evaluacion}`) return;
+    aplicada.current = `${f.tipo}:${u.evaluacion}`;
+    const ev = precarga?.config?.evaluador ? null : evaluadorDesdeUltima(u);
+    setF((x) => ({ ...x, cita: citaDesdeUltima(u, { ...x.cita, modalidad: "Presencial" }), ...(ev ? { evaluador: ev } : {}) }));
+  }, [ultima, cargando, f.tipo, precarga]);
+
   const errores = useMemo(() => validarActividad(f, teams), [f, teams]);
   const ver = (k: keyof FormActividad) => (intentado ? errores[k] : undefined);
   const tipos = (opciones?.tiposPaso ?? []).filter((t) => !["solicitud_web", "prefiltro_web", "prefiltro_whatsapp", "alta"].includes(t.valor));
@@ -212,7 +238,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
   const conAdjuntos = !f.yaRealizada && f.conCita && conCitaPresencial(f);
   async function guardar() {
     setIntentado(true);
-    if (candado.current || Object.keys(errores).length || (conAdjuntos && validarAdjuntosCita(adjuntosCita))) return;
+    if (candado.current || Object.keys(errores).length || (conAdjuntos && validarAdjuntosCita(adjuntosCita, f.cita.previos?.adjuntos.length ?? 0))) return;
     candado.current = true;
     setGuardando(true);
     setError("");
@@ -265,7 +291,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
             {evaluacion && !f.yaRealizada && (
               <CamposConfiguracion f={f} set={set} ver={ver} catalogo={catalogo} internos={internos} contactos={contactos} teams={teams}
                 deVacante={deVacante} precarga={precarga} clienteNombre={c.clienteVacante ?? null}
-                adjuntosCita={adjuntosCita} onAdjuntosCita={setAdjuntosCita} />
+                adjuntosCita={adjuntosCita} onAdjuntosCita={setAdjuntosCita} contextoMapa={ultima?.ubicacionVacante ?? ""} />
             )}
 
             {evaluacion && f.yaRealizada && (
@@ -324,11 +350,21 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
   const pideEvaluador = faltan.includes("evaluador");
   const pideCorreo = faltan.includes("correo");
   const pideCita = faltan.includes("cita");
+  const ultima = useUltimaCita(c.id, paso.tipo === "psicometrica" ? "psicometria_fisica" : paso.tipo, pideCita);
+  const aplicada = useRef(false);
+  useEffect(() => {
+    const u = ultima?.cita;
+    if (!u || aplicada.current) return;
+    aplicada.current = true;
+    setCita((x) => citaDesdeUltima(u, x));
+    const ev = evaluadorDesdeUltima(u);
+    if (ev && faltan.includes("evaluador")) setEvaluador(ev);
+  }, [ultima, faltan]);
   const errores: { evaluador?: string; correo?: string; cita?: string; adjuntos?: string } = {};
   if (pideCita) {
     const m = validarCita(cita, teams);
     if (m) errores.cita = m;
-    const a = validarAdjuntosCita(adjuntos);
+    const a = validarAdjuntosCita(adjuntos, cita.previos?.adjuntos.length ?? 0);
     if (a) errores.adjuntos = a;
   }
   if (pideEvaluador) {
@@ -367,8 +403,8 @@ export function ModalCompletarActividad({ c, paso, faltan, mensaje, ocupado, onC
         )}
         {pideCita && (
           <Fila etiqueta="Programar cita" error={intentado ? errores.cita ?? errores.adjuntos : undefined}>
-            <CamposCita valor={cita} onChange={setCita} teams={teams} />
-            <AdjuntosCita valor={adjuntos} onChange={setAdjuntos} />
+            <CamposCita valor={cita} onChange={setCita} teams={teams} adjuntos={{ valor: adjuntos, onChange: setAdjuntos }}
+              contextoMapa={ultima?.ubicacionVacante ?? ""} />
           </Fila>
         )}
         <div className="flex justify-end gap-2">
@@ -410,11 +446,11 @@ function Segmentos({ valor, opciones, onChange }: { valor: string; opciones: { v
   );
 }
 
-function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams, deVacante, precarga, clienteNombre, adjuntosCita, onAdjuntosCita }: {
+function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams, deVacante, precarga, clienteNombre, adjuntosCita, onAdjuntosCita, contextoMapa }: {
   f: FormActividad; set: Setter; ver: Ver; catalogo: PruebaPsicometrica[];
   internos: Parameters<typeof SelectorEvaluador>[0]["internos"]; contactos: Parameters<typeof SelectorEvaluador>[0]["contactos"];
   teams: boolean; deVacante: (k: keyof ConfigActividad) => boolean; precarga: PrecargaActividad | null; clienteNombre: string | null;
-  adjuntosCita: File[]; onAdjuntosCita: (a: File[]) => void;
+  adjuntosCita: File[]; onAdjuntosCita: (a: File[]) => void; contextoMapa: string;
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-border-soft p-3">
@@ -513,16 +549,7 @@ function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams
         </Fila>
       )}
 
-      {["entrevista_humana", "medica"].includes(f.tipo) && (
-        <>
-          {/* 2026-10-09: formulario ÚNICO de citas — evaluador interno/externo, modalidad e instrucciones aquí mismo */}
-          <Fila etiqueta="Instrucciones (opcional)" deVacante={deVacante("instrucciones")}>
-            <textarea className={cn(inputRH, "h-16 py-2")} value={f.instrucciones} onChange={(e) => set("instrucciones", e.target.value)}
-              placeholder={f.tipo === "medica" ? "Ayuno de 8 horas, identificación oficial…" : "Qué traer, con quién preguntar al llegar…"} />
-          </Fila>
-        </>
-      )}
-
+      {/* 2026-10-10: las instrucciones de entrevista humana, médica y psicometría física van con la cita («▸ Más detalles») */}
       {conCitaPresencial(f) && (
         <>
           <label className="flex items-center gap-2 text-sm">
@@ -532,8 +559,8 @@ function CamposConfiguracion({ f, set, ver, catalogo, internos, contactos, teams
           </label>
           {f.conCita ? (
             <Fila etiqueta="Cita" error={ver("cita")}>
-              <CamposCita valor={f.cita} onChange={(v) => set("cita", v)} teams={teams} />
-              <AdjuntosCita valor={adjuntosCita} onChange={onAdjuntosCita} />
+              <CamposCita valor={f.cita} onChange={(v) => set("cita", v)} teams={teams} adjuntos={{ valor: adjuntosCita, onChange: onAdjuntosCita }}
+                conInstrucciones={!CON_FORMA.includes(f.tipo)} contextoMapa={contextoMapa} />
               <span className="text-[11px] text-ink-3">
                 Con la cita completa se avisa solo al candidato{f.tipo === "psicometria_fisica" ? "" : f.tipo === "medica" ? " y al médico (después de su consentimiento)" : " y a quien la aplica"}.
               </span>

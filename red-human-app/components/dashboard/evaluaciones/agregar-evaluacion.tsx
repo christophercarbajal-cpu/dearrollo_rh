@@ -270,7 +270,7 @@ export function ModalAgregarEvaluacion({ c, preset, onClose, onListo }: {
               <span className="text-sm font-semibold text-ink">Programar cita</span>
               <input type="checkbox" role="switch" checked={conCita} onChange={(e) => setConCita(e.target.checked)} className="h-5 w-9 cursor-pointer accent-[var(--brand)]" />
             </label>
-            {conCita && <div className="mt-3"><CamposCita valor={cita} onChange={setCita} teams={teams} /></div>}
+            {conCita && <div className="mt-3"><CamposCita valor={cita} onChange={setCita} teams={teams} conInstrucciones={false} /></div>}
             {!conCita && <p className="mt-1 text-[12px] text-ink-3">Sin cita (opcional). {forma === "asignada" ? "Solo se notifica al evaluador." : ""}</p>}
           </section>
         )}

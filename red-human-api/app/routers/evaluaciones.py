@@ -269,6 +269,9 @@ class CitaIn(BaseModel):
     telefono: str = ""
     usar_teams: bool = True  # Fase 7B: con Teams conectado la videollamada se crea sola
     hasta: str = ""  # 2026-10-10: fin del rango de hora (opcional, 11:00)
+    instrucciones: Optional[str] = None  # 2026-10-10: «Instrucciones (opcional)» de la cita → «📝 Indicaciones: …»
+    # 2026-10-10: adjuntos de la última cita de la vacante que RH reutiliza ({evaluacion, ids}); el servidor los valida
+    adjuntos_previos: Optional[dict] = None
 
 
 class CrearEvaluacionIn(BaseModel):
@@ -303,12 +306,13 @@ def _guion_entrevista_humana(p: Postulacion, paso: Optional[dict]) -> dict:
     return {**g.model_dump(), "tipo": tipo, "tipoTexto": TIPOS_ENTREVISTA_HUMANA.get(tipo, tipo), "ia": con_ia}
 
 
-async def _cita_con_teams(db: Session, p: Postulacion, cita: CitaIn, evaluador: dict) -> dict:
+async def _cita_con_teams(db: Session, p: Postulacion, cita: CitaIn, evaluador: dict, actual=None) -> dict:
     """Arma la cita; en Videollamada sin liga y con Teams conectado crea la reunión ANTES de guardar (Fase 7B)."""
+    from ..services.citas import contexto_vacante
     from .candidatos import _reunion_teams_o_error
 
     with _negocio():
-        datos = sev.armar_cita(cita.model_dump())
+        datos = sev.armar_cita(cita.model_dump(), contexto_vacante(p.vacante), actual)
     if datos["cita_modalidad"] == "Videollamada" and not datos["cita_liga_videollamada"]:
         reunion = None
         if cita.usar_teams:
@@ -348,7 +352,25 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     if tipo != "entrevista_humana" and not p.consentimiento:
         raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
 
-    campos: dict = {"tipo": tipo, "nombre": nombre, "forma": datos.forma, "instrucciones": datos.instrucciones.strip()[:4000],
+    instrucciones = datos.instrucciones.strip()
+    cita_instr = ((datos.cita.instrucciones if datos.cita else None) or "").strip()
+    if cita_instr and cita_instr not in instrucciones:  # 2026-10-10: indicaciones capturadas con la cita
+        instrucciones = f"{instrucciones}\n{cita_instr}".strip()
+    from ..services import citas as scitas
+
+    previas: list = []
+    if datos.cita:
+        # 2026-10-10: programar otra cita para la MISMA actividad cancela la anterior (y se avisa al candidato)
+        if paso is None and not datos.paso_id.strip() and sproc.tiene_proceso(p):
+            viva = _cita_viva(db, p, tipo)
+            if viva is not None and viva.paso_id:
+                try:
+                    paso = sproc._paso(p, viva.paso_id)
+                except Exception:  # noqa: BLE001 — paso ya no existe: queda ad hoc
+                    paso = None
+        if paso is not None:
+            previas = _citas_vivas_de_paso(db, p, paso["id"])
+    campos: dict = {"tipo": tipo, "nombre": nombre, "forma": datos.forma, "instrucciones": instrucciones[:4000],
                     "paso_id": paso["id"] if paso else ""}
     if tipo == "entrevista_humana":
         campos["guion"] = _guion_entrevista_humana(p, paso)
@@ -377,14 +399,15 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
             raise HTTPException(400, "Elige una prueba del catálogo conectada a un proveedor integrado.")
         campos.update({"prueba_id": prueba.id, "proveedor": prueba.proveedor or "", "id_proveedor": prueba.id_proveedor or "",
                        "nombre": nombre or prueba.nombre, "paso_integrada": "asignada"})
-    from ..services import citas as scitas
-
     # 2026-10-10: la psicometría FÍSICA (registro directo) también se agenda: el candidato va a aplicarla en persona
     cita_registro = datos.forma == "registro_directo" and scitas.requiere_cita(paso)
     if datos.cita and (datos.forma != "registro_directo" or cita_registro):
         campos.update(await _cita_con_teams(db, p, datos.cita, evaluador))
-        if datos.cita_adjuntos:
-            campos["cita_adjuntos"] = scitas.sanear_metadata(datos.cita_adjuntos)
+        adjuntos = scitas.sanear_metadata(datos.cita_adjuntos) if datos.cita_adjuntos else []
+        if datos.cita.adjuntos_previos:  # adjuntos de la última cita de la vacante que RH dejó en el formulario
+            adjuntos += scitas.adjuntos_de_referencia(db, p, datos.cita.adjuntos_previos)
+        if adjuntos:
+            campos["cita_adjuntos"] = adjuntos[:scitas.MAX_ADJUNTOS]
 
     ev = sev.nueva(p, cuenta.id, u.nombre, u.id, **campos)
     sev.asegurar_ligas(ev)
@@ -407,8 +430,10 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
 
         movida = mover_por_entrevista_humana(db, p, u, ev.codigo)
     resultados: list = []
+    for vieja in previas if ev.cita_fecha_hora else []:
+        resultados += await _cancelar_por_reemplazo(db, vieja, ev, p, u)
     if datos.forma != "registro_directo" or ev.cita_fecha_hora:
-        resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
+        resultados += await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, override=override_de(datos.notificar))
     # 2026-10-08 — flujos de DOS fases, fase 1 automática al crear (la fase 2, al evaluador/médico, sale sola después):
     #   médica: la solicitud de consentimiento va al candidato; el médico NO recibe nada hasta que acepte.
     #   referencias: el candidato recibe su liga exclusiva para capturar contactos; el evaluador, hasta que capture.
@@ -427,6 +452,50 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
         aviso_proceso = ("El candidato sigue en su columna: el proceso tiene pasos obligatorios sin cumplir antes de Filtro humano "
                          "(complétalos u omítelos con autorización desde «Seguimiento»).")
     return _respuesta(db, ev, u, p, resultados, movidaAFiltroHumano=movida, avisoProceso=aviso_proceso)
+
+
+def _citas_vivas_de_paso(db: Session, p: Postulacion, paso_id: str) -> list:
+    """Evaluaciones de ESA actividad con una cita todavía por realizarse (pendiente o no realizada)."""
+    return (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.paso_id == paso_id,
+                                        Evaluacion.estado.in_(("pendiente", "no_realizada")), Evaluacion.cita_fecha_hora.isnot(None))
+            .order_by(Evaluacion.id).all())
+
+
+def _cita_viva(db: Session, p: Postulacion, tipo: str):
+    return (db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.tipo == tipo, Evaluacion.paso_id != "",
+                                        Evaluacion.estado.in_(("pendiente", "no_realizada")), Evaluacion.cita_fecha_hora.isnot(None))
+            .order_by(Evaluacion.id.desc()).first())
+
+
+async def _cancelar_por_reemplazo(db: Session, vieja: Evaluacion, nueva_ev: Evaluacion, p: Postulacion, u: Usuario) -> list:
+    """2026-10-10: la cita anterior de la misma actividad se cancela sola al programar la nueva; se avisa al candidato
+    (y al evaluador anterior si cambió). Nunca rompe la creación de la nueva."""
+    from .candidatos import _teams_best_effort
+
+    try:
+        sev.cambiar_estado(db, vieja, "cancelada", u.nombre, motivo=f"Reemplazada por una nueva cita ({nueva_ev.codigo})", usuario_id=u.id)
+    except sev.ErrorEvaluacion:
+        return []
+    if vieja.teams_evento_id:
+        await _teams_best_effort(db, p, vieja, "cancelar")
+    audiencias = {"candidato"}
+    if vieja.forma == "asignada" and (vieja.evaluador_nombre, vieja.evaluador_correo) != (nueva_ev.evaluador_nombre, nueva_ev.evaluador_correo):
+        audiencias.add("entrevistador")
+    resultados = await sev.notificar(db, vieja, p, "evaluacion_cancelada", u.nombre, audiencias=audiencias, extra_datos={"reemplazada": True})
+    registrar(db, u.nombre, "cita_reemplazada", "postulacion", p.codigo,
+              {"cancelada": vieja.codigo, "nueva": nueva_ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
+    return resultados
+
+
+@router.get("/postulaciones/{codigo}/ultima-cita")
+def ultima_cita(codigo: str, tipo: str = "", db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """2026-10-10: precarga del formulario de cita con la ÚLTIMA cita agendada en la vacante de esta postulación
+    (evaluador, modalidad, dirección, indicaciones y adjuntos). Fecha y hora nunca se precargan."""
+    from ..services.citas import contexto_vacante, ultima_cita_vacante
+
+    p = _postulacion(db, codigo, cuenta.id)
+    tipo = {"psicometria_fisica": "psicometrica"}.get(tipo, tipo)
+    return {"cita": ultima_cita_vacante(db, p, tipo), "ubicacionVacante": contexto_vacante(p.vacante)}
 
 
 @router.get("/{codigo}")
@@ -497,11 +566,15 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
         ev.cita_zona_horaria = ev.cita_modalidad = ev.cita_direccion = ev.cita_liga_videollamada = ev.cita_telefono = ev.teams_evento_id = ""
         ev.cita_mapa = ""
     elif datos.cita is not None:
-        cita = await _cita_con_teams(db, p, datos.cita, {"evaluador_correo": ev.evaluador_correo, "evaluador_nombre": ev.evaluador_nombre}) \
+        from ..services.citas import contexto_vacante
+
+        cita = await _cita_con_teams(db, p, datos.cita, {"evaluador_correo": ev.evaluador_correo, "evaluador_nombre": ev.evaluador_nombre},
+                                     ev.cita_fecha_hora) \
             if not (datos.cita.modalidad == "Videollamada" and ev.teams_evento_id and not datos.cita.liga_videollamada) else None
         if cita is None:  # videollamada de Teams existente: se conserva la liga y se mueve la reunión
             with _negocio():
-                cita = sev.armar_cita({**datos.cita.model_dump(), "liga_videollamada": ev.cita_liga_videollamada})
+                cita = sev.armar_cita({**datos.cita.model_dump(), "liga_videollamada": ev.cita_liga_videollamada},
+                                      contexto_vacante(p.vacante), ev.cita_fecha_hora)
             aviso_teams = await _teams_best_effort(db, p, ev, "actualizar", inicio=cita["cita_fecha_hora"])
             cita["teams_evento_id"] = ev.teams_evento_id
         # 2026-10-10: cambiar fecha, rango de hora, modalidad o lugar es reprogramar (avisa a candidato y evaluador);
@@ -513,6 +586,12 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
             anteriores["cita_fecha_hora"] = fechas.iso(ev.cita_fecha_hora)
         for k, v in cita.items():
             setattr(ev, k, v)
+        ci = datos.cita.instrucciones
+        if ci is not None and datos.instrucciones is None and ci.strip() != (ev.instrucciones or ""):
+            anteriores["instrucciones"], ev.instrucciones = ev.instrucciones, ci.strip()[:4000]
+        # 2026-10-10: cambiar las indicaciones de una cita también es «Tu cita cambió» (UN solo aviso con los datos nuevos)
+        if "instrucciones" in anteriores and not primera:
+            reprogramada = True
     if not anteriores and not reprogramada and datos.cita is None:
         return _respuesta(db, ev, u)
     sev.evento(db, ev, "reprogramada" if reprogramada else "modificada", u.nombre, anteriores=anteriores, usuario_id=u.id,
@@ -544,6 +623,8 @@ async def reprogramar(codigo: str, datos: ReprogramarIn, db: Session = Depends(g
     cita = await _cita_con_teams(db, p, datos.cita, {"evaluador_correo": ev.evaluador_correo, "evaluador_nombre": ev.evaluador_nombre})
     for k, v in cita.items():
         setattr(ev, k, v)
+    if datos.cita.instrucciones is not None:
+        ev.instrucciones = datos.cita.instrucciones.strip()[:4000]
     with _negocio():
         if ev.estado == "no_realizada":
             sev.cambiar_estado(db, ev, "pendiente", u.nombre, usuario_id=u.id, motivo="")

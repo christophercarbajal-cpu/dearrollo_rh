@@ -499,8 +499,10 @@ def resolver_evaluador(db: Session, p: Postulacion, datos: dict, actor: str) -> 
             "evaluador_nombre": nombre[:150], "evaluador_correo": correo[:200], "evaluador_whatsapp": whatsapp[:30]}
 
 
-def armar_cita(datos: dict) -> dict:
-    """Valida la cita (opcional). Fecha y hora se interpretan en la zona de la organización y se guardan en UTC."""
+def armar_cita(datos: dict, contexto_mapa: str = "", actual: Optional[datetime] = None) -> dict:
+    """Valida la cita (opcional). Fecha y hora se interpretan en la zona de la organización y se guardan en UTC.
+    2026-10-10: nunca en el pasado (salvo que sea la MISMA hora que ya tenía: editar otros datos de una cita vencida no
+    se bloquea); la liga de mapa suma la ubicación de la vacante (`contexto_mapa`)."""
     fecha, hora = (datos.get("fecha") or "").strip(), (datos.get("hora") or "").strip()
     modalidad = (datos.get("modalidad") or "").strip()
     modalidad = {"Llamada": "Teléfono", "Telefono": "Teléfono"}.get(modalidad, modalidad)
@@ -512,6 +514,10 @@ def armar_cita(datos: dict) -> dict:
         cuando = fechas.desde_local(fecha, hora)
     except ValueError:
         raise ErrorEvaluacion(400, "Fecha u hora inválida (fecha: 2026-09-05, hora: 14:30).")
+    from .citas import en_pasado, liga_mapa
+
+    if en_pasado(cuando) and not (actual is not None and abs((cuando - actual).total_seconds()) < 60):
+        raise ErrorEvaluacion(400, "La fecha y hora de la cita ya pasaron. Elige una fecha y hora futuras.")
     direccion = (datos.get("direccion") or "").strip()
     liga = (datos.get("liga_videollamada") or "").strip()
     if modalidad == "Presencial" and not direccion:
@@ -526,14 +532,12 @@ def armar_cita(datos: dict) -> dict:
             raise ErrorEvaluacion(400, "La hora «Hasta» es inválida (formato 16:30).")
         if fin <= cuando:
             raise ErrorEvaluacion(400, "La hora «Hasta» debe ser posterior a la hora de inicio.")
-    from .citas import liga_mapa
-
     return {
         "cita_fecha_hora": cuando, "cita_zona_horaria": fechas.TZ_ORG.key, "cita_modalidad": modalidad,
         "cita_direccion": direccion[:300] if modalidad == "Presencial" else "",
         "cita_liga_videollamada": liga[:500] if modalidad == "Videollamada" else "",
         "cita_telefono": (datos.get("telefono") or "").strip()[:30] if modalidad == "Teléfono" else "",
-        "cita_hasta": fin, "cita_mapa": liga_mapa(direccion)[:500] if modalidad == "Presencial" else "",
+        "cita_hasta": fin, "cita_mapa": liga_mapa(direccion, contexto_mapa)[:500] if modalidad == "Presencial" else "",
     }
 
 
@@ -697,11 +701,13 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
         "fecha_texto": citas.texto_fecha(ev.cita_fecha_hora), "horario_texto": citas.texto_horario(ev.cita_fecha_hora, ev.cita_hasta),
         "hora_hasta": citas._hora(ev.cita_hasta) if ev.cita_hasta else "", "mapa": ev.cita_mapa or "",
         "adjuntos": len(ev.cita_adjuntos or []),
+        # 2026-10-10: «👤 Pregunta por: …» en el aviso de la cita
+        "evaluador": (ev.evaluador_nombre or "") if ev.forma == "asignada" else "",
     }
 
 
 async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, actor: str, *, override: Optional[dict] = None,
-                    audiencias: Optional[set] = None) -> List[dict]:
+                    audiencias: Optional[set] = None, extra_datos: Optional[dict] = None) -> List[dict]:
     """Aplica la matriz de la especificación sobre la regla de la Cuenta y dispara el evento. Nunca truena.
 
     - creada con cita → candidato + evaluador · creada sin cita → evaluador (y candidato SOLO con liga de otro sistema)
@@ -727,8 +733,9 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         if not permitido:
             forzado[f"{aud}_correo"] = False
             forzado[f"{aud}_whatsapp"] = False
-    extra = {"_datos_evaluacion": datos_evaluacion(ev, p)}
-    if evento_ in ("evaluacion_asignada", "evaluacion_reprogramada") and matriz["candidato"] and ev.cita_adjuntos:
+    extra = {"_datos_evaluacion": {**datos_evaluacion(ev, p), **(extra_datos or {})}}
+    # 2026-10-10: los adjuntos salen SOLO con el primer aviso de la cita; al editarla no se reenvían
+    if evento_ == "evaluacion_asignada" and matriz["candidato"] and ev.cita_adjuntos:
         from .citas import leer_adjuntos
 
         extra["_adjuntos_candidato"] = leer_adjuntos(ev.cita_adjuntos)  # tal cual, sin IA

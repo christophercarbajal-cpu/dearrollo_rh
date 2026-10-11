@@ -39,6 +39,13 @@ from app import fechas  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual  # noqa: E402
 from app.main import app  # noqa: E402
+
+import app.services.citas as _citas_fijas  # noqa: E402
+
+# 2026-10-10: esta verificación agenda con fechas FIJAS que ya pasaron; la regla «nunca una cita en el pasado» se prueba
+# en scripts/verificar_citas_ajustes.py
+_citas_fijas.en_pasado = lambda cuando: False
+
 from app.models import Bitacora, Candidato, Cuenta, EntrevistaHumana, Evaluacion, Usuario, UsuarioCuenta, Vacante, registrar  # noqa: E402
 from app.services import plantillas_correo  # noqa: E402
 

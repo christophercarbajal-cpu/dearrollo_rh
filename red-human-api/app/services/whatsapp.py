@@ -589,8 +589,9 @@ async def enviar_con_boton(telefono: str, texto: str, boton: str, url: str, cuen
 async def enviar_documento(
     telefono: str, contenido: bytes, filename: str, caption: str = "", mime: str = "application/pdf", cuenta_id: Optional[int] = None,
 ) -> dict:
-    """Manda un archivo (PDF/imagen). Telegram: sendDocument; Meta: sube el medio y lo manda como documento. Nunca
-    lanza; con otro proveedor regresa no enviado."""
+    """Manda un archivo (PDF/imagen). Telegram: sendDocument / sendPhoto; Meta: sube el medio y lo manda como documento
+    o, si es foto JPG/PNG (2026-10-10), como `image` para que se vea la vista previa. Nunca lanza; con otro proveedor
+    regresa no enviado."""
     if _por_telegram(telefono, cuenta_id):
         return await telegram.enviar_documento(telefono, contenido, filename, caption, mime)
     if settings.whatsapp_provider != "meta" or not (settings.meta_whatsapp_token and settings.meta_phone_number_id):
@@ -609,9 +610,21 @@ async def enviar_documento(
         err = _meta_error(r)
         return _resultado(False, f"{err['codigo']}: {err['mensaje']}")
     media_id = (r.json() or {}).get("id", "")
+    if es_foto(mime):
+        resultado = await _meta_post({
+            "messaging_product": "whatsapp", "recipient_type": "individual", "to": numero_e164(telefono), "type": "image",
+            "image": {"id": media_id, **({"caption": caption[:1024]} if caption else {})},
+        })
+        resultado["formato"] = "imagen"
+        return resultado
     resultado = await _meta_post({
         "messaging_product": "whatsapp", "recipient_type": "individual", "to": numero_e164(telefono), "type": "document",
         "document": {"id": media_id, "filename": filename, **({"caption": caption[:1024]} if caption else {})},
     })
     resultado["formato"] = "documento"
     return resultado
+
+
+def es_foto(mime: str) -> bool:
+    """Meta solo admite JPEG y PNG como `image` (WEBP es sticker): lo demás sale como documento."""
+    return (mime or "").lower() in ("image/jpeg", "image/jpg", "image/png")

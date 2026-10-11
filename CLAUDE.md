@@ -556,3 +556,16 @@ Reemplaza lo anterior en: `Expediente.progreso` (Fases 1-3 post-demo), «Solicit
 - La solicitud de documentos ya no felicita y lista solo los pendientes. La entrevista IA no genera alertas de escolaridad ni documentos (`ia._sin_escolaridad`; se validan en Documentos).
 - Regresión: `scripts/verificar_avisos_propuesta.py`.
 
+
+## Citas: ajustes y mejoras (prueba del 2026-10-10) — REEMPLAZA lo anterior donde choque
+
+- Aviso al candidato (`citas.texto_candidato`): además de fecha, rango, lugar y mapa lleva «👤 Pregunta por: [evaluador]» (`datos_evaluacion.evaluador`, solo forma asignada) y «📝 Indicaciones: [texto]». Las indicaciones se capturan con la cita (`CitaIn.instrucciones`, «Más detalles») y se guardan en `Evaluacion.instrucciones` (sin columna nueva).
+- Editar la cita (PATCH con cambio de fecha, «Hasta», modalidad, lugar o indicaciones; o «Reprogramar») = UN solo aviso «Tu cita cambió» + los datos nuevos; los adjuntos salen SOLO con el primer aviso (`evaluacion_asignada`), nunca en la reprogramación.
+- Validaciones (API `sev.armar_cita` y navegador `validarCita`): nunca una cita en el pasado (salvo que se conserve la MISMA fecha-hora que ya tenía: editar otros datos de una cita vencida no se bloquea); «Hasta» estrictamente posterior a la hora.
+- Archivos por WhatsApp (`whatsapp.enviar_documento`): JPG/PNG como `image` (vista previa; Telegram `sendPhoto`), PDF y WEBP como `document`.
+- Programar una cita nueva para la MISMA actividad (mismo `paso_id`, o sin paso explícito cuando ya hay una cita viva de ese tipo en la ruta) cancela la anterior pendiente/no realizada (`motivo «Reemplazada por una nueva cita»`, bitácora `cita_reemplazada`) y avisa al candidato («cancelamos tu cita… en seguida te enviamos los datos de la nueva») antes del aviso nuevo; al evaluador anterior solo si cambió.
+- Precarga: `GET /evaluaciones/postulaciones/{codigo}/ultima-cita?tipo=` (`citas.ultima_cita_vacante`) = la última cita agendada en la vacante (mismo tipo primero): evaluador, modalidad, dirección, indicaciones y adjuntos; NUNCA fecha ni hora. Los adjuntos se reutilizan con `cita.adjuntos_previos {evaluacion, ids}`: el servidor valida misma Cuenta y vacante y copia la metadata con id nuevo (el archivo en disco se comparte; quitar un adjunto nunca lo borra).
+- Formulario (`CamposCita`): siempre visibles Fecha, Hora, Modalidad y Dirección; «▸ Más detalles» plegable con Hasta, Instrucciones y Adjuntos, con resumen en el título («Hasta 11:00 · Indicaciones: … · 1 foto»). `conInstrucciones={false}` donde la pantalla ya tiene su propio campo (Modificar, técnica con forma).
+- Selector de evaluador (`SelectorEvaluador`): UN select — contactos del Cliente primero («Nombre · Teléfono»), luego usuarios internos, al final «+ Nuevo evaluador» (solo entonces se piden nombre/correo/WhatsApp). Los teléfonos repetidos no se bloquean.
+- Liga de mapa: `citas.liga_mapa(direccion, contexto_vacante(v))` concatena la ubicación de la vacante (municipio, estado) que la dirección no mencione; `cita_direccion` guarda lo que RH escribió tal cual.
+- Regresión: `scripts/verificar_citas_ajustes.py` (+ `verificar_citas_presenciales.py`). Las verificaciones previas que agendan con fechas fijas ya pasadas desactivan `citas.en_pasado` al importar.

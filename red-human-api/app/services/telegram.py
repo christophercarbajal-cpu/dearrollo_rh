@@ -257,6 +257,12 @@ async def enviar_documento(telefono: str, contenido: bytes, filename: str, capti
     destino = chat_de_telefono(telefono)
     if not destino:
         return _sin_chat(telefono)
+    if (mime or "").lower() in ("image/jpeg", "image/jpg", "image/png"):  # 2026-10-10: foto con vista previa
+        r = await llamar("sendPhoto", data={"chat_id": destino, "caption": _html(caption)[:1024], "parse_mode": "HTML"},
+                         files={"photo": (filename, contenido, mime)})
+        if r.get("ok"):
+            return _resultado(True, 200, wa_id=f"tg-msg-{(r.get('result') or {}).get('message_id', '')}", formato="imagen")
+        return _resultado(False, f"{r.get('error_code', '')}: {r.get('description', '')}".strip(": "))
     r = await llamar(
         "sendDocument",
         data={"chat_id": destino, "caption": _html(caption)[:1024], "parse_mode": "HTML"},

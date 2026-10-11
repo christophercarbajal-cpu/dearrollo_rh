@@ -707,7 +707,7 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
 
 
 async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, actor: str, *, override: Optional[dict] = None,
-                    audiencias: Optional[set] = None, extra_datos: Optional[dict] = None) -> List[dict]:
+                    audiencias: Optional[set] = None, extra_datos: Optional[dict] = None, reenvio: bool = False) -> List[dict]:
     """Aplica la matriz de la especificación sobre la regla de la Cuenta y dispara el evento. Nunca truena.
 
     - creada con cita → candidato + evaluador · creada sin cita → evaluador (y candidato SOLO con liga de otro sistema)
@@ -728,6 +728,12 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         matriz["entrevistador"] = False  # médica: hasta el consentimiento · referencias: hasta que el candidato capture
     if audiencias is not None:
         matriz = {k: v and k in audiencias for k, v in matriz.items()}
+    # 2026-10-11: UN solo aviso por cita al entrevistador — si ya recibió este mismo aviso para esta misma cita, no se repite
+    # (salvo un reenvío EXPLÍCITO de RH: «Reenviar liga», «Enviar», «Reenviar al entrevistador»)
+    firma = firma_cita(ev)
+    if not reenvio and matriz["entrevistador"] and evento_ in ("evaluacion_asignada", "evaluacion_reprogramada") and firma \
+            and ultimo_aviso_entrevistador(db, ev, firma) is not None:
+        matriz["entrevistador"] = False
     forzado = dict(override or {})
     for aud, permitido in matriz.items():
         if not permitido:
@@ -747,7 +753,7 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         resultados = [{"destinatario": "sistema", "canal": "", "destino": "", "enviado": False, "detalle": f"No se pudo avisar: {ex}"[:300]}]
     if resultados:
         # también los fallidos: el estado del envío se muestra junto a cada liga (nunca en silencio)
-        evento(db, ev, "envio", actor, "sistema", evento=evento_,
+        evento(db, ev, "envio", actor, "sistema", evento=evento_, firma_cita=firma,
                envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
         from . import envios
 
@@ -757,6 +763,24 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         if evento_ in ("evaluacion_asignada", "evaluacion_reprogramada", "recordatorio_evaluacion"):
             marcar_enviada(ev, resultados, "entrevistador" if ev.forma == "asignada" else "candidato" if ev.forma == "liga_otro_sistema" else "-")
     return resultados
+
+
+def firma_cita(ev: Evaluacion) -> str:
+    """Identifica UNA cita (fecha, rango, lugar/liga y a quién se le avisa): cambia si se reprograma o cambia el evaluador."""
+    if not ev.cita_fecha_hora:
+        return ""
+    return "|".join(str(x or "") for x in (fechas.iso(ev.cita_fecha_hora), fechas.iso(ev.cita_hasta), ev.cita_modalidad, ev.cita_direccion,
+                                           ev.cita_liga_videollamada, ev.evaluador_correo, ev.evaluador_whatsapp))
+
+
+def ultimo_aviso_entrevistador(db: Session, ev: Evaluacion, firma: str) -> Optional[datetime]:
+    """Cuándo recibió el entrevistador (con éxito) el aviso de asignación/reprogramación de ESTA cita. None = nunca."""
+    for e in reversed(eventos_de(db, ev)):
+        d = e.detalle or {}
+        if (e.accion == "envio" and d.get("firma_cita") == firma and d.get("evento") in ("evaluacion_asignada", "evaluacion_reprogramada")
+                and any(x.get("destinatario") == "entrevistador" and x.get("enviado") for x in d.get("envios") or [])):
+            return e.fecha
+    return None
 
 
 async def notificar_rh_resultado(db: Session, ev: Evaluacion, p: Postulacion) -> Optional[dict]:

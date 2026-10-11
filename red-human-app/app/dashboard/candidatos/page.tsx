@@ -1798,9 +1798,9 @@ function PestanaResumen({
       {seccion === "evaluacion" && <div>
         <Eyebrow>Prefiltro de entrada</Eyebrow>
         <Card className="mt-2 p-4">
-          {!c.prefiltroResumen ? (
+          {!c.prefiltroResumen?.resultado ? (
             <p className="text-sm text-ink-3">Prefiltro en curso — todavía no hay criterios evaluados.</p>
-          ) : c.prefiltroResumen.resultado === "no_cumple" || c.prefiltroResumen.incumplidos.length > 0 ? (
+          ) : c.prefiltroResumen.resultado === "no_cumple" ? (
             <div>
               <p className="text-sm font-semibold text-warn">
                 Prefiltro: No cumple{c.prefiltroResumen.total ? ` (incumple ${c.prefiltroResumen.incumplidos.length} de ${c.prefiltroResumen.total} criterios)` : ""}

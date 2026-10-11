@@ -315,6 +315,8 @@ export interface Candidato {
   estado: EstadoPrefiltro;
   etapa: EtapaCandidato;
   score: number; // 0-100 match con el perfil
+  /** 2026-10-11: ¿la ruta pide CV? false = la ficha no muestra score de CV. */
+  pideCv?: boolean;
   experiencia: string;
   ubicacion: string;
   aplicado: string; // fecha relativa

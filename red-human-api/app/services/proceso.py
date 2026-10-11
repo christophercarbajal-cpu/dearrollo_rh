@@ -1773,6 +1773,41 @@ def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional
             "motivo": f"{x['nombre']}: {detalle}" if detalle and detalle != x["nombre"] else f"{x['nombre']}: No aprobada"}
 
 
+def agente_puede_actuar(p: Postulacion, tipo: str) -> Tuple[bool, str]:
+    """2026-10-11: el agente revisa la RUTA antes de cada paso (agendar, iniciar la entrevista en el chat, invitar).
+    Solo actúa si la actividad `tipo` está en la ruta, sigue viva, no está completada y ya se habilitó (lo anterior
+    obligatorio quedó cumplido/aprobado). Una obligatoria «No aprobada» lo detiene todo. Regresa (puede, motivo)."""
+    if p is None or not p.activa:
+        return False, "postulación cerrada"
+    if not tiene_proceso(p):
+        return True, ""
+    pasos = estado_pasos(p)
+    bloqueo = bloqueo_no_aprobada(p, pasos)
+    if bloqueo:
+        return False, f"no_aprobada: {bloqueo['motivo']}"
+    x = next((y for y in pasos if y["tipo"] == tipo and not y.get("heredado") and y["estado"] not in ("omitida", "cancelada")), None)
+    if x is None:
+        return False, f"la ruta no incluye «{TIPOS_PASO.get(tipo, {}).get('nombre', tipo)}»"
+    if x["estado"] == "completada":
+        return False, f"«{x['nombre']}» ya está completada"
+    # Lo ANTERIOR debe estar aprobado: obligatorias de etapas previas cumplidas (u omitidas / por decisión de RH) y sus
+    # dependencias completadas. No se exige que la etapa ya esté escrita: el agente actúa justo al entrar a ella.
+    idx = _indice(x["etapa"])
+    previas = [y for y in pasos if y["obligatorio"] and not y.get("heredado") and _indice(y["etapa"]) < idx and not y["cumpleRegla"]
+               and not y.get("excepcionRH")]
+    deps = [y for y in pasos if y["id"] in (x.get("dependeDe") or []) and y["estado"] not in ("completada", "omitida", "cancelada")]
+    if previas or deps:
+        return False, "Falta completar: " + ", ".join(y["nombre"] for y in (previas + deps)[:3])
+    return True, ""
+
+
+def detenido_por_no_aprobada(p: Postulacion) -> Optional[dict]:
+    """La ruta está detenida por una obligatoria «No aprobada»: el agente deja de enviar mensajes (RH decide)."""
+    if p is None or not p.activa or not tiene_proceso(p):
+        return None
+    return bloqueo_no_aprobada(p, estado_pasos(p))
+
+
 def falta_correo_psicometria(p: Postulacion, paso_id: str, r: dict, ev: Optional[Evaluacion]) -> bool:
     """La psicometría quiso enviarse (RH o el motor) y no pudo porque el candidato no tiene correo: el proveedor lo exige.
     Se marca en `analisis.psicometria_pendiente_correo` y se apaga sola en cuanto hay correo o una asignación viva."""

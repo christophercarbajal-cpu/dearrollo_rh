@@ -209,7 +209,7 @@ def _sintesis_global(p: Postulacion) -> dict:
     # 2026-09-13: solo una Entrevista Red Human EVALUADA entra a la evaluación integral. Una
     # interrumpida (sin respuestas / desconexión) o parcial no aporta score ni fortalezas.
     entrevista_valida = bool(ultima_ent and ultima_ent.estado == "evaluada" and ultima_ent.evaluacion)
-    eval_ia = (ultima_ent.evaluacion or {}) if entrevista_valida else {}
+    eval_ia = sin_alertas_escolaridad(ultima_ent.evaluacion or {}) if entrevista_valida else {}
     match_ia = eval_ia.get("match_perfil")
     respuestas = a.get("respuestas_prefiltro") or []
     hay_cv = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"))
@@ -217,12 +217,14 @@ def _sintesis_global(p: Postulacion) -> dict:
     # --- C. Prefiltro: SOLO un status de entrada (Cumple / No cumple) — no participa en la
     # evaluación integral ni aporta afinidad, fortalezas ni puntos por validar (2026-09-13). ---
     prefiltro_resumen = None
-    if respuestas or a.get("prefiltro_resultado"):
+    # 2026-10-11: el MISMO estatus que la actividad del prefiltro en la ruta (`estado_prefiltro`), nunca otro cálculo
+    estado_pf = estado_prefiltro(p)
+    if respuestas or a.get("prefiltro_resultado") or estado_pf:
         cumple_n = sum(1 for r in respuestas if r.get("cumple") is True)
         incumplidos = [r.get("criterio") or r.get("pregunta") for r in respuestas if r.get("cumple") is False]
         prefiltro_resumen = {
-            "cumple": cumple_n, "total": len(respuestas), "incumplidos": incumplidos,
-            "resultado": a.get("prefiltro_resultado") or ("no_cumple" if p.estado == "no_cumple" else "cumple" if p.prefiltro_completo else None),
+            "cumple": cumple_n, "total": len(respuestas), "incumplidos": incumplidos if estado_pf == "no_cumple" else [],
+            "resultado": estado_pf if estado_pf in ("cumple", "no_cumple") else None,
         }
 
     # --- Status de la Entrevista Red Human (bloque propio en la ficha) ---
@@ -429,6 +431,43 @@ def _entrevista_ia(p: Postulacion) -> dict:
     return (e.evaluacion or {}) if e is not None and e.estado == "evaluada" and e.evaluacion else {}
 
 
+def _pide_cv(p: Postulacion) -> bool:
+    from .services.guiones import pide_cv
+
+    pasos = (p.proceso or {}).get("pasos")
+    return True if not pasos else pide_cv(pasos)
+
+
+def estado_prefiltro(p: Postulacion) -> Optional[str]:
+    """«cumple» | «no_cumple» | «en_curso» | None — la MISMA regla con la que la ruta deriva la actividad del prefiltro
+    (decisión del agente en `prefiltro_web`; si no, `prefiltro_completo` + `estado`). Resumen y ruta leen esto."""
+    a = p.analisis or {}
+    res = (a.get("prefiltro_web") or {}).get("resultado")
+    if res in ("cumple", "no_cumple"):
+        return res
+    if res == "revision":
+        return "en_curso"
+    if p.prefiltro_completo:
+        return {"cumple": "cumple", "no_cumple": "no_cumple"}.get(p.estado or "", "en_curso")
+    if a.get("respuestas_prefiltro") or a.get("prefiltro_conversacional"):
+        return "en_curso"
+    return None
+
+
+def sin_alertas_escolaridad(ev: Optional[dict]) -> dict:
+    """2026-10-11: escolaridad y documentos se validan en «Documentos» — nunca como alerta ni «Punto por validar» de la
+    entrevista (también en evaluaciones guardadas antes de la regla)."""
+    if not ev:
+        return {}
+    from .services.entrevista_operativa import es_alerta_escolaridad
+
+    salida = dict(ev)
+    for k in ("riesgos", "faltante"):
+        if isinstance(salida.get(k), list):
+            salida[k] = [x for x in salida[k] if not es_alerta_escolaridad(str(x))]
+    return salida
+
+
 def score_tablero(p: Postulacion) -> Optional[int]:
     """`card_score` (2026-10-07): el score del agente IA leído de la base — Análisis de CV REAL (`Postulacion.score`)
     y/o el score PROPIO de la Entrevista Red Human evaluada (`models.score_de_entrevista`), promediados como en la
@@ -561,6 +600,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "estado": p.estado,
         "etapa": p.etapa,
         "score": p.score,
+        # 2026-10-11: ¿la ruta de esta postulación pide CV? Sin CV, la ficha no muestra score de CV
+        "pideCv": _pide_cv(p),
         "experiencia": c.experiencia or "",
         "ubicacion": c.ubicacion or "",
         "aplicado": hace(p.creado_en),
@@ -660,7 +701,7 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
                 "estado": e.estado,
                 "tipo": e.tipo,
                 "token": e.token,
-                "evaluacion": e.evaluacion or None,
+                "evaluacion": sin_alertas_escolaridad(e.evaluacion) or None,
                 "creada": hace(e.creada_en),
             }
             for e in p.entrevistas
@@ -708,7 +749,7 @@ def entrevista_dict(e: Entrevista) -> dict:
         "guion": e.guion or {},
         "mensajes": len(e.transcript or []),
         "turnosCandidato": sum(1 for m in (e.transcript or []) if m.get("rol") == "user"),
-        "evaluacion": e.evaluacion or None,
+        "evaluacion": sin_alertas_escolaridad(e.evaluacion) or None,
         # Fase 4: cómo cerró y cuándo; intentos previos si RH la reabrió.
         "cierre": e.cierre or "",
         "motivo": e.motivo or "",  # sin_respuestas | desconexion | parcial | "" (ver MOTIVOS_ENTREVISTA)

@@ -148,7 +148,10 @@ with TestClient(app) as client:
     n = asyncio.run(sre.revisar_recordatorios_entrevista())
     check(n == 1, "cita dentro de las próximas 24 h → 1 recordatorio")
     check(any(c[0] == "carlos@correo.mx" and "Recordatorio" in c[1] and "<!doctype html>" in c[2].lower() for c in CORREOS), "candidato: correo HTML de recordatorio")
-    check(any(c[0] == admin.correo and "Recordatorio" in c[1] for c in CORREOS) and any(t[0] == "3399998888" for t in WA), "evaluador: correo + WhatsApp")
+    # 2026-10-11: UN solo aviso por cita al entrevistador — su aviso de esta cita salió hace minutos (dentro de la ventana
+    # del recordatorio), así que el recordatorio automático no se le repite
+    check(not any(c[0] == admin.correo and "Recordatorio" in c[1] for c in CORREOS) and not any(t[0] == "3399998888" for t in WA),
+          "evaluador: sin recordatorio repetido (ya recibió el aviso de esta cita)")
     check(asyncio.run(sre.revisar_recordatorios_entrevista()) == 0, "no se repite (recordatorio_enviado_en)")
     db.expire_all()
     check(db.query(Evaluacion).filter_by(codigo=COD).one().recordatorio_enviado_en is not None, "queda marcado en la evaluación")

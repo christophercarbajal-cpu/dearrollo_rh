@@ -161,7 +161,11 @@ with TestClient(app) as client:
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
 
     r = client.post("/vacantes", json={"titulo": "Cajero Demo", "descripcion": "x", "generar_si_falta": False, "publicar": True,
-                                       "proceso": {"pasos": _corp["pasos"]}})  # ruta con Entrevista con avatar (agenda)
+                                       # 2026-10-11: ruta con Entrevista con avatar (agenda) y sin CV: el agente solo
+                                       # agenda/reagenda si lo anterior obligatorio de la ruta está aprobado
+                                       "proceso": {"pasos": [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
+                                                             {"id": "ea", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": True},
+                                                             {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "obligatorio": True}]}})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar")
     TEL = "5215512345678"

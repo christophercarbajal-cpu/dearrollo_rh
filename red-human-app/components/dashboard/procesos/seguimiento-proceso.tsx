@@ -813,11 +813,13 @@ function ModalRegistrarResultado({ c, paso, onClose, onListo }: {
 
 /** Resultados clave: cada dato UNA vez (prefiltro, CV, entrevista, evaluación integral, expediente). */
 function ResultadosClave({ c }: { c: Candidato }) {
+  // 2026-10-11: el MISMO estatus que la actividad del prefiltro en la ruta (la API lo calcula con una sola regla)
   const pf = c.prefiltroResumen;
-  const prefiltro = !pf ? "En curso" : pf.resultado === "no_cumple" || pf.incumplidos.length > 0 ? "No cumple" : "Cumple";
+  const prefiltro = pf?.resultado === "no_cumple" ? "No cumple" : pf?.resultado === "cumple" ? "Cumple" : "En curso";
   const items: { k: string; v: React.ReactNode; tono?: string }[] = [
     { k: "Prefiltro", v: prefiltro, tono: prefiltro === "Cumple" ? "text-good" : prefiltro === "No cumple" ? "text-bad" : "text-ink-3" },
-    ...(c.score != null ? [{ k: "CV", v: `${c.score}/100` }] : []),
+    // 2026-10-11: en rutas sin CV no hay score de CV
+    ...(c.score != null && c.pideCv !== false ? [{ k: "CV", v: `${c.score}/100` }] : []),
     // 2026-10-08: el score de la entrevista es el SUYO (antes se mostraba la afinidad integral CV + entrevista)
     ...(c.scoreEntrevista != null ? [{ k: "Entrevista Red Human", v: `${c.scoreEntrevista}/100` }] : []),
     ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),

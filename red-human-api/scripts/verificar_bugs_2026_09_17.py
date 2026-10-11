@@ -91,6 +91,17 @@ with TestClient(app) as client:
     # ================= 1. Liga única =================
     print("\n--- 1. Liga de videollamada una sola vez ---")
     v1 = nueva_vacante(client, "Cajero Bug1")
+    # 2026-10-11: el agente solo agenda la videollamada si la RUTA trae la Entrevista Red Human con avatar
+    from app.models import Vacante as _V
+    from app.services import proceso as _sproc
+
+    _v1 = db.query(_V).filter(_V.codigo == v1["id"]).one()
+    _v1.proceso = _sproc.proceso_para_vacante(db, ca.id, {}, {"pasos": [
+        {"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
+        {"id": "ea", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": True},
+        {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA", "obligatorio": True},
+        {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "obligatorio": True}]})
+    db.commit()
     r = client.post("/candidatos", json={"nombre": "Liga Uno", "telefono": "5511110001", "vacante": v1["id"], "consentimiento": True, "fuente": "RH"})
     P1 = r.json()["id"]
     p1 = db.query(Postulacion).filter(Postulacion.codigo == P1).one()

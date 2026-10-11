@@ -154,7 +154,10 @@ async def revisar(db: Session, p: Optional[Postulacion]) -> Optional[str]:
 
         if not sproc.tiene_proceso(p):
             return None
-        pasos = [x for x in sproc.estado_pasos(p) if not x.get("heredado")]
+        todos = sproc.estado_pasos(p)
+        if sproc.bloqueo_no_aprobada(p, todos):
+            return None  # 2026-10-11: ruta detenida por una «No aprobada» — el agente no envía mensajes
+        pasos = [x for x in todos if not x.get("heredado")]
         completadas = sorted(x["id"] for x in pasos if x["estado"] == "completada")
         previo = _estado(p)
         if previo is None:
@@ -221,7 +224,7 @@ async def revisar_inactividad_postulacion(db: Session, p: Postulacion, ahora: Op
         return None
     from . import proceso as sproc
 
-    if not sproc.tiene_proceso(p):
+    if not sproc.tiene_proceso(p) or sproc.detenido_por_no_aprobada(p):
         return None
     mov = ultimo_movimiento(p)
     if dias_habiles_entre(mov, ahora) < DIAS_HABILES_INACTIVIDAD:

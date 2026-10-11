@@ -782,7 +782,7 @@ async def reenviar_liga(codigo: str, db: Session = Depends(get_db), u: Usuario =
     if ev.estado == "cancelada":  # con resultado sigue: el evaluador puede complementar
         raise HTTPException(409, "Esta evaluación fue cancelada.")
     audiencias = {"entrevistador"} | ({"candidato"} if ev.forma == "liga_otro_sistema" else set())
-    resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias=audiencias)
+    resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias=audiencias, reenvio=True)
     registrar(db, u.nombre, "evaluacion_liga_reenviada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
     db.commit()
     return _respuesta(db, ev, u, None, resultados)
@@ -1290,7 +1290,7 @@ async def enviar_liga(codigo: str, clave: str, db: Session = Depends(get_db), u:
     if not vigentes[clave]["puedeEnviar"]:
         raise HTTPException(409, vigentes[clave]["motivoNoEnvio"] or "No hay a quién enviarla.")
     if clave == "evaluador":
-        resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"})
+        resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"}, reenvio=True)
         registrar(db, u.nombre, "evaluacion_liga_reenviada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo, "notificaciones": resultados})
     else:
         resultados = await _enviar_liga_candidato(db, ev, p, u, clave, cuenta)

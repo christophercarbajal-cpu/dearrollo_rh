@@ -522,7 +522,8 @@ class Archivo(Base):
 
 # parcial = el candidato contestó poco y la IA determinó que NO hay información suficiente para una
 # evaluación integral (2026-09-13). Igual que interrumpida, no genera score ni recomendación.
-ESTADOS_ENTREVISTA = ["programada", "en_curso", "completada", "evaluada", "interrumpida", "parcial"]
+ESTADOS_ENTREVISTA = ["programada", "en_curso", "completada", "evaluada", "interrumpida", "parcial", "cancelada"]
+# 2026-10-11: «cancelada» = cita de la sala anulada por RH/soporte (p. ej. creada por error); la sala la trata como cerrada.
 # Motivos de una entrevista NO evaluada (Entrevista.motivo): sin_respuestas = transcript vacío o
 # sin intervenciones reales del candidato · desconexion = se cortó con muy pocas respuestas ·
 # parcial = contestó poco y la IA juzgó insuficiente. Acción siguiente: «Reintentar Entrevista Red Human».

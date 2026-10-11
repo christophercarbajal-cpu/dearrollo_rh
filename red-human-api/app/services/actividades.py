@@ -463,9 +463,9 @@ async def reenviar(db: Session, p: Postulacion, paso_id: str, a: str, u: Usuario
         if a == "candidato" and motivo in ("consentimiento", "referencias", "proveedor", "otro_sistema"):
             resultados = await _enviar_liga_candidato(db, ev, p, u, motivo, cuenta)
         elif a == "candidato":  # la cita de una entrevista/evaluación presencial
-            resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"candidato"})
+            resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"candidato"}, reenvio=True)
         else:
-            resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"})
+            resultados = await sev.notificar(db, ev, p, "evaluacion_asignada", u.nombre, audiencias={"entrevistador"}, reenvio=True)
     elif paso["tipo"] in TIPOS_PASO_ENTREVISTA_IA:
         resultados = await _reenviar_entrevista(db, p, paso, u, crear)
     elif paso["tipo"] in ("solicitud_documentos", "documentos"):

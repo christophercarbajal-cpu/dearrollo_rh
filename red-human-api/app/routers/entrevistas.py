@@ -274,7 +274,7 @@ def consentir(token: str, datos: ConsentirIn, db: Session = Depends(get_db)):
     e = _por_token(db, token)
     if not datos.acepta:
         raise HTTPException(400, "La entrevista requiere consentimiento explícito del candidato.")
-    if e.estado in ("completada", "evaluada", "interrumpida"):
+    if e.estado in ("completada", "evaluada", "interrumpida", "cancelada"):
         raise HTTPException(409, "Esta entrevista ya fue cerrada.")
     e.consentimiento = True
     e.consentimiento_fecha = datetime.now(timezone.utc)
@@ -290,7 +290,7 @@ def _system_prompt(e: Entrevista) -> str:
     return system_prompt(e)
 
 
-ESTADOS_CERRADOS = ("completada", "evaluada", "interrumpida", "parcial")
+ESTADOS_CERRADOS = ("completada", "evaluada", "interrumpida", "parcial", "cancelada")
 MENSAJE_CERRADA = "Esta entrevista ya fue completada o interrumpida. Solicita a RH reabrirla."
 
 

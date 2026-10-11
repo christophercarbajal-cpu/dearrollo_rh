@@ -1150,7 +1150,12 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
     """Mensaje que invita al candidato a compartir su disponibilidad — en cuanto responda,
     procesar_prefiltro lo enruta a _procesar_turno_agenda (herramienta agendar_videollamada).
     La usan tanto la clasificación automática de Zero-Touch como el botón manual
-    'Enviar a Entrevista IA' (mover_etapa), para que ambos caminos se comporten igual."""
+    'Enviar a Entrevista IA' (mover_etapa), para que ambos caminos se comporten igual.
+    2026-10-11: solo si la RUTA trae la Entrevista con avatar y ya se habilitó (nunca en una ruta masiva)."""
+    puede, motivo = sproc.agente_puede_actuar(p, "entrevista_agente")
+    if not puede:
+        registrar(db, "agente-ia", "agenda_detenida_por_ruta", "postulacion", p.codigo, {"motivo": motivo})
+        return {"enviado": False, "detalle": f"No se agenda: {motivo}", "texto": ""}
     texto = _texto_apto(p)
     envio = await _enviar_whatsapp(p, texto)
     guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
@@ -1170,6 +1175,10 @@ async def _iniciar_entrevista_en_chat(db: Session, p: Postulacion, actor: str) -
 
     if sent.entrevista_whatsapp_activa(p) is not None:
         return {"enviado": None, "detalle": "La entrevista por WhatsApp ya estaba iniciada"}
+    puede, motivo = sproc.agente_puede_actuar(p, "entrevista_whatsapp")
+    if not puede:  # 2026-10-11: la ruta manda — lo anterior debe estar aprobado
+        registrar(db, actor, "entrevista_whatsapp_detenida_por_ruta", "postulacion", p.codigo, {"motivo": motivo})
+        return {"enviado": False, "detalle": f"No se inicia: {motivo}"}
     paso = sproc.paso_de_tipo(p, "entrevista_whatsapp") or {}
     ok, detalle, entregado, _e = await sent.iniciar_whatsapp(db, p, actor, paso_id=paso.get("id", ""))
     if ok:
@@ -1312,6 +1321,17 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
     from ..services.entrevistas import crear_entrevista_para_candidato
 
     texto = (historial[-1]["texto"] if historial and historial[-1]["rol"] == "user" else "")
+    puede, motivo = sproc.agente_puede_actuar(p, "entrevista_agente")
+    if not puede:
+        # 2026-10-11: NUNCA se agenda una videollamada que la ruta no pide (rutas masivas) o que aún no se habilita
+        registrar(db, "agente-ia", "agenda_detenida_por_ruta", "postulacion", p.codigo, {"motivo": motivo, "texto": texto[:120]})
+        agenda_chat.fijar_propuesta(p, None)
+        respuesta_final = "Gracias, registré tu mensaje. Una persona del equipo de RH te escribirá por este medio. 🙌"
+        envio = await _enviar_whatsapp(p, respuesta_final, canal)
+        guardar_mensaje(db, p, "assistant", respuesta_final, canal, envio)
+        _actualizar_ultima_actividad(p)
+        db.commit()
+        return {"respuesta": respuesta_final, "clasificacion": None, "ia": False, "whatsapp": envio, "cita": None, "detenido": motivo}
     d = agenda_chat.decidir(p, texto)
     cita = None
     if d["accion"] == "registrar":
@@ -1321,7 +1341,8 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         liga = f"{settings.app_url}/entrevista/{e.token}"
         p.videollamada_agendada_en = cuando
         p.videollamada_liga = liga
-        p.etapa = "Entrevista IA"  # ver ETAPAS_CANDIDATO
+        if ETAPAS_CANDIDATO.index(p.etapa) < ETAPAS_CANDIDATO.index("Entrevista IA"):
+            p.etapa = "Entrevista IA"  # nunca retrocede de etapa (2026-10-11)
         agenda_chat.fijar_propuesta(p, None)
         registrar(db, "agente-ia", "videollamada_agendada", "postulacion", p.codigo,
                   {"fecha_hora": cuando.isoformat(), "liga": liga, "confirmada_por_candidato": texto[:120]})
@@ -1603,6 +1624,14 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     if p.etapa == "Onboarding":
         return await _procesar_turno_onboarding(db, p, historial, canal)
 
+    # 2026-10-11: una obligatoria «No aprobada» detiene la ruta — el agente DEJA de enviar mensajes (RH decide)
+    detenida = sproc.detenido_por_no_aprobada(p)
+    if detenida is not None:
+        registrar(db, "agente-ia", "agente_detenido_no_aprobada", "postulacion", p.codigo, {"motivo": detenida["motivo"], "texto": texto[:120]})
+        db.commit()
+        return {"respuesta": "", "clasificacion": None, "ia": False, "whatsapp": {"enviado": False, "detalle": "Ruta detenida: " + detenida["motivo"]},
+                "detenido": detenida["motivo"]}
+
     # 2026-10-09: Entrevista Red Human por WhatsApp en curso — el agente conduce la entrevista con el guion de la vacante
     from ..services import entrevistas as sent
 
@@ -1624,7 +1653,9 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
             return r
 
     # Zero-Touch fase 1: apto y sin videollamada agendada -> herramienta de agendamiento (nunca con entrevista por liga).
-    if p.prefiltro_completo and p.estado == "cumple" and not p.videollamada_agendada_en and not entrevista_por_liga(p):
+    if (p.prefiltro_completo and p.estado == "cumple" and not p.videollamada_agendada_en and not entrevista_por_liga(p)
+            and sproc.agente_puede_actuar(p, "entrevista_agente")[0]):
+        # 2026-10-11: solo si la ruta trae la Entrevista con avatar y ya se habilitó (nunca en una ruta masiva)
         return await _procesar_turno_agenda(db, p, historial, canal)
 
     # Fase 3 (2026-09-15): Entrevista IA interrumpida/parcial → el candidato la reanuda (misma liga)

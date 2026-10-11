@@ -349,18 +349,7 @@ async def _resolver_postulacion(
         fijar_conversacion(esperando[0])
         return esperando[0], "conversacion_unica"
     if len(esperando) > 1:
-        await enviar_lista_interactiva(
-            telefono,
-            "📋 Tus postulaciones",
-            "Tienes más de un proceso en curso. ¿Sobre cuál vacante me escribes?",
-            "Elegir vacante",
-            [
-                {"id": p.codigo, "titulo": (p.vacante.titulo if p.vacante else "Sin vacante")[:24], "descripcion": f"Etapa: {p.etapa}"[:72]}
-                for p in esperando[:10]
-            ],
-        )
-        registrar(db, "agente-ia", "postulacion_ambigua_preguntada", "candidato", c.codigo, {"opciones": [p.codigo for p in esperando]})
-        return None, "elegir_postulacion"
+        return None, await _preguntar_vacante(db, c, telefono, esperando)
 
     # 3. Nada espera respuesta. ¿Eligió explícitamente una vacante (lista/código)? → nueva
     # postulación (o la activa que ya tenga para esa vacante).
@@ -373,6 +362,10 @@ async def _resolver_postulacion(
         return p, "postulacion_nueva_por_seleccion"
     if conv:
         return conv, "conversacion_cerrada"  # respuesta fija de post-completo
+    con_vacante = [p for p in activas if p.vacante_id]
+    if len(con_vacante) > 1:
+        # 2026-10-11: varias postulaciones activas y ninguna elegida en esta conversación → se pregunta, nunca se adivina
+        return None, await _preguntar_vacante(db, c, telefono, con_vacante)
     if activas:
         fijar_conversacion(activas[-1])
         return activas[-1], "activa_mas_reciente"
@@ -382,6 +375,32 @@ async def _resolver_postulacion(
     p = crear_postulacion(db, c, None, c.cuenta_id, _origen(), es_prueba=prueba)
     fijar_conversacion(p)
     return p, "postulacion_nueva"
+
+
+PREGUNTA_VACANTE = "¿Sobre qué vacante me escribes?"
+
+
+async def _preguntar_vacante(db: Session, c: Candidato, telefono: str, opciones: List[Postulacion]) -> str:
+    """Varias postulaciones activas: lista «¿Sobre qué vacante me escribes?» (ids = P-####). Nunca adivina."""
+    await enviar_lista_interactiva(
+        telefono,
+        "📋 Tus postulaciones",
+        f"Tienes más de un proceso en curso. {PREGUNTA_VACANTE}",
+        "Elegir vacante",
+        [{"id": p.codigo, "titulo": (p.vacante.titulo if p.vacante else "Sin vacante")[:24], "descripcion": f"Etapa: {p.etapa}"[:72]}
+         for p in opciones[:10]],
+    )
+    registrar(db, "agente-ia", "postulacion_ambigua_preguntada", "candidato", c.codigo, {"opciones": [p.codigo for p in opciones]})
+    return "elegir_postulacion"
+
+
+def _postulacion_forzada(db: Session, msg: dict) -> Optional[Postulacion]:
+    """Postulación a la que el canal amarró este mensaje (liga demo de Telegram). None = se resuelve por teléfono."""
+    codigo = (msg.get("postulacion_forzada") or "").strip()
+    if not codigo:
+        return None
+    p = db.query(Postulacion).filter(Postulacion.codigo == codigo).first()
+    return p if p is not None and p.activa and p.candidato is not None and p.cuenta is not None else None
 
 
 def _persona_para_cuenta(db: Session, c: Candidato, personas: List[Candidato], cuenta_id: int, prueba: bool) -> Candidato:
@@ -774,7 +793,12 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
 
     print(f"[agente] Procesando mensaje de {nombre_wa} ({telefono}): '{texto}' (id_sel='{id_seleccionado}')")
 
-    alcance, modo_numero = _alcance_whatsapp(db, msg.get("numero_receptor", ""), msg.get("canal") or "whatsapp")
+    forzada = _postulacion_forzada(db, msg)
+    if forzada is not None:
+        # 2026-10-11 (Telegram demo): el chat está amarrado a UNA postulación por su liga — nada se resuelve por teléfono
+        alcance, modo_numero = [forzada.cuenta], "liga_postulacion"
+    else:
+        alcance, modo_numero = _alcance_whatsapp(db, msg.get("numero_receptor", ""), msg.get("canal") or "whatsapp")
     if not alcance:
         print(f"[agente] Ninguna Cuenta activa atiende el canal {msg.get('canal') or 'whatsapp'}; mensaje ignorado.")
         return {"ok": True, "ignorado": True, "motivo": "canal_sin_cuentas"}
@@ -782,18 +806,23 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     prueba = modo_prueba_activo(db)
 
     # ── 1. Persona y postulación en conversación (dentro del alcance del número) ──
-    personas = _personas_en_alcance(db, telefono, alcance_ids)
-    cuenta = _cuenta_ancla(db, alcance, personas)
-    c = _buscar_o_crear_candidato(db, telefono, nombre_wa, cuenta.id, prueba) if not personas else personas[0]
-    if not personas:
-        personas = [c]
+    if forzada is not None:
+        c, personas, cuenta = forzada.candidato, [forzada.candidato], forzada.cuenta
+        fijar_conversacion(forzada)
+        p, ruteo = forzada, "liga_postulacion"
     else:
-        if not c.wa_id:
-            c.wa_id = telefono
-        if nombre_wa and not c.wa_nombre:
-            c.wa_nombre = nombre_wa
-    print(f"[agente] Alcance del número: {modo_numero} ({len(alcance)} Cuenta(s)); persona(s): {[x.codigo for x in personas]}")
-    p, ruteo = await _resolver_postulacion(db, c, texto, id_seleccionado, alcance_ids, prueba, telefono, personas=personas)
+        personas = _personas_en_alcance(db, telefono, alcance_ids)
+        cuenta = _cuenta_ancla(db, alcance, personas)
+        c = _buscar_o_crear_candidato(db, telefono, nombre_wa, cuenta.id, prueba) if not personas else personas[0]
+        if not personas:
+            personas = [c]
+        else:
+            if not c.wa_id:
+                c.wa_id = telefono
+            if nombre_wa and not c.wa_nombre:
+                c.wa_nombre = nombre_wa
+        print(f"[agente] Alcance del número: {modo_numero} ({len(alcance)} Cuenta(s)); persona(s): {[x.codigo for x in personas]}")
+        p, ruteo = await _resolver_postulacion(db, c, texto, id_seleccionado, alcance_ids, prueba, telefono, personas=personas)
     if p is None:
         db.commit()
         return {"ok": True, "accion": ruteo, "candidato": c.codigo}

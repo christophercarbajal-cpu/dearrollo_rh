@@ -13,6 +13,7 @@ proceso configurable de la postulación). Lo único propio de Telegram:
 """
 
 import traceback
+from typing import Optional
 from collections import deque
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -108,6 +109,12 @@ async def _procesar(db: Session, msg: dict) -> dict:
     if msg.get("start"):
         ch.inicio_pendiente = msg["start"][:80]
 
+    # 2026-10-11 (Telegram demo): con Modo Prueba o Cuenta demo, la liga `p_<token>` abre EXACTAMENTE esa postulación
+    # desde cualquier cuenta de Telegram, sin pedir ni validar el número. Si el chat ya atendía otra, se reemplaza y se
+    # empieza de cero para ésta (sin mezclar datos).
+    demo = _postulacion_demo(db, msg.get("start") or "")
+    if demo is not None:
+        return await _abrir_demo(db, ch, demo, msg)
     contacto = msg.get("contacto")
     if contacto:
         if not contacto.get("propio"):
@@ -129,15 +136,61 @@ async def _procesar(db: Session, msg: dict) -> dict:
         return {"ok": True, "accion": "contacto_solicitado"}
     if msg.get("start") is not None:  # /start con o sin payload
         ch.inicio_pendiente = ""
+        if (msg.get("start") or "").startswith("vac_"):
+            ch.postulacion_id = None  # elegir otra vacante suelta el amarre de la liga demo
         db.commit()
         return await _iniciar(db, tel, msg.get("start") or "", msg)
     db.commit()
-    return await _entrante(db, tel, msg)
+    return await _entrante(db, tel, msg, ch)
 
 
-async def _entrante(db: Session, tel: str, msg: dict) -> dict:
+def _postulacion_demo(db: Session, payload: str):
+    """La postulación de una liga `p_<token>` cuando aplica el modo demo de Telegram (Modo Prueba o Cuenta demo)."""
+    from ..services.mensajeria import telegram_demo
+
+    tipo, valor, _paso = telegram.separar_inicio(payload)
+    if tipo != "p" or not valor:
+        return None
+    p = db.query(Postulacion).filter(Postulacion.telegram_token == valor).first()
+    if p is None or not p.activa or not telegram.telefono_10(p.telefono) or not telegram_demo(db, p.cuenta):
+        return None
+    return p
+
+
+async def _abrir_demo(db: Session, ch, p: Postulacion, msg: dict) -> dict:
+    """Telegram demo: el chat queda amarrado a ESTA postulación (reemplaza lo que atendía antes) y se retoma desde su
+    estado actual. Nunca valida el número ni pide el contacto."""
+    _tipo, _valor, paso = telegram.separar_inicio(msg.get("start") or "")
+    tel = telegram.telefono_10(p.telefono)
+    anterior = {"telefono": ch.telefono or "", "postulacion_id": ch.postulacion_id}
+    ch.telefono = tel
+    ch.postulacion_id = p.id
+    ch.inicio_pendiente = ""
+    registrar(db, "sistema", "telegram_demo_vinculado", "postulacion", p.codigo,
+              {"chat_id": msg["chat_id"], "reemplaza": anterior if (anterior["telefono"] or anterior["postulacion_id"]) else None})
+    db.commit()
+    base = {**msg, "contacto": None, "media": None, "tipo": "text", "texto": "Hola", "id_seleccionado": "", "reconexion": True,
+            "postulacion_forzada": p.codigo}
+    return await _continuar_postulacion(db, p, tel, paso, msg, base)
+
+
+def _postulacion_amarrada(db: Session, ch) -> Optional[Postulacion]:
+    if not ch or not ch.postulacion_id:
+        return None
+    p = db.get(Postulacion, ch.postulacion_id)
+    if p is None or not p.activa:
+        ch.postulacion_id = None  # la postulación se cerró: el chat vuelve al flujo normal por teléfono
+        return None
+    return p
+
+
+async def _entrante(db: Session, tel: str, msg: dict, ch=None) -> dict:
     with en_conversacion("telegram", tel):
-        r = await procesar_entrante(db, telegram.mensaje_para_agente(msg, tel))
+        para_agente = telegram.mensaje_para_agente(msg, tel)
+        amarrada = _postulacion_amarrada(db, ch)
+        if amarrada is not None:
+            para_agente["postulacion_forzada"] = amarrada.codigo  # demo: SOLO esa postulación, sin mezclar datos
+        r = await procesar_entrante(db, para_agente)
         if r.get("motivo") == "canal_sin_cuentas":
             # Ninguna Cuenta activa atiende por Telegram: nunca dejar al candidato sin respuesta.
             await enviar_mensaje(tel, "Por ahora no estamos recibiendo postulaciones por Telegram. Postúlate desde la "

@@ -106,7 +106,7 @@ def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
         "logoUrl": v.cuenta.logo if v.cuenta else "",
         "cuentaId": v.cuenta_id,
         "cuentaSlug": (v.cuenta.slug if v.cuenta else "") or "",
-        **canales_publicos(v),  # 2026-10-06: canal con candidatos de la Cuenta (WhatsApp / Telegram / ambos)
+        **canales_publicos(v, db),  # 2026-10-06: canal con candidatos de la Cuenta (WhatsApp / Telegram / ambos)
     }
 
 

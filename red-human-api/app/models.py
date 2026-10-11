@@ -2723,6 +2723,9 @@ class ChatTelegram(Base):
     creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
     ultimo_entrante_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # 2026-10-11 (Telegram demo): la postulación que abrió este chat con su liga `p_<token>`. Mientras exista, lo que
+    # escriba este chat es SOLO de esa postulación (no se resuelve por teléfono: en Modo Prueba los teléfonos se repiten).
+    postulacion_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class UpdateTelegram(Base):

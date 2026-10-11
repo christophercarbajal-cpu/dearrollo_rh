@@ -308,7 +308,9 @@ def seguimiento(codigo: str, db: Session = Depends(get_db), _: Usuario = Depends
     from ..services.mensajeria import canal_de_cuenta
 
     salida["telegram"] = {"disponible": False, "liga": "", "pasos": {}}
-    if salida.get("tieneProceso") and canal_de_cuenta(db, cuenta.id) in ("telegram", "ambos"):
+    from ..services.mensajeria import telegram_demo
+
+    if salida.get("tieneProceso") and (canal_de_cuenta(db, cuenta.id) in ("telegram", "ambos") or telegram_demo(db, cuenta)):
         nuevo = not p.telegram_token
         salida["telegram"] = ligas_telegram(p)
         if nuevo and p.telegram_token:

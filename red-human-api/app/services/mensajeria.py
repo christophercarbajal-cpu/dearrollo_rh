@@ -152,7 +152,19 @@ def alcance_canal(cuentas: list, canal: str) -> list:
     return [c for c in cuentas if normalizar_canal_mensajeria(c.canal_mensajeria) != "telegram"]
 
 
-def canales_publicos(vacante) -> dict:
+def telegram_demo(db, cuenta) -> bool:
+    """2026-10-11 (Telegram demo): con Modo Prueba activo o en una Cuenta demo, «Continuar en Telegram» existe en
+    CUALQUIER Cuenta (aunque su canal sea solo WhatsApp) y la liga de la postulación se abre desde cualquier cuenta de
+    Telegram sin validar el número. Con Modo Prueba apagado y Cuentas reales, todo sigue validándose."""
+    if not telegram.activo() or db is None:
+        return False
+    from ..models import es_cuenta_demo
+    from .configuracion import modo_prueba_activo
+
+    return bool(modo_prueba_activo(db) or es_cuenta_demo(cuenta))
+
+
+def canales_publicos(vacante, db=None) -> dict:
     """Canal con candidatos de la Cuenta de una vacante, para el portal público (detalle y «Postulación exitosa»):
 
     - `canalCandidatos`: whatsapp | telegram | ambos (`Cuenta.canal_mensajeria`; sin `TELEGRAM_BOT_TOKEN` o sin
@@ -167,6 +179,8 @@ def canales_publicos(vacante) -> dict:
 
     cuenta = getattr(vacante, "cuenta", None)
     canal = "telegram" if solo_telegram() else normalizar_canal_mensajeria(cuenta.canal_mensajeria if cuenta else "")
+    if canal == "whatsapp" and telegram_demo(db, cuenta):
+        canal = "ambos"  # Telegram demo: «Continuar en Telegram» desde cualquier Cuenta
     bot = telegram.usuario_bot() if telegram.activo() else ""
     if not bot:
         canal = "whatsapp"

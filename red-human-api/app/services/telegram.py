@@ -388,4 +388,6 @@ def mensaje_para_agente(msg: dict, telefono: str) -> dict:
         "id_seleccionado": msg.get("id_seleccionado", ""),
         "numero_receptor": "",
         "canal": "telegram",
+        # 2026-10-11 (Telegram demo): la postulación amarrada al chat por su liga (se procesa SOLO esa)
+        **({"postulacion_forzada": msg["postulacion_forzada"]} if msg.get("postulacion_forzada") else {}),
     }

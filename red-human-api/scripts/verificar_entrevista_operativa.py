@@ -121,11 +121,13 @@ with TestClient(app) as client:
           and [s["origen"] for s in op["secciones"]] == ["fijo", "biblioteca", "ia", "fijo", "fijo", "fijo"],
           "6 secciones en orden fijo: fijo · biblioteca · IA · fijo · fijo · fijo")
     sec = {s["clave"]: s for s in op["secciones"]}
-    check(op["oficio"] == "montacarguista" and sec["oficio"]["preguntas"][:3] == eop.BIBLIOTECA["montacarguista"]["datos"]
-          and sec["oficio"]["preguntas"][3] == eop.BIBLIOTECA["montacarguista"]["situacion"]["pregunta"],
-          "Verificación del oficio = 3 datos + 1 situación de la biblioteca")
+    # 2026-10-11 (tarde): estructura exacta de 18 — el oficio son las preguntas 8-10 (2 datos + la situación)
+    check(op["oficio"] == "montacarguista" and sec["oficio"]["preguntas"][:2] == eop.BIBLIOTECA["montacarguista"]["datos"][:2]
+          and sec["oficio"]["preguntas"][2:] == [eop.BIBLIOTECA["montacarguista"]["situacion"]["pregunta"]],
+          "Verificación del oficio = 2 datos + 1 situación de la biblioteca (preguntas 8-10)")
+    check(len(g["preguntas"]) == 18, f"el guion lleva exactamente 18 preguntas ({len(g['preguntas'])})")
     check(len(op["indispensables"]) == 3 and len(sec["indispensables"]["preguntas"]) == 3, "se exploran máximo 3 indispensables")
-    check("Tultitlán" in sec["logistica"]["preguntas"][0], "Logística usa la ubicación REAL de la vacante")
+    check(sec["logistica"]["preguntas"] == [eop.PREGUNTA_INICIO], "Logística = solo la fecha de inicio (el traslado va en el prefiltro)")
     check(all(not q.lower().startswith(("¿tienes", "¿cuentas", "¿puedes")) for q in g["preguntas"]), "todas las preguntas son abiertas")
     vista = client.get(f"/vacantes/{v.codigo}", headers=H).json()["guiones"]
     check((vista.get("perfilOperativo") or {}).get("oficio") == "montacarguista" and not vista["perfilOperativoPropio"],
@@ -145,7 +147,8 @@ with TestClient(app) as client:
     r = client.post(f"/vacantes/{v.codigo}/guiones/generar", headers=H, json={"sobrescribir_editadas": True})
     db.expire_all()
     g = sgui.contenido_de(db.get(Vacante, v.id), "entrevista_whatsapp")
-    check(r.status_code == 200 and g["operativo"]["secciones"][1]["preguntas"][:3] == nuevos, "al regenerar se usa el perfil de la vacante")
+    check(r.status_code == 200 and g["operativo"]["secciones"][1]["preguntas"][:2] == nuevos[:2],
+          "al regenerar se usa el perfil de la vacante (sus 2 primeros datos: la estructura de 18 deja 3 preguntas al oficio)")
 
     # ================= 4. Conversación =================
     print("\n--- 4. Conversación por WhatsApp: una pregunta por mensaje, sin repetir el prefiltro ---")
@@ -214,10 +217,12 @@ with TestClient(app) as client:
     MALAS = {**RESP_BUENAS,
              "último trabajo": "Estuve 2 meses en una bodega operando montacargas, antes en otra empresa.",
              "saliste": "Me corrieron porque llegué tarde varias veces.",
-             "de tu casa": "Como 2 horas en dos camiones.",
              "empezar": "No puedo empezar antes de un mes.",
              "situación laboral": "Estoy trabajando todavía en una tienda."}
     p2 = postulacion("Nora Lejos")
+    # 2026-10-11 (tarde): el traslado lo dio en el prefiltro de WhatsApp (la entrevista ya no lo pregunta)
+    p2.analisis = {**(p2.analisis or {}), "prefiltro_datos": {"traslado": "Como 2 horas y 10", "traslado_min": 130}}
+    db.commit()
     e2, _ = asyncio.run(entrevistar(p2, MALAS))
     ev2 = e2.evaluacion or {}
     op2 = ev2.get("operativa") or {}
@@ -226,7 +231,7 @@ with TestClient(app) as client:
     db.refresh(p2)
     check(p2.activa and p2.motivo_cierre in (None, ""), "…y NO descarta: la postulación sigue activa (RH decide)")
     alertas = " ".join(op2["alertas"])
-    check("menos de 3 meses" in alertas and "despido" in alertas and "90 minutos" in alertas and "Trabaja actualmente" in alertas,
+    check("menos de 3 meses" in alertas and "despido" in alertas and "Traslado de ~130 min" in alertas and "Trabaja actualmente" in alertas,
           "alertas: empleo < 3 meses, despido, traslado > 90 min, trabaja actualmente")
     check(any(r.startswith("Alerta: ") for r in ev2["riesgos"]), "las alertas encabezan «Puntos por validar»")
 

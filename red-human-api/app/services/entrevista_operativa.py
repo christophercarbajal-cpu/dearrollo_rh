@@ -7,7 +7,10 @@ En lugar de que la IA invente todo el guion, el enfoque «operativo» ARMA la en
   3. Indispensables            — la IA los redacta UNA vez al generar el guion (máximo 3 se exploran)
   4. Situación actual          — fija
   5. Motivación                — fija
-  6. Logística                 — fija (traslado, horario, inicio) con los datos REALES de la vacante
+  6. Logística                 — fija: SOLO la fecha de inicio (2026-10-11 tarde: el traslado se pregunta en el prefiltro)
+
+Estructura EXACTA (2026-10-11 tarde, `ESTRUCTURA`): 18 preguntas — 1-7 Trayectoria, 8-10 Oficio (2 datos del perfil + su
+situación TAL CUAL), 11-13 Indispensables (con condicionales), 14-16 Situación actual, 17 Motivación, 18 Logística.
 
 Biblioteca de Perfiles = 10 oficios en código (`BIBLIOTECA`): nunca se editan globalmente. Cada vacante guarda SU copia
 (`Vacante.guiones["perfil_operativo"]`) y solo esa copia se ajusta.
@@ -34,6 +37,9 @@ from typing import Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field
 
 ENFOQUE = "operativo"
+# 2026-10-11 (tarde): el guion operativo tiene EXACTAMENTE 18 preguntas en este reparto
+ESTRUCTURA = (("trayectoria", 7), ("oficio", 3), ("indispensables", 3), ("situacion_actual", 3), ("motivacion", 1), ("logistica", 1))
+TOTAL_PREGUNTAS = sum(n for _, n in ESTRUCTURA)
 MAX_INDISPENSABLES = 3
 MAX_PALABRAS = 15
 MAX_REGENERACIONES = 2  # 1 intento + 2 regeneraciones; al tercero que falle se guarda con los problemas a la vista de RH
@@ -438,14 +444,33 @@ def _si_cabe(pregunta: str, alterna: str) -> str:
     return pregunta if palabras(pregunta) <= MAX_PALABRAS else alterna
 
 
+PREGUNTA_INICIO = "¿Cuándo podrías empezar a trabajar?"
+
+
 def preguntas_logistica(ubicacion: str = "", horario: str = "") -> List[str]:
-    """Traslado, horario e inicio con los datos REALES de la vacante (≤ 15 palabras; si el dato es largo, versión corta)."""
-    general = "¿Cuánto tiempo haces de tu casa al trabajo y en qué transporte?"
-    traslado = _si_cabe(f"¿Cuánto tiempo haces de tu casa a {ubicacion.strip()} y en qué transporte?", general) \
-        if (ubicacion or "").strip() else general
-    turno = _si_cabe(f"El horario es {horario.strip()}, ¿cómo te acomoda?", "¿Qué horario o turno puedes cubrir?") \
-        if (horario or "").strip() else "¿Qué horario o turno puedes cubrir?"
-    return [traslado, turno, "¿Cuándo podrías empezar a trabajar?"]
+    """2026-10-11 (tarde): Logística = SOLO la fecha de inicio (zona, traslado y transporte ya se preguntan en el prefiltro
+    de WhatsApp; el horario es requisito clave del prefiltro web)."""
+    return [PREGUNTA_INICIO]
+
+
+def indispensables_de_entrevista(indispensables: List[str]) -> List[str]:
+    """Indispensables que se exploran en la entrevista: nunca escolaridad ni documentos (se validan en el prefiltro y en
+    Documentos)."""
+    return [r for r in (indispensables or []) if str(r or "").strip() and not es_alerta_escolaridad(r)][:MAX_INDISPENSABLES]
+
+
+def preguntas_indispensables(reqs: List[str], redactadas: Optional[List[str]] = None) -> List[str]:
+    """Preguntas 11-13 (con condicionales): ¿ya lo ha hecho? → [sí] dónde y cuánto tiempo → [no] cómo lo cumpliría, o el
+    segundo indispensable. Sin indispensables por explorar: si algo del puesto se le complica."""
+    if not reqs:
+        return ["¿Hay algo del puesto que se te complique cumplir?", con_condicion("¿Qué se te complica y por qué?", "si"),
+                con_condicion("¿Qué parte del puesto se te facilita más?", "no")]
+    r1 = reqs[0].strip().rstrip(".")
+    r1 = r1[0].lower() + r1[1:] if len(r1) > 1 and not r1[:2].isupper() else r1
+    primera = _si_cabe(f"¿En otro trabajo ya cumplías con {r1}?", "¿Ya cumpliste este requisito del puesto en otro trabajo?")
+    tercera = (list(redactadas or [])[1:2] or [pregunta_indispensable_demo(reqs[1])])[0] if len(reqs) > 1 \
+        else con_condicion("¿Cómo lo cumplirías en este puesto?", "no")
+    return [primera, con_condicion("¿Dónde lo hiciste y cuánto tiempo?", "si"), tercera]
 
 
 def condicion_de(pregunta: str) -> Tuple[str, str]:
@@ -474,26 +499,29 @@ def armar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], 
     """Guion operativo ARMADO: 6 secciones en orden fijo. Regresa el formato de guion de siempre (`enfoque`, `temas`,
     `preguntas`) + `operativo` (secciones, oficio, perfil congelado) para la entrevistadora y la evaluación."""
     puesto = (titulo or "").strip() or "este puesto"
-    reqs = [r for r in (indispensables or []) if str(r or "").strip()][:MAX_INDISPENSABLES]
+    reqs = indispensables_de_entrevista(indispensables)
     secciones = []
+    # 2026-10-11 (tarde): estructura EXACTA de 18 preguntas (7 · 3 · 3 · 3 · 1 · 1)
     secciones.append({"clave": "trayectoria", "titulo": "Trayectoria", "origen": "fijo", "preguntas": [
-        "¿Cuál fue tu último trabajo?",  # 2026-10-11 (tarde): va en el mismo mensaje de la transición
+        "¿Cuál fue tu último trabajo?",  # va en el mismo mensaje de la transición
         "¿Qué hacías en ese trabajo?",
         "¿Cuánto tiempo trabajaste ahí?",
         "¿Por qué saliste de ese trabajo?",
+        "¿Tuviste otro trabajo antes de ese?",
+        con_condicion("¿Qué hacías ahí y cuánto tiempo estuviste?", "si"),
+        con_condicion("¿Por qué dejaste ese empleo?", "si"),
     ]})
     if perfil:
-        oficio = list(perfil.get("datos") or [])[:3] + [str((perfil.get("situacion") or {}).get("pregunta") or "")]
+        oficio = list(perfil.get("datos") or [])[:2] + [str((perfil.get("situacion") or {}).get("pregunta") or "")]
     else:
         oficio = [_si_cabe(f"¿Qué experiencia tienes como {puesto}?", "¿Qué experiencia tienes en este tipo de puesto?"),
-                  "¿Qué hacías en un día normal de trabajo?"]
+                  "¿Qué herramientas o equipo usabas en tu trabajo?",
+                  "¿Qué harías si no sabes cómo hacer una tarea nueva?"]
     secciones.append({"clave": "oficio", "titulo": "Verificación del oficio", "origen": "biblioteca" if perfil else "fijo",
                       "preguntas": [q for q in oficio if q.strip()]})
-    # 2026-10-11: las 6 secciones SIEMPRE están; sin indispensables por explorar, una pregunta general del puesto
+    # 2026-10-11: las 6 secciones SIEMPRE están; 11-13 con condicionales (sin indispensables: si algo se le complica)
     secciones.append({"clave": "indispensables", "titulo": "Indispensables", "origen": "ia" if reqs else "fijo",
-                      "preguntas": (list(preguntas_indisp or [])[:len(reqs)] or [pregunta_indispensable_demo(r) for r in reqs]) if reqs
-                      else ["¿Hay algo del puesto que se te complique cumplir?"],
-                      "requisitos": reqs})
+                      "preguntas": preguntas_indispensables(reqs, preguntas_indisp), "requisitos": reqs})
     secciones.append({"clave": "situacion_actual", "titulo": "Situación actual", "origen": "fijo", "preguntas": [
         "¿Estás trabajando actualmente?",
         con_condicion("¿Por qué quieres cambiar de trabajo?", "si"),
@@ -526,25 +554,28 @@ PROMPT_GENERACION = (
     "REGLAS ESTRICTAS:\n"
     "1. Una sola pregunta por línea, con UN solo signo de interrogación (nada de dos preguntas en una).\n"
     f"2. Máximo {MAX_PALABRAS} palabras por pregunta.\n"
-    "3. Estructura estricta de 6 secciones, en este orden y todas presentes: 1. Trayectoria, 2. Oficio, 3. Indispensables, "
-    "4. Situación actual, 5. Motivación, 6. Logística.\n"
-    "   - Trayectoria: último trabajo, qué hacía, cuánto tiempo estuvo y por qué salió.\n"
-    "   - Oficio: verifica la experiencia REAL con los 3 datos del perfil del oficio y termina con su situación TAL CUAL.\n"
-    f"   - Indispensables: una pregunta abierta por requisito (máximo {MAX_INDISPENSABLES}) que explore dónde y cuánto tiempo lo "
-    "ha cumplido; el candidato ya dijo en el prefiltro que lo cumple: nunca le preguntes si lo tiene.\n"
-    "   - Situación actual: si trabaja hoy, con preguntas condicionales para cada caso.\n"
-    "   - Motivación: qué le interesa de este trabajo.\n"
-    "   - Logística: traslado, horario e inicio, con los datos reales de la vacante.\n"
+    f"3. EXACTAMENTE {TOTAL_PREGUNTAS} preguntas en 6 secciones, en este orden y todas presentes (numeración del guion):\n"
+    "   - 1 a 7 · Trayectoria (7): «¿Cuál fue tu último trabajo?» SIEMPRE es la primera; qué hacía, cuánto tiempo, por qué "
+    "salió, si tuvo otro trabajo antes (sí/no) y, condicionales a eso, qué hacía ahí, cuánto tiempo y por qué lo dejó.\n"
+    "   - 8 a 10 · Oficio (3): 2 datos del perfil del oficio para verificar experiencia REAL y la situación del oficio TAL CUAL "
+    "(la pregunta 10).\n"
+    "   - 11 a 13 · Indispensables (3, con condicionales): una pregunta de sí/no sobre si ya cumplió el requisito en otro "
+    "trabajo y sus condicionales (dónde y cuánto tiempo / cómo lo cumpliría), o el segundo requisito. Nunca escolaridad.\n"
+    "   - 14 a 16 · Situación actual (3): «¿Estás trabajando actualmente?» y una condicional para el sí y otra para el no.\n"
+    "   - 17 · Motivación (1): qué le interesa de este trabajo.\n"
+    "   - 18 · Logística (1): SOLO la fecha de inicio («¿Cuándo podrías empezar a trabajar?»). El traslado, la colonia y el "
+    "transporte ya se preguntaron en el prefiltro: NO los vuelvas a preguntar.\n"
     "4. Condicionales: una pregunta puede llevar condicion «si» (solo si responde sí) o «no» (solo si responde no); aplica "
     "a la pregunta ANTERIOR, que debe contestarse con sí o no.\n"
     "5. PROHIBIDO: preguntas de manual de RH (fortalezas, debilidades, virtudes, trabajo bajo presión, errores, «¿dónde te "
-    "ves en 5 años?»), pedir documentos (INE, CURP, RFC, comprobantes, actas, certificados) o hablar de escolaridad o "
+    "ves en 5 años?», desarrollarte, crecer, «¿cómo organizas…?», «cuéntame un ejemplo»), pedir documentos (INE, CURP, RFC, comprobantes, actas, certificados) o hablar de escolaridad o "
     "estudios, e inventar condiciones (sueldo, horario, ubicación) que no estén en los datos."
 )
 
 _RE_PROHIBIDAS = re.compile(r"\b(error|errores|equivocaste|presion|fortaleza|fortalezas|debilidad|debilidades|virtud|virtudes|"
                             r"cualidad|cualidades|punto debil|puntos debiles|donde te ves|en cinco anos|en 5 anos|"
-                            r"deberiamos contratarte|te definirias)\b")
+                            r"deberiamos contratarte|te definirias|desarrollarte|desarrollar\w*|crecer|crecimiento|"
+                            r"como organizas|como te organizas|cuentame un ejemplo|dame un ejemplo)\b")
 
 
 def revisar_guion(guion: dict) -> List[str]:
@@ -559,6 +590,19 @@ def revisar_guion(guion: dict) -> List[str]:
     orden = [k for k, _, _ in SECCIONES if k in claves]
     if [k for k in claves if k in orden] != orden:
         problemas.append("Las secciones no van en el orden 1. Trayectoria → 6. Logística.")
+    # 2026-10-11 (tarde): EXACTAMENTE 18 preguntas con el reparto 7 · 3 · 3 · 3 · 1 · 1
+    vigentes = set(preguntas)
+    for clave, n in ESTRUCTURA:
+        s = next((x for x in op.get("secciones") or [] if x.get("clave") == clave), None)
+        hay = len([q for q in (s or {}).get("preguntas") or [] if q in vigentes])
+        if s is not None and hay != n:
+            problemas.append(f"{TITULO_SECCION[clave]}: lleva {hay} pregunta{'s' if hay != 1 else ''} (deben ser {n}).")
+    if len(preguntas) != TOTAL_PREGUNTAS:
+        problemas.append(f"El guion lleva {len(preguntas)} preguntas (deben ser exactamente {TOTAL_PREGUNTAS}).")
+    logistica = next((x for x in op.get("secciones") or [] if x.get("clave") == "logistica"), None)
+    for q in [q for q in (logistica or {}).get("preguntas") or [] if q in vigentes]:
+        if not re.search(r"\b(empezar|iniciar|inicio|comenzar|incorporarte)\b", _n(q)):
+            problemas.append(f"«{texto_pregunta(q)[:70]}»: Logística solo pregunta la fecha de inicio (el traslado va en el prefiltro).")
     anterior = ""
     for q in preguntas:
         cond, t = condicion_de(q)
@@ -603,10 +647,11 @@ def _desde_ia(crudo: GuionOperativoIA, base: dict) -> dict:
     requisitos = next((s.get("requisitos") for s in op["secciones"] if s["clave"] == "indispensables"), []) or []
     situacion = str(((op.get("perfil") or {}).get("situacion") or {}).get("pregunta") or "")
     secciones = []
+    cupo = dict(ESTRUCTURA)
     for s in crudo.secciones:
-        qs = [con_condicion(x.texto, x.condicion) for x in s.preguntas if (x.texto or "").strip()][:6]
+        qs = [con_condicion(x.texto, x.condicion) for x in s.preguntas if (x.texto or "").strip()][:cupo[s.clave]]
         if s.clave == "oficio" and situacion and _n(situacion) not in {_n(texto_pregunta(q)) for q in qs}:
-            qs = qs[:5] + [situacion]  # la situación del oficio va TAL CUAL (la evaluación B la reconoce)
+            qs = qs[:cupo["oficio"] - 1] + [situacion]  # la situación del oficio va TAL CUAL (la evaluación B la reconoce)
         if qs:
             secciones.append({"clave": s.clave, "titulo": TITULO_SECCION[s.clave], "origen": "ia" if s.clave != "oficio" else origen.get("oficio", "ia"),
                               "preguntas": qs, **({"requisitos": requisitos} if s.clave == "indispensables" else {})})
@@ -629,7 +674,7 @@ def generar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str]
     guarda IGUAL con `operativo.revision.problemas` (RH ve qué falló). Sin IA: guion determinista (cumple las reglas)."""
     from . import ia
 
-    reqs = [r for r in (indispensables or []) if str(r or "").strip()][:MAX_INDISPENSABLES]
+    reqs = indispensables_de_entrevista(indispensables)
     base = armar_guion(titulo, perfil, reqs, [], ubicacion=ubicacion, horario=horario)
     client = ia._client()
     if client is None:
@@ -675,7 +720,7 @@ def normalizar_operativo(op) -> Optional[dict]:
     for s in op["secciones"]:
         if isinstance(s, dict) and s.get("clave") in TITULO_SECCION:
             secciones.append({"clave": s["clave"], "titulo": TITULO_SECCION[s["clave"]], "origen": s.get("origen") or "fijo",
-                              "preguntas": _textos(s.get("preguntas"), 300, 6), **({"requisitos": _textos(s.get("requisitos"), 200, 3)}
+                              "preguntas": _textos(s.get("preguntas"), 300, 8), **({"requisitos": _textos(s.get("requisitos"), 200, 3)}
                                                                                    if s.get("requisitos") else {})})
     if not secciones:
         return None

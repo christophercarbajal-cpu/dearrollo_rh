@@ -54,15 +54,22 @@ P, S = eop.PreguntaIA, eop.SeccionIA
 
 
 def guion_ia(malo: bool = False):
+    # 2026-10-11 (tarde): estructura exacta de 18 (7 · 3 · 3 · 3 · 1 · 1); la situación del oficio la completa el código
     sec = [
-        S(clave="trayectoria", preguntas=[P(texto="¿Cuál fue tu último trabajo y qué hacías?"), P(texto="¿Por qué saliste de ahí?")]),
+        S(clave="trayectoria", preguntas=[P(texto="¿Cuál fue tu último trabajo?"), P(texto="¿Qué hacías en ese trabajo?"),
+                                          P(texto="¿Cuánto tiempo estuviste ahí?"), P(texto="¿Por qué saliste de ahí?"),
+                                          P(texto="¿Tuviste otro trabajo antes de ese?"),
+                                          P(texto="¿Qué hacías ahí y cuánto tiempo?", condicion="si"),
+                                          P(texto="¿Por qué lo dejaste?", condicion="si")]),
         S(clave="oficio", preguntas=[P(texto="¿Qué montacargas operabas?"), P(texto="¿A qué altura acomodabas tarimas?")]),
-        S(clave="indispensables", preguntas=[P(texto="¿Dónde has rolado turnos y cuánto tiempo?")]),
+        S(clave="indispensables", preguntas=[P(texto="¿En otro trabajo ya rolabas turnos?"),
+                                             P(texto="¿Dónde y cuánto tiempo?", condicion="si"),
+                                             P(texto="¿Qué turnos podrías cubrir?", condicion="no")]),
         S(clave="situacion_actual", preguntas=[P(texto="¿Estás trabajando actualmente?"),
                                                P(texto="¿Por qué quieres cambiar de trabajo?", condicion="si"),
                                                P(texto="¿Desde cuándo no trabajas?", condicion="no")]),
         S(clave="motivacion", preguntas=[P(texto="¿Qué te interesa de este trabajo?")]),
-        S(clave="logistica", preguntas=[P(texto="¿Cuánto tiempo haces de tu casa a Tultitlán?"), P(texto="¿Cuándo podrías empezar?")]),
+        S(clave="logistica", preguntas=[P(texto="¿Cuándo podrías empezar?")]),
     ]
     if malo:
         sec[0] = S(clave="trayectoria", preguntas=[P(texto="¿Cuáles son tus fortalezas? ¿Y tus debilidades?"),
@@ -105,6 +112,24 @@ check("máximo 15" in texto, "detecta más de 15 palabras")
 check("palabra prohibida" in texto and "fortalezas" in texto, "detecta palabras prohibidas («fortalezas»)")
 check("Faltan secciones: Motivación" in texto, "detecta que falta una de las 6 secciones")
 check("pide documentos" in texto, "detecta que pide documentos")
+# 2026-10-11 (tarde): estructura exacta, Logística solo inicio y más palabras prohibidas
+base18 = eop.armar_guion("Montacarguista", perfil, REQS, [])
+check(len(base18["preguntas"]) == eop.TOTAL_PREGUNTAS == 18 and [len(s["preguntas"]) for s in base18["operativo"]["secciones"]] == [7, 3, 3, 3, 1, 1],
+      "el guion determinista lleva 18 preguntas: 7 · 3 · 3 · 3 · 1 · 1")
+check(base18["preguntas"][0] == "¿Cuál fue tu último trabajo?" and base18["preguntas"][-1] == eop.PREGUNTA_INICIO,
+      "empieza con «¿Cuál fue tu último trabajo?» y Logística solo pregunta la fecha de inicio")
+corto = eop._desde_ia(eop.GuionOperativoIA(secciones=[S(clave=k, preguntas=[P(texto="¿Qué hacías ahí?")]) for k, _ in eop.ESTRUCTURA]), base18)
+texto18 = " ".join(eop.revisar_guion(corto))
+check("Trayectoria: lleva 1 pregunta (deben ser 7)" in texto18 and "exactamente 18" in texto18, "detecta secciones incompletas (no son 18)")
+check("Logística solo pregunta la fecha de inicio" in texto18, "detecta Logística con algo distinto a la fecha de inicio")
+for frase in ("¿Cómo te ves para crecer aquí?", "¿Qué quieres desarrollarte en este puesto?", "¿Cómo organizas tu día?",
+              "Cuéntame un ejemplo de tu trabajo, ¿sí?", "¿Cómo manejas la presión?", "¿Cuál fue tu peor error?"):
+    g1 = {**base18, "preguntas": [frase] + base18["preguntas"][1:]}
+    g1["operativo"] = {**base18["operativo"], "secciones": [{**base18["operativo"]["secciones"][0], "preguntas": [frase] + base18["operativo"]["secciones"][0]["preguntas"][1:]}]
+                       + base18["operativo"]["secciones"][1:]}
+    check(any("palabra prohibida" in x for x in eop.revisar_guion(g1)), f"palabra prohibida: «{frase}»")
+check(not any(eop.es_alerta_escolaridad(q) for q in eop.armar_guion("Cargador", None, ["Secundaria terminada", "Rolar turnos"], [])["preguntas"]),
+      "un indispensable de escolaridad nunca entra a la entrevista (se valida en el prefiltro)")
 check(eop.revisar_guion(eop.armar_guion("Montacarguista", perfil, REQS, [], ubicacion="Tultitlán, Estado de México",
                                         horario="Lunes a sábado de 7 a 15")) == [],
       "el guion determinista (biblioteca + piezas fijas) cumple todas las reglas")
@@ -133,8 +158,8 @@ try:
           "guion bueno al primer intento: una sola llamada y revisión aprobada")
     ins = falsa.llamadas[0]["instructions"]
     check(ins.startswith("Eres un reclutador experto en personal operativo en México"), "el prompt empieza con «Eres un reclutador experto en personal operativo en México…»")
-    check("Una sola pregunta por línea" in ins and "Máximo 15 palabras" in ins and "1. Trayectoria, 2. Oficio, 3. Indispensables, "
-          "4. Situación actual, 5. Motivación, 6. Logística" in ins and "solo si responde sí" in ins, "…con las reglas: una por línea, 15 palabras, 6 secciones y condicionales")
+    check("Una sola pregunta por línea" in ins and "Máximo 15 palabras" in ins and "EXACTAMENTE 18 preguntas" in ins
+          and "1 a 7 · Trayectoria" in ins and "18 · Logística (1): SOLO la fecha de inicio" in ins and "solo si responde sí" in ins, "…con las reglas: una por línea, 15 palabras, 6 secciones y condicionales")
     check(any(q.startswith(eop.MARCA_SI) for q in g["preguntas"]) and any(q.startswith(eop.MARCA_NO) for q in g["preguntas"]),
           "las condiciones de la IA quedan marcadas en el guion")
     check(perfil["situacion"]["pregunta"] in g["preguntas"], "la situación del oficio va tal cual (la evaluación B la reconoce)")

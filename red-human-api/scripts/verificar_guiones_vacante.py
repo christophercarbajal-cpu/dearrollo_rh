@@ -248,33 +248,30 @@ with TestClient(app) as client:
     p3.analisis = {"respuestas_web": [{"pregunta": web[0]["pregunta"], "respuesta": "Sí"}]}
     db.commit()
     P3 = p3.codigo
+    # RH edita el guion antes de iniciar: el bot usa la versión vigente
+    r = client.patch(f"/vacantes/{VAC3}", headers=H, json={"guiones": {"secciones": {"entrevista_whatsapp": {
+        "enfoque": "Experiencia en patio", "temas": ["Patio", "Seguridad"],
+        "preguntas": ["Cuéntame de tu último turno en patio (editada).", "Cuéntame cómo cuidas la seguridad al cargar.",
+                      "Cuéntame qué haces si ves una tarima mal acomodada."]}}}})
+    check(r.status_code == 200, "RH edita el guion de WhatsApp de la vacante")
     r = client.post(f"/procesos/postulaciones/{P3}/pasos/entrevista-wa/iniciar", headers=H, json={})
     db.expire_all()
     p3 = db.query(Postulacion).filter_by(codigo=P3).one()
     e3 = next((e for e in p3.entrevistas if e.tipo == "whatsapp"), None)
-    check(r.status_code == 200 and e3 is not None and e3.estado == "programada" and e3.guion.get("seccion") == "entrevista_whatsapp",
-          f"«Iniciar» la Entrevista por WhatsApp crea la entrevista con el guion de la vacante ({r.status_code})")
-    intro = sia.mensaje_inicial_entrevista_whatsapp(v3.titulo)  # sin proveedor en la prueba: el envío queda como intento
-    check("inteligencia artificial" in intro and intro.rstrip().endswith("¿Comenzamos?") and p3.espera_respuesta,
-          "la presentación avisa que la conduce la IA y pide «¿Comenzamos?»; la postulación espera respuesta en el chat")
-    # RH edita el guion DESPUÉS de mandar la invitación: el bot usa la versión vigente al comenzar
-    r = client.patch(f"/vacantes/{VAC3}", headers=H, json={"guiones": {"secciones": {"entrevista_whatsapp": {
-        "enfoque": "Experiencia en patio", "temas": ["Patio", "Seguridad"],
-        "preguntas": ["Cuéntame de tu último turno en patio (editada).", "Cuéntame cómo cuidas la seguridad al cargar."]}}}})
-    check(r.status_code == 200, "RH edita el guion de WhatsApp de la vacante")
-    r1 = asyncio.run(procesar_prefiltro(db, p3, "más tarde", "whatsapp"))
-    check(r1.get("esperando") and db.get(Entrevista, e3.id).estado == "programada", "«más tarde» → no empieza ni registra consentimiento")
-    db.expire_all()  # cada petición real abre su sesión; aquí se refresca la caché de la prueba
-    r1 = asyncio.run(procesar_prefiltro(db, db.query(Postulacion).filter_by(codigo=P3).one(), "Sí, comencemos", "whatsapp"))
-    check(r1["respuesta"] == "Cuéntame de tu último turno en patio (editada).",
-          f"el bot hace la PRIMERA pregunta del guion de la vacante con la edición de RH: {r1['respuesta'][:80]}")
-    e3 = db.get(Entrevista, e3.id)
-    check(e3.consentimiento and e3.estado == "en_curso", "el «Sí» queda como consentimiento de la entrevista")
-    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    # 2026-10-11 (tarde): la transición ya no pide permiso — el consentimiento es el del aviso de privacidad
+    check(r.status_code == 200 and e3 is not None and e3.estado == "en_curso" and e3.consentimiento
+          and e3.guion.get("seccion") == "entrevista_whatsapp",
+          f"«Iniciar» la Entrevista por WhatsApp crea la entrevista con el guion de la vacante y arranca ({r.status_code})")
+    intro = (e3.transcript or [{}])[0].get("texto", "")
+    check(intro.endswith("\nCuéntame de tu último turno en patio (editada).") and "¿Comenzamos?" not in intro and p3.espera_respuesta,
+          f"la transición trae la PRIMERA pregunta del guion vigente (con la edición de RH), sin pedir permiso: {intro!r}")
     r2 = asyncio.run(procesar_prefiltro(db, p3, "No tengo experiencia operando montacargas; trabajé en almacén acomodando cajas.", "whatsapp"))
     check(r2["respuesta"] == "Cuéntame cómo cuidas la seguridad al cargar.", "segunda pregunta del guion, en orden")
     p3 = db.query(Postulacion).filter_by(codigo=P3).one()
     r3 = asyncio.run(procesar_prefiltro(db, p3, "Reviso el mástil, uso cinturón, nunca levanto con gente cerca y respeto la capacidad.", "whatsapp"))
+    # 2026-10-11 (tarde): sin el «Sí, comencemos» de antes, una tercera pregunta da los turnos suficientes para evaluar
+    p3 = db.query(Postulacion).filter_by(codigo=P3).one()
+    r3 = asyncio.run(procesar_prefiltro(db, p3, "La bajo, aviso al supervisor y la vuelvo a acomodar con el montacargas.", "whatsapp"))
     db.expire_all()
     e3 = db.get(Entrevista, e3.id)
     check(r3.get("terminada") and e3.estado == "evaluada" and e3.evaluacion.get("score_entrevista") is not None,

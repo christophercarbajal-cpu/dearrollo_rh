@@ -176,6 +176,18 @@ def archivo_dict(a: Archivo) -> dict:
     }
 
 
+def prefiltro_datos(p) -> Optional[dict]:
+    d = ((p.analisis or {}).get("prefiltro_datos")) or {}
+    if not d:
+        return None
+    from .services.entrevista_operativa import TRASLADO_MAX_MIN, TRASLADO_NO_RECOMENDABLE_MIN
+
+    m = d.get("traslado_min") if isinstance(d.get("traslado_min"), (int, float)) else None
+    return {"escolaridad": d.get("escolaridad") or "", "nivel": d.get("nivel") or "", "zona": d.get("zona") or "",
+            "traslado": d.get("traslado") or "", "trasladoMin": m, "transporte": d.get("transporte_medio") or d.get("transporte") or "",
+            "alerta": None if m is None or m <= TRASLADO_MAX_MIN else ("no_recomendable" if m > TRASLADO_NO_RECOMENDABLE_MIN else "alerta")}
+
+
 def _dedupe_cap(items: List[Optional[str]], maximo: int) -> List[str]:
     vistos = set()
     salida: List[str] = []
@@ -273,8 +285,11 @@ def _sintesis_global(p: Postulacion) -> dict:
         f"Inconsistencia: {i.get('criterio')} — formulario «{i.get('web')}», chat «{i.get('whatsapp')}»"
         + (f" (aclaró: {str(i.get('aclaracion'))[:120]})" if i.get("aclarada") and i.get("aclaracion") else "")
         for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
+    from .services.entrevista_operativa import alerta_traslado, minutos_prefiltro
+
     puntos_por_validar = _dedupe_cap(
-        [*inconsistencias_txt,
+        [alerta_traslado(minutos_prefiltro(p)),  # 2026-10-11 (tarde): traslado > 90 min del prefiltro, siempre primero
+         *inconsistencias_txt,
          *[str(x) for x in (a.get("puntos_validar_prefiltro") or [])],  # 2026-10-10: lo que el prefiltro no pudo concluir
          *(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],
@@ -602,6 +617,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "score": p.score,
         # 2026-10-11: ¿la ruta de esta postulación pide CV? Sin CV, la ficha no muestra score de CV
         "pideCv": _pide_cv(p),
+        # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)
+        "prefiltroDatos": prefiltro_datos(p),
         "experiencia": c.experiencia or "",
         "ubicacion": c.ubicacion or "",
         "aplicado": hace(p.creado_en),

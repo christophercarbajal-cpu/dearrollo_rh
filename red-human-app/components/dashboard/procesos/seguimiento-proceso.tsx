@@ -824,6 +824,21 @@ function ResultadosClave({ c }: { c: Candidato }) {
     ...(c.scoreEntrevista != null ? [{ k: "Entrevista Red Human", v: `${c.scoreEntrevista}/100` }] : []),
     ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),
   ];
+  // 2026-10-11 (tarde): lo que dio en el prefiltro de WhatsApp; traslado > 90 min = alerta, > 120 min = no recomendable
+  const d = c.prefiltroDatos;
+  const traslado = d
+    ? [
+        ...(d.zona ? [{ k: "Zona", v: d.zona }] : []),
+        ...(d.trasladoMin != null || d.traslado
+          ? [{
+              k: "Traslado",
+              v: d.trasladoMin != null ? `~${d.trasladoMin} min` + (d.alerta === "no_recomendable" ? " · no recomendable" : d.alerta ? " · alerta" : "") : d.traslado,
+              tono: d.alerta === "no_recomendable" ? "text-bad" : d.alerta ? "text-warn" : undefined,
+            }]
+          : []),
+        ...(d.transporte ? [{ k: "Transporte", v: d.transporte }] : []),
+      ]
+    : [];
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-border-soft bg-surface px-4 py-2.5">
       {items.map((i) => (
@@ -832,6 +847,15 @@ function ResultadosClave({ c }: { c: Candidato }) {
         </span>
       ))}
       {c.resultadoIntegral && <BadgeIntegral r={c.resultadoIntegral} compacto />}
+      {traslado.length > 0 && (
+        <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border-faint pt-1.5">
+          {traslado.map((i) => (
+            <span key={i.k} className="text-[12px] text-ink-3">
+              {i.k}: <b className={cn("font-semibold", i.tono ?? "text-ink")}>{i.v}</b>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

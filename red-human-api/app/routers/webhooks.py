@@ -646,7 +646,9 @@ def _texto_aviso_privacidad(nombre: str, vacante: Optional[Vacante]) -> str:
         f"{saludo} Gracias por tu interés{puesto}. Soy Red Human.\n\n"
         "Antes de comenzar, necesito tu autorización: tus datos personales serán tratados conforme "
         "a nuestro Aviso de Privacidad, exclusivamente para este proceso de selección. "
-        "Puedes consultar el aviso completo en redhuman.mx/privacidad.\n\n"
+        # 2026-10-11 (tarde): el aviso de IA vive aquí (la entrevista por chat ya no lo repite ni pide permiso)
+        "Las preguntas y la entrevista por este chat las hace Red Human con inteligencia artificial; las decisiones las "
+        "toma una persona. Puedes consultar el aviso completo en redhuman.mx/privacidad.\n\n"
         "¿Autorizas el uso de tus datos para continuar? (Responde *Sí* o *Acepto*)"
     )
 

@@ -161,7 +161,7 @@ with TestClient(app) as client:
         return p
 
     RESP_BUENAS = {
-        "trabajo más reciente": "Trabajé 3 años en un almacén de Bodega Norte operando montacargas de combustión.",
+        "último trabajo": "Trabajé 3 años en un almacén de Bodega Norte operando montacargas de combustión.",
         "saliste": "Cerraron la sucursal y buscamos algo más cerca.",
         "montacargas has operado": "Contrabalanceado de combustión y retráctil eléctrico, de 2.5 toneladas.",
         "carga máxima": "Hasta 2.5 toneladas en tarimas de bebidas a 8 metros de altura.",
@@ -184,7 +184,8 @@ with TestClient(app) as client:
         ok, _, _, e = await sent.iniciar_whatsapp(db, p, "prueba")
         db.commit()
         historial_preguntas = []
-        salida = await sent.turno_whatsapp(db, p, e, "Sí, comencemos", "whatsapp")
+        # 2026-10-11 (tarde): la transición ya hizo la primera pregunta (sin «¿Comenzamos?»)
+        salida = {"respuesta": e.transcript[0]["texto"]}
         for _ in range(25):
             pregunta = salida["respuesta"]
             if salida.get("terminada"):
@@ -211,7 +212,7 @@ with TestClient(app) as client:
 
     # No recomendable por logística + alertas
     MALAS = {**RESP_BUENAS,
-             "trabajo más reciente": "Estuve 2 meses en una bodega operando montacargas, antes en otra empresa.",
+             "último trabajo": "Estuve 2 meses en una bodega operando montacargas, antes en otra empresa.",
              "saliste": "Me corrieron porque llegué tarde varias veces.",
              "de tu casa": "Como 2 horas en dos camiones.",
              "empezar": "No puedo empezar antes de un mes.",
@@ -231,7 +232,7 @@ with TestClient(app) as client:
 
     # Excluyente del oficio: patín hidráulico no es montacargas
     EXCL = {**RESP_BUENAS,
-            "trabajo más reciente": "Trabajé un año en una tienda moviendo cajas con patín hidráulico.",
+            "último trabajo": "Trabajé un año en una tienda moviendo cajas con patín hidráulico.",
             "montacargas has operado": "Solo el patín hidráulico, montacargas nunca.",
             "carga máxima": "Unas tarimas con el patín.",
             "almacenes trabajaste": "En la tienda nada más."}

@@ -550,6 +550,10 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
 
         operativa, _ = eop.evaluar(e.transcript or [], e.guion or {}, respuestas_previas(p) if p else [], v.titulo if v else "")
         ev = eop.aplicar(ev, operativa)
+    # 2026-10-11 (tarde): traslado del prefiltro > 90 min → alerta; > 120 min → «No recomendable» (nunca descarta)
+    from ..services import entrevista_operativa as _eop
+
+    ev = _eop.aplicar_traslado(ev, operativa, _eop.minutos_prefiltro(p))
     e.evaluacion = {**ev.model_dump(), **({"operativa": operativa} if operativa else {})}
     e.estado = "evaluada"
     # p.score / p.evidencia son el resultado de Luna sobre el CV (ver ia.AjustePerfil,

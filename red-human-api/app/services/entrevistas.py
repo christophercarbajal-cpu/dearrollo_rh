@@ -175,15 +175,21 @@ def preguntas_de(e: Entrevista) -> list:
     return list(guion.get("preguntas") or [])
 
 
-def mensaje_inicial(p: Postulacion) -> str:
-    """«Listo, [nombre], cumples con los requisitos. Ahora te haré unas preguntas…» (2026-10-11): sin saludo; lo de
-    «cumples» solo si el prefiltro de esta postulación quedó «cumple»."""
+def mensaje_inicial(p: Postulacion, primera: str = "", pedir_permiso: bool = False) -> str:
+    """«Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n[primera pregunta]» (2026-10-11
+    tarde): un solo mensaje, sin reglas internas ni «¿Comenzamos?»."""
     from ..routers.candidatos import nombre_ficha
 
-    a = p.analisis or {}
-    cumple = (a.get("prefiltro_web") or {}).get("resultado") == "cumple" or a.get("prefiltro_resultado") == "cumple"
     nombre = nombre_ficha(p).split(" ")[0] if nombre_ficha(p) and not nombre_ficha(p).startswith("Candidato") else ""
-    return ia.mensaje_inicial_entrevista_whatsapp(p.vacante.titulo if p.vacante else "", nombre, cumple)
+    return ia.mensaje_inicial_entrevista_whatsapp(p.vacante.titulo if p.vacante else "", nombre, primera, pedir_permiso)
+
+
+def primera_pregunta(e: Entrevista) -> str:
+    """Primera pregunta del guion (sin la marca de condicional) — va en el mismo mensaje de la transición."""
+    from . import entrevista_operativa as eop
+
+    qs = [q for q in preguntas_de(e) if str(q or "").strip()]
+    return eop.texto_pregunta(qs[0]) if qs else "¿Cuál fue tu último trabajo?"
 
 
 def _paso_de(e: Entrevista) -> str:
@@ -199,8 +205,10 @@ def _norm(t: str) -> str:
 
 
 async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str = "") -> Tuple[bool, str, Optional[bool], Entrevista]:
-    """Crea (o reutiliza) la entrevista por WhatsApp y manda la presentación: el aviso de que la conduce la IA y
-    «¿Comenzamos?». La respuesta afirmativa del candidato es su consentimiento para ESTA entrevista."""
+    """Crea (o reutiliza) la entrevista por WhatsApp y manda la transición. 2026-10-11 (tarde): sin pedir permiso — el
+    candidato ya aceptó el aviso de privacidad (que dice que el proceso lo conduce una IA), así que la entrevista arranca
+    en ese mismo mensaje con la primera pregunta del guion. Solo una postulación sin consentimiento registrado conserva el
+    «¿Comenzamos?» de antes (su «Sí» es el consentimiento)."""
     from .motor_ruta import _avisar
 
     e = entrevista_whatsapp_activa(p)
@@ -209,8 +217,20 @@ async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str
         db.flush()
     if not p.telefono:
         return False, "El candidato no tiene teléfono: la entrevista por WhatsApp no se puede iniciar.", None, e
-    texto = mensaje_inicial(p)
-    e.ultima_actividad_en = datetime.now(timezone.utc)
+    ahora = datetime.now(timezone.utc)
+    if p.consentimiento and e.estado == "programada":
+        refrescar_guion(e)
+        texto = mensaje_inicial(p, primera_pregunta(e))
+        e.consentimiento = True
+        e.consentimiento_fecha = ahora
+        e.estado = "en_curso"
+        e.iniciada_en = ahora
+        e.transcript = [{"rol": "assistant", "texto": texto}]
+        registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
+                  {"canal": "whatsapp", "medio": "aviso_privacidad", "postulacion": p.codigo})
+    else:
+        texto = mensaje_inicial(p, pedir_permiso=e.estado == "programada")
+    e.ultima_actividad_en = ahora
     entregado, detalle = await _avisar(db, p, texto, "Tu entrevista con Red Human", "", motivo="entrevista", paso_id=paso_id, actor=actor)
     return True, (f"Entrevista iniciada por {detalle}" if entregado else f"Entrevista creada; el mensaje no salió ({detalle})"), entregado, e
 
@@ -245,7 +265,7 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         e.consentimiento_fecha = ahora
         e.estado = "en_curso"
         e.iniciada_en = ahora
-        intro = mensaje_inicial(p)
+        intro = mensaje_inicial(p, pedir_permiso=True)
         e.transcript = [{"rol": "assistant", "texto": intro}]
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})

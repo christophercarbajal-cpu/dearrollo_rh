@@ -1269,18 +1269,17 @@ def mensaje_inicial_entrevista(titulo_vacante: str) -> str:
     )
 
 
-def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str, nombre: str = "", cumple: bool = False) -> str:
-    """Presentación de la Entrevista Red Human por WhatsApp. En el chat no hay pantalla de consentimiento: este mensaje la
-    sustituye — dice que la conduce la IA y que la revisa una persona, y el «Sí» es el consentimiento.
-    2026-10-11: empieza SIN saludo, en el mismo chat del prefiltro: «Listo, [nombre], cumples con los requisitos. Ahora te
-    haré unas preguntas…» (lo de «cumples» solo cuando el prefiltro de verdad quedó «cumple»)."""
-    puesto = (titulo_vacante or "").strip() or "el puesto"
-    inicio = f"Listo, {nombre}" if (nombre or "").strip() else "Listo"
-    inicio += ", cumples con los requisitos." if cumple else "."
-    return (
-        f"{inicio} Ahora te haré unas preguntas sobre tu experiencia para {puesto}, una a la vez (unos 10 minutos). Las hace "
-        "una inteligencia artificial y tus respuestas las revisa una persona del equipo de RH. ¿Comenzamos?"
-    )
+def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str = "", nombre: str = "", primera: str = "", pedir_permiso: bool = False) -> str:
+    """Transición a la Entrevista Red Human por WhatsApp (2026-10-11 tarde): UN solo mensaje, natural, sin reglas internas
+    (ni «unos 10 minutos» ni «las revisa RH») y sin pedir permiso — el aviso de IA ya va en el aviso de privacidad, que el
+    candidato aceptó. Se concatena con la primera pregunta del guion:
+    «Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n¿Cuál fue tu último trabajo?».
+    `pedir_permiso` solo para una postulación sin consentimiento registrado (no debería pasar: el prefiltro lo exige)."""
+    inicio = f"Listo, {nombre.strip()}." if (nombre or "").strip() else "Listo."
+    texto = f"{inicio} Soy Red Human, te haré unas preguntas sobre tu experiencia."
+    if pedir_permiso:
+        return f"{texto} ¿Comenzamos?"
+    return f"{texto}\n{primera.strip()}" if (primera or "").strip() else texto
 
 
 CANAL_ENTREVISTA = {
@@ -1351,13 +1350,18 @@ def prompt_entrevistador(
            else (f"Preguntas de referencia (inspiración de tono, NO script; no tienes que hacerlas todas ni tal cual):\n{referencia}\n" if referencia else ""))
         + (f"{CANAL_ENTREVISTA[canal]}\n" if canal in CANAL_ENTREVISTA else "")
         + "\n"
+        # 2026-10-11 (tarde): por WhatsApp la transición ya hizo la primera pregunta (sin pedir permiso)
+        + ("PROTOCOLO DE INICIO: tu primer mensaje ya se presentó («Listo, … Soy Red Human…») e hizo la PRIMERA pregunta "
+           "del guion; lo que conteste el candidato es su respuesta a esa pregunta. Sigue con la siguiente pregunta, sin "
+           "volver a presentarte, sin frases de transición y sin pedir permiso nunca.\n\n" if canal == "whatsapp" else "")
+        + ("" if canal == "whatsapp" else
         "PROTOCOLO DE INICIO: tu primer mensaje ya se presentó y terminó con «¿Comenzamos?». Si la respuesta "
         "es afirmativa (sí, claro, vamos, adelante, listo, lista, ok, dale, comencemos), haz DE INMEDIATO la "
         "primera pregunta: sin frases de transición ('perfecto, empecemos', 'muy bien', 'excelente'), sin "
         "volver a presentarte y sin volver a pedir confirmación nunca más. Si contesta que no o pide un "
         f"momento, responde solo: «{ESPERA_INICIO}» y espera. Si recibes un turno vacío o sin contenido antes "
-        f"de empezar, di: «{AVISO_SILENCIO.format(nombre=candidato_nombre)}».\n\n"
-        "CÓMO ENTREVISTAS: (1) frases cortas y lenguaje sencillo, en español mexicano; (2) UNA sola pregunta "
+        f"de empezar, di: «{AVISO_SILENCIO.format(nombre=candidato_nombre)}».\n\n")
+        + "CÓMO ENTREVISTAS: (1) frases cortas y lenguaje sencillo, en español mexicano; (2) UNA sola pregunta "
         "principal por intervención — jamás dos preguntas en la misma oración; SOLO preguntas ABIERTAS (qué, cómo, "
         "cuéntame, platícame) — nunca de sí/no ni de prefiltro; (3) primero pregunta algo "
         "general del tema y luego profundiza según lo que responda, con repreguntas también cortas (máximo "
@@ -1390,13 +1394,20 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
     `operativo` (2026-10-11): el guion operativo respeta sus condicionales, pide UN dato concreto ante una respuesta vaga
     y reformula sin cambiar de tema ante «no entiendo» (`entrevista_operativa.turno_demo`)."""
     client = _client()
+    # 2026-10-11 (tarde): por WhatsApp la transición ya hizo la primera pregunta (sin pedir permiso): la primera respuesta
+    # del candidato es la respuesta a esa pregunta, no una confirmación para empezar
+    from .entrevista_operativa import texto_pregunta
+
+    qs0 = [q for q in (preguntas or []) if (q or "").strip()]
+    primera_hecha = bool(qs0 and historial and historial[0]["rol"] == "assistant"
+                         and " ".join(texto_pregunta(qs0[0]).split()) in " ".join(historial[0]["texto"].split()))
     if client is None and operativo:
         from .entrevista_operativa import turno_demo
 
         n_agente = sum(1 for m in historial if m["rol"] == "assistant")
         n_usuario = sum(1 for m in historial if m["rol"] == "user")
         ultimo = (historial[-1]["texto"] if historial else "").strip().lower()
-        if n_usuario == 1 and n_agente == 1 and not any(w in ultimo for w in ("si", "sí", "listo", "lista", "adelante", "vamos", "claro",
+        if not primera_hecha and n_usuario == 1 and n_agente == 1 and not any(w in ultimo for w in ("si", "sí", "listo", "lista", "adelante", "vamos", "claro",
                                                                                "ok", "dale", "comencemos", "empecemos")):
             return TurnoEntrevista(respuesta=ESPERA_INICIO, terminada=False), False
         texto, fin = turno_demo([q for q in (preguntas or []) if (q or "").strip()], historial)
@@ -1410,12 +1421,12 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
         demo_qs = [q for q in (preguntas or []) if (q or "").strip()] or _guion_demo("el puesto").preguntas
         ultimo = (historial[-1]["texto"] if historial else "").strip().lower()
         # Protocolo de inicio: el primer turno del candidato es la confirmación de que está listo.
-        if n_usuario == 1 and n_agente == 1:
+        if n_usuario == 1 and n_agente == 1 and not primera_hecha:
             afirmativo = any(w in ultimo for w in ("si", "sí", "listo", "lista", "adelante", "vamos", "claro", "ok", "dale", "comencemos"))
             if not afirmativo:
                 return TurnoEntrevista(respuesta=ESPERA_INICIO, terminada=False), False
         # n_agente incluye el saludo inicial: la pregunta i-ésima es demo_qs[n_agente - 1]
-        i = max(0, n_agente - 1)
+        i = n_agente if primera_hecha else max(0, n_agente - 1)
         if i < len(demo_qs):
             return TurnoEntrevista(respuesta=demo_qs[i], terminada=False), False
         nombre = "gracias"

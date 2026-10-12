@@ -305,6 +305,10 @@ export default function FormularioAplicar() {
                           </a>
                           .
                           <span className="mt-1 block text-ink-3">
+                            Las preguntas y la entrevista por chat las hace Red Human con inteligencia artificial; las
+                            decisiones las toma una persona.
+                          </span>
+                          <span className="mt-1 block text-ink-3">
                             Requerido para continuar (LFPDPPP). Puedes revocarlo cuando quieras.
                           </span>
                         </span>

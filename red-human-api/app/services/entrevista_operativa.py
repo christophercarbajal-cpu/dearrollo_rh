@@ -40,6 +40,7 @@ MAX_REGENERACIONES = 2  # 1 intento + 2 regeneraciones; al tercero que falle se 
 MARCA_SI = "[Solo si responde sí]"
 MARCA_NO = "[Solo si responde no]"
 TRASLADO_MAX_MIN = 90
+TRASLADO_NO_RECOMENDABLE_MIN = 120  # 2026-10-11 (tarde): más de 2 horas → la entrevista queda «No recomendable»
 EMPLEO_MIN_MESES = 3
 
 # ============================================================ Biblioteca de Perfiles (10 oficios, estándar de la industria)
@@ -476,7 +477,8 @@ def armar_guion(titulo: str, perfil: Optional[dict], indispensables: List[str], 
     reqs = [r for r in (indispensables or []) if str(r or "").strip()][:MAX_INDISPENSABLES]
     secciones = []
     secciones.append({"clave": "trayectoria", "titulo": "Trayectoria", "origen": "fijo", "preguntas": [
-        "¿Cuál fue tu trabajo más reciente y qué hacías ahí?",
+        "¿Cuál fue tu último trabajo?",  # 2026-10-11 (tarde): va en el mismo mensaje de la transición
+        "¿Qué hacías en ese trabajo?",
         "¿Cuánto tiempo trabajaste ahí?",
         "¿Por qué saliste de ese trabajo?",
     ]})
@@ -1114,6 +1116,39 @@ def resultado(criterios: Dict[str, dict], alertas: List[str], perfil: Optional[d
 
 
 PREFIJO_ALERTA = "Alerta: "
+
+
+def minutos_prefiltro(p) -> Optional[int]:
+    """Minutos de traslado que dio el candidato en el prefiltro de WhatsApp (`analisis.prefiltro_datos`)."""
+    m = (((getattr(p, "analisis", None) or {}).get("prefiltro_datos")) or {}).get("traslado_min") if p is not None else None
+    return int(m) if isinstance(m, (int, float)) else None
+
+
+def alerta_traslado(minutos: Optional[int]) -> Optional[str]:
+    """Texto ÚNICO de la alerta de traslado (ficha y evaluación lo comparten: no se duplica en Puntos por validar)."""
+    if minutos is None or minutos <= TRASLADO_MAX_MIN:
+        return None
+    if minutos > TRASLADO_NO_RECOMENDABLE_MIN:
+        return f"{PREFIJO_ALERTA}Traslado de ~{minutos} min (más de 2 horas): entrevista no recomendable."
+    return f"{PREFIJO_ALERTA}Traslado de ~{minutos} min (más de {TRASLADO_MAX_MIN} min)."
+
+
+def aplicar_traslado(ev, operativa: Optional[dict], minutos: Optional[int]):
+    """2026-10-11 (tarde): con el traslado del prefiltro, > 90 min = alerta en Puntos por validar y > 120 min = la
+    recomendación de la entrevista pasa a «No recomendable». Nunca descarta (RH decide)."""
+    alerta = alerta_traslado(minutos)
+    if not alerta:
+        return ev
+    ev.riesgos = [alerta] + [r for r in (ev.riesgos or []) if "traslado de" not in _n(r)]
+    if operativa is not None:
+        operativa["alertas"] = [alerta[len(PREFIJO_ALERTA):]] + [a for a in operativa.get("alertas") or [] if "traslado de" not in _n(a)]
+    if minutos > TRASLADO_NO_RECOMENDABLE_MIN:
+        ev.recomendacion = RECOMENDACIONES["no_recomendable"][1]
+        if operativa is not None:
+            operativa["recomendacion"] = "no_recomendable"
+            operativa["recomendacion_texto"] = RECOMENDACIONES["no_recomendable"][0]
+            operativa["motivo_traslado"] = f"Traslado de ~{minutos} min"
+    return ev
 
 
 def aplicar(ev, op: dict):

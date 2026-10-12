@@ -2,7 +2,7 @@
 
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_conversacion_operativa.py
 
-Cubre: arranque sin saludo («Listo, [nombre], cumples con los requisitos. Ahora te haré unas preguntas…»); condicionales
+Cubre: arranque sin saludo (2026-10-11 tarde: «Listo, [nombre]. Soy Red Human…» + la primera pregunta); condicionales
 «solo si responde sí / no»; respuesta vaga → UN dato concreto y sigue; «no entiendo» → reformula sin cambiar de tema;
 prefiltro sin «¿cuál de estas opciones te describe?» (sí/no en lenguaje natural); y descarte inmediato cuando la respuesta
 indica que no cumple («1er año de secundaria» cuando se pide terminada), también en la reconfirmación.
@@ -123,7 +123,7 @@ check(vaga[1].startswith(eop.PREFIJO_DATO) and vaga[2] == eop.texto_pregunta(QS[
 vaga2 = conversar(["pues normal", "normal"] + [responde({})] * 20)
 check(sum(1 for x in vaga2[:4] if x.startswith(eop.PREFIJO_DATO)) == 1, "el dato concreto se pide UNA sola vez por pregunta")
 dud = conversar(["no entiendo", "no entiendo", "no entiendo"] + [responde({})] * 20)
-check(dud[1].startswith(eop.PREFIJO_REFORMULA) and "trabajo más reciente" in dud[1] and dud[2].startswith(eop.PREFIJO_REFORMULA)
+check(dud[1].startswith(eop.PREFIJO_REFORMULA) and "último trabajo" in dud[1] and dud[2].startswith(eop.PREFIJO_REFORMULA)
       and dud[3] == eop.texto_pregunta(QS[1]), "«no entiendo» → reformula la MISMA pregunta (máx. 2) y después sigue")
 prompt = eop.bloque_prompt({"preguntas": QS, "operativo": eop.armar_guion("Cargador", eop.perfil_base("cargador"), [], [])["operativo"]}, [])
 check("CONDICIONALES" in prompt and "RESPUESTA VAGA" in prompt and "NO ENTIENDO" in prompt and "sin saludo" in prompt,
@@ -149,7 +149,7 @@ finally:
 check(t.respuesta == "¿Por qué quieres cambiar de trabajo?", "si la IA copia la marca de la condicional, se quita antes de enviar")
 
 # ================= 4. De punta a punta en el chat =================
-print("\n--- 4. Chat: prefiltro → «Listo, …, cumples con los requisitos» → entrevista ---")
+print("\n--- 4. Chat: prefiltro → «Listo, … Soy Red Human…» + primera pregunta → entrevista ---")
 RUTA = [{"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
         {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]
@@ -195,15 +195,15 @@ with TestClient(app) as client:
         asyncio.run(sent.iniciar_whatsapp(db, p, "prueba"))
         db.commit()
     intro = next((t for t in enviados(p.telefono, desde) if t.startswith("Listo")), "")
-    check(intro.startswith("Listo, Ana, cumples con los requisitos. Ahora te haré unas preguntas") and "Hola" not in intro,
-          "la entrevista empieza SIN saludo: «Listo, Ana, cumples con los requisitos. Ahora te haré unas preguntas…»")
-    check("inteligencia artificial" in intro and intro.endswith("¿Comenzamos?"), "…y conserva el aviso de IA y el consentimiento («¿Comenzamos?»)")
+    # 2026-10-11 (tarde): UN mensaje sin reglas internas ni permiso, con la primera pregunta del guion
+    check(intro == "Listo, Ana. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n¿Cuál fue tu último trabajo?",
+          "la entrevista empieza SIN saludo y en el mismo mensaje hace la primera pregunta")
+    check("Comenzamos" not in intro and "inteligencia artificial" not in intro, "…sin «¿Comenzamos?» (el aviso de IA va en el aviso de privacidad)")
     e = sent.entrevista_whatsapp_activa(p)
-    s = asyncio.run(sent.turno_whatsapp(db, p, e, "Sí", "whatsapp"))
-    check(s["respuesta"] == "¿Cuál fue tu trabajo más reciente y qué hacías ahí?",
-          "tras el «Sí» va directo a la primera pregunta")
-    check(ia.mensaje_inicial_entrevista_whatsapp("Cargador", "Luis", False).startswith("Listo, Luis. Ahora"),
-          "sin prefiltro aprobado no dice «cumples con los requisitos»")
+    s = asyncio.run(sent.turno_whatsapp(db, p, e, "Cargador en una bodega", "whatsapp"))
+    check(s["respuesta"] == "¿Qué hacías en ese trabajo?", "la respuesta cuenta para la primera pregunta y sigue con la segunda")
+    check(ia.mensaje_inicial_entrevista_whatsapp("Cargador", "Luis").startswith("Listo, Luis. Soy Red Human"),
+          "ya no dice «cumples con los requisitos» (sin promesas)")
 
     print("\n--- 5. Chat: «1er año de secundaria» → DESCARTA de inmediato ---")
     q = nueva("Beto Parcial")

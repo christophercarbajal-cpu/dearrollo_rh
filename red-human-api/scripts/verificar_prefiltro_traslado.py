@@ -8,6 +8,11 @@ escolaridad, exigencias, ubicación u horario); con menos de 3 la vacante no se 
 prefiltro de WhatsApp pregunta, una por mensaje y en orden estricto, escolaridad exacta → colonia/municipio → tiempo de
 traslado → medio de transporte; ante una respuesta vaga repregunta UNA sola vez; la escolaridad que no cumple descarta
 de inmediato con el mensaje de cierre y el traslado nunca descarta.
+
+Bloque 2: la transición a la entrevista es UN mensaje sin reglas internas ni permiso, concatenado con la primera
+pregunta («Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n¿…?»; el aviso de IA va en el
+aviso de privacidad); la ficha muestra zona, traslado y transporte; traslado > 90 min = alerta en Puntos por validar y
+> 120 min = la entrevista queda «No recomendable» sin descartar.
 """
 
 import asyncio
@@ -39,6 +44,8 @@ from app.main import app  # noqa: E402
 from app.deps import usuario_actual, usuario_admin, usuario_decisor  # noqa: E402
 from app.models import Cuenta, Postulacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.routers.candidatos import _crear_candidato, crear_postulacion  # noqa: E402
+from app.services import entrevista_operativa as eop  # noqa: E402
+from app.services import entrevistas as sent  # noqa: E402
 from app.services import guiones as sgui  # noqa: E402
 from app.services import ia  # noqa: E402
 from app.services import prefiltro_conversacional as pconv  # noqa: E402
@@ -130,6 +137,7 @@ with TestClient(app) as client:
     print("\n--- 3. Datos por WhatsApp: uno por mensaje, repregunta única ---")
     v = db.query(Vacante).filter(Vacante.estado == "Publicada").order_by(Vacante.id).first()
     v.cuenta_id, v.titulo, v.ubicacion = cuenta.id, "Cargador", "Tlalnepantla"
+    v.enfoque_entrevista, v.guiones = "operativo", {}
     v.preguntas_filtro = web
     v.preguntas_filtro_whatsapp = wa
     v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": RUTA})
@@ -173,6 +181,53 @@ with TestClient(app) as client:
     check(d.get("traslado_min") == 150 and d.get("nivel") == "Secundaria" and "Metro" in d.get("transporte_medio", "")
           and d.get("zona") == "por aquí", "los datos quedan guardados para la ficha (zona, minutos, transporte, escolaridad)")
 
+    print("\n--- 3b. Transición natural a la entrevista (Bloque 2) ---")
+    desde = 0
+    if sent.entrevista_whatsapp_activa(p) is None:
+        asyncio.run(sent.iniciar_whatsapp(db, p, "prueba"))
+        db.commit()
+    p = fresca(p)
+    e = sent.entrevista_whatsapp_activa(p)
+    intro = next((c["text"]["body"] for c in WA[desde:] if c.get("type") == "text" and c.get("to", "").endswith(p.telefono)
+                  and c["text"]["body"].startswith("Listo")), "")
+    primera = sent.primera_pregunta(e)
+    check(intro == f"Listo, Ana. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n{primera}",
+          f"UN solo mensaje con la primera pregunta: {intro!r}")
+    check(primera == "¿Cuál fue tu último trabajo?", "la primera pregunta del guion operativo es «¿Cuál fue tu último trabajo?»")
+    check(not any(x in intro for x in ("Comenzamos", "10 minutos", "revisa", "inteligencia artificial")),
+          "sin «¿Comenzamos?», sin «unos 10 minutos», sin «las revisa RH» y sin el aviso de IA")
+    check(e.estado == "en_curso" and e.consentimiento, "la entrevista arranca de inmediato (el consentimiento es el del aviso de privacidad)")
+    aviso = __import__("app.routers.webhooks", fromlist=["_texto_aviso_privacidad"])._texto_aviso_privacidad("Ana", v)
+    check("inteligencia artificial" in aviso, "el aviso de IA vive en el aviso de privacidad")
+    s1 = asyncio.run(sent.turno_whatsapp(db, p, e, "Ayudante en una bodega de abarrotes", "whatsapp"))
+    check(s1["respuesta"] != primera and "Comenzar" not in s1["respuesta"], "la respuesta cuenta como respuesta a la primera pregunta y sigue")
+
+    print("\n--- 3c. Ficha: zona, traslado, transporte y alertas ---")
+    f = client.get(f"/candidatos/{p.codigo}", headers=h).json()
+    d = f.get("prefiltroDatos") or {}
+    check(d.get("zona") == "por aquí" and d.get("trasladoMin") == 150 and "Metro" in d.get("transporte", "") and d.get("alerta") == "no_recomendable",
+          "la ficha trae zona, traslado (~150 min) y transporte")
+    check((f.get("puntosPorValidar") or [""])[0].startswith("Alerta: Traslado de ~150 min"), "traslado > 90 min → alerta al inicio de Puntos por validar")
+    for _ in range(40):  # el resto de la entrevista (motor sin IA) hasta la despedida
+        e = sent.entrevista_whatsapp_activa(fresca(p))
+        if e is None:
+            break
+        asyncio.run(sent.turno_whatsapp(db, fresca(p), e, "Sí, cargaba cajas en la bodega 2 años", "whatsapp"))
+    p = fresca(p)
+    ent = next(x for x in p.entrevistas if x.tipo == "whatsapp")
+    ev = ent.evaluacion or {}
+    check(ent.estado == "evaluada" and ev.get("recomendacion") == "no_avanzar" and (ev.get("operativa") or {}).get("recomendacion_texto") == "No recomendable",
+          "traslado > 120 min → la entrevista queda «No recomendable»")
+    check(p.activa and p.motivo_cierre in ("", None), "…pero NO se descarta (RH decide)")
+
+    class _Ev:
+        recomendacion, riesgos = "avanzar", []
+
+    x = eop.aplicar_traslado(_Ev(), None, 100)
+    check(x.recomendacion == "avanzar" and x.riesgos == ["Alerta: Traslado de ~100 min (más de 90 min)."],
+          "entre 90 y 120 min: solo alerta, la recomendación no cambia")
+    check(eop.alerta_traslado(80) is None, "90 min o menos: sin alerta")
+
     print("\n--- 4. Escolaridad que no cumple → descarte inmediato ---")
     q = nueva("Beto Parcial")
     turno(q, "Hola")
@@ -194,4 +249,4 @@ with TestClient(app) as client:
           "el dato contradice el «Sí» → descarta y la contradicción queda registrada")
     db.close()
 
-print(f"\n🎉 {OK} comprobaciones OK — prefiltro web de 3 preguntas y traslado por WhatsApp")
+print(f"\n🎉 {OK} comprobaciones OK — prefiltro web de 3 preguntas, traslado por WhatsApp y transición natural")

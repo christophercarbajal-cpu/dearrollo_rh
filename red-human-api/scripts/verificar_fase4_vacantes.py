@@ -112,8 +112,8 @@ with TestClient(app) as client:
     r = client.post("/candidatos", json={"nombre": "Beto WA", "telefono": "5511223355", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
     r = client.post(f"/candidatos/{P2}/prefiltro", json={"texto": "Hola"})
-    # 2026-10-11 (tarde): sin preguntas de WhatsApp se generan solas (JIT) y empiezan por la escolaridad exacta
-    check("¿Hasta qué año estudiaste?" in r.json()["respuesta"], "sin preguntas de WhatsApp → se generan solas (empieza por la escolaridad exacta)")
+    # Cambio 19: sin preguntas de WhatsApp se generan solas (JIT) y la primera es un INDISPENSABLE de la vacante
+    check("¿Tienes experiencia en caja?" in r.json()["respuesta"], "sin preguntas de WhatsApp → se generan solas (empieza por un indispensable)")
 
     print("\n--- Plantillas ---")
     r = client.post("/plantillas", json={"nombre": "P F4", "titulo": "Cajero", "ubicacion_estado": "Nuevo León", "ubicacion_municipio": "Monterrey", "preguntas_filtro_whatsapp": wa})

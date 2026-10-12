@@ -37,7 +37,7 @@ SECCION_DE_PASO = {"entrevista_agente": "entrevista_avatar", "entrevista_whatsap
                    "solicitud_web": "prefiltro_web"}
 TIPOS_PREGUNTA_CERRADA = ("si_no", "numero", "opcion")
 MAX_PREGUNTAS = 15
-MAX_PREGUNTAS_OPERATIVO = 20  # 6 secciones con condicionales
+MAX_PREGUNTAS_OPERATIVO = 25  # Cambio 19: 7 secciones con condicionales (cupos en entrevista_operativa.RANGOS)
 
 
 class ErrorGuion(Exception):
@@ -109,7 +109,7 @@ def datos_de_vacante(v) -> dict:
     return {"titulo": v.titulo or "", "responsabilidades": list(v.responsabilidades or []),
             "requisitos": requisitos_lista(v.requisitos), "requisitos_deseables": list(v.requisitos_deseables or []),
             "ubicacion": v.ubicacion or "", "modalidad": v.modalidad or "", "sueldo": v.sueldo or "",
-            "enfoque_entrevista": v.enfoque_entrevista or "profesional", "horario": "",
+            "enfoque_entrevista": v.enfoque_entrevista or "profesional", "horario": "", "descripcion": v.descripcion or "",
             **({"perfil_operativo": _perfil_operativo(v)} if (v.enfoque_entrevista or "") == "operativo" else {})}
 
 
@@ -138,7 +138,8 @@ def normalizar_pregunta(q) -> Optional[dict]:
 
     if q.get("tipo") == "dato" and q.get("dato") in ia.DATOS_PREFILTRO:
         return {"pregunta": _texto(q["pregunta"]), "tipo": "dato", "dato": q["dato"], "valida": _texto(q.get("valida") or q["pregunta"], 200),
-                "respuesta_esperada": _texto(q.get("respuesta_esperada"), 200), "descarta": bool(q.get("descarta")), "opciones": []}
+                "respuesta_esperada": _texto(q.get("respuesta_esperada"), 200), "descarta": bool(q.get("descarta")), "opciones": [],
+                **({"regla": _texto(q["regla"], 200)} if _texto(q.get("regla")) else {})}
     tipo = q.get("tipo") if q.get("tipo") in TIPOS_PREGUNTA_CERRADA else None
 
     if ia.es_autopercepcion(_texto(q.get("pregunta"))):
@@ -157,7 +158,9 @@ def normalizar_pregunta(q) -> Optional[dict]:
             salida["respuesta_esperada"] = "Sí"
     if tipo in ("numero", "opcion") and len(salida["opciones"]) < 2:
         raise ErrorGuion(400, f"«{salida['pregunta'][:80]}»: una pregunta de número u opción necesita al menos dos opciones.")
-    for k in ("reconfirma", "clave", "pregunta_chat"):
+    if q.get("registra") and not q.get("descarta"):
+        salida["registra"] = True  # Cambio 19: condición de la descripción — se pregunta y se registra, nunca descarta
+    for k in ("reconfirma", "clave", "pregunta_chat", "regla"):
         if _texto(q.get(k)):
             salida[k] = _texto(q[k], 200)
     if q.get("minimo") not in (None, ""):
@@ -381,7 +384,8 @@ def ficha_guion(datos: dict, empresa: str = "") -> "ia.FichaGuion":
                          requisitos_deseables=list(datos.get("requisitos_deseables") or []), ubicacion=datos.get("ubicacion") or "",
                          modalidad=datos.get("modalidad") or "", horario=datos.get("horario") or "",
                          sueldo="" if (datos.get("sueldo") or "") == "A convenir" else (datos.get("sueldo") or ""),
-                         empresa=empresa, enfoque_entrevista=datos.get("enfoque_entrevista") or "profesional")
+                         empresa=empresa, enfoque_entrevista=datos.get("enfoque_entrevista") or "profesional",
+                         descripcion=datos.get("descripcion") or "")
 
 
 def generar(datos: dict, pasos: list, actuales: Optional[dict] = None, conservar: Optional[List[str]] = None,

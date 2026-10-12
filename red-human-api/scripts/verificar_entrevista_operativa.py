@@ -126,7 +126,7 @@ with TestClient(app) as client:
           "el enfoque se ofrece como «Operativo (sugerido para Masivos)»")
     lib = client.get("/vacantes/perfiles-operativos", headers=H)
     check(lib.status_code == 200 and len(lib.json()["oficios"]) == 10 and [s["clave"] for s in lib.json()["secciones"]] ==
-          ["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica"], "GET /vacantes/perfiles-operativos")
+          ["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica", "condiciones"], "GET /vacantes/perfiles-operativos")
 
     # ================= 2. Guion armado =================
     print("\n--- 2. Guion armado de 6 secciones ---")
@@ -136,16 +136,16 @@ with TestClient(app) as client:
     g = sgui.contenido_de(db.get(Vacante, v.id), "entrevista_whatsapp")
     op = g.get("operativo") or {}
     check([s["clave"] for s in op.get("secciones", [])] == ["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica"]
-          and [s["origen"] for s in op["secciones"]] == ["fijo", "biblioteca", "ia", "fijo", "fijo", "fijo"],
-          "6 secciones en orden fijo: fijo · biblioteca · IA · fijo · fijo · fijo")
+          and [s["origen"] for s in op["secciones"]] == ["fijo", "biblioteca", "vacante", "fijo", "fijo", "fijo"],
+          "secciones en orden fijo (Cambio 19: sin condiciones capturadas no hay sección 7): fijo · biblioteca · vacante · fijo · fijo · fijo")
     sec = {s["clave"]: s for s in op["secciones"]}
     # 2026-10-11 (tarde): estructura exacta de 18 — el oficio son las preguntas 8-10 (2 datos + la situación)
     check(op["oficio"] == "montacarguista" and sec["oficio"]["preguntas"][:2] == eop.BIBLIOTECA["montacarguista"]["datos"][:2]
           and sec["oficio"]["preguntas"][2:] == [eop.BIBLIOTECA["montacarguista"]["situacion"]["pregunta"]],
           "Verificación del oficio = 2 datos + 1 situación de la biblioteca (preguntas 8-10)")
-    check(len(g["preguntas"]) == 18, f"el guion lleva exactamente 18 preguntas ({len(g['preguntas'])})")
+    check(not eop.revisar_guion(g), f"Cambio 19: el guion pasa la revisión ({eop.revisar_guion(g)[:2]})")
     check(len(op["indispensables"]) == 3 and len(sec["indispensables"]["preguntas"]) == 3, "se exploran máximo 3 indispensables")
-    check(sec["logistica"]["preguntas"] == [eop.PREGUNTA_INICIO], "Logística = solo la fecha de inicio (el traslado va en el prefiltro)")
+    check(sec["logistica"]["preguntas"] == [eop.PREGUNTA_INICIO], "Inicio = solo la fecha de inicio (el traslado va en el prefiltro)")
     check(all(not q.lower().startswith(("¿tienes", "¿cuentas", "¿puedes")) for q in g["preguntas"]), "todas las preguntas son abiertas")
     vista = client.get(f"/vacantes/{v.codigo}", headers=H).json()["guiones"]
     check((vista.get("perfilOperativo") or {}).get("oficio") == "montacarguista" and not vista["perfilOperativoPropio"],

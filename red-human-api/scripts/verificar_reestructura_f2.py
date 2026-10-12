@@ -92,9 +92,12 @@ with TestClient(app) as client:
     wa_todo = r.json()["preguntas_filtro_whatsapp"]
     # 2026-10-11 (tarde): primero los 4 datos (escolaridad exacta, colonia, traslado, transporte); la escolaridad
     # reconfirma «Secundaria terminada», así que las reconfirmaciones sí/no son las de los otros 2 indispensables
-    check([q.get("dato") for q in wa_todo[:4]] == ["escolaridad", "zona", "traslado", "transporte"],
-          "generar: WhatsApp empieza con escolaridad → colonia → traslado → transporte")
-    wa = wa_todo[4:]
+    # Cambio 19: primero los indispensables (la escolaridad exacta reconfirma «Secundaria terminada» y descarta), al final
+    # colonia → traslado → transporte (se registran)
+    check(wa_todo[0].get("dato") == "escolaridad" and wa_todo[0]["descarta"] and wa_todo[0]["regla"].startswith("Descarta si")
+          and [q.get("dato") for q in wa_todo[-3:]] == ["zona", "traslado", "transporte"],
+          "generar: WhatsApp empieza con el indispensable (escolaridad) y termina con colonia → traslado → transporte")
+    wa = [q for q in wa_todo if q.get("reconfirma")]
     # 2026-10-09: con web + WhatsApp en la ruta, WhatsApp RECONFIRMA cada indispensable con un dato concreto (cerrado)
     check(len(wa) == 2 and all(q["tipo"] in ("numero", "opcion", "si_no") and q.get("reconfirma") and "cuál de estas" not in q["pregunta"] for q in wa),
           f"generar: prefiltro WhatsApp = {len(wa)} reconfirmaciones cerradas de los indispensables")

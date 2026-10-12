@@ -136,19 +136,40 @@ def criterios_de(v) -> List[dict]:
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
             "opciones": opciones, "opciones_validas": [str(o) for o in pw.get("opciones_validas") or []], "minimo": pw.get("minimo"),
         })
-    # 2026-10-11 (tarde): los 4 datos de WhatsApp van PRIMERO y en orden estricto; la escolaridad reconfirma el nivel
-    # de estudios indispensable (si la vacante lo pide) y sustituye su reconfirmación sí/no
+    # Cambio 19 (2026-10-12): condiciones de la DESCRIPCIÓN («Se registra»): se preguntan en el chat, nunca descartan;
+    # un «no» va a Puntos por validar
+    registro: List[dict] = []
+    for i, pw in enumerate((v.preguntas_filtro_whatsapp if v is not None else None) or []):
+        if (not isinstance(pw, dict) or not pw.get("registra") or pw.get("descarta") or pw.get("reconfirma")
+                or (pw.get("tipo") or "si_no") != "si_no" or not str(pw.get("pregunta", "")).strip() or ia.es_autopercepcion(pw["pregunta"])):
+            continue
+        criterio = str(pw.get("valida") or pw["pregunta"]).strip()
+        if _norm(criterio) in ya:
+            continue
+        ya.add(_norm(criterio))
+        registro.append({"id": f"reg{i + 1}", "clave": f"reg{i + 1}", "criterio": criterio, "pregunta": str(pw["pregunta"]).strip(),
+                         "chat": ia.chat_natural(str(pw["pregunta"]).strip(), criterio), "indispensable": False, "registra": True,
+                         "esperada": "si"})
+    # 2026-10-11 (tarde) / Cambio 19: los datos de WhatsApp; la escolaridad reconfirma el nivel de estudios indispensable
+    # (si la vacante lo pide) y sustituye su reconfirmación sí/no
     datos: List[dict] = []
     for pw in (v.preguntas_filtro_whatsapp if v is not None else None) or []:
         if not isinstance(pw, dict) or pw.get("tipo") != "dato" or pw.get("dato") not in ia.DATOS_PREFILTRO:
             continue
         if any(d["dato"] == pw["dato"] for d in datos) or not str(pw.get("pregunta", "")).strip():
             continue
-        datos.append({"id": f"dato-{pw['dato']}", "clave": pw["dato"], "dato": pw["dato"], "criterio": str(pw.get("valida") or pw["pregunta"]).strip(),
-                      "pregunta": str(pw["pregunta"]).strip(), "chat": str(pw["pregunta"]).strip(), "indispensable": False,
-                      "esperada": "si", "tipo": "dato"})
+        d = {"id": f"dato-{pw['dato']}", "clave": pw["dato"], "dato": pw["dato"], "criterio": str(pw.get("valida") or pw["pregunta"]).strip(),
+             "pregunta": str(pw["pregunta"]).strip(), "chat": str(pw["pregunta"]).strip(), "indispensable": False,
+             "esperada": "si", "tipo": "dato"}
+        if pw["dato"] == "escolaridad":
+            # Cambio 19: el nivel sale de la vacante — indispensable («Descarta si…») o de la descripción («Se registra»)
+            nivel = nivel_estudios(str(pw.get("respuesta_esperada") or pw.get("valida") or ""))[0]
+            if nivel is not None and ia.RE_NIVEL_ESTUDIOS.search(str(pw.get("respuesta_esperada") or pw.get("valida") or "")):
+                d["nivel_requerido"] = nivel
+                d["indispensable" if pw.get("descarta") else "registra"] = True
+        datos.append(d)
     if not datos:
-        return salida
+        return salida + registro
     q_sueldo = ia.pregunta_sueldo(v.sueldo or "")
     if q_sueldo and not any(d["dato"] == "sueldo" for d in datos):
         # C2 (prueba del 11 de octubre): vacantes con los 4 datos ya guardados también preguntan el sueldo (sin regenerar)
@@ -159,8 +180,17 @@ def criterios_de(v) -> List[dict]:
     esc = next((d for d in datos if d["dato"] == "escolaridad"), None)
     if base is not None and esc is not None:
         esc.update({"reconfirma": base["id"], "criterio": base["criterio"], "nivel_requerido": nivel_estudios(base["criterio"])[0]})
+        esc.pop("registra", None)
+        esc["indispensable"] = False
         salida = [c for c in salida if c.get("reconfirma") != base["id"]]
-    return datos + salida
+    # Cambio 19: orden — 1) indispensables (la primera pregunta del chat siempre es un indispensable) · 2) condiciones de la
+    # descripción («Se registra») · 3) colonia, traslado, transporte y sueldo · lo demás del formulario (solo se registra)
+    esc_desc = [d for d in datos if d.get("registra")]
+    esc_indisp = [d for d in datos if d["dato"] == "escolaridad" and (d.get("reconfirma") or d["indispensable"])]
+    otros = [d for d in datos if d not in esc_desc and d not in esc_indisp]
+    primero = [c for c in salida if c["indispensable"] or c.get("reconfirma")]
+    resto = [c for c in salida if c not in primero]
+    return esc_indisp + primero + esc_desc + registro + otros + resto
 
 
 # ============================================================ datos de WhatsApp (escolaridad, zona, traslado, transporte)
@@ -284,7 +314,7 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
         if nivel is None:
             return None, {}
         extra = {"nivel": NOMBRE_NIVEL.get(nivel, ""), "terminado": terminado}
-        return (cumple_nivel(c.get("nivel_requerido"), texto) if c.get("reconfirma") else "si"), extra
+        return (cumple_nivel(c.get("nivel_requerido"), texto) if c.get("nivel_requerido") is not None else "si"), extra
     if dato == "zona":
         return (None, {}) if (_RE_ZONA_VAGA.match(t) or len(t) < 3) else ("si", {"zona": texto.strip()[:120]})
     if dato == "traslado":
@@ -565,8 +595,8 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
     def falta(c: dict) -> bool:
         if c["id"] in respuestas:
             return False
-        if c.get("dato"):
-            return True  # 2026-10-11 (tarde): los datos de WhatsApp siempre se preguntan (primero y en orden)
+        if c.get("dato") or c.get("registra"):
+            return True  # los datos de WhatsApp y las condiciones de la descripción («Se registra») siempre se preguntan
         if c.get("reconfirma"):
             # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
             base = respuestas.get(c["reconfirma"]) or {}
@@ -593,7 +623,7 @@ def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
         if c.get("reconfirma") and r:
             veredicto = "cumple" if r.get("valor") == "si" else "inconsistencia"
         if c.get("dato") and r:
-            veredicto = ("no_concluyente" if r.get("valor") is None else "registrado") if not c.get("reconfirma") else \
+            veredicto = ("no_concluyente" if r.get("valor") is None else "registrado") if not (c.get("reconfirma") or c["indispensable"]) else \
                 ("cumple" if r.get("valor") == "si" else "no_cumple" if r.get("valor") == "no" else "no_concluyente")
         salida.append({"criterio": c["criterio"], "pregunta": c["pregunta"] if c.get("reconfirma") else c["chat"],
                        "respuesta": r.get("respuesta", ""), "valor": r.get("valor"), "excluyente": c["indispensable"],

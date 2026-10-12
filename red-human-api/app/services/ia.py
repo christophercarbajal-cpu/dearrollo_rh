@@ -2684,6 +2684,8 @@ class PreguntaPrefiltroIA(BaseModel):
     opciones: List[str] = Field(description="numero/opcion: 3 a 5 opciones ordenadas; si_no: vacío.")
     reconfirma: str = Field(description="Solo en WhatsApp: el requisito indispensable (texto EXACTO) del web que esta pregunta "
                                         "reconfirma pidiendo un dato concreto; vacío si no reconfirma nada.")
+    regla: str = Field(description="Cambio 19: «Descarta si …» (la condición exacta que descarta) para un INDISPENSABLE; "
+                                   "«Se registra» para una condición de la descripción.")
 
 
 class GuionesIA(BaseModel):
@@ -2707,6 +2709,8 @@ class FichaGuion(BaseModel):
     enfoque_entrevista: str = "profesional"
     # 2026-10-10: perfil del oficio (copia de la Biblioteca de Perfiles ajustada por vacante) para el enfoque operativo
     perfil_operativo: Optional[dict] = None
+    # Cambio 19 (2026-10-12): la descripción de la vacante — sus condiciones (p. ej. escolaridad) se REGISTRAN en el prefiltro
+    descripcion: str = ""
 
 
 ESTILO_GUION = {
@@ -2810,6 +2814,8 @@ def pregunta_si_no_natural(req: str) -> str:
         return f"¿Tienes disponibilidad para {m.group(1)}?"
     if re.match(r"^(licencia|constancia|certificaci[oó]n|curso|conocimient)", bajo, re.IGNORECASE):
         return f"¿Tienes {bajo}?"
+    if re.fullmatch(r"[a-záéíóúñ]+(ar|er|ir)(se)?", (bajo.split() or [""])[0].lower()):
+        return f"¿Puedes {bajo}?"  # «Cargar cajas de 25 kg» → «¿Puedes cargar cajas de 25 kg?»
     return f"¿Cuentas con {bajo}?"
 
 
@@ -2830,6 +2836,8 @@ def _pregunta_dict(p: "PreguntaPrefiltroIA") -> dict:
     d = p.model_dump()
     if not d.get("reconfirma"):
         d.pop("reconfirma", None)
+    if not d.get("regla"):
+        d.pop("regla", None)
     if d["tipo"] == "si_no":
         d["opciones"] = list(OPCIONES_CERRADAS)
     return d
@@ -2888,12 +2896,26 @@ def preguntas_clave_extra(ficha: FichaGuion, ya: List[dict], faltan: int) -> Lis
     return candidatos[:max(0, faltan)]
 
 
-# 2026-10-11 (tarde): el prefiltro de WhatsApp recolecta, una pregunta por mensaje y en este orden estricto, escolaridad
-# exacta, colonia/municipio, tiempo de traslado y medio de transporte. Solo la escolaridad puede descartar (si la vacante
-# pide un nivel como indispensable); el traslado NO descarta en esta etapa.
-# C2 (prueba del 11 de octubre): 5) el sueldo — «El sueldo es desde… ¿Te parece bien?». Se registra; NUNCA descarta. Sin
-# sueldo capturado («A convenir») no se pregunta (Red Human nunca inventa condiciones).
+# Cambio 19 (2026-10-12) — CERO REGLAS FIJAS: el prefiltro de WhatsApp sale de los atributos de CADA vacante.
+#   1) cada requisito INDISPENSABLE → pregunta cerrada con la regla «Descarta si …» (la primera pregunta del chat siempre
+#      es un indispensable, si la vacante tiene);
+#   2) cada condición de la DESCRIPCIÓN (deseables, escolaridad mencionada en la descripción) → «Se registra» (nunca
+#      descarta; si no la cumple, va a Puntos por validar);
+#   3) SIEMPRE: colonia/municipio, tiempo de traslado, transporte y aceptación del sueldo («El sueldo es desde… ¿Te
+#      parece bien?», solo si hay sueldo capturado) → «Se registra».
+# La escolaridad solo se pregunta si la vacante la menciona (indispensable → descarta; descripción → se registra).
 DATOS_PREFILTRO = ("escolaridad", "zona", "traslado", "transporte", "sueldo")
+DATOS_SIEMPRE = ("zona", "traslado", "transporte", "sueldo")
+REGLA_REGISTRA = "Se registra"
+MAX_CONDICIONES_REGISTRO = 4
+MAX_REGENERACIONES_PREFILTRO = 2
+_RE_NIVEL_DESC = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|carrera t[eé]cnica)"
+                            r"(\s+(terminad[ao]|concluid[ao]|complet[ao]|trunca))?", re.IGNORECASE)
+
+
+def regla_descarta(req: str) -> str:
+    """«Descarta si no cumple: secundaria terminada» — la regla sale del texto del indispensable de la vacante."""
+    return f"Descarta si no cumple: {_minuscula_inicial(req)}"
 
 
 def pregunta_sueldo(sueldo: str) -> str:
@@ -2911,31 +2933,106 @@ def pregunta_sueldo(sueldo: str) -> str:
     return f"El sueldo es {cuerpo}. ¿Te parece bien?"
 
 
-def preguntas_datos_whatsapp(ficha: FichaGuion) -> List[dict]:
-    indisp = [r for r in ficha.requisitos_indispensables if r.strip()]
-    nivel = next((r for r in indisp if RE_NIVEL_ESTUDIOS.search(r)), "")
+def condiciones_descripcion(ficha: FichaGuion) -> List[str]:
+    """Condiciones descriptivas (NO eliminatorias) de la vacante: los requisitos deseables y la escolaridad que mencione la
+    descripción. Nunca autopercepciones ni lo que ya es indispensable."""
+    indisp = {_norm_req(r) for r in ficha.requisitos_indispensables if r.strip()}
+    salida = [r.strip() for r in ficha.requisitos_deseables if r.strip() and not es_autopercepcion(r) and _norm_req(r) not in indisp]
+    if not any(RE_NIVEL_ESTUDIOS.search(r) for r in salida + list(ficha.requisitos_indispensables)):
+        m = _RE_NIVEL_DESC.search(ficha.descripcion or "")
+        if m:
+            nivel = m.group(0).strip()
+            salida.insert(0, nivel[0].upper() + nivel[1:])
+    vistos, unicas = set(), []
+    for r in salida:
+        if _norm_req(r) not in vistos:
+            vistos.add(_norm_req(r))
+            unicas.append(r)
+    return unicas[:MAX_CONDICIONES_REGISTRO]
+
+
+def pregunta_escolaridad(nivel: str, descarta: bool) -> dict:
+    """«¿Hasta qué año estudiaste?»: descarta si el nivel es INDISPENSABLE; si viene de la descripción, se registra."""
+    return {"pregunta": "¿Hasta qué año estudiaste?", "tipo": "dato", "dato": "escolaridad", "valida": nivel,
+            "respuesta_esperada": nivel, "descarta": descarta, "regla": regla_descarta(nivel) if descarta else REGLA_REGISTRA,
+            "opciones": []}
+
+
+def preguntas_datos_siempre(ficha: FichaGuion) -> List[dict]:
+    """Los datos que el prefiltro de WhatsApp pregunta SIEMPRE (solo se registran): colonia, traslado, transporte y
+    aceptación del sueldo (este último solo con sueldo capturado: Red Human nunca inventa condiciones)."""
     lugar = (ficha.ubicacion or "").strip()
     traslado = f"¿Cuánto tiempo haces de tu casa a {lugar}?" if lugar and len(lugar.split()) <= 8 else "¿Cuánto tiempo harías de tu casa al trabajo?"
-    return [
-        {"pregunta": "¿Hasta qué año estudiaste?", "tipo": "dato", "dato": "escolaridad", "valida": nivel or "Escolaridad",
-         "respuesta_esperada": nivel, "descarta": bool(nivel), "opciones": []},
-        {"pregunta": "¿En qué colonia y municipio vives?", "tipo": "dato", "dato": "zona", "valida": "Colonia y municipio",
-         "respuesta_esperada": "", "descarta": False, "opciones": []},
-        {"pregunta": traslado, "tipo": "dato", "dato": "traslado", "valida": "Tiempo de traslado", "respuesta_esperada": "",
-         "descarta": False, "opciones": []},
-        {"pregunta": "¿En qué transporte llegarías?", "tipo": "dato", "dato": "transporte", "valida": "Medio de transporte",
-         "respuesta_esperada": "", "descarta": False, "opciones": []},
-    ] + ([{"pregunta": pregunta_sueldo(ficha.sueldo), "tipo": "dato", "dato": "sueldo", "valida": f"Sueldo: {ficha.sueldo.strip()}",
-           "respuesta_esperada": "Sí", "descarta": False, "opciones": []}] if pregunta_sueldo(ficha.sueldo) else [])
+    salida = [
+        {"pregunta": "¿En qué colonia y municipio vives?", "tipo": "dato", "dato": "zona", "valida": "Colonia y municipio"},
+        {"pregunta": traslado, "tipo": "dato", "dato": "traslado", "valida": "Tiempo de traslado"},
+        {"pregunta": "¿En qué transporte llegarías?", "tipo": "dato", "dato": "transporte", "valida": "Medio de transporte"},
+    ]
+    if pregunta_sueldo(ficha.sueldo):
+        salida.append({"pregunta": pregunta_sueldo(ficha.sueldo), "tipo": "dato", "dato": "sueldo", "valida": f"Sueldo: {ficha.sueldo.strip()}",
+                       "respuesta_esperada": "Sí"})
+    return [{"respuesta_esperada": "", **q, "descarta": False, "regla": REGLA_REGISTRA, "opciones": []} for q in salida]
+
+
+def preguntas_datos_whatsapp(ficha: FichaGuion) -> List[dict]:
+    """Compatibilidad: escolaridad (solo si la vacante la menciona) + los datos de siempre."""
+    nivel = next((r for r in ficha.requisitos_indispensables if r.strip() and RE_NIVEL_ESTUDIOS.search(r)), "")
+    desc = next((r for r in condiciones_descripcion(ficha) if RE_NIVEL_ESTUDIOS.search(r)), "")
+    esc = [pregunta_escolaridad(nivel, True)] if nivel else [pregunta_escolaridad(desc, False)] if desc else []
+    return esc + preguntas_datos_siempre(ficha)
+
+
+def _une_dos_ideas(texto: str) -> bool:
+    from .entrevista_operativa import une_dos_ideas
+
+    return une_dos_ideas(texto)
+
+
+def preguntas_registro(ficha: FichaGuion, propuestas: Optional[List[dict]] = None) -> List[dict]:
+    """«Se registra»: una pregunta cerrada (Sí/No, lenguaje natural) por condición de la descripción. Si la IA propuso una
+    redacción válida para esa condición se usa la suya."""
+    por_req = {_norm_req(q.get("valida") or ""): q for q in propuestas or []
+               if not q.get("descarta") and q.get("tipo") == "si_no" and not es_autopercepcion(q.get("pregunta", ""))
+               and not _une_dos_ideas(q.get("pregunta", "")) and "[" not in q.get("pregunta", "")}
+    salida = []
+    for cond in condiciones_descripcion(ficha):
+        if RE_NIVEL_ESTUDIOS.search(cond):
+            salida.append(pregunta_escolaridad(cond, False))
+            continue
+        propia = por_req.get(_norm_req(cond))
+        salida.append({"pregunta": (propia or {}).get("pregunta") or _pregunta_exigencia(cond), "tipo": "si_no", "valida": cond,
+                       "respuesta_esperada": "Sí", "descarta": False, "registra": True, "regla": REGLA_REGISTRA,
+                       "opciones": list(OPCIONES_CERRADAS)})
+    return salida
+
+
+def revisar_prefiltro_whatsapp(preguntas: List[dict], indispensables: List[str]) -> List[str]:
+    """Validación del prefiltro de WhatsApp (Cambio 19): TODOS los indispensables de la vacante tienen su pregunta con regla
+    «Descarta si…»; ninguna pregunta une dos ideas con «y» ni lleva marcas internas visibles. Vacía = aprobado."""
+    problemas: List[str] = []
+    cubiertos = {_norm_req(q.get("reconfirma") or "") for q in preguntas or [] if q.get("reconfirma")}
+    cubiertos |= {_norm_req(q.get("valida") or "") for q in preguntas or [] if q.get("descarta")}
+    escolaridad = any(q.get("dato") == "escolaridad" and q.get("descarta") for q in preguntas or [])
+    for r in [r for r in indispensables or [] if str(r or "").strip()]:
+        if _norm_req(r) in cubiertos or (escolaridad and RE_NIVEL_ESTUDIOS.search(r)):
+            continue
+        problemas.append(f"Falta la pregunta del indispensable «{r.strip()}» (regla «Descarta si…»).")
+    for q in preguntas or []:
+        t = str(q.get("pregunta") or "")
+        if _une_dos_ideas(t):
+            problemas.append(f"«{t[:70]}»: une dos ideas con «y».")
+        if "[" in t or "]" in t:
+            problemas.append(f"«{t[:70]}»: lleva una marca interna visible.")
+    return problemas
 
 
 def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion, hay_web: bool,
                         hay_whatsapp: bool) -> Tuple[List[dict], List[dict]]:
     """Reglas de prefiltro garantizadas en código (IA o demo):
-    * Web: cerradas Sí/No/Parcial, primero cada indispensable (eliminatoria) y después lo deseable (solo suma).
-    * WhatsApp con web en la ruta: SOLO reconfirmaciones de los indispensables del web, con dato concreto y cerradas (lo de
-      la IA si reconfirma un indispensable con tipo número/opción; si no, la determinista). Nada no indispensable.
-    * WhatsApp sin web: el prefiltro principal — cerrado, indispensables como eliminatorias."""
+    * Web: cerradas Sí/No, primero cada indispensable (eliminatoria) y después lo deseable (solo suma).
+    * WhatsApp (Cambio 19): 1) indispensables con «Descarta si…» (con web en la ruta, reconfirmación con dato concreto
+      de cada uno; sin web, la pregunta principal) → 2) condiciones de la descripción con «Se registra» → 3) colonia,
+      traslado, transporte y sueldo («Se registra»)."""
     indisp = [r for r in ficha.requisitos_indispensables if r.strip()]
     # retro 2026-10-09: una autopercepción («¿te consideras organizado?») nunca entra al prefiltro
     web = [q for q in web or [] if not es_autopercepcion(q.get("pregunta", ""))]
@@ -2967,27 +3064,30 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
             salida_web += preguntas_clave_extra(ficha, salida_web, MIN_PREFILTRO_WEB - len(salida_web))
     salida_wa: List[dict] = []
     if hay_whatsapp:
-        # 1) escolaridad · 2) colonia/municipio · 3) traslado · 4) transporte · 5) sueldo — siempre primero y en este orden
-        salida_wa = preguntas_datos_whatsapp(ficha)
-        nivel = salida_wa[0]["respuesta_esperada"]
+        nivel = next((r for r in indisp if RE_NIVEL_ESTUDIOS.search(r)), "")
+        # 1) indispensables («Descarta si…»): la escolaridad exacta reconfirma el nivel indispensable
+        if nivel:
+            salida_wa.append(pregunta_escolaridad(nivel, True))
         if hay_web:
             reconf = {_norm_req(q.get("reconfirma", "")): q for q in whatsapp
                       if q.get("reconfirma") and q.get("tipo") in ("numero", "opcion", "si_no") and len(q.get("opciones") or []) >= 2
-                      and not _RE_CUAL_OPCION.search(q.get("pregunta") or "")}
+                      and not _RE_CUAL_OPCION.search(q.get("pregunta") or "") and not _une_dos_ideas(q.get("pregunta") or "")}
             for q in [x for x in salida_web if x.get("descarta")]:
                 if nivel and _norm_req(q["valida"]) == _norm_req(nivel):
                     continue  # la escolaridad exacta («¿Hasta qué año estudiaste?») ya reconfirma el nivel de estudios
                 det = pregunta_reconfirmacion(q["valida"])
                 propia = reconf.get(_norm_req(q["valida"]))
                 if propia and propia["tipo"] == det["tipo"] and propia.get("opciones") == det["opciones"]:
-                    salida_wa.append({**propia, "reconfirma": q["valida"], "descarta": False, "opciones_validas": det["opciones_validas"],
-                                      **({"minimo": det["minimo"]} if "minimo" in det else {})})
+                    elegida = {**propia, "reconfirma": q["valida"], "opciones_validas": det["opciones_validas"],
+                               **({"minimo": det["minimo"]} if "minimo" in det else {})}
                 elif propia and propia.get("opciones_validas"):
-                    salida_wa.append({**propia, "reconfirma": q["valida"], "descarta": False})
+                    elegida = {**propia, "reconfirma": q["valida"]}
                 else:
-                    salida_wa.append(det)  # la regla de reconfirmación nunca depende de que la IA la cumpla
+                    elegida = det  # la regla de reconfirmación nunca depende de que la IA la cumpla
+                salida_wa.append({**elegida, "descarta": True, "regla": regla_descarta(q["valida"])})
         else:
-            cerradas = [dict(q) for q in whatsapp if q.get("tipo") in ("si_no", "numero", "opcion") and not q.get("reconfirma")]
+            cerradas = [dict(q) for q in whatsapp if q.get("tipo") in ("si_no", "numero", "opcion") and not q.get("reconfirma")
+                        and q.get("descarta") and not _une_dos_ideas(q.get("pregunta") or "")]
             por_req = {_norm_req(q.get("valida", "")): q for q in cerradas}
             for r in indisp:
                 if nivel and _norm_req(r) == _norm_req(nivel):
@@ -2998,7 +3098,11 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
                     q["opciones"] = list(OPCIONES_CERRADAS)
                 elif len(q.get("opciones") or []) < 2:
                     q = pregunta_web_cerrada(r)
+                q["regla"] = regla_descarta(r)
                 salida_wa.append(q)
+        # 2) condiciones de la descripción («Se registra») · 3) colonia, traslado, transporte y sueldo («Se registra»)
+        salida_wa += preguntas_registro(ficha, whatsapp)
+        salida_wa += preguntas_datos_siempre(ficha)
     return salida_web, salida_wa
 
 
@@ -3040,7 +3144,8 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
         from . import entrevista_operativa as eop
 
         guion_op, ia_op = eop.generar_guion(ficha.titulo, ficha.perfil_operativo, ficha.requisitos_indispensables,
-                                            ubicacion=ficha.ubicacion, horario=ficha.horario, responsabilidades=ficha.responsabilidades)
+                                            ubicacion=ficha.ubicacion, horario=ficha.horario, responsabilidades=ficha.responsabilidades,
+                                            modalidad=ficha.modalidad)
         for c in guion_claves:
             armados[c] = _copy.deepcopy(guion_op)
         con_ia = con_ia or ia_op
@@ -3055,7 +3160,11 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
                           "acaso, 1-2 deseables (descarta=false). Un requisito numérico es un umbral («¿Tienes al menos 2 años…?»).")
         if "prefiltro_whatsapp" in claves:
             pedido.append(
-                "prefiltro_whatsapp: preguntas CERRADAS en tono de chat. " + (
+                "prefiltro_whatsapp: preguntas CERRADAS en tono de chat, UNA idea por pregunta (nunca unas dos con «y»). "
+                "Convierte CADA requisito INDISPENSABLE en una pregunta con regla «Descarta si …» (descarta=true) y CADA "
+                "condición de la descripción (requisitos deseables, escolaridad que mencione la descripción) en una pregunta "
+                "con regla «Se registra» (descarta=false). NO agregues colonia, traslado, transporte ni sueldo: el sistema "
+                "los agrega siempre. " + (
                     "La ruta TAMBIÉN tiene prefiltro web: cada requisito INDISPENSABLE se RECONFIRMA pidiendo un DATO CONCRETO "
                     "como pregunta cerrada (tipo numero con rangos, o si_no en lenguaje natural: «¿Terminaste la secundaria?»; "
                     "NUNCA «¿cuál de estas opciones te describe?»), con `reconfirma` = el requisito exacto. Ejemplo: web "
@@ -3085,11 +3194,38 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
                     f"Requisitos indispensables:{lista(ficha.requisitos_indispensables)}\n"
                     f"Requisitos deseables:{lista(ficha.requisitos_deseables)}\nUbicación: {ficha.ubicacion or '(sin dato)'}\n"
                     f"Modalidad: {ficha.modalidad or '(sin dato)'}\nHorario: {ficha.horario or '(sin dato)'}\n"
-                    f"Sueldo: {ficha.sueldo or '(sin dato)'}{web_txt}"
+                    f"Sueldo: {ficha.sueldo or '(sin dato)'}\nDescripción: {(ficha.descripcion or '(sin dato)')[:1500]}{web_txt}"
                 ),
                 text_format=GuionesIA,
             )
             crudo, con_ia = resp.output_parsed, True
+            # Cambio 19: validación estricta del prefiltro de WhatsApp — si falta un indispensable o una pregunta une dos
+            # ideas, se regenera esa sección con los problemas como retroalimentación (máximo 2 veces). Lo que aún
+            # falte lo completa la regla determinista (`asegurar_prefiltros`).
+            for intento in range(MAX_REGENERACIONES_PREFILTRO):
+                if "prefiltro_whatsapp" not in claves:
+                    break
+                problemas = revisar_prefiltro_whatsapp([_pregunta_dict(q) for q in crudo.prefiltro_whatsapp],
+                                                       [r for r in ficha.requisitos_indispensables if r.strip()])
+                if not problemas:
+                    break
+                print(f"[ia] prefiltro de WhatsApp de «{ficha.titulo}» no pasó la revisión (intento {intento + 1}): {problemas[:3]}", flush=True)
+                try:
+                    otra = client.responses.parse(
+                        model=MODEL,
+                        instructions=("Corriges el prefiltro de WhatsApp de una vacante (RH en México). Llena SOLO "
+                                      "prefiltro_whatsapp; deja vacío lo demás.\n- " + pedido[[i for i, x in enumerate(pedido)
+                                                                                                 if x.startswith("prefiltro_whatsapp")][0]]
+                                      + f"\nPROHIBIDO preguntar sobre: {DATOS_SENSIBLES_PROHIBIDOS}."),
+                        input=(f"Puesto: {ficha.titulo}\nRequisitos indispensables:{lista(ficha.requisitos_indispensables)}\n"
+                               f"Requisitos deseables:{lista(ficha.requisitos_deseables)}{web_txt}\n\nTu versión anterior NO pasó "
+                               "la revisión automática. Corrige EXACTAMENTE esto:\n" + "\n".join(f"- {p}" for p in problemas)),
+                        text_format=GuionesIA,
+                    )
+                    crudo.prefiltro_whatsapp = otra.output_parsed.prefiltro_whatsapp
+                except Exception as ex:  # noqa: BLE001 — la regla determinista completa lo que falte
+                    print(f"[ia] regeneración del prefiltro de WhatsApp no disponible: {str(ex)[:200]}", flush=True)
+                    break
         except Exception as ex:  # noqa: BLE001 — sin IA disponible se genera en modo determinista; nunca bloquea
             print(f"[ia] generar_guiones cayó a modo determinista: {str(ex)[:200]}", flush=True)
             crudo, con_ia = GuionesIA(), False

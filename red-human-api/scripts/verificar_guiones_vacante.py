@@ -165,9 +165,16 @@ with TestClient(app) as client:
     indisp = [q for q in web_g if q["descarta"]]
     check(sorted(q["valida"] for q in indisp) == sorted(FICHA["requisitos_indispensables"]),
           "eliminatorias del web = exactamente los requisitos indispensables")
-    check([q.get("dato") for q in wa_g[:4]] == ["escolaridad", "zona", "traslado", "transporte"],
-          "WhatsApp (2026-10-11, tarde): primero escolaridad → colonia → traslado → transporte")
-    wa_r = [q for q in wa_g if q["tipo"] != "dato"]
+    # Cambio 19: 1) indispensables («Descarta si…») → 2) condiciones de la descripción («Se registra») → 3) colonia,
+    # traslado, transporte y sueldo («Se registra»)
+    reglas = [("descarta" if q.get("descarta") else "registra") for q in wa_g]
+    check(reglas == sorted(reglas) and wa_g[0]["regla"].startswith("Descarta si") and all(q.get("regla") for q in wa_g),
+          "WhatsApp (Cambio 19): primero los indispensables con «Descarta si…», después lo que «Se registra»")
+    check([q.get("dato") for q in wa_g if q.get("dato") in ("zona", "traslado", "transporte")] == ["zona", "traslado", "transporte"]
+          and wa_g[-1].get("dato") in ("transporte", "sueldo"), "siempre: colonia → traslado → transporte (→ sueldo) al final")
+    check(any("inventarios" in q["valida"].lower() and q["regla"] == "Se registra" for q in wa_g),
+          "el deseable («Manejo de inventarios») se pregunta y solo se registra")
+    wa_r = [q for q in wa_g if q.get("reconfirma")]
     check(len(wa_r) == len(indisp) and all(q.get("reconfirma") and q["tipo"] in ("numero", "opcion", "si_no") and "cuál de estas" not in q["pregunta"] for q in wa_r)
           and not any("inventarios" in q["valida"].lower() for q in wa_r),
           "WhatsApp: reconfirma CADA indispensable con un dato concreto y no repite lo no indispensable")
@@ -184,7 +191,7 @@ with TestClient(app) as client:
         {"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]}})
     solo_wa = r.json()
     check(solo_wa["guiones"]["aplican"] == ["prefiltro_whatsapp"] and solo_wa["preguntas_filtro"] == []
-          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"] if q["tipo"] != "dato"),
+          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"] if q["tipo"] != "dato" and not q.get("registra")),
           "ruta solo con prefiltro por WhatsApp: es el primer filtro (eliminatorias cerradas), sin web")
 
     editado = {"enfoque": "Mío", "temas": ["Montacargas"], "preguntas": ["Cuéntame de tu turno más pesado."]}

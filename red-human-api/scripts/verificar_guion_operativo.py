@@ -59,12 +59,11 @@ def guion_ia(malo: bool = False):
         S(clave="trayectoria", preguntas=[P(texto="¿Cuál fue tu último trabajo?"), P(texto="¿Qué hacías en ese trabajo?"),
                                           P(texto="¿Cuánto tiempo estuviste ahí?"), P(texto="¿Por qué saliste de ahí?"),
                                           P(texto="¿Tuviste otro trabajo antes de ese?"),
-                                          P(texto="¿Qué hacías ahí y cuánto tiempo?", condicion="si"),
+                                          P(texto="¿Qué hacías ahí?", condicion="si"),
                                           P(texto="¿Por qué lo dejaste?", condicion="si")]),
         S(clave="oficio", preguntas=[P(texto="¿Qué montacargas operabas?"), P(texto="¿A qué altura acomodabas tarimas?")]),
-        S(clave="indispensables", preguntas=[P(texto="¿En otro trabajo ya rolabas turnos?"),
-                                             P(texto="¿Dónde y cuánto tiempo?", condicion="si"),
-                                             P(texto="¿Qué turnos podrías cubrir?", condicion="no")]),
+        S(clave="indispensables", preguntas=[P(texto="¿En qué trabajo te tocó rolar turnos?"),
+                                             P(texto="¿Dónde adquiriste tu experiencia?")]),
         S(clave="situacion_actual", preguntas=[P(texto="¿Estás trabajando actualmente?"),
                                                P(texto="¿Por qué quieres cambiar de trabajo?", condicion="si"),
                                                P(texto="¿Desde cuándo no trabajas?", condicion="no")]),
@@ -110,18 +109,33 @@ texto = " | ".join(problemas)
 check("UN solo signo de interrogación" in texto, "detecta dos preguntas en una línea")
 check("máximo 15" in texto, "detecta más de 15 palabras")
 check("palabra prohibida" in texto and "fortalezas" in texto, "detecta palabras prohibidas («fortalezas»)")
-check("Faltan secciones: Motivación" in texto, "detecta que falta una de las 6 secciones")
+check("Motivación: lleva" in texto or "Faltan secciones" in texto or len(problemas) > 3, "detecta secciones mal armadas")
 check("pide documentos" in texto, "detecta que pide documentos")
 # 2026-10-11 (tarde): estructura exacta, Logística solo inicio y más palabras prohibidas
 base18 = eop.armar_guion("Montacarguista", perfil, REQS, [])
-check(len(base18["preguntas"]) == eop.TOTAL_PREGUNTAS == 18 and [len(s["preguntas"]) for s in base18["operativo"]["secciones"]] == [7, 3, 3, 3, 1, 1],
-      "el guion determinista lleva 18 preguntas: 7 · 3 · 3 · 3 · 1 · 1")
+# Cambio 19: 7 secciones con cupos (sin total fijo); sin horario ni modalidad capturados no hay sección 7
+check([s["clave"] for s in base18["operativo"]["secciones"]] == ["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica"]
+      and not eop.revisar_guion(base18), "el guion determinista arma las secciones de la vacante y pasa la revisión")
 check(base18["preguntas"][0] == "¿Cuál fue tu último trabajo?" and base18["preguntas"][-1] == eop.PREGUNTA_INICIO,
-      "empieza con «¿Cuál fue tu último trabajo?» y Logística solo pregunta la fecha de inicio")
+      "empieza con «¿Cuál fue tu último trabajo?» e Inicio solo pregunta la fecha de inicio")
 corto = eop._desde_ia(eop.GuionOperativoIA(secciones=[S(clave=k, preguntas=[P(texto="¿Qué hacías ahí?")]) for k, _ in eop.ESTRUCTURA]), base18)
 texto18 = " ".join(eop.revisar_guion(corto))
-check("Trayectoria: lleva 1 pregunta (deben ser 7)" in texto18 and "exactamente 18" in texto18, "detecta secciones incompletas (no son 18)")
-check("Logística solo pregunta la fecha de inicio" in texto18, "detecta Logística con algo distinto a la fecha de inicio")
+check("Trayectoria: lleva 1 pregunta (deben ser de 4 a 9)" in texto18, "detecta secciones incompletas (cupo por sección)")
+check("Inicio solo pregunta la fecha de inicio" in texto18, "detecta Inicio con algo distinto a la fecha de inicio")
+# Cambio 19: una idea por pregunta, sin marcas visibles y una pregunta de evidencia por indispensable
+dos = {**base18, "preguntas": ["¿Qué hacías ahí y cuánto tiempo estuviste?"] + base18["preguntas"][1:]}
+dos["operativo"] = {**base18["operativo"], "secciones": [{**base18["operativo"]["secciones"][0], "preguntas": dos["preguntas"][:8]}]
+                    + base18["operativo"]["secciones"][1:]}
+check(any("une dos ideas" in x for x in eop.revisar_guion(dos)), "detecta una pregunta que une dos ideas con «y»")
+marca = {**base18, "preguntas": ["¿Cuál fue tu último trabajo? [Solo si responde sí]"] + base18["preguntas"][1:]}
+marca["operativo"] = {**base18["operativo"], "secciones": [{**base18["operativo"]["secciones"][0], "preguntas": marca["preguntas"][:8]}]
+                      + base18["operativo"]["secciones"][1:]}
+check(any("marca «[Solo si…]»" in x for x in eop.revisar_guion(marca)), "detecta «[Solo si…]» en el texto visible")
+check(not eop.une_dos_ideas("¿Puedes cargar cajas y tarimas?") and eop.une_dos_ideas("¿Dónde trabajaste y por qué saliste?"),
+      "«y» entre dos cosas de una misma idea no cuenta; «y por qué…» sí")
+ind = next(s for s in base18["operativo"]["secciones"] if s["clave"] == "indispensables")
+check(len(ind["preguntas"]) == len(ind["requisitos"]) == 2 and all(q.startswith("¿") for q in ind["preguntas"]),
+      "una pregunta de evidencia por indispensable")
 for frase in ("¿Cómo te ves para crecer aquí?", "¿Qué quieres desarrollarte en este puesto?", "¿Cómo organizas tu día?",
               "Cuéntame un ejemplo de tu trabajo, ¿sí?", "¿Cómo manejas la presión?", "¿Cuál fue tu peor error?"):
     g1 = {**base18, "preguntas": [frase] + base18["preguntas"][1:]}
@@ -169,8 +183,10 @@ try:
           "guion bueno al primer intento: una sola llamada y revisión aprobada")
     ins = falsa.llamadas[0]["instructions"]
     check(ins.startswith("Eres un reclutador experto en personal operativo en México"), "el prompt empieza con «Eres un reclutador experto en personal operativo en México…»")
-    check("Una sola pregunta por línea" in ins and "Máximo 15 palabras" in ins and "EXACTAMENTE 18 preguntas" in ins
-          and "1 a 7 · Trayectoria" in ins and "18 · Logística (1): SOLO la fecha de inicio" in ins and "solo si responde sí" in ins, "…con las reglas: una por línea, 15 palabras, 6 secciones y condicionales")
+    check("Una sola pregunta por línea" in ins and "Máximo 15 palabras" in ins and "Estructura OBLIGATORIA" in ins
+          and "1) trayectoria" in ins and "6) logistica (1): SOLO la fecha de inicio" in ins and "7) condiciones" in ins
+          and "solo si responde sí" in ins and "nunca unas dos ideas con «y»" in ins and "NUNCA escribas «[Solo si…]»" in ins,
+          "…con las reglas (Cambio 19): una idea por línea, 15 palabras, 7 secciones, condicionales sin marcas visibles")
     check(any(q.startswith(eop.MARCA_SI) for q in g["preguntas"]) and any(q.startswith(eop.MARCA_NO) for q in g["preguntas"]),
           "las condiciones de la IA quedan marcadas en el guion")
     check(perfil["situacion"]["pregunta"] in g["preguntas"], "la situación del oficio va tal cual (la evaluación B la reconoce)")

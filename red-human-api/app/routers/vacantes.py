@@ -97,6 +97,16 @@ def _guardar_guiones(v: Vacante, entrada: Optional[dict], por: str, web=None, wh
         raise HTTPException(e.status, e.mensaje)
 
 
+def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
+    """2026-10-11 (tarde): con prefiltro web en la ruta se exigen al menos 3 preguntas clave (si no, no se guarda)."""
+    from ..services import guiones as sgui
+
+    try:
+        sgui.validar_minimo_web(db, v, explicito)
+    except sgui.ErrorGuion as e:
+        raise HTTPException(e.status, e.mensaje)
+
+
 def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
     """Agrega el logo de la Cuenta al payload candidato-visible (Fase B, punto 12: la vista
     previa/portal público hereda la apariencia mínima de la Cuenta — logo + nombre comercial;
@@ -521,6 +531,7 @@ def crear(
         from ..services import guiones as sgui
 
         sgui.generar_para_vacante(db, v, u.nombre)  # conserva lo que RH ya escribió; genera lo que falte de la ruta
+    _validar_minimo_prefiltro(db, v, explicito=datos.guiones is not None)
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -806,6 +817,8 @@ def actualizar(
         _guardar_guiones(v, entrada_guiones, u.nombre, web=web_nuevo, whatsapp=whatsapp_nuevo)
         cambios.update({k: True for k, x in (("guiones", entrada_guiones), ("preguntas_filtro", web_nuevo),
                                              ("preguntas_filtro_whatsapp", whatsapp_nuevo)) if x is not None})
+    if web_nuevo is not None or "proceso" in cambios:
+        _validar_minimo_prefiltro(db, v, explicito=web_nuevo is not None)
     # Fase 4: si tocó Estado/Municipio, el texto de ubicación se deriva
     if any(k in cambios for k in ("ubicacion_estado", "ubicacion_municipio")):
         v.ubicacion = texto_ubicacion(v.ubicacion_estado, v.ubicacion_municipio, v.ubicacion)

@@ -89,7 +89,10 @@ with TestClient(app) as client:
         "sueldo_desde": 12000, "sueldo_hasta": 14000, "sueldo_moneda": "MXN", "sueldo_periodicidad": "quincenal",
         "requisitos": "Secundaria · Manejo de efectivo", "descripcion": "Descripción editada",
         "responsabilidades": ["Cobrar", "Arqueo"], "requisitos_deseables": ["Inglés"], "beneficios": ["Vales"],
-        "preguntas_filtro": [{"pregunta": "¿Tienes INE vigente?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": True}],
+        # 2026-10-11 (tarde): el prefiltro web lleva al menos 3 preguntas clave
+        "preguntas_filtro": [{"pregunta": "¿Tienes INE vigente?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": True},
+                             {"pregunta": "¿Puedes rolar turnos?", "tipo": "si_no", "valida": "Rolar turnos", "respuesta_esperada": "Sí", "descarta": False},
+                             {"pregunta": "¿Puedes trabajar fines de semana?", "tipo": "si_no", "valida": "Fines de semana", "respuesta_esperada": "Sí", "descarta": False}],
         "preguntas_filtro_whatsapp": [{"pregunta": "¿Vives en Monterrey?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": False}],
         "enfoque_entrevista": "profesional_personal", "texto_bolsa": "Texto bolsa editado", "avisos_cumplimiento": ["aviso 1"],
         "resumen": "Resumen editado", "perfil_ideal": "Perfil editado", "palabras_clave": ["caja"], "texto_whatsapp": "WA editado",

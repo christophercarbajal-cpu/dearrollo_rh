@@ -266,7 +266,8 @@ with TestClient(app) as client:
     check(r.json().get("accion") == "prefiltro_iniciado", "'Sí, acepto' → consentimiento registrado y prefiltro iniciado")
     db.expire_all()
     check(pw.consentimiento and pw.consentimiento_fecha is not None, "consentimiento quedó en la postulación con fecha")
-    for txt in ("Sí", "Sí, 3 años", "Sí vivo en Guadalajara"):
+    # 2026-10-11 (tarde): primero los 4 datos (escolaridad exacta, colonia, traslado, transporte)
+    for txt in ("Terminé la licenciatura", "Colonia Americana, Guadalajara", "40 minutos", "En camión", "Sí", "Sí, 3 años", "Sí vivo en Guadalajara"):
         r = client.post("/webhooks/whatsapp", json=meta_texto(WA2, txt, nombre="Otra Persona"))
     db.refresh(pw)
     check(pw.prefiltro_completo and pw.estado == "cumple" and pw.etapa == "Entrevista IA" and pw.etapa in [t["etapa"] for t in client.get("/candidatos").json()],

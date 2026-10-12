@@ -246,6 +246,8 @@ with TestClient(app) as client:
     check("todavía no está disponible" in ultimo(7001)["text"], f"paso aún no disponible → el proceso dice qué falta ({ultimo(7001)['text'][:160]} · {post(P).etapa})")
     p = post(P)
     p.prefiltro_completo, p.estado = True, "cumple"
+    # 2026-10-11 (tarde): el prefiltro de WhatsApp/Telegram pregunta los 4 datos (escolaridad, colonia, traslado, transporte)
+    p.analisis = {**(p.analisis or {}), "prefiltro_conversacional": {"resultado": "cumple"}, "prefiltro_web": {"resultado": "cumple"}}
     db.commit()
     if post(P).etapa != "Entrevista Humana":
         client.patch(f"/candidatos/{P}/etapa", json={"etapa": "Entrevista Humana"})

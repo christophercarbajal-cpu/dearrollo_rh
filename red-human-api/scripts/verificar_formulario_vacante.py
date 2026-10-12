@@ -130,7 +130,9 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["sueldo"] == "$9,000 – $10,500 MXN mensuales", "página pública /aplicar ve el sueldo derivado")
 
     # ---------- 4. crear con generar_si_falta (agente / requisición) respeta lo capturado ----------
-    r = client.post("/vacantes", json={"titulo": "Cajero(a)", "sueldo": "$8,000 mensuales", "requisitos": "INE vigente; Secundaria", "beneficios": ["Fondo de ahorro"], "generar_si_falta": True})
+    # 2026-10-11 (tarde): con la ubicación el prefiltro web llega a las 3 preguntas clave mínimas
+    r = client.post("/vacantes", json={"titulo": "Cajero(a)", "sueldo": "$8,000 mensuales", "requisitos": "INE vigente; Secundaria", "beneficios": ["Fondo de ahorro"],
+                                       "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan", "generar_si_falta": True})
     check(r.status_code == 201, "POST /vacantes con generación en el servidor (compatibilidad agente)")
     v2 = r.json()
     check(v2["sueldo"] == "$8,000 mensuales" and v2["sueldoDesde"] is None, "sueldo legado en texto se conserva intacto (sin estructurado)")

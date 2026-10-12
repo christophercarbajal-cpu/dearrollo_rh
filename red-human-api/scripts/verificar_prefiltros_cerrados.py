@@ -1,5 +1,5 @@
 """Verificación BLOQUE 1 (2026-09-20): generación de prefiltros.
-- Web (`preguntas_filtro`): TODAS cerradas, respondibles solo con Sí / No / Parcial; sin texto libre.
+- Web (`preguntas_filtro`): TODAS cerradas, respondibles solo con Sí / No (2026-10-11: sin «Parcial»); sin texto libre.
 - WhatsApp (`preguntas_filtro_whatsapp`): una pregunta por criterio (sin compuestas); respuestas abiertas permitidas.
 Garantizado en código (`ia.cerrar_preguntas_web`, `ia.separar_preguntas_whatsapp`) y en el prompt. Modo demo.
 
@@ -49,7 +49,7 @@ P = ia.PreguntaFiltro
 
 print("\n--- 1. Prompt de generación ---")
 fuente = _insp.getsource(ia)
-check("PREFILTRO WEB" in fuente and "Sí / No / Parcial" in fuente and "PROHIBIDO" in fuente and "«Describe», «Explica», «Cuéntanos»" in fuente, "regla 5: prefiltro web cerrado, texto libre prohibido explícitamente")
+check("PREFILTRO WEB" in fuente and "Sí / No (tipo 'si_no')" in fuente and "PROHIBIDO" in fuente and "«Describe», «Explica», «Cuéntanos»" in fuente, "regla 5: prefiltro web cerrado, texto libre prohibido explícitamente")
 check("PREFILTRO WHATSAPP" in fuente and "UNA pregunta por criterio" in fuente and "prohibidas las preguntas compuestas" in fuente and "sí se permiten respuestas abiertas" in fuente, "regla 5b: WhatsApp una pregunta por criterio, abiertas permitidas")
 check("UN solo criterio por pregunta" in _insp.getsource(ia.prefiltro_turno), "el agente de WhatsApp también recibe la regla en cada turno")
 
@@ -64,7 +64,7 @@ web = [
 ]
 cerradas = ia.cerrar_preguntas_web(web)
 check(len(cerradas) == 6 and all(q.tipo == "si_no" for q in cerradas), "todas quedan tipo si_no")
-check(all(q.opciones == ["Sí", "No", "Parcial"] for q in cerradas), "todas con opciones exactas Sí / No / Parcial")
+check(all(q.opciones == ["Sí", "No"] for q in cerradas), "todas con opciones exactas Sí / No")
 check(all(not ABIERTAS.match(q.pregunta) for q in cerradas), "ninguna empieza con Describe/Explica/Cuéntanos/Qué/Cómo/Cuántos")
 check(all(q.pregunta.startswith("¿") and q.pregunta.endswith("?") for q in cerradas), "todas son preguntas bien formadas (¿…?)")
 check(cerradas[0].pregunta == "¿Cumples con este requisito: Experiencia en montacargas?", "texto libre → cumplimiento del requisito que valida")
@@ -73,7 +73,7 @@ check(cerradas[2].pregunta == "¿Tienes al menos 1 año de experiencia en un pue
 check(cerradas[3].pregunta == "¿Tienes al menos 2 años de experiencia en ventas?", "numérica → umbral cerrado (2 años)")
 check(cerradas[4].pregunta == "¿Cumples con este requisito: Manejo de SAP?", "opción abierta («¿Qué…?») → cerrada")
 check(cerradas[5].pregunta == "¿Vives en Querétaro?" and cerradas[5].descarta, "una si_no válida se respeta tal cual (y conserva descarta)")
-check(all(q.respuesta_esperada in ("Sí", "No", "Parcial") for q in cerradas), "respuesta esperada siempre es una de las 3 opciones")
+check(all(q.respuesta_esperada in ("Sí", "No") for q in cerradas), "respuesta esperada siempre es Sí o No")
 
 print("\n--- 3. WhatsApp: una pregunta por criterio ---")
 wa = [
@@ -91,7 +91,7 @@ check(all(q.pregunta.count("?") == 1 for q in sep), "ninguna pregunta de WhatsAp
 print("\n--- 4. Generación completa (demo + _asegurar_capturado) ---")
 g, con_ia = ia.generar_vacante(ia.FichaVacante(titulo="Cajero", requisitos_indispensables=["Secundaria terminada", "Disponibilidad de fines de semana", "Manejo de efectivo"]))
 check(not con_ia and len(g.preguntas_filtro) >= 4, "vacante demo generada")
-check(all(q.tipo == "si_no" and q.opciones == ["Sí", "No", "Parcial"] for q in g.preguntas_filtro), "web generada: 100 % Sí/No/Parcial")
+check(all(q.tipo == "si_no" and q.opciones == ["Sí", "No"] for q in g.preguntas_filtro), "web generada: 100 % Sí/No")
 check(all(not ABIERTAS.match(q.pregunta) for q in g.preguntas_filtro), "web generada: sin texto libre ni «¿Cuántos…?»")
 check(1 <= len(g.preguntas_filtro_whatsapp) <= 3 and all(q.pregunta.count("?") == 1 for q in g.preguntas_filtro_whatsapp), "WhatsApp generado: 2-3 preguntas, una por criterio")
 check(any(q.tipo == "numero" for q in g.preguntas_filtro_whatsapp), "WhatsApp conserva la pregunta abierta de experiencia (respuesta libre)")
@@ -114,7 +114,7 @@ with TestClient(app) as client:
     j = r.json()
     web_api = j.get("preguntas_filtro") or j.get("preguntasFiltro") or []
     wa_api = j.get("preguntas_filtro_whatsapp") or j.get("preguntasFiltroWhatsapp") or []
-    check(web_api and all(q["tipo"] == "si_no" and q["opciones"] == ["Sí", "No", "Parcial"] for q in web_api), "la API entrega el prefiltro web cerrado")
+    check(web_api and all(q["tipo"] == "si_no" and q["opciones"] == ["Sí", "No"] for q in web_api), "la API entrega el prefiltro web cerrado")
     check(wa_api and all(q["pregunta"].count("?") == 1 for q in wa_api), "la API entrega el prefiltro WhatsApp con una pregunta por criterio")
     db.close()
 

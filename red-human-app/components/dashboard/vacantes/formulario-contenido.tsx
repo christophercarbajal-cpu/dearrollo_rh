@@ -48,6 +48,8 @@ import {
   PERIODICIDADES_SUELDO,
   SENIORITIES,
   type CriterioFiltro,
+  MIN_PREFILTRO_WEB,
+  MENSAJE_MIN_PREFILTRO,
   type EnfoqueEntrevista,
   type PeriodicidadSueldo,
   type Plantilla,
@@ -468,7 +470,17 @@ function CriteriosEditor({ items, onChange, cerradas = false }: { items: Criteri
   const tipos = cerradas ? TIPOS_CRITERIO.filter((t) => t.valor !== "texto_corto") : TIPOS_CRITERIO;
   return (
     <div className="flex flex-col gap-2">
-      {items.map((c, i) => (
+      {items.map((c, i) => c.tipo === "dato" ? (
+        // 2026-10-11 (tarde): datos fijos del prefiltro de WhatsApp (orden estricto; la escolaridad descarta si no cumple)
+        <div key={i} className="rounded-xl border border-border-soft bg-surface-2/50 px-3 py-2.5">
+          <p className="text-sm text-ink">{c.pregunta}</p>
+          <p className="mt-0.5 text-[11px] text-ink-3">
+            {c.dato === "escolaridad"
+              ? c.descarta ? `Dato fijo · descarta si no cumple: ${c.valida}` : "Dato fijo · solo se registra"
+              : c.dato === "traslado" ? "Dato fijo · no descarta (más de 90 min = alerta para RH)" : "Dato fijo · solo se registra"}
+          </p>
+        </div>
+      ) : (
         <div key={i} className="rounded-xl border border-border-soft bg-surface-2/50 p-3">
           <div className="flex items-start gap-2">
             <input
@@ -597,6 +609,9 @@ function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; 
                   ? "Solo preguntas cerradas (Sí / No, número u opción). Las eliminatorias son los requisitos indispensables."
                   : "Solo preguntas abiertas. Red Human las hace en este orden con el candidato."}
               </p>
+              {k === "prefiltro_web" && value.preguntas_filtro.filter((q) => q.pregunta.trim()).length < MIN_PREFILTRO_WEB && (
+                <p className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-warn">{MENSAJE_MIN_PREFILTRO}.</p>
+              )}
               {k === "prefiltro_web" && (
                 <CriteriosEditor cerradas items={value.preguntas_filtro} onChange={(x) => marcar(k, { preguntas_filtro: x })} />
               )}

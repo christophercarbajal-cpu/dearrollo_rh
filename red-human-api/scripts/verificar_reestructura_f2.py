@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Cuenta, Postulacion, Usuario, UsuarioCuenta  # noqa: E402
+from app.models import Cuenta, Postulacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.routers.candidatos import comparar_web_vs_whatsapp  # noqa: E402
 from app.services import ia  # noqa: E402
 import app.routers.candidatos as rc  # noqa: E402
@@ -89,19 +89,31 @@ with TestClient(app) as client:
                                                 # 2026-10-09: solo se genera lo que está en la ruta (aquí web + WhatsApp)
                                                 "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     check(r.status_code == 200 and len(r.json()["preguntas_filtro"]) >= 3, f"generar: prefiltro web con {len(r.json()['preguntas_filtro'])} preguntas")
-    wa = r.json()["preguntas_filtro_whatsapp"]
+    wa_todo = r.json()["preguntas_filtro_whatsapp"]
+    # 2026-10-11 (tarde): primero los 4 datos (escolaridad exacta, colonia, traslado, transporte); la escolaridad
+    # reconfirma «Secundaria terminada», así que las reconfirmaciones sí/no son las de los otros 2 indispensables
+    check([q.get("dato") for q in wa_todo[:4]] == ["escolaridad", "zona", "traslado", "transporte"],
+          "generar: WhatsApp empieza con escolaridad → colonia → traslado → transporte")
+    wa = wa_todo[4:]
     # 2026-10-09: con web + WhatsApp en la ruta, WhatsApp RECONFIRMA cada indispensable con un dato concreto (cerrado)
-    check(len(wa) == 3 and all(q["tipo"] in ("numero", "opcion", "si_no") and q.get("reconfirma") and "cuál de estas" not in q["pregunta"] for q in wa),
+    check(len(wa) == 2 and all(q["tipo"] in ("numero", "opcion", "si_no") and q.get("reconfirma") and "cuál de estas" not in q["pregunta"] for q in wa),
           f"generar: prefiltro WhatsApp = {len(wa)} reconfirmaciones cerradas de los indispensables")
     check(not {q["pregunta"] for q in r.json()["preguntas_filtro"]} & {w["pregunta"] for w in wa} and wa[0]["pregunta"].startswith("Para confirmar"),
           "las de WhatsApp piden el dato concreto, no copian la lista web")
+    # 2026-10-11 (tarde): con la ubicación el prefiltro web llega a las 3 preguntas clave mínimas
     r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana"], "publicar": True, "generar_si_falta": True,
+                                       "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan",
                                        "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["WhatsApp", "Portal"]})
     v = client.get(f"/vacantes/{VAC}").json()
     check(len(v["criteriosWhatsapp"]) >= 1 and len(v["criterios"]) >= 2, "al crear con generar_si_falta la vacante guarda ambas listas")
     slug = v["slug"]
+    # 2026-10-11 (tarde): aquí se prueba la reconfirmación web ↔ chat; los 4 datos fijos (escolaridad, colonia, traslado,
+    # transporte) se prueban en verificar_prefiltro_traslado.py
+    vdb = db.query(Vacante).filter(Vacante.codigo == VAC).one()
+    vdb.preguntas_filtro_whatsapp = [q for q in vdb.preguntas_filtro_whatsapp or [] if q.get("tipo") != "dato"]
+    db.commit()
 
     print("\n--- Respuestas web guardadas y comparación Web vs WhatsApp ---")
     preg_web = v["criterios"][0]["pregunta"]

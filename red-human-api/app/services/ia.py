@@ -100,7 +100,7 @@ class VacanteGenerada(BaseModel):
     preguntas_filtro: List[PreguntaFiltro] = Field(
         description=(
             "4 a 6 preguntas de prefiltro WEB ligadas a los requisitos indispensables. TODAS cerradas: se responden "
-            "ÚNICAMENTE con Sí / No / Parcial (tipo 'si_no'). Prohibido texto libre: nada de «Describe», «Explica», "
+            "ÚNICAMENTE con Sí / No (tipo 'si_no'). Prohibido texto libre: nada de «Describe», «Explica», "
             "«Cuéntanos», «Menciona». Un requisito numérico se convierte en umbral («¿Tienes al menos 2 años de experiencia en caja?»)."
         )
     )
@@ -158,7 +158,7 @@ _REGLAS = (
     "4. Usa lenguaje incluyente con la forma «(a)» del español mexicano (Cajero(a), Repartidor(a)).\n"
     "5. PREFILTRO WEB (`preguntas_filtro`): salen PRINCIPALMENTE de los requisitos indispensables (primero los "
     "capturados por RH) y marcan descarta=true SOLO cuando el requisito sea realmente indispensable. REGLA ESTRICTA: "
-    "TODAS son preguntas CERRADAS que se responden únicamente con Sí / No / Parcial (tipo 'si_no'); está PROHIBIDO "
+    "TODAS son preguntas CERRADAS que se responden únicamente con Sí / No (tipo 'si_no'); está PROHIBIDO "
     "el texto libre (no uses «Describe», «Explica», «Cuéntanos», «Menciona», «Detalla», «¿Qué…?», «¿Cómo…?»). Un "
     "requisito numérico se pregunta como umbral cerrado («¿Tienes al menos 2 años de experiencia en caja?»).\n"
     "5b. PREFILTRO WHATSAPP (`preguntas_filtro_whatsapp`): SOLO 2 o 3 puntos críticos (experiencia, ubicación/"
@@ -304,7 +304,11 @@ def _quitar_cv(salida: "VacanteGenerada") -> None:
 
 # 2026-09-20 (Bloque 1): reglas de prefiltro garantizadas en código, no solo en el prompt.
 _VERBOS_ABIERTOS = re.compile(r"^\s*¿?\s*(describe|explica|cu[eé]ntanos|cu[eé]ntame|menciona|detalla|platícanos|platica|qu[eé]\s|c[oó]mo\s|por qu[eé]\s|cu[aá]l(es)?\s)", re.IGNORECASE)
-OPCIONES_CERRADAS = ["Sí", "No", "Parcial"]
+# 2026-10-11 (tarde): el prefiltro web se responde SOLO con Sí / No («Parcial» ya no existe)
+OPCIONES_CERRADAS = ["Sí", "No"]
+MIN_PREFILTRO_WEB = 3
+MENSAJE_MIN_PREFILTRO = ("Para el prefiltro necesitamos al menos 3 requisitos clave. Agrega uno: horario, experiencia o "
+                         "condición del trabajo")
 
 
 def _pregunta_cerrada_desde_requisito(valida: str, pregunta: str) -> str:
@@ -316,7 +320,7 @@ def _pregunta_cerrada_desde_requisito(valida: str, pregunta: str) -> str:
 
 
 def cerrar_preguntas_web(preguntas: List[PreguntaFiltro]) -> List[PreguntaFiltro]:
-    """Prefiltro WEB: todas cerradas (Sí / No / Parcial). Una pregunta abierta o numérica se reescribe como
+    """Prefiltro WEB: todas cerradas (Sí / No). Una pregunta abierta o numérica se reescribe como
     umbral/cumplimiento del requisito que valida; el tipo queda 'si_no' con opciones fijas."""
     salida: List[PreguntaFiltro] = []
     for p in preguntas:
@@ -337,7 +341,7 @@ def cerrar_preguntas_web(preguntas: List[PreguntaFiltro]) -> List[PreguntaFiltro
         p.pregunta = q
         p.tipo = "si_no"
         p.opciones = list(OPCIONES_CERRADAS)
-        if not p.respuesta_esperada or p.respuesta_esperada.lower() not in ("sí", "si", "no", "parcial"):
+        if not p.respuesta_esperada or p.respuesta_esperada.lower() not in ("sí", "si", "no"):
             p.respuesta_esperada = "Sí"
         salida.append(p)
     return salida
@@ -2662,7 +2666,7 @@ def clasificar_respuesta_prefiltro(pregunta: str, respuesta: str) -> Optional[st
 
 class PreguntaPrefiltroIA(BaseModel):
     pregunta: str = Field(description="Pregunta CERRADA en español mexicano.")
-    tipo: Literal["si_no", "numero", "opcion"] = Field(description="si_no = Sí/No/Parcial; numero = rangos; opcion = una de una lista.")
+    tipo: Literal["si_no", "numero", "opcion"] = Field(description="si_no = Sí/No; numero = rangos; opcion = una de una lista.")
     valida: str = Field(description="Requisito que valida (texto del requisito).")
     respuesta_esperada: str = Field(description="Respuesta que cumple (ej. 'Sí', '>= 2 años', la opción válida).")
     descarta: bool = Field(description="true solo si el requisito es INDISPENSABLE (eliminatoria).")
@@ -2738,7 +2742,7 @@ def _minuscula_inicial(t: str) -> str:
 
 
 def pregunta_web_cerrada(req: str, descarta: bool = True) -> dict:
-    """Prefiltro web (y WhatsApp sin web): cumplimiento del requisito, Sí/No/Parcial."""
+    """Prefiltro web (y WhatsApp sin web): cumplimiento del requisito, Sí/No."""
     m = _RE_ANOS.search(req)
     if m:
         n = m.group(1).replace(",", ".")
@@ -2820,6 +2824,79 @@ def _pregunta_dict(p: "PreguntaPrefiltroIA") -> dict:
     return d
 
 
+_RE_EXIGENCIA = re.compile(r"\b(carg\w*|levant\w*|de pie|turno\w*|rolar|nocturn\w*|fines? de semana|domingos?|altura\w*|"
+                           r"esfuerzo|intemperie|fr[ií]o|calor|maneja\w*|kg|kilos?)\b", re.IGNORECASE)
+_RE_HORARIO = re.compile(r"\b(horario|turno\w*|rolar|nocturn\w*|fines? de semana|lunes a|de \d{1,2}(:\d\d)? ?(a\.? ?m\.?|p\.? ?m\.?)?"
+                         r" a \d)", re.IGNORECASE)
+RE_NIVEL_ESTUDIOS = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|escolaridad)\b", re.IGNORECASE)
+
+
+def _pregunta_exigencia(texto: str) -> str:
+    """Una condición del trabajo como pregunta de Sí/No: «Cargar cajas de 25 kg» → «¿Puedes cargar cajas de 25 kg?»."""
+    t = _minuscula_inicial(" ".join(str(texto or "").split()))
+    primera = (t.split() or [""])[0]
+    if re.fullmatch(r"[a-záéíóúñ]+(ar|er|ir)(se)?", primera):
+        return f"¿Puedes {t}?"
+    return pregunta_si_no_natural(texto)
+
+
+def preguntas_clave_extra(ficha: FichaGuion, ya: List[dict], faltan: int) -> List[dict]:
+    """2026-10-11 (tarde): el prefiltro web lleva al menos 3 preguntas clave. Si los indispensables no alcanzan, se
+    completan con lo que RH capturó: escolaridad (deseable), exigencias del trabajo (responsabilidades con esfuerzo físico,
+    turnos…), ubicación y horario. Nunca son eliminatorias (las eliminatorias son solo los indispensables de RH)."""
+    vistos = {_norm_req(q.get("valida") or "") for q in ya} | {_clave_texto(q.get("pregunta") or "") for q in ya}
+    candidatos: List[dict] = []
+
+    def agregar(pregunta: str, valida: str, **extra) -> None:
+        if _norm_req(valida) in vistos or _clave_texto(pregunta) in vistos:
+            return
+        vistos.add(_norm_req(valida))
+        candidatos.append({"pregunta": pregunta, "tipo": "si_no", "valida": valida.strip(), "respuesta_esperada": "Sí",
+                           "descarta": False, "opciones": list(OPCIONES_CERRADAS), **extra})
+
+    for r in ficha.requisitos_deseables:
+        if RE_NIVEL_ESTUDIOS.search(r or ""):
+            agregar(pregunta_si_no_natural(r), r)
+    textos = list(ficha.responsabilidades) + list(ficha.requisitos_deseables)
+    for r in textos:
+        if r and _RE_EXIGENCIA.search(r) and not RE_NIVEL_ESTUDIOS.search(r) and len(r.split()) <= 14:
+            agregar(_pregunta_exigencia(r), r)
+    if (ficha.ubicacion or "").strip() and not (ficha.modalidad or "").lower().startswith("remot"):
+        agregar(f"¿Puedes trasladarte a {ficha.ubicacion.strip()}?", f"Trasladarse a {ficha.ubicacion.strip()}",
+                clave="ubicacion", solo_con_ubicacion=True)
+    if (ficha.horario or "").strip():
+        agregar(f"¿Puedes trabajar en el horario {ficha.horario.strip()}?", f"Horario: {ficha.horario.strip()}", clave="horario")
+    else:
+        for r in textos:
+            if r and _RE_HORARIO.search(r) and len(r.split()) <= 14:
+                agregar(_pregunta_exigencia(r), r, clave="horario")
+                break
+    return candidatos[:max(0, faltan)]
+
+
+# 2026-10-11 (tarde): el prefiltro de WhatsApp recolecta, una pregunta por mensaje y en este orden estricto, escolaridad
+# exacta, colonia/municipio, tiempo de traslado y medio de transporte. Solo la escolaridad puede descartar (si la vacante
+# pide un nivel como indispensable); el traslado NO descarta en esta etapa.
+DATOS_PREFILTRO = ("escolaridad", "zona", "traslado", "transporte")
+
+
+def preguntas_datos_whatsapp(ficha: FichaGuion) -> List[dict]:
+    indisp = [r for r in ficha.requisitos_indispensables if r.strip()]
+    nivel = next((r for r in indisp if RE_NIVEL_ESTUDIOS.search(r)), "")
+    lugar = (ficha.ubicacion or "").strip()
+    traslado = f"¿Cuánto tiempo haces de tu casa a {lugar}?" if lugar and len(lugar.split()) <= 8 else "¿Cuánto tiempo harías de tu casa al trabajo?"
+    return [
+        {"pregunta": "¿Hasta qué año estudiaste?", "tipo": "dato", "dato": "escolaridad", "valida": nivel or "Escolaridad",
+         "respuesta_esperada": nivel, "descarta": bool(nivel), "opciones": []},
+        {"pregunta": "¿En qué colonia y municipio vives?", "tipo": "dato", "dato": "zona", "valida": "Colonia y municipio",
+         "respuesta_esperada": "", "descarta": False, "opciones": []},
+        {"pregunta": traslado, "tipo": "dato", "dato": "traslado", "valida": "Tiempo de traslado", "respuesta_esperada": "",
+         "descarta": False, "opciones": []},
+        {"pregunta": "¿En qué transporte llegarías?", "tipo": "dato", "dato": "transporte", "valida": "Medio de transporte",
+         "respuesta_esperada": "", "descarta": False, "opciones": []},
+    ]
+
+
 def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion, hay_web: bool,
                         hay_whatsapp: bool) -> Tuple[List[dict], List[dict]]:
     """Reglas de prefiltro garantizadas en código (IA o demo):
@@ -2851,13 +2928,23 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
                 salida_web.append(q)
         if not salida_web:
             salida_web = [pregunta_web_cerrada(r, False) for r in ficha.requisitos_deseables[:3] if r.strip()]
+        for q in salida_web:
+            if q.get("tipo") == "si_no":
+                q["opciones"] = list(OPCIONES_CERRADAS)
+        if len(salida_web) < MIN_PREFILTRO_WEB:  # mínimo 3 preguntas clave (si lo capturado alcanza)
+            salida_web += preguntas_clave_extra(ficha, salida_web, MIN_PREFILTRO_WEB - len(salida_web))
     salida_wa: List[dict] = []
     if hay_whatsapp:
+        # 1) escolaridad · 2) colonia/municipio · 3) traslado · 4) transporte — siempre primero y en este orden
+        salida_wa = preguntas_datos_whatsapp(ficha)
+        nivel = salida_wa[0]["respuesta_esperada"]
         if hay_web:
             reconf = {_norm_req(q.get("reconfirma", "")): q for q in whatsapp
                       if q.get("reconfirma") and q.get("tipo") in ("numero", "opcion", "si_no") and len(q.get("opciones") or []) >= 2
                       and not _RE_CUAL_OPCION.search(q.get("pregunta") or "")}
             for q in [x for x in salida_web if x.get("descarta")]:
+                if nivel and _norm_req(q["valida"]) == _norm_req(nivel):
+                    continue  # la escolaridad exacta («¿Hasta qué año estudiaste?») ya reconfirma el nivel de estudios
                 det = pregunta_reconfirmacion(q["valida"])
                 propia = reconf.get(_norm_req(q["valida"]))
                 if propia and propia["tipo"] == det["tipo"] and propia.get("opciones") == det["opciones"]:
@@ -2871,6 +2958,8 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
             cerradas = [dict(q) for q in whatsapp if q.get("tipo") in ("si_no", "numero", "opcion") and not q.get("reconfirma")]
             por_req = {_norm_req(q.get("valida", "")): q for q in cerradas}
             for r in indisp:
+                if nivel and _norm_req(r) == _norm_req(nivel):
+                    continue  # lo cubre la escolaridad exacta
                 q = por_req.pop(_norm_req(r), None) or pregunta_web_cerrada(r)
                 q["descarta"] = True
                 if q["tipo"] == "si_no":
@@ -2878,8 +2967,6 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
                 elif len(q.get("opciones") or []) < 2:
                     q = pregunta_web_cerrada(r)
                 salida_wa.append(q)
-            if not salida_wa:
-                salida_wa = [pregunta_web_cerrada(r, False) for r in ficha.requisitos_deseables[:2] if r.strip()]
     return salida_web, salida_wa
 
 

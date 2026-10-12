@@ -146,6 +146,9 @@ with TestClient(app) as client:
     print("\n--- 2. Misma persona, segunda empresa ---")
     db.expire_all()
     p.prefiltro_completo = True  # ya no espera respuesta (ver Postulacion.espera_respuesta)
+    # 2026-10-11 (tarde): el prefiltro de WhatsApp ahora pregunta escolaridad/colonia/traslado/transporte aunque la vacante
+    # no tenga criterios; aquí se da por terminado para probar la segunda empresa
+    p.analisis = {**(p.analisis or {}), "prefiltro_conversacional": {"resultado": "cumple"}, "prefiltro_web": {"resultado": "cumple"}}
     db.commit()
     r = webhook(client, TEL, sel=vc["id"])
     check(r["accion"] == "aviso_privacidad_enviado", "elige ahora «Abogado Fiscalista» (CARBE) desde el mismo número")

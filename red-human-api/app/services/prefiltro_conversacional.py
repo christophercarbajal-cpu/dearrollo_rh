@@ -24,6 +24,13 @@ del web (`reconfirma`), después de un «Sí» del formulario se pide el DATO CO
 contradice el «Sí» es una INCONSISTENCIA: nunca cierra la postulación — queda «Revisar prefiltro» para RH y la
 contradicción entra a «Puntos por validar».
 
+Datos de WhatsApp (2026-10-11, tarde): si la vacante trae en «Prefiltro · WhatsApp» las preguntas `tipo: "dato"`
+(`ia.DATOS_PREFILTRO`), el bot las hace PRIMERO y en este orden estricto, una por mensaje: 1) escolaridad exacta (hasta
+qué año), 2) colonia/municipio, 3) tiempo de traslado, 4) medio de transporte. Ante una respuesta vaga repregunta por un
+dato concreto UNA sola vez; si sigue vaga queda en Puntos por validar. La escolaridad DESCARTA de inmediato si no cumple
+el nivel indispensable de la vacante (mensaje de cierre); el traslado NUNCA descarta en esta etapa. Los datos quedan en
+`analisis.prefiltro_datos` (la ficha los muestra).
+
 Resolución al vuelo (sin esperar a RH):
   * Cumple → prefiltro aprobado; el motor de ruta avanza y manda la liga de la Entrevista Red Human por el canal
     conectado (`motor_ruta._disparar_entrevista`). Con la entrevista por liga NUNCA se pide agendar videollamada.
@@ -128,7 +135,178 @@ def criterios_de(v) -> List[dict]:
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
             "opciones": opciones, "opciones_validas": [str(o) for o in pw.get("opciones_validas") or []], "minimo": pw.get("minimo"),
         })
-    return salida
+    # 2026-10-11 (tarde): los 4 datos de WhatsApp van PRIMERO y en orden estricto; la escolaridad reconfirma el nivel
+    # de estudios indispensable (si la vacante lo pide) y sustituye su reconfirmación sí/no
+    datos: List[dict] = []
+    for pw in (v.preguntas_filtro_whatsapp if v is not None else None) or []:
+        if not isinstance(pw, dict) or pw.get("tipo") != "dato" or pw.get("dato") not in ia.DATOS_PREFILTRO:
+            continue
+        if any(d["dato"] == pw["dato"] for d in datos) or not str(pw.get("pregunta", "")).strip():
+            continue
+        datos.append({"id": f"dato-{pw['dato']}", "clave": pw["dato"], "dato": pw["dato"], "criterio": str(pw.get("valida") or pw["pregunta"]).strip(),
+                      "pregunta": str(pw["pregunta"]).strip(), "chat": str(pw["pregunta"]).strip(), "indispensable": False,
+                      "esperada": "si", "tipo": "dato"})
+    if not datos:
+        return salida
+    datos.sort(key=lambda d: ia.DATOS_PREFILTRO.index(d["dato"]))
+    base = next((c for c in salida if c["indispensable"] and not c.get("reconfirma") and ia.RE_NIVEL_ESTUDIOS.search(c["criterio"])), None)
+    esc = next((d for d in datos if d["dato"] == "escolaridad"), None)
+    if base is not None and esc is not None:
+        esc.update({"reconfirma": base["id"], "criterio": base["criterio"], "nivel_requerido": nivel_estudios(base["criterio"])[0]})
+        salida = [c for c in salida if c.get("reconfirma") != base["id"]]
+    return datos + salida
+
+
+# ============================================================ datos de WhatsApp (escolaridad, zona, traslado, transporte)
+
+_NIVELES = ((4, r"licenciatura|universidad|ingenier\w*|licenciad\w*|maestria"),
+            (3, r"prepa\w*|preparatoria|bachiller\w*|cbtis|conalep|cetis|cecyt\w*|cobach|tecnico|carrera tecnica"),
+            (2, r"secundaria|secu|telesecundaria"),
+            (1, r"primaria"))
+NOMBRE_NIVEL = {0: "Sin estudios", 1: "Primaria", 2: "Secundaria", 3: "Preparatoria", 4: "Licenciatura"}
+_GRADO_FINAL = {1: 6, 2: 3, 3: 3}
+_ORDINALES = {"primero": 1, "primer": 1, "segundo": 2, "tercero": 3, "tercer": 3, "cuarto": 4, "quinto": 5, "sexto": 6}
+_RE_GRADO = re.compile(r"\b([1-9])\s*(?:er|ro|do|to|o|vo|mo|no|ero|º|°)?\s*(ano|anos|grado|semestre|semestres|sem)?\b|\b("
+                       + "|".join(_ORDINALES) + r")\b(?:\s*(ano|grado|semestre))?")
+_RE_SIN_ESTUDIOS = re.compile(r"\b(no estudie|sin estudios|no fui a la escuela|nunca estudie|no tengo estudios|ninguno|ninguna)\b")
+
+
+def nivel_estudios(texto: str) -> Tuple[Optional[int], Optional[bool]]:
+    """(nivel, terminado) de una respuesta libre: «1er año de secundaria» → (2, False); «terminé la prepa» → (3, True);
+    «hasta 6to de primaria» → (1, True). Nivel None = no se entiende."""
+    t = limpiar(texto)
+    if _RE_SIN_ESTUDIOS.search(t):
+        return 0, True
+    nivel = next((n for n, rx in _NIVELES if re.search(r"\b(" + rx + r")\b", t)), None)
+    if nivel is None:
+        return None, None
+    if _RE_INCOMPLETA.search(t):
+        return nivel, False
+    m = _RE_GRADO.search(t)
+    if m and nivel in _GRADO_FINAL:
+        grado = int(m.group(1)) if m.group(1) else _ORDINALES[m.group(3)]
+        semestre = "sem" in (m.group(2) or m.group(4) or "")
+        final = 6 if (semestre and nivel == 3) else _GRADO_FINAL[nivel]
+        return nivel, grado >= final
+    if _RE_GRADO_PARCIAL.search(t) and not _RE_TERMINADA.search(t):
+        return nivel, False
+    return nivel, True
+
+
+def cumple_nivel(requerido: Optional[int], texto: str) -> Optional[str]:
+    """«si» / «no» / None contra el nivel indispensable de la vacante (un nivel superior, aunque esté trunco, cumple)."""
+    nivel, terminado = nivel_estudios(texto)
+    if nivel is None:
+        return None
+    if not requerido:
+        return "si"
+    if nivel > requerido:
+        return "si"
+    if nivel == requerido:
+        return "si" if terminado else "no"
+    return "no"
+
+
+_RE_ZONA_VAGA = re.compile(r"^(cerca|aqui cerca|muy cerca|por aqui|aqui|aca|por aca|lejos|no tan lejos|algo lejos|por ahi|en la ciudad|"
+                           r"aqui mismo|no se|no lo se|normal|en mi casa|mi casa)$")
+_RE_TIEMPO_VAGO = re.compile(r"^(poco|muy poco|no mucho|nada|un rato|rapido|cerca|lejos|mucho|depende|no se|normal|lo normal|"
+                             r"no tanto|un buen rato|bastante)$")
+_RE_TRANSPORTE_VAGO = re.compile(r"^(normal|como sea|como pueda|ahi veo|ya vere|lo que sea|no se|depende|como siempre|cualquiera)$")
+_MEDIOS = ((r"transporte de (personal|la empresa)|ruta de personal|camion de la empresa", "Transporte de personal"),
+           (r"metrobus|metro|tren|mexibus|tren ligero|trolebus|cablebus", "Metro / tren"),
+           (r"camion|micro|combi|pesero|colectivo|ruta|transporte publico|autobus|bus", "Transporte público"),
+           (r"moto|motocicleta", "Moto"),
+           (r"bici|bicicleta", "Bicicleta"),
+           (r"caminando|a pie|camino|caminar", "A pie"),
+           (r"uber|didi|taxi|indrive", "Taxi o app"),
+           (r"auto|carro|coche|camioneta|vehiculo|mi propio", "Auto propio"))
+
+
+def minutos_de(texto: str) -> Optional[int]:
+    """Minutos de traslado de una respuesta libre («40 min», «hora y media», «1:30», «media hora», «una hora»)."""
+    from .entrevista_operativa import minutos_traslado
+
+    m = re.search(r"\b(\d{1,2}):(\d{2})\b", texto or "")
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+    t = limpiar(texto)
+    if re.search(r"\bhoras? y media\b", t) and "hora y media" not in t:
+        return (minutos_traslado(re.sub(r"\by media\b", "", t)) or 0) + 30
+    if re.search(r"\bmedia hora\b", t):
+        return 30 + (minutos_traslado(t.replace("media hora", "")) or 0)
+    if re.search(r"\bcuarto de hora\b", t):
+        return 15
+    mins = minutos_traslado(t)
+    if mins is not None:
+        return mins
+    if re.search(r"\buna hora\b|\bun hora\b", t):
+        return 60
+    m = re.fullmatch(r"(?:como |unos |unas |mas o menos |aprox\w* )?(\d{1,3})", t)
+    if m:
+        n = int(m.group(1))
+        return n * 60 if n <= 4 else n  # «2» = 2 horas; «40» = 40 minutos
+    return None
+
+
+def medio_de(texto: str) -> Optional[str]:
+    t = limpiar(texto)
+    medios = [nombre for rx, nombre in _MEDIOS if re.search(r"\b(" + rx + r")\b", t)]
+    if medios:
+        return " y ".join(dict.fromkeys(medios))
+    if not t or _RE_TRANSPORTE_VAGO.match(t) or len(t) < 3:
+        return None
+    return texto.strip()[:60]
+
+
+REPREGUNTA_DATO = {
+    "escolaridad": "Para tenerlo claro: ¿cuál fue el último año que terminaste? Por ejemplo, «3.º de secundaria» o «2.º de prepa».",
+    "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
+    "traslado": "¿Cuántos minutos más o menos? Por ejemplo, «40 minutos» o «1 hora y media».",
+    "transporte": "¿Qué transporte usarías, por ejemplo camión, metro o auto?",
+}
+
+
+def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]:
+    """(valor, extra) de un dato de WhatsApp. valor None = respuesta vaga (se repregunta una vez)."""
+    t = limpiar(texto)
+    dato = c.get("dato")
+    if not t:
+        return None, {}
+    if dato == "escolaridad":
+        nivel, terminado = nivel_estudios(texto)
+        if nivel is None:
+            return None, {}
+        extra = {"nivel": NOMBRE_NIVEL.get(nivel, ""), "terminado": terminado}
+        return (cumple_nivel(c.get("nivel_requerido"), texto) if c.get("reconfirma") else "si"), extra
+    if dato == "zona":
+        return (None, {}) if (_RE_ZONA_VAGA.match(t) or len(t) < 3) else ("si", {"zona": texto.strip()[:120]})
+    if dato == "traslado":
+        if _RE_TIEMPO_VAGO.match(t):
+            return None, {}
+        mins = minutos_de(texto)
+        return (None, {}) if mins is None else ("si", {"minutos": mins})
+    if dato == "transporte":
+        medio = medio_de(texto)
+        return (None, {}) if medio is None else ("si", {"medio": medio})
+    return "si", {}
+
+
+def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
+    """`analisis.prefiltro_datos`: lo que la ficha muestra (zona, traslado, transporte, escolaridad)."""
+    a = dict(p.analisis or {})
+    d = dict(a.get("prefiltro_datos") or {})
+    d[c["dato"]] = texto.strip()[:200]
+    if c["dato"] == "traslado":
+        d["traslado_min"] = extra.get("minutos")
+    elif c["dato"] == "transporte":
+        d["transporte_medio"] = extra.get("medio") or texto.strip()[:60]
+    elif c["dato"] == "escolaridad":
+        d["nivel"] = extra.get("nivel") or ""
+        d["terminado"] = extra.get("terminado")
+    d["en"] = _ahora()
+    a["prefiltro_datos"] = d
+    p.analisis = a
+    flag_modified(p, "analisis")
 
 
 _NUMEROS = {"un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9,
@@ -373,6 +551,8 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
     def falta(c: dict) -> bool:
         if c["id"] in respuestas:
             return False
+        if c.get("dato"):
+            return True  # 2026-10-11 (tarde): los 4 datos de WhatsApp siempre se preguntan (primero y en orden)
         if c.get("reconfirma"):
             # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
             base = respuestas.get(c["reconfirma"]) or {}
@@ -398,6 +578,9 @@ def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
             veredicto = "cumple" if r.get("valor") == c["esperada"] else "no_cumple"
         if c.get("reconfirma") and r:
             veredicto = "cumple" if r.get("valor") == "si" else "inconsistencia"
+        if c.get("dato") and r:
+            veredicto = ("no_concluyente" if r.get("valor") is None else "registrado") if not c.get("reconfirma") else \
+                ("cumple" if r.get("valor") == "si" else "no_cumple" if r.get("valor") == "no" else "no_concluyente")
         salida.append({"criterio": c["criterio"], "pregunta": c["pregunta"] if c.get("reconfirma") else c["chat"],
                        "respuesta": r.get("respuesta", ""), "valor": r.get("valor"), "excluyente": c["indispensable"],
                        "veredicto": veredicto, "fuente": r.get("fuente", ""), **({"reconfirma": True} if c.get("reconfirma") else {})})
@@ -629,7 +812,11 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     if not p.telefono:
         # sin teléfono no se le puede preguntar: lo pendiente pasa a «Puntos por validar» y el agente decide con lo demás
         while siguiente is not None:
-            _no_concluyente(db, p, e, siguiente, "", "web")
+            if siguiente.get("dato"):
+                e["respuestas"] = {**(e.get("respuestas") or {}), siguiente["id"]: {"respuesta": "", "valor": None, "fuente": "web",
+                                                                                   "en": _ahora(), "sin_telefono": True}}
+            else:
+                _no_concluyente(db, p, e, siguiente, "", "web")
             resultado, incumple, siguiente = _evaluar(criterios, e)
         if resultado == "no_cumple":
             texto = cerrar_no_aprobado(db, p, criterios, e, incumple)
@@ -687,6 +874,33 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         _no_concluyente(db, p, e, pendiente, texto.strip(), canal_registro(canal))
         e["pendiente"] = None
         pendiente = None
+    if pendiente is not None and pendiente.get("dato"):
+        # 2026-10-11 (tarde): dato de WhatsApp — una respuesta vaga (o «no entiendo») se repregunta UNA sola vez por un dato
+        # concreto; si sigue vaga queda en Puntos por validar y se continúa. Nunca se toma como «No».
+        valor, extra = (None, {}) if (_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto)) \
+            else clasificar_dato_prefiltro(pendiente, texto)
+        if valor is None and not aclaraciones.get(pendiente["id"]):
+            aclaraciones[pendiente["id"]] = 1
+            e["aclaraciones"] = aclaraciones
+            registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
+                      {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": 1})
+            return await responder(REPREGUNTA_DATO[pendiente["dato"]], aclaracion=True)
+        fuente = canal_registro(canal)
+        if valor is None:
+            _no_concluyente(db, p, e, pendiente, texto.strip(), fuente)
+        else:
+            e["respuestas"] = {**(e.get("respuestas") or {}),
+                               pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": fuente, "en": _ahora(), **extra}}
+        guardar_datos(p, pendiente, texto, extra)
+        if pendiente.get("reconfirma"):
+            base = (e.get("respuestas") or {}).get(pendiente["reconfirma"])
+            if base is None:  # sin respuesta del formulario: la escolaridad exacta también responde el requisito
+                e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["reconfirma"]: {
+                    "respuesta": texto.strip()[:300], "valor": valor, "fuente": fuente, "en": _ahora(), "desde_escolaridad": True}}
+            elif valor == "no" and base.get("fuente") == "web" and base.get("valor") == "si":
+                registrar_inconsistencia(db, p, criterios, e, pendiente)
+        e["pendiente"] = None
+        pendiente = None
     unidad = dict(e.get("unidad_pendiente") or {})
     if pendiente is not None and pendiente["id"] in unidad:
         # respuesta a «¿8 años o 8 meses?»: se completa el dato con la unidad elegida
@@ -736,7 +950,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         e["preguntadas"] = list(e.get("preguntadas") or []) + [siguiente["id"]]
         if primera:
             resp = e.get("respuestas") or {}
-            faltan = sum(1 for c in criterios if c["id"] not in resp and (not c.get("reconfirma") or (
+            faltan = sum(1 for c in criterios if c["id"] not in resp and (c.get("dato") or not c.get("reconfirma") or (
                 (resp.get(c["reconfirma"]) or {}).get("valor") == "si" and (resp.get(c["reconfirma"]) or {}).get("fuente") == "web")))
             web = any((r or {}).get("fuente") == "web" for r in (e.get("respuestas") or {}).values())
             intro = (f"Ya tengo las respuestas de tu formulario; solo me falta confirmar {faltan} dato{'s' if faltan != 1 else ''}."

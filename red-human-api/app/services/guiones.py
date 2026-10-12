@@ -127,14 +127,19 @@ def _texto(x, n: int = 400) -> str:
 
 
 def normalizar_pregunta(q) -> Optional[dict]:
-    """Pregunta de prefiltro: SIEMPRE cerrada (Sí/No/Parcial, número con rangos u opción múltiple). Conserva las claves
-    propias de la ruta (reconfirma, minimo, opciones_validas, clave, pregunta_chat, solo_con_ubicacion)."""
+    """Pregunta de prefiltro: SIEMPRE cerrada (Sí/No, número con rangos u opción múltiple). Conserva las claves
+    propias de la ruta (reconfirma, minimo, opciones_validas, clave, pregunta_chat, solo_con_ubicacion). Excepción
+    (2026-10-11, tarde): los 4 DATOS del prefiltro de WhatsApp (`tipo: "dato"`: escolaridad, zona, traslado, transporte)."""
     if isinstance(q, str):
         q = {"pregunta": q, "tipo": "si_no"}
     if not isinstance(q, dict) or not _texto(q.get("pregunta")):
         return None
-    tipo = q.get("tipo") if q.get("tipo") in TIPOS_PREGUNTA_CERRADA else None
     from . import ia
+
+    if q.get("tipo") == "dato" and q.get("dato") in ia.DATOS_PREFILTRO:
+        return {"pregunta": _texto(q["pregunta"]), "tipo": "dato", "dato": q["dato"], "valida": _texto(q.get("valida") or q["pregunta"], 200),
+                "respuesta_esperada": _texto(q.get("respuesta_esperada"), 200), "descarta": bool(q.get("descarta")), "opciones": []}
+    tipo = q.get("tipo") if q.get("tipo") in TIPOS_PREGUNTA_CERRADA else None
 
     if ia.es_autopercepcion(_texto(q.get("pregunta"))):
         raise ErrorGuion(400, f"«{_texto(q.get('pregunta'), 80)}»: el prefiltro no pregunta autopercepciones (no se pueden "
@@ -146,8 +151,10 @@ def normalizar_pregunta(q) -> Optional[dict]:
               "respuesta_esperada": _texto(q.get("respuesta_esperada") or ("Sí" if tipo == "si_no" else ""), 120),
               "descarta": bool(q.get("descarta")),
               "opciones": [_texto(o, 80) for o in (q.get("opciones") or []) if _texto(o)][:8]}
-    if tipo == "si_no" and not salida["opciones"]:
-        salida["opciones"] = ["Sí", "No", "Parcial"]
+    if tipo == "si_no":
+        salida["opciones"] = list(ia.OPCIONES_CERRADAS)  # 2026-10-11 (tarde): solo Sí / No — «Parcial» ya no existe
+        if _texto(salida["respuesta_esperada"]).lower() not in ("sí", "si", "no"):
+            salida["respuesta_esperada"] = "Sí"
     if tipo in ("numero", "opcion") and len(salida["opciones"]) < 2:
         raise ErrorGuion(400, f"«{salida['pregunta'][:80]}»: una pregunta de número u opción necesita al menos dos opciones.")
     for k in ("reconfirma", "clave", "pregunta_chat"):
@@ -163,6 +170,19 @@ def normalizar_pregunta(q) -> Optional[dict]:
     if q.get("solo_con_ubicacion"):
         salida["solo_con_ubicacion"] = True
     return salida
+
+
+def validar_minimo_web(db: Optional[Session], v, explicito: bool = False) -> None:
+    """2026-10-11 (tarde): si la ruta de la vacante trae el prefiltro web, necesita al menos 3 preguntas clave. Vacío
+    solo bloquea cuando el formulario lo mandó explícito (RH lo vació); las vacantes sin prefiltro configurado no cambian."""
+    from . import ia
+
+    n = len([q for q in (getattr(v, "preguntas_filtro", None) or []) if isinstance(q, dict) and _texto(q.get("pregunta"))])
+    if n >= ia.MIN_PREFILTRO_WEB or (n == 0 and not explicito):
+        return
+    if "prefiltro_web" not in secciones_aplicables(tipos_de_ruta(pasos_de_vacante(db, v))):
+        return
+    raise ErrorGuion(400, ia.MENSAJE_MIN_PREFILTRO)
 
 
 def normalizar_prefiltro(preguntas) -> List[dict]:

@@ -78,7 +78,8 @@ with TestClient(app) as client:
 
     print("\n--- Ubicación estructurada ---")
     web = [{"pregunta": "¿Tienes experiencia en caja?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": True},
-           {"pregunta": "¿Años de experiencia?", "tipo": "numero", "valida": "", "respuesta_esperada": "≥ 1", "descarta": False}]
+           {"pregunta": "¿Años de experiencia?", "tipo": "numero", "valida": "", "respuesta_esperada": "≥ 1", "descarta": False},
+           {"pregunta": "¿Puedes rolar turnos?", "tipo": "si_no", "valida": "Rolar turnos", "respuesta_esperada": "Sí", "descarta": False}]
     wa = [{"pregunta": "¿Vives en Zapopan o cerca?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": True}]
     r = client.post("/vacantes", json={
         "titulo": "Cajero F4", "descripcion": "x", "generar_si_falta": False,
@@ -89,11 +90,11 @@ with TestClient(app) as client:
     v = r.json()
     VAC = v["id"]
     check(v["ubicacion"] == "Zapopan, Jalisco" and v["ubicacionEstado"] == "Jalisco" and v["ubicacionMunicipio"] == "Zapopan", "ubicación derivada «Zapopan, Jalisco» + campos estructurados")
-    check(len(v["criterios"]) == 2 and len(v["criteriosWhatsapp"]) == 1, "criterios web (2) y WhatsApp (1) guardados por separado")
+    check(len(v["criterios"]) == 3 and len(v["criteriosWhatsapp"]) == 1, "criterios web (3, el mínimo) y WhatsApp (1) guardados por separado")
     r = client.patch(f"/vacantes/{VAC}", json={"ubicacion_estado": "Ciudad de México", "ubicacion_municipio": "Benito Juárez"})
     check(r.json()["ubicacion"] == "Benito Juárez, Ciudad de México", "PATCH Estado/Municipio → texto de ubicación se recalcula")
     r = client.patch(f"/vacantes/{VAC}", json={"preguntas_filtro_whatsapp": []})
-    check(r.json()["criteriosWhatsapp"] == [] and len(r.json()["criterios"]) == 2, "vaciar las de WhatsApp no toca las de la web")
+    check(r.json()["criteriosWhatsapp"] == [] and len(r.json()["criterios"]) == 3, "vaciar las de WhatsApp no toca las de la web")
     r = client.post("/vacantes", json={"titulo": "Libre", "descripcion": "x", "generar_si_falta": False, "ubicacion": "Guadalajara, JAL"})
     check(r.json()["ubicacion"] == "Guadalajara, JAL" and r.json()["ubicacionEstado"] == "", "vacante con texto libre (compatibilidad) se conserva")
 
@@ -111,7 +112,8 @@ with TestClient(app) as client:
     r = client.post("/candidatos", json={"nombre": "Beto WA", "telefono": "5511223355", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P2 = r.json()["id"]
     r = client.post(f"/candidatos/{P2}/prefiltro", json={"texto": "Hola"})
-    check("¿Tienes experiencia en caja?" in r.json()["respuesta"], "sin preguntas de WhatsApp → usa las de la web (fallback)")
+    # 2026-10-11 (tarde): sin preguntas de WhatsApp se generan solas (JIT) y empiezan por la escolaridad exacta
+    check("¿Hasta qué año estudiaste?" in r.json()["respuesta"], "sin preguntas de WhatsApp → se generan solas (empieza por la escolaridad exacta)")
 
     print("\n--- Plantillas ---")
     r = client.post("/plantillas", json={"nombre": "P F4", "titulo": "Cajero", "ubicacion_estado": "Nuevo León", "ubicacion_municipio": "Monterrey", "preguntas_filtro_whatsapp": wa})

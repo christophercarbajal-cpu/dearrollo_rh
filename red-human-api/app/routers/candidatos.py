@@ -1591,7 +1591,9 @@ def _asegurar_guion_prefiltro(db: Session, p: Postulacion) -> None:
     try:
         if tipos & {"prefiltro_web", "solicitud_web"} and not v.preguntas_filtro:
             sgui.asegurar(db, v, "prefiltro_web", motivo=f"prefiltro de {p.codigo}")
-        if "prefiltro_whatsapp" in tipos and not v.preguntas_filtro_whatsapp and not v.preguntas_filtro:
+        # 2026-10-11 (tarde): el prefiltro de WhatsApp siempre lleva sus 4 datos (escolaridad, colonia, traslado,
+        # transporte), aunque la vacante ya tenga prefiltro web
+        if "prefiltro_whatsapp" in tipos and not v.preguntas_filtro_whatsapp:
             sgui.asegurar(db, v, "prefiltro_whatsapp", motivo=f"prefiltro de {p.codigo}")
         db.flush()
     except Exception as ex:  # noqa: BLE001 — el JIT nunca tumba el turno: sin él se usa lo que haya

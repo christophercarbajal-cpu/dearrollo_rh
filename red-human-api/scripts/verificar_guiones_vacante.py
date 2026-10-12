@@ -101,7 +101,9 @@ with TestClient(app) as client:
                              {"id": "llamada", "tipo": "llamada_agente", "etapa": "Entrevista IA"}]
     guion_wa = {"enfoque": "Validar experiencia real", "temas": ["Experiencia"], "preguntas": ["Cuéntame de tu último trabajo con montacargas."]}
     web = [{"pregunta": "¿Tienes al menos 2 años operando montacargas?", "tipo": "si_no", "valida": "2 años de experiencia operando montacargas",
-            "respuesta_esperada": "Sí", "descarta": True}]
+            "respuesta_esperada": "Sí", "descarta": True},
+           {"pregunta": "¿Puedes rolar turnos?", "tipo": "si_no", "valida": "Rolar turnos", "respuesta_esperada": "Sí", "descarta": False},
+           {"pregunta": "¿Puedes trabajar fines de semana?", "tipo": "si_no", "valida": "Fines de semana", "respuesta_esperada": "Sí", "descarta": False}]  # 2026-10-11 (tarde): mínimo 3 preguntas clave
     r = client.post("/vacantes", headers=H, json={**FICHA, "generar_si_falta": False, "preguntas_filtro": web,
                                                  "proceso": {"plantilla_id": corp["id"], "pasos": pasos, "etapas": corp["etapas"]},
                                                  "guiones": {"secciones": {"entrevista_whatsapp": guion_wa}}})
@@ -157,15 +159,19 @@ with TestClient(app) as client:
     check(set(g["guiones"]["secciones"]) == {"entrevista_whatsapp", "entrevista_avatar"} and "llamada" not in g["guiones"]["meta"],
           "no se genera nada para actividades que no están en la ruta")
     web_g, wa_g = g["preguntas_filtro"], g["preguntas_filtro_whatsapp"]
-    check(web_g and all(q["tipo"] in ("si_no", "numero", "opcion") and q.get("opciones") for q in web_g + wa_g),
+    # 2026-10-11 (tarde): los 4 datos fijos de WhatsApp (tipo «dato») no son preguntas de evaluación
+    check(web_g and all(q["tipo"] in ("si_no", "numero", "opcion") and q.get("opciones") for q in web_g + wa_g if q["tipo"] != "dato"),
           "prefiltros web y WhatsApp: solo preguntas cerradas")
     indisp = [q for q in web_g if q["descarta"]]
     check(sorted(q["valida"] for q in indisp) == sorted(FICHA["requisitos_indispensables"]),
           "eliminatorias del web = exactamente los requisitos indispensables")
-    check(len(wa_g) == len(indisp) and all(q.get("reconfirma") and q["tipo"] in ("numero", "opcion", "si_no") and "cuál de estas" not in q["pregunta"] for q in wa_g)
-          and not any("inventarios" in q["valida"].lower() for q in wa_g),
+    check([q.get("dato") for q in wa_g[:4]] == ["escolaridad", "zona", "traslado", "transporte"],
+          "WhatsApp (2026-10-11, tarde): primero escolaridad → colonia → traslado → transporte")
+    wa_r = [q for q in wa_g if q["tipo"] != "dato"]
+    check(len(wa_r) == len(indisp) and all(q.get("reconfirma") and q["tipo"] in ("numero", "opcion", "si_no") and "cuál de estas" not in q["pregunta"] for q in wa_r)
+          and not any("inventarios" in q["valida"].lower() for q in wa_r),
           "WhatsApp: reconfirma CADA indispensable con un dato concreto y no repite lo no indispensable")
-    exp = next(q for q in wa_g if "montacargas" in q["valida"] and "años" in q["valida"])
+    exp = next(q for q in wa_r if "montacargas" in q["valida"] and "años" in q["valida"])
     check(exp["tipo"] == "numero" and "cuánto tiempo" in exp["pregunta"].lower() and exp.get("minimo") == 2,
           f"web «¿tienes al menos 2 años…?» → WhatsApp «¿cuánto tiempo…?» con rangos: {exp['pregunta']}")
     textos_prefiltro = {q["pregunta"] for q in web_g + wa_g}
@@ -178,7 +184,7 @@ with TestClient(app) as client:
         {"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]}})
     solo_wa = r.json()
     check(solo_wa["guiones"]["aplican"] == ["prefiltro_whatsapp"] and solo_wa["preguntas_filtro"] == []
-          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"]),
+          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"] if q["tipo"] != "dato"),
           "ruta solo con prefiltro por WhatsApp: es el primer filtro (eliminatorias cerradas), sin web")
 
     editado = {"enfoque": "Mío", "temas": ["Montacargas"], "preguntas": ["Cuéntame de tu turno más pesado."]}
@@ -315,7 +321,7 @@ with TestClient(app) as client:
     check(not v5.preguntas_filtro_whatsapp, "candidato antiguo: su vacante no tiene guion de prefiltro")
     asyncio.run(procesar_prefiltro(db, p5, "Hola", "whatsapp"))
     db.refresh(v5)
-    check(len(v5.preguntas_filtro_whatsapp) >= 1 and all(q["tipo"] in ("si_no", "numero", "opcion") for q in v5.preguntas_filtro_whatsapp),
+    check(len(v5.preguntas_filtro_whatsapp) >= 1 and all(q["tipo"] in ("si_no", "numero", "opcion", "dato") for q in v5.preguntas_filtro_whatsapp),
           "el bot genera el guion de prefiltro JIT antes del primer mensaje (nunca arranca sin guion)")
 
     # Prefiltro conversacional (ruta automática): reconfirmación con dato concreto; contradicción → Inconsistencia, sin cierre

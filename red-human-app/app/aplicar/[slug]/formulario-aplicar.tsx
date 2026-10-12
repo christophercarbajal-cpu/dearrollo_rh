@@ -72,7 +72,7 @@ export default function FormularioAplicar() {
 
   /** Rangos por pregunta cuando el criterio es numérico (ej. años de experiencia); todo lo
    * demás (si_no, o preguntas sin criterio asociado como las de PREGUNTAS_BASE) sigue usando
-   * los botones fijos Sí/No/Parcial. */
+   * los botones fijos Sí / No (2026-10-11: «Parcial» ya no existe). */
   const opcionesPorPregunta = useMemo(() => {
     const m: Record<string, string[]> = {};
     for (const c of vacante?.criterios ?? []) {
@@ -315,7 +315,7 @@ export default function FormularioAplicar() {
                   {step === 2 && (
                     <div className="flex flex-col gap-4">
                       {preguntas.map((q, i) => {
-                        const opciones = opcionesPorPregunta[q] ?? ["Sí", "No", "Parcial"];
+                        const opciones = opcionesPorPregunta[q] ?? ["Sí", "No"];
                         return (
                           <div key={i}>
                             <p className="mb-2 text-sm font-medium">{q}</p>

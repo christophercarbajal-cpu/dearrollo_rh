@@ -549,7 +549,9 @@ export interface BloquePlataforma {
 
 export interface CriterioFiltro {
   pregunta: string;
-  tipo: "si_no" | "numero" | "opcion" | "texto_corto";
+  /** «dato» (2026-10-11, tarde): escolaridad, colonia, traslado y transporte del prefiltro de WhatsApp (fijos). */
+  tipo: "si_no" | "numero" | "opcion" | "texto_corto" | "dato";
+  dato?: "escolaridad" | "zona" | "traslado" | "transporte";
   valida: string;
   respuesta_esperada: string;
   descarta: boolean;
@@ -571,6 +573,11 @@ export const TITULOS_GUION: Record<ClaveGuion, string> = {
   entrevista_avatar: "Entrevista con avatar — guion",
   llamada: "Llamada — guion",
 };
+/** 2026-10-11 (tarde): el prefiltro web necesita al menos 3 preguntas clave (la API lo exige igual). */
+export const MIN_PREFILTRO_WEB = 3;
+export const MENSAJE_MIN_PREFILTRO =
+  "Para el prefiltro necesitamos al menos 3 requisitos clave. Agrega uno: horario, experiencia o condición del trabajo";
+
 export interface GuionConversacion {
   enfoque: string;
   temas: string[];

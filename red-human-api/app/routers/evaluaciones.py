@@ -638,21 +638,14 @@ async def reprogramar(codigo: str, datos: ReprogramarIn, db: Session = Depends(g
     return _respuesta(db, ev, u, p, resultados)
 
 
+MENSAJE_SIN_REALIZADA = ("«Marcar como realizada» ya no existe: registra el resultado con «Registrar resultado / Adjuntar "
+                         "reporte» y la actividad queda cumplida.")
+
+
 @router.post("/{codigo}/realizada")
-def marcar_realizada(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
-    """«Marcar como realizada» → Realizada · Resultado pendiente."""
-    ev = _ev(db, codigo, cuenta.id)
-    with _negocio():
-        p = sev.postulacion_de(db, ev)
-        bloqueo = sev.bloqueo_consentimiento(ev)
-        if bloqueo:
-            raise sev.ErrorEvaluacion(409, bloqueo)
-        sev.cambiar_estado(db, ev, "realizada_sin_resultado", u.nombre, usuario_id=u.id)
-    ev.realizada_en = ev.realizada_en or datetime.now(timezone.utc)
-    registrar(db, u.nombre, "evaluacion_marcada_realizada", "postulacion", p.codigo, {"evaluacion": ev.codigo, "correo_rh": u.correo})
-    _tocar(p)
-    db.commit()
-    return _respuesta(db, ev, u, p)
+def marcar_realizada(codigo: str, _: Usuario = Depends(usuario_decisor)):
+    """Retirado (Cambio 18, 2026-10-12): ya no existe el estado «Realizada · Resultado pendiente»."""
+    raise HTTPException(410, MENSAJE_SIN_REALIZADA)
 
 
 class MotivoIn(BaseModel):

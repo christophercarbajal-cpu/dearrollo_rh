@@ -577,6 +577,10 @@ async def _enviar_y_registrar(
     # 2026-10-06: el canal de la Cuenta (WhatsApp / Telegram / ambos) aplica al CANDIDATO; a RH, Cliente y
     # entrevistadores se les escribe por WhatsApp salvo que ellos mismos hayan vinculado Telegram como candidatos.
     cuenta_canal = cuenta_id if destinatario_tipo == "candidato" else None
+    from . import telegram as _tg
+
+    rol = _tg.como_rol(destinatario_tipo)  # Cambio 17: encabezado por rol si el chat de Telegram es candidato Y entrevistador
+    rol.__enter__()
     try:
         if canal == "whatsapp" and plantilla_valores is not None:
             with de_cuenta(cuenta_canal):
@@ -603,6 +607,8 @@ async def _enviar_y_registrar(
                 envio = await enviar_correo(destino, asunto, html)
     except Exception as ex:  # que un proveedor falle no debe tumbar el flujo que disparó el evento
         envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}
+    finally:
+        rol.__exit__(None, None, None)
     db.add(NotificacionEnviada(
         cuenta_id=cuenta_id, candidato_id=candidato_id, evento=evento, destinatario_tipo=destinatario_tipo,
         canal=canal, destino=destino, enviado=bool(envio.get("enviado")), detalle=str(envio.get("detalle", "")),

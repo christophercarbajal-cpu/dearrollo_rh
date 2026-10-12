@@ -2258,8 +2258,11 @@ ESTADOS_EVALUACION_U = {
 # Transiciones por acción de seguimiento. Además: registrar un resultado desde cualquier estado distinto de
 # Cancelada deja «Con resultado» (`puede_registrar_resultado`); «Con resultado» se complementa/corrige sin
 # cambiar de estado.
+# Cambio 18 (2026-10-12): «Marcar como realizada» y el estado «Realizada · Resultado pendiente» ya no existen — nada
+# entra a ese estado; se conserva solo para leer registros previos (scripts/migrar_realizada_sin_resultado.py los
+# regresa a «Pendiente»).
 TRANSICIONES_EVALUACION = {
-    "pendiente": ("realizada_sin_resultado", "con_resultado", "no_realizada", "cancelada"),
+    "pendiente": ("con_resultado", "no_realizada", "cancelada"),
     "realizada_sin_resultado": ("con_resultado", "cancelada"),
     "con_resultado": (),
     "no_realizada": ("pendiente", "cancelada"),  # pendiente = reprogramar
@@ -2729,6 +2732,9 @@ class ChatTelegram(Base):
     # 2026-10-11 (Telegram demo): la postulación que abrió este chat con su liga `p_<token>`. Mientras exista, lo que
     # escriba este chat es SOLO de esa postulación (no se resuelve por teléfono: en Modo Prueba los teléfonos se repiten).
     postulacion_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Cambio 17 (2026-10-12): `telefono` es el número REAL que la persona compartió con el botón nativo; los chats viejos
+    # del modo demo guardaban ahí el número del formulario, por eso hasta compartirlo de nuevo quedan sin verificar.
+    telefono_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class UpdateTelegram(Base):

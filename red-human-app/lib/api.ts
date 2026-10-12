@@ -3415,7 +3415,7 @@ export type CondicionConsentimiento = "no_requerido" | "pendiente" | "otorgado" 
 export type ModalidadCita = "Presencial" | "Videollamada" | "Teléfono";
 export const MODALIDADES_CITA: ModalidadCita[] = ["Presencial", "Videollamada", "Teléfono"];
 export type AccionEvaluacion =
-  | "registrar_resultado" | "marcar_realizada" | "ver_resultado" | "complementar" | "reprogramar" | "recordatorio" | "reenviar_liga"
+  | "registrar_resultado" | "ver_resultado" | "complementar" | "reprogramar" | "recordatorio" | "reenviar_liga"
   | "modificar" | "no_realizada" | "cancelar" | "enviar_consentimiento" | "programar_otra" | "enviar_proveedor" | "sincronizar" | "avanzar_paso"
   | "confirmar_inicio" | "marcar_revisada" | "cambiar_revision";
 
@@ -3587,9 +3587,7 @@ export function modificarEvaluacion(
 export function reprogramarEvaluacion(codigo: string, cita: CitaEntrada, notificar?: NotificarAccion) {
   return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/reprogramar`, { cita: citaSnake(cita), notificar: notificarSnake(notificar) });
 }
-export function marcarEvaluacionRealizada(codigo: string) {
-  return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/realizada`, {});
-}
+/* Cambio 18 (2026-10-12): «Marcar como realizada» ya no existe — se registra el resultado. */
 export function marcarEvaluacionNoRealizada(codigo: string, motivo: string) {
   return post<RespuestaEvaluacion>(`/evaluaciones/${codigo}/no-realizada`, { motivo });
 }

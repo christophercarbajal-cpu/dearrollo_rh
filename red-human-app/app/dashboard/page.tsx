@@ -111,7 +111,6 @@ export default function Tablero() {
                 <>
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <Dato etiqueta="Pendientes" valor={t.evaluaciones.pendientes} />
-                    <Dato etiqueta="Resultado pendiente" valor={t.evaluaciones.realizadasSinResultado} tono={t.evaluaciones.realizadasSinResultado ? "text-warn" : "text-ink"} />
                   </div>
                   <p className="mt-3 text-[12px] text-ink-3">
                     {t.evaluaciones.nuevosResultados ? `${t.evaluaciones.nuevosResultados} resultado(s) nuevo(s) sin abrir · ` : ""}

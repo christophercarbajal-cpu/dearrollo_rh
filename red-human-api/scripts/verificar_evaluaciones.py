@@ -136,7 +136,8 @@ with TestClient(app) as client:
     MED = r.json()["evaluacion"]
     check(MED["estado"] == "pendiente" and MED["consentimiento"] == "pendiente" and MED["ligaConsentimiento"],
           "la médica nace Pendiente + «En espera de consentimiento» aunque haya consentimiento general, con liga de aceptación")
-    check(client.post(f"/evaluaciones/{MED['id']}/realizada").status_code == 409, "sin consentimiento expreso no avanza")
+    check(client.post(f"/evaluaciones/{MED['id']}/resultado", data={"comentarios": "x", "version": "0"}).status_code == 409,
+          "sin consentimiento expreso no avanza")
     check(client.post(f"/evaluaciones/{MED['id']}/resultado", data={"comentarios": "x", "version": "0"}).status_code == 409, "…ni se carga resultado")
     token = MED["ligaConsentimiento"].rsplit("/", 1)[-1]
     r = client.post(f"/evaluaciones/{MED['id']}/consentimiento/enviar")
@@ -163,7 +164,8 @@ with TestClient(app) as client:
     for _ in range(2):
         r = client.post(f"/evaluaciones/{PSI['id']}/integracion/avanzar")
         pasos.append((r.json()["evaluacion"]["pasoIntegrada"], r.json()["evaluacion"]["estado"]))
-    check(pasos == [("iniciada", "pendiente"), ("completada", "realizada_sin_resultado")], f"Enviada → Iniciada → Completada = Realizada · Resultado pendiente ({pasos})")
+    # Cambio 18 (2026-10-12): ya no existe «Realizada · Resultado pendiente» — sigue Pendiente hasta registrar el resultado
+    check(pasos == [("iniciada", "pendiente"), ("completada", "pendiente")], f"Enviada → Iniciada → Completada = sigue Pendiente ({pasos})")
     check(client.post(f"/evaluaciones/{PSI['id']}/integracion/avanzar").status_code == 409, "el resultado ya no se simula: se registra con el formulario único")
     check(client.post(f"/evaluaciones/{tipos['tecnica']['id']}/integracion/avanzar").status_code == 409, "solo la forma integrada avanza por pasos")
 
@@ -214,7 +216,7 @@ with TestClient(app) as client:
     REF = tipos["referencias"]["id"]
     r = client.post(f"/evaluaciones/{REF}/cancelar", json={"motivo": "Las referencias no respondieron"})
     check(r.json()["evaluacion"]["estado"] == "cancelada" and r.json()["evaluacion"]["motivoEstado"] == "Las referencias no respondieron", "Cancelada con su motivo")
-    check(client.post(f"/evaluaciones/{REF}/realizada").status_code == 409, "una cancelada ya no se mueve")
+    check(client.post(f"/evaluaciones/{REF}/no-realizada", json={"motivo": "x"}).status_code == 409, "una cancelada ya no se mueve")
     eventos = client.get(f"/evaluaciones/{REF}").json()["eventos"]
     check(len(eventos) >= 2 and eventos[-1]["estadoNuevo"] == "cancelada", "cada cambio queda en el historial de la evaluación")
     check(client.get(f"/candidatos/{P}").json()["etapa"] == "Entrevista IA", "nada de lo anterior movió el pipeline")

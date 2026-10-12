@@ -15,6 +15,8 @@ consulta el proceso configurable de la postulación.
   `p_<token>` abre la postulación; `p_<token>_<paso>` abre un paso de su proceso configurable.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import hmac
 import html
@@ -92,9 +94,11 @@ def telefono_10(telefono: str) -> str:
 
 
 def chat_de_telefono(telefono: str, db=None) -> Optional[str]:
-    """Chat de Telegram de ese teléfono (el más reciente que lo compartió) o None si nunca habló con el bot."""
+    """Chat de Telegram de ese teléfono o None si nunca habló con el bot. Cambio 17 (2026-10-12): primero el número REAL
+    que la persona compartió con «Compartir mi número»; si no, el chat amarrado a una postulación activa cuyo candidato
+    registró ese número en el formulario (modo demo: el número del formulario puede no ser el de su Telegram)."""
     from ..database import SessionLocal
-    from ..models import ChatTelegram
+    from ..models import Candidato, ChatTelegram, Postulacion
 
     tel = telefono_10(telefono)
     if not tel:
@@ -102,7 +106,13 @@ def chat_de_telefono(telefono: str, db=None) -> Optional[str]:
     propia = db is None
     db = db or SessionLocal()
     try:
-        fila = db.query(ChatTelegram).filter(ChatTelegram.telefono == tel).order_by(ChatTelegram.actualizado_en.desc()).first()
+        fila = (db.query(ChatTelegram).filter(ChatTelegram.telefono == tel)
+                .order_by(ChatTelegram.telefono_verificado.desc(), ChatTelegram.actualizado_en.desc()).first())
+        if fila is None:
+            fila = (db.query(ChatTelegram).join(Postulacion, Postulacion.id == ChatTelegram.postulacion_id)
+                    .join(Candidato, Candidato.id == Postulacion.candidato_id)
+                    .filter(Candidato.telefono == tel, Postulacion.activa.is_(True))
+                    .order_by(ChatTelegram.actualizado_en.desc()).first())
         return fila.chat_id if fila else None
     except Exception as e:  # noqa: BLE001 — tabla no creada (paso no fatal) → no hay a quién mandar
         print(f"[telegram] no se pudo leer chats_telegram: {e}")
@@ -126,6 +136,7 @@ def chat(db, chat_id: str):
 def guardar_contacto(db, chat_id: str, telefono: str, nombre: str) -> str:
     fila = chat(db, chat_id)
     fila.telefono = telefono_10(telefono)
+    fila.telefono_verificado = True  # Cambio 17: el número REAL de su Telegram (botón nativo, contacto propio)
     if nombre:
         fila.nombre = nombre[:200]
     db.flush()
@@ -212,11 +223,65 @@ def _sin_chat(telefono: str) -> dict:
     )
 
 
+# Cambio 17 (2026-10-12): una misma cuenta de Telegram puede ser candidato Y entrevistador (pruebas, o un entrevistador
+# que también se postuló). En ese chat cada aviso lleva su encabezado para no confundirlos.
+_ROL: ContextVar[str] = ContextVar("rol_destinatario_telegram", default="")
+ENCABEZADO_ROL = {"candidato": "Aviso para el candidato", "entrevistador": "Aviso para el entrevistador"}
+
+
+@contextmanager
+def como_rol(rol: str):
+    """Marca a quién va dirigido el aviso (candidato | entrevistador | …) mientras se envía."""
+    token = _ROL.set(rol or "")
+    try:
+        yield
+    finally:
+        _ROL.reset(token)
+
+
+def roles_de_chat(chat_id: str, db=None) -> set:
+    """Roles que tiene la persona de este chat: «candidato» (amarrado a una postulación o su número real es de un
+    candidato) y/o «entrevistador» (su número real es de un usuario o de un evaluador externo)."""
+    from ..database import SessionLocal
+    from ..models import Candidato, ChatTelegram, Evaluacion, Usuario
+
+    propia = db is None
+    db = db or SessionLocal()
+    roles: set = set()
+    try:
+        fila = db.get(ChatTelegram, str(chat_id))
+        if fila is None:
+            return roles
+        tel = telefono_10(fila.telefono)
+        if fila.postulacion_id or (tel and db.query(Candidato.id).filter(Candidato.telefono == tel).first()):
+            roles.add("candidato")
+        if tel and (any(telefono_10(u.telefono or "") == tel for u in db.query(Usuario).filter(Usuario.telefono != "").all())
+                    or db.query(Evaluacion.id).filter(Evaluacion.evaluador_whatsapp.like(f"%{tel}")).first()):
+            roles.add("entrevistador")
+        return roles
+    except Exception as e:  # noqa: BLE001 — el encabezado nunca tumba un envío
+        print(f"[telegram] no se pudieron leer los roles del chat {chat_id}: {e}")
+        return roles
+    finally:
+        if propia:
+            db.close()
+
+
+def con_encabezado(chat_id: str, texto: str) -> str:
+    """«Aviso para el candidato» / «Aviso para el entrevistador» cuando el chat tiene AMBOS roles."""
+    rol = _ROL.get()
+    if rol not in ENCABEZADO_ROL or not texto:
+        return texto
+    if not {"candidato", "entrevistador"} <= roles_de_chat(chat_id):
+        return texto
+    return f"*{ENCABEZADO_ROL[rol]}*\n\n{texto}"
+
+
 async def enviar_texto(telefono: str, texto: str) -> dict:
     destino = chat_de_telefono(telefono)
     if not destino:
         return _sin_chat(telefono)
-    return await enviar_a_chat(destino, texto)
+    return await enviar_a_chat(destino, con_encabezado(destino, texto))
 
 
 async def enviar_boton(telefono: str, texto: str, boton: str, url: str = "", callback: str = "") -> dict:
@@ -225,6 +290,7 @@ async def enviar_boton(telefono: str, texto: str, boton: str, url: str = "", cal
     destino = chat_de_telefono(telefono)
     if not destino:
         return _sin_chat(telefono)
+    texto = con_encabezado(destino, texto)
     tecla = {"text": boton[:60], **({"url": url} if url else {"callback_data": (callback or boton)[:64]})}
     r = await enviar_a_chat(destino, texto, {"inline_keyboard": [[tecla]]})
     if not r.get("enviado") and url:

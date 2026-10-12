@@ -13,6 +13,8 @@ proceso configurable de la postulación). Lo único propio de Telegram:
 """
 
 import traceback
+import re
+
 from typing import Optional
 from collections import deque
 
@@ -114,6 +116,12 @@ async def _procesar(db: Session, msg: dict) -> dict:
     # empieza de cero para ésta (sin mezclar datos).
     demo = _postulacion_demo(db, msg.get("start") or "")
     if demo is not None:
+        if not ch.telefono_verificado:
+            # Cambio 17 (2026-10-12): al abrir el bot por primera vez se pide «Compartir mi número» (también en la liga
+            # demo) y se guarda el número REAL; la liga espera en `inicio_pendiente` y se abre al recibir el contacto
+            db.commit()
+            await telegram.pedir_contacto(chat_id, msg.get("nombre", ""))
+            return {"ok": True, "accion": "contacto_solicitado", "postulacion": demo.codigo}
         return await _abrir_demo(db, ch, demo, msg)
     contacto = msg.get("contacto")
     if contacto:
@@ -127,10 +135,13 @@ async def _procesar(db: Session, msg: dict) -> dict:
         registrar(db, "sistema", "telegram_contacto_vinculado", "chat_telegram", chat_id, {"telefono": tel})
         db.commit()
         await telegram.confirmar_contacto(chat_id)
+        demo_pendiente = _postulacion_demo(db, pendiente)
+        if demo_pendiente is not None:  # la liga demo que esperaba el número real
+            return await _abrir_demo(db, ch, demo_pendiente, {**msg, "start": pendiente})
         return await _iniciar(db, tel, pendiente, msg)
 
     tel = ch.telefono
-    if not tel:
+    if not tel or not ch.telefono_verificado:
         db.commit()
         await telegram.pedir_contacto(chat_id, msg.get("nombre", ""))
         return {"ok": True, "accion": "contacto_solicitado"}
@@ -163,7 +174,7 @@ async def _abrir_demo(db: Session, ch, p: Postulacion, msg: dict) -> dict:
     _tipo, _valor, paso = telegram.separar_inicio(msg.get("start") or "")
     tel = telegram.telefono_10(p.telefono)
     anterior = {"telefono": ch.telefono or "", "postulacion_id": ch.postulacion_id}
-    ch.telefono = tel
+    # Cambio 17: el chat conserva el número REAL que compartió; la conversación de la liga demo usa el del formulario
     ch.postulacion_id = p.id
     ch.inicio_pendiente = ""
     registrar(db, "sistema", "telegram_demo_vinculado", "postulacion", p.codigo,
@@ -185,9 +196,18 @@ def _postulacion_amarrada(db: Session, ch) -> Optional[Postulacion]:
 
 
 async def _entrante(db: Session, tel: str, msg: dict, ch=None) -> dict:
+    amarrada = _postulacion_amarrada(db, ch)
+    if amarrada is not None:
+        tel = telegram.telefono_10(amarrada.telefono) or tel  # demo: la conversación es la de esa postulación
+    elif _es_saludo(msg.get("texto") or ""):
+        inactivo = _sin_actividad(db, tel, msg.get("nombre") or (ch.nombre if ch is not None else ""))
+        if inactivo is not None:
+            # Cambio 17: «Hola» sin nada pendiente → respuesta EXACTA (nunca el menú de vacantes a un entrevistador)
+            texto = f"Hola, {inactivo}. No tienes ninguna actividad pendiente por ahora. Te escribiré aquí cuando haya novedades."
+            envio = await telegram.enviar_a_chat(msg["chat_id"], texto)
+            return {"ok": True, "accion": "sin_actividad", "envio": envio}
     with en_conversacion("telegram", tel):
         para_agente = telegram.mensaje_para_agente(msg, tel)
-        amarrada = _postulacion_amarrada(db, ch)
         if amarrada is not None:
             para_agente["postulacion_forzada"] = amarrada.codigo  # demo: SOLO esa postulación, sin mezclar datos
         r = await procesar_entrante(db, para_agente)
@@ -196,6 +216,43 @@ async def _entrante(db: Session, tel: str, msg: dict, ch=None) -> dict:
             await enviar_mensaje(tel, "Por ahora no estamos recibiendo postulaciones por Telegram. Postúlate desde la "
                                       "bolsa de trabajo o escríbenos por WhatsApp. 🙂")
         return r
+
+
+from ..services.telegram import telefono_10  # noqa: E402
+
+_RE_SALUDO = re.compile(r"^(hola+|holi|buen[oa]s?( dias| tardes| noches)?|que tal|hey|hi|saludos)[\s!.,¡¿?]*$", re.IGNORECASE)
+
+
+def _es_saludo(texto: str) -> bool:
+    import unicodedata
+
+    t = "".join(c for c in unicodedata.normalize("NFD", (texto or "").strip().lower()) if unicodedata.category(c) != "Mn")
+    return bool(_RE_SALUDO.match(t))
+
+
+def _sin_actividad(db: Session, tel: str, nombre_chat: str = "") -> Optional[str]:
+    """Nombre de pila de un ENTREVISTADOR (usuario o evaluador externo con ese número real) que no tiene citas ni
+    evaluaciones pendientes y tampoco una postulación activa como candidato. None = sigue el flujo normal (candidatos,
+    números nuevos que quieren postularse o entrevistadores con algo pendiente)."""
+    from ..models import Candidato, Evaluacion, Usuario
+
+    tel = telefono_10(tel)
+    if not tel:
+        return None
+    usuario = next((u for u in db.query(Usuario).filter(Usuario.telefono != "").all() if telefono_10(u.telefono or "") == tel), None)
+    evs = db.query(Evaluacion).filter(
+        (Evaluacion.evaluador_whatsapp.like(f"%{tel}")) | ((Evaluacion.evaluador_usuario_id == usuario.id) if usuario else False)).all()
+    evs = [e for e in evs if telefono_10(e.evaluador_whatsapp or "") == tel or (usuario and e.evaluador_usuario_id == usuario.id)]
+    if usuario is None and not evs:
+        return None
+    if any(e.estado in ("pendiente", "no_realizada") for e in evs):
+        return None
+    activa = (db.query(Postulacion.id).join(Candidato, Candidato.id == Postulacion.candidato_id)
+              .filter(Candidato.telefono == tel, Postulacion.activa.is_(True), Postulacion.vacante_id.isnot(None)).first())
+    if activa is not None:
+        return None
+    nombre = (usuario.nombre if usuario else "") or next((e.evaluador_nombre for e in evs if e.evaluador_nombre), "") or nombre_chat or ""
+    return (nombre.split(" ")[0] if nombre else "").strip() or "hola"
 
 
 async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:

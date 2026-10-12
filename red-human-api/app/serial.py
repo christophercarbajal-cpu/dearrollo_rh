@@ -1591,12 +1591,11 @@ def acciones_evaluacion(ev, restringido: bool = False) -> dict:
     if ev.estado == "pendiente":
         principal = None if bloqueo else "registrar_resultado"
         inicio = puede_confirmar_inicio(ev)
-        secundaria = None if bloqueo else ("confirmar_inicio" if inicio else "marcar_realizada")
+        # Cambio 18 (2026-10-12): ya no existe «Marcar como realizada» — el cierre es «Registrar resultado / Adjuntar reporte»
+        secundaria = None if bloqueo else ("confirmar_inicio" if inicio else None)
         if not bloqueo:
             # 2026-10-07: psicometría del proveedor con clave → «Recordatorio de psicometría pendiente» al candidato
             menu += ["recordatorio"] if ev.forma in ("asignada", "liga_otro_sistema") or (ev.forma == "integrada" and ev.clave_proveedor) else []
-            if inicio:
-                menu.append("marcar_realizada")
             menu.append("modificar")
             if con_cita:
                 menu.append("reprogramar")
@@ -1608,6 +1607,10 @@ def acciones_evaluacion(ev, restringido: bool = False) -> dict:
     elif ev.estado == "con_resultado":
         if restringido:
             principal = "ver_resultado"
+        elif ev.tipo == "entrevista_humana":
+            # Cambio 18: con el resultado registrado la entrevista queda cumplida — solo «Ver resultado»
+            principal = "ver_resultado"
+            menu.append("complementar")
         elif not ev.revisada_en:
             principal, secundaria = "marcar_revisada", "ver_resultado"
             menu.append("complementar")

@@ -4,7 +4,8 @@ SIMULAN (sin red).
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_telegram_demo.py
 
 Cubre: con Modo Prueba (o Cuenta demo) «Continuar en Telegram» existe en cualquier Cuenta y la liga `p_<token>` se abre
-desde cualquier cuenta de Telegram sin validar el número; la liga abre EXACTAMENTE esa postulación (el chat se amarra a
+desde cualquier cuenta de Telegram sin validar que el número sea el del formulario (Cambio 17: la primera vez se pide y
+guarda el número REAL); la liga abre EXACTAMENTE esa postulación (el chat se amarra a
 ella, reemplaza lo anterior y no se mezcla con otra persona de teléfono repetido); con Modo Prueba apagado se sigue
 validando el número; y un candidato real con varias postulaciones activas recibe «¿Sobre qué vacante me escribes?».
 """
@@ -129,10 +130,16 @@ with TestClient(app) as client:
     CHAT = 424242  # cuenta de Telegram del probador: nunca compartió número y su número no es el de la postulación
     desde = len(LLAMADAS)
     r = enviar(start(CHAT, f"p_{tok1}"))
+    # Cambio 17 (2026-10-12): la primera vez se pide «Compartir mi número» y se guarda el número REAL de su Telegram
+    check(any(j.get("reply_markup", {}).get("keyboard") for j in enviados(CHAT, desde)), "la primera vez pide «Compartir mi número»")
+    uid = next(UID)
+    desde = len(LLAMADAS)
+    r = enviar({"update_id": uid, "message": {"message_id": uid, "chat": {"id": CHAT, "type": "private"}, "from": {"id": CHAT, "first_name": "Tester"},
+                                              "contact": {"phone_number": "+52 55 9999 0001", "user_id": CHAT}}})
     db.expire_all()
     ch = db.get(ChatTelegram, str(CHAT))
-    check(not any(j.get("reply_markup", {}).get("keyboard") for j in enviados(CHAT, desde)), "no pide «Compartir mi número»")
-    check(ch.postulacion_id == P1.id and ch.telefono == "5551110001", "el chat queda amarrado a ESA postulación")
+    check(ch.postulacion_id == P1.id and ch.telefono == "5599990001" and ch.telefono_verificado,
+          "con su número real (distinto al del formulario) el chat queda amarrado a ESA postulación")
     check(enviados(CHAT, desde) and r.get("postulacion") in (None, P1.codigo) and "otro número" not in str(enviados(CHAT, desde)),
           "responde desde la postulación (sin «Esta liga pertenece a otro número»)")
     antes = db.query(Mensaje).filter(Mensaje.postulacion_id == P1.id).count()
@@ -148,7 +155,7 @@ with TestClient(app) as client:
     enviar(start(CHAT, f"p_{tok2}"))
     db.expire_all()
     ch = db.get(ChatTelegram, str(CHAT))
-    check(ch.postulacion_id == P2.id and ch.telefono == "5551110002", "el chat ahora atiende SOLO la postulación nueva")
+    check(ch.postulacion_id == P2.id and ch.telefono == "5599990001", "el chat ahora atiende SOLO la postulación nueva (sin volver a pedir el número)")
     b = db.query(Bitacora).filter(Bitacora.accion == "telegram_demo_vinculado", Bitacora.entidad_id == P2.codigo).first()
     check(b is not None and "reemplaza" in (b.detalle or ""), "queda en bitácora qué atendía antes el chat")
     n1 = db.query(Mensaje).filter(Mensaje.postulacion_id == P1.id).count()

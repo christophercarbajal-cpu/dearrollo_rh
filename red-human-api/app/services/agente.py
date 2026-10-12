@@ -562,11 +562,6 @@ def _ejecutar_cancelar_entrevista(db, u, cuenta, a):
                    db=db, u=u, cuenta=cuenta)
 
 
-def _ejecutar_marcar_realizada(db, u, cuenta, a):
-    ev = _entrevista_vigente(db, cuenta, a["codigo"])
-    return _llamar(r_evaluaciones.marcar_realizada, ev.codigo, db=db, u=u, cuenta=cuenta)
-
-
 def _ejecutar_registrar_resultado(db, u, cuenta, a):
     from ..models import Evaluacion
 
@@ -793,16 +788,6 @@ TOOLS_ESCRITURA: Dict[str, dict] = {
         "schema": {
             "type": "function", "name": "cancelar_entrevista_humana",
             "description": "Cancela la entrevista humana abierta más reciente. No mueve la etapa del candidato.",
-            "parameters": {"type": "object", "properties": {"codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)")},
-                            "required": ["codigo"], "additionalProperties": False},
-        },
-    },
-    "marcar_entrevista_humana_realizada": {
-        "permiso": "decisor", "ejecutar": _ejecutar_marcar_realizada,
-        "resumen": lambda db, cuenta, a: f"Marcar como realizada la entrevista de {_nombre_candidato(db, cuenta.id, a['codigo'])}.",
-        "schema": {
-            "type": "function", "name": "marcar_entrevista_humana_realizada",
-            "description": "Marca la entrevista humana como realizada (queda «Realizada · Resultado pendiente»).",
             "parameters": {"type": "object", "properties": {"codigo": _p("string", "Código de la postulación (P-####, el id de la tarjeta; se acepta C-#### de la persona)")},
                             "required": ["codigo"], "additionalProperties": False},
         },

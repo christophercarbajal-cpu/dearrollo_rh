@@ -906,7 +906,10 @@ def aplicar_paso(db: Session, ev: Evaluacion, paso: str, actor: str, origen: str
     if paso in ("iniciada", "completada") and not ev.iniciada_en:
         ev.iniciada_en = datetime.now(timezone.utc)  # confirmación de inicio del proveedor
     if paso == "completada" and ev.estado == "pendiente":
-        cambiar_estado(db, ev, "realizada_sin_resultado", actor, "proveedor" if origen != "simulado" else "sistema", f"Proveedor ({origen}): completada")
+        # Cambio 18 (2026-10-12): sin «Realizada · Resultado pendiente» — sigue Pendiente (en curso) hasta que llegue el
+        # resultado; el paso del proveedor queda en el historial
+        evento(db, ev, "cambio_estado", actor, "proveedor" if origen != "simulado" else "sistema", paso=paso, origen=origen,
+               detalle=f"Proveedor ({origen}): completada")
     else:
         evento(db, ev, "envio" if paso in ("enviada", "iniciada") else "cambio_estado", actor,
                "proveedor" if origen != "simulado" else "sistema", paso=paso, origen=origen)
@@ -1078,3 +1081,20 @@ def etiqueta_forma(forma: str) -> str:
 
 def etiqueta_consentimiento(ev: Evaluacion) -> str:
     return CONSENTIMIENTOS.get(ev.consentimiento or "no_requerido", "")
+
+
+def migrar_realizadas_sin_resultado(db: Session, aplicar: bool = False, actor: str = "migración 2026-10-12") -> dict:
+    """Cambio 18 (2026-10-12): el estado «Realizada · Resultado pendiente» ya no existe. Las evaluaciones que siguen en
+    él regresan a «Pendiente» (de ahí se cierra con «Registrar resultado / Adjuntar reporte»). Idempotente; nunca borra
+    ni toca resultados, citas ni etapas: solo el estado, con su evento en el historial. `aplicar=False` = solo contar."""
+    filas = db.query(Evaluacion).filter(Evaluacion.estado == "realizada_sin_resultado").order_by(Evaluacion.id).all()
+    salida = {"encontradas": len(filas), "codigos": [ev.codigo for ev in filas], "migradas": 0}
+    if not aplicar:
+        return salida
+    for ev in filas:
+        ev.estado = "pendiente"
+        evento(db, ev, "cambio_estado", actor, "sistema", de="realizada_sin_resultado", a="pendiente",
+               motivo="«Realizada · Resultado pendiente» ya no existe (Cambio 18)")
+        salida["migradas"] += 1
+    db.commit()
+    return salida

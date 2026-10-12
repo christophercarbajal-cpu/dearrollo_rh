@@ -206,9 +206,10 @@ with TestClient(app) as client:
     check(ev1.realizada_por == "Ana Externa" and ev1.registrada_via == "liga_evaluador" and len(ev1.adjuntos) == 2, "autor precargado con el evaluador; captura vía liga; PDF + Word adjuntos")
     lista = client.get(f"/evaluaciones/postulaciones/{P}").json()
     tarjeta = next(x for x in lista if x["codigo"] == E1["codigo"])
-    check(tarjeta["nuevoResultado"] and tarjeta["conclusionTexto"] == "Avanzar" and tarjeta["acciones"]["principal"] == "marcar_revisada"
-          and tarjeta["acciones"]["secundaria"] == "ver_resultado" and tarjeta["revision"] is None,
-          "tarjeta: «Nuevo resultado», una sola etiqueta de conclusión, «Marcar como revisada» + «Ver resultado» (recibir ≠ revisar)")
+    # Cambio 18 (2026-10-12): la entrevista humana con resultado queda cumplida — solo «Ver resultado»
+    check(tarjeta["nuevoResultado"] and tarjeta["conclusionTexto"] == "Avanzar" and tarjeta["acciones"]["principal"] == "ver_resultado"
+          and not tarjeta["acciones"]["secundaria"] and tarjeta["revision"] is None,
+          "tarjeta: «Nuevo resultado», una sola etiqueta de conclusión y solo «Ver resultado»")
     det = client.get(f"/evaluaciones/{E1['codigo']}").json()
     check(not det["evaluacion"]["nuevoResultado"] and [e["accion"] for e in det["eventos"]][:1] == ["creada"], "abrir el detalle quita «Nuevo resultado»; historial con la creación")
     r = client.get(f"/evaluaciones/{E1['codigo']}/adjuntos/{det['evaluacion']['adjuntos'][0]['id']}")
@@ -290,10 +291,11 @@ with TestClient(app) as client:
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
                                                              "cita": {"fecha": "2026-10-07", "hora": "10:00", "modalidad": "Teléfono", "telefono": "5512345678"}})
     T = r.json()["evaluacion"]["codigo"]
+    # Cambio 18 (2026-10-12): «Marcar como realizada» ya no existe
     r = client.post(f"/evaluaciones/{T}/realizada")
-    check(r.status_code == 200 and r.json()["evaluacion"]["estado"] == "realizada_sin_resultado", "«Marcar como realizada» → Realizada · Resultado pendiente")
-    r = client.post(f"/evaluaciones/{T}/no-realizada", json={"motivo": "x"})
-    check(r.status_code == 409, "Realizada · Resultado pendiente no pasa a No realizada")
+    check(r.status_code == 410 and "Registrar resultado" in r.json()["detail"], "«Marcar como realizada» ya no existe (410)")
+    check("marcar_realizada" not in str(next(x for x in client.get(f"/evaluaciones/postulaciones/{P}").json() if x["codigo"] == T)["acciones"]),
+          "la tarjeta ya no ofrece «Marcar como realizada»")
     r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "tecnica", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
                                                              "cita": {"fecha": "2026-10-08", "hora": "10:00", "modalidad": "Videollamada", "liga_videollamada": "https://meet.example/x"}})
     T2 = r.json()["evaluacion"]["codigo"]
@@ -312,6 +314,10 @@ with TestClient(app) as client:
     check(pub["cancelada"] and r.status_code == 409 and "cancelada" in r.json()["detail"], "la liga de una evaluación cancelada ya no acepta resultados")
     r = client.post(f"/evaluaciones/{T2}/reprogramar", json={"cita": {"fecha": "2026-10-10", "hora": "12:00", "modalidad": "Teléfono"}})
     check(r.status_code == 409, "una Cancelada no se reabre")
+    # Cambio 18: T ya no pasa a «Realizada» (la cita de T2 reemplazó a la pendiente) — el recordatorio va sobre una nueva
+    r = client.post(f"/evaluaciones/postulaciones/{P}", json={"tipo": "socioeconomica", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
+                                                             "cita": {"fecha": "2026-10-11", "hora": "10:00", "modalidad": "Teléfono", "telefono": "5512345678"}})
+    T = r.json()["evaluacion"]["codigo"]
     ENVIOS.clear()
     r = client.post(f"/evaluaciones/{T}/recordatorio", json={"a": "evaluador"})
     check(r.status_code == 200 and all(d != persona.telefono for c, d, t in ENVIOS), "recordatorio solo al evaluador (según elección)")

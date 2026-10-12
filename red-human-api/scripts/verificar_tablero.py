@@ -79,10 +79,9 @@ with TestClient(app) as client:
         r = client.post("/candidatos", json={"nombre": nombre, "telefono": tel, "correo": f"{tel}@a.mx", "vacante": "VAC-A1", "consentimiento": True, "fuente": fuente})
         P[nombre] = r.json()["id"]
     client.patch(f"/candidatos/{P['Mario A']}/etapa", json={"etapa": "Evaluación", "manual": True, "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
-    # evaluaciones (modelo unificado): una Pendiente, una Realizada · Resultado pendiente y una Con resultado
+    # evaluaciones (modelo unificado): dos Pendientes y una Con resultado (Cambio 18: ya no hay «Realizada · Resultado pendiente»)
     client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "referencias", "forma": "registro_directo"})
     ev = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "tecnica", "forma": "registro_directo"}).json()["evaluacion"]
-    client.post(f"/evaluaciones/{ev['id']}/realizada")
     ev3 = client.post(f"/evaluaciones/postulaciones/{P['Mario A']}", json={"tipo": "socioeconomica", "forma": "registro_directo"}).json()["evaluacion"]
     client.post(f"/evaluaciones/{ev3['id']}/resultado", data={"comentarios": "Visita realizada", "version": "0"})
     # onboarding activo con una tarea atrasada
@@ -120,7 +119,7 @@ with TestClient(app) as client:
     check(o["activos"] == 1 and o["tareasAtrasadas"] == 1 and o["avancePromedio"] is not None and 0 <= o["avancePromedio"] <= 100,
           f"Onboarding: 1 activo, 1 tarea atrasada, avance promedio real ({o})")
     e = t["evaluaciones"]
-    check(e["pendientes"] == 1 and e["realizadasSinResultado"] == 1 and e["conResultado"] == 1 and e["nuevosResultados"] == 0,
+    check(e["pendientes"] == 2 and e["realizadasSinResultado"] == 0 and e["conResultado"] == 1 and e["nuevosResultados"] == 0,
           f"evaluaciones: 1 pendiente, 1 con resultado pendiente, 1 con resultado (capturado por RH: no es «nuevo») ({e})")
     d = t["desempeno"]
     check(d["activos"] == 1 and d["personasIncluidas"] == 1 and d["personasCompletadas"] == 0 and d["avance"] == 0,

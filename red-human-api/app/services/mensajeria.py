@@ -124,7 +124,11 @@ def resolver(telefono: str, cuenta_id: Optional[int] = None, db=None) -> str:
     db = db or SessionLocal()
     try:
         ids = [cuenta_id] if cuenta_id else _cuentas_de_telefono(db, tel)
-        canal = canal_de_cuenta(db, ids[0]) if ids else "whatsapp"
+        if not ids:
+            # Cambio 17 (2026-10-12): quien no es candidato (entrevistador, evaluador) recibe por Telegram si vinculó ESE
+            # número real con el bot; si no, por WhatsApp
+            return "telegram" if telegram.chat_de_telefono(tel, db) else "whatsapp"
+        canal = canal_de_cuenta(db, ids[0])
         if canal != "ambos":
             return canal
         if not telegram.chat_de_telefono(tel, db):

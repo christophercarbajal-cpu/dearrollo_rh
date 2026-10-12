@@ -30,7 +30,7 @@ import {
 } from "@/components/dashboard/evaluaciones/campos-evaluacion";
 import {
   avanzarEvaluacionIntegrada, cancelarEvaluacion, confirmarInicioEvaluacion, dictaminarReferencia, enviarEvaluacionProveedor, enviarLigaEvaluacion, fetchEvaluacion,
-  fetchEvaluaciones, lineasResultados, marcarEvaluacionNoRealizada, marcarEvaluacionRealizada, modificarEvaluacion, recordatorioEvaluacion,
+  fetchEvaluaciones, lineasResultados, marcarEvaluacionNoRealizada, modificarEvaluacion, recordatorioEvaluacion,
   registrarResultadoEvaluacion, reprogramarEvaluacion, revisarEvaluacion, sincronizarEvaluacion, urlAdjuntoCita, urlAdjuntoEvaluacion,
   type Evaluacion, type EventoEvaluacion, type LigaEvaluacion, type RespuestaEvaluacion, type Resultado,
   proveedorVisible,
@@ -149,7 +149,6 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
       case "marcar_revisada":
       case "cambiar_revision": return setRevisar(e);
       case "confirmar_inicio": return accion(e, () => confirmarInicioEvaluacion(e.codigo), `«${e.nombre}»: inicio confirmado.`);
-      case "marcar_realizada": return accion(e, () => marcarEvaluacionRealizada(e.codigo), `«${e.nombre}»: Realizada · Resultado pendiente.`);
       case "reprogramar": return setReprogramar(e);
       case "modificar": return setModificar(e);
       case "no_realizada": return setMotivo({ e, accion: "no_realizada" });
@@ -167,7 +166,6 @@ export function PanelEvaluaciones({ c, live, version = 0, onCambio, titulo = "Ev
   const ETIQUETA: Record<string, { texto: string; icono: React.ReactNode }> = {
     // la captura manual existe aunque la evaluación esté asignada a un externo: ambos escriben el MISMO registro
     registrar_resultado: { texto: "Registrar resultado / Adjuntar reporte", icono: <ClipboardCheck className="h-4 w-4" /> },
-    marcar_realizada: { texto: "Marcar como realizada", icono: <CheckCircle2 className="h-4 w-4" /> },
     ver_resultado: { texto: "Ver resultado", icono: <Eye className="h-4 w-4" /> },
     complementar: { texto: "Complementar o corregir", icono: <Pencil className="h-4 w-4" /> },
     marcar_revisada: { texto: "Marcar como revisada", icono: <BadgeCheck className="h-4 w-4" /> },

@@ -225,6 +225,8 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
         {!cerrada && c.suggested_discard && (
           <Chip clase="bg-kb-red-bg text-kb-red" title={c.suggested_discard.motivo}>Descarte sugerido</Chip>
         )}
+        {/* C12: «Actividad agregada: [nombre] pendiente» */}
+        {!cerrada && c.added_activity && <Chip clase="bg-kb-amber-bg text-kb-amber">{c.added_activity}</Chip>}
         {sinConsentimiento(c) && <Chip clase="bg-kb-red-bg text-kb-red">Sin consentimiento</Chip>}
         {c.psychometric_alert && ALERTA_PSICO[c.psychometric_alert] && (
           <Chip clase={c.psychometric_alert === "error_envio" ? "bg-kb-red-bg text-kb-red" : "bg-kb-amber-bg text-kb-amber"}>{ALERTA_PSICO[c.psychometric_alert]}</Chip>

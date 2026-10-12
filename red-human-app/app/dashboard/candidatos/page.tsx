@@ -3269,10 +3269,15 @@ function PanelContratacion({
       )}
       {live && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          {c.etapa === "Contratación" && propuesta?.propuesta?.estado !== "aceptada" && (
-            <Button size="sm" onClick={() => void enviarProp()} disabled={enviandoProp || guardando}>
+          {(c.etapa === "Contratación" || c.actividadAgregada) && propuesta?.propuesta?.estado !== "aceptada" && (
+            // C12: con una actividad agregada pendiente, «Enviar propuesta» queda desactivado
+            <Button size="sm" onClick={() => void enviarProp()} disabled={enviandoProp || guardando || Boolean(c.actividadAgregada)}
+              title={c.actividadAgregada ? `Primero completa «${c.actividadAgregada.nombre}» (actividad agregada)` : undefined}>
               <Send className="h-4 w-4" /> {enviandoProp ? "Enviando…" : propuesta?.propuesta?.estado === "enviada" ? "Reenviar propuesta" : "Enviar propuesta"}
             </Button>
+          )}
+          {c.actividadAgregada && (
+            <span className="text-[12px] font-medium text-warn">Primero completa «{c.actividadAgregada.nombre}» (actividad agregada).</span>
           )}
           <Button size="sm" variant={c.etapa === "Contratación" && propuesta?.propuesta?.estado !== "aceptada" ? "outline" : "primary"} onClick={guardar} disabled={guardando}>
             {guardando ? "Guardando…" : condicionesListas ? "Guardar cambios" : "Guardar condiciones"}

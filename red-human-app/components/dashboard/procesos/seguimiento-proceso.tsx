@@ -395,6 +395,22 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
             </Button>
           )}
         </div>
+        {seg.actividadAgregada && vigente && (
+          // C12 (prueba del 11 de octubre): la actividad agregada bloquea lo que sigue hasta completarla u omitirla
+          <div role="status" className="mt-3 rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2">
+            <p className="flex items-center gap-2 text-[13px] font-semibold text-warn">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> {seg.actividadAgregada.texto}
+            </p>
+            <p className="mt-0.5 pl-6 text-[12px] text-ink-2">
+              Lo que sigue en la ruta y «Enviar propuesta» quedan bloqueados hasta completarla.
+              {seg.actividadAgregada.desdeTexto && seg.actividadAgregada.desdeTexto !== nombreEtapa(c.etapa)
+                ? ` Si la omites, el candidato vuelve a ${seg.actividadAgregada.desdeTexto}.` : ""}
+            </p>
+            {seg.actividadAgregada.advertencia && (
+              <p className="mt-1 pl-6 text-[12px] font-semibold text-bad">{seg.actividadAgregada.advertencia}</p>
+            )}
+          </div>
+        )}
         {descarte && vigente && (
           <div role="alert" className="mt-3 rounded-lg border border-bad/40 bg-bad-soft/50 px-3 py-2">
             <p className="flex items-center gap-2 text-[13px] font-semibold text-bad">

@@ -1375,6 +1375,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         calculados[paso["id"]] = r
 
     salida = []
+    agregadas = agregadas_pendientes(p)
     for paso in pasos:
         r = calculados[paso["id"]]
         superada = (_indice(paso["etapa"]) < actual and r["estado"] in ("pendiente", "en_curso") and not r.get("excepcion")
@@ -1397,8 +1398,15 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             etapa_alcanzada = not previos_pendientes
         disponible = deps_listas and etapa_alcanzada and r["estado"] in ("pendiente", "en_curso") and not superada
         espera = r["espera"]
+        bloqueada_por = next((x for x in agregadas if x.get("paso") in calculados and x.get("paso") != paso["id"]
+                              and not _cumplido(calculados[x["paso"]])), None) if agregadas and _indice(paso["etapa"]) > actual else None
+        if bloqueada_por is not None and r["estado"] in ("pendiente", "en_curso"):
+            # C12: mientras la actividad agregada siga pendiente, lo de columnas posteriores queda bloqueado
+            disponible = False
         if superada:
             espera = ""
+        elif bloqueada_por is not None and r["estado"] in ("pendiente", "en_curso"):
+            espera = f"Bloqueada: primero «{bloqueada_por['nombre']}» (actividad agregada)"
         elif r["estado"] == "pendiente" and not deps_listas:
             espera = f"Falta completar: {', '.join(faltan_deps)}"
         elif r["estado"] == "pendiente" and not etapa_alcanzada:
@@ -2062,6 +2070,8 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         # 2026-10-08 (todas las Cuentas): una obligatoria «No aprobada» detiene la ruta → «Confirmar descarte» o
         # «Continuar por decisión de RH». La recomendación de la ficha sale de ESTE mismo cálculo.
         "bloqueo": bloqueo,
+        # C12: actividad agregada pendiente (bloquea lo siguiente y «Enviar propuesta»)
+        "actividadAgregada": agregada_resumen(p),
         "recomendacion": _recomendacion_ruta(bloqueo, accion_principal, p, pasos),
         "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
@@ -2425,6 +2435,7 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
     if p is None:
         return []
     try:
+        restaurar_tras_agregadas(db, p)  # C12: actividad agregada resuelta → vuelve a su columna original
         if ruta_automatica(p.cuenta):
             from . import motor_ruta
 
@@ -2447,10 +2458,15 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
 
 # ============================================================ actividades ad hoc (solo ESTA postulación)
 
-def agregar_paso_adhoc(db: Session, p: Postulacion, datos: dict, u, registrar_evento: bool = True) -> dict:
+def agregar_paso_adhoc(db: Session, p: Postulacion, datos: dict, u, registrar_evento: bool = True, retroactivo: bool = False) -> dict:
     """Agrega una actividad extra (entrevista, prueba, documento…) SOLO a esta postulación: se suma a su copia del
     proceso y nunca toca la plantilla ni la vacante. Por defecto NO es obligatoria (no frena el avance) y va en la etapa
-    actual si el tipo lo permite. No hace commit. Regresa el paso normalizado."""
+    actual si el tipo lo permite. No hace commit. Regresa el paso normalizado.
+
+    C12 (prueba del 11 de octubre) — `retroactivo` («Agregar actividad» de RH): la actividad es SIEMPRE obligatoria y va
+    en la columna natural de su tipo; si esa columna es anterior a la actual, el candidato REGRESA a ella (p. ej. de
+    Contratación a Filtro humano) y lo siguiente queda bloqueado hasta completarla. La columna de origen se guarda en
+    `analisis.actividades_agregadas`: al completarla u omitirla, el candidato vuelve a ella (`restaurar_tras_agregadas`)."""
     tipo = str((datos or {}).get("tipo") or "").strip()
     if tipo not in TIPOS_PASO:
         raise ErrorProceso(400, f"Tipo de actividad inválido: «{tipo}».")
@@ -2461,11 +2477,19 @@ def agregar_paso_adhoc(db: Session, p: Postulacion, datos: dict, u, registrar_ev
     etapa = datos.get("etapa") or p.etapa
     if etapa not in ETAPAS_CANDIDATO or _indice(etapa) < _indice(p.etapa):
         etapa = p.etapa
+    desde = p.etapa
+    retrocede = False
+    if retroactivo:
+        natural = TIPOS_PASO[tipo].get("etapa") or p.etapa
+        exp = p.expediente
+        dado_de_alta = exp is not None and exp.estado == "alta"
+        if natural in ETAPAS_CANDIDATO and _indice(natural) < _indice(p.etapa) and not dado_de_alta:
+            etapa, retrocede = natural, True
     previos = list(p.proceso.get("pasos") or [])
     ids = {x["id"] for x in previos}
     crudo = {k: v for k, v in datos.items() if k not in ("id", "etapa", "obligatorio", "adhoc")}
-    crudo.update({"id": f"extra-{tipo.replace('_', '-')}", "etapa": etapa, "obligatorio": bool(datos.get("obligatorio", False)),
-                  "adhoc": True})
+    crudo.update({"id": f"extra-{tipo.replace('_', '-')}", "etapa": etapa,
+                  "obligatorio": True if retroactivo else bool(datos.get("obligatorio", False)), "adhoc": True})
     pasos = normalizar_pasos([*previos, crudo])
     nuevo = next(x for x in pasos if x["id"] not in ids)
     proc = dict(p.proceso)
@@ -2480,7 +2504,95 @@ def agregar_paso_adhoc(db: Session, p: Postulacion, datos: dict, u, registrar_ev
         }]
         registrar(db, quien, "proceso_actividad_adhoc", "postulacion", p.codigo,
                   {"paso": nuevo["id"], "tipo": tipo, "etapa": etapa, "obligatorio": nuevo["obligatorio"], "correo_rh": getattr(u, "correo", "")})
+    if retroactivo:
+        sello = _ahora()
+        quien = getattr(u, "nombre", "") or "sistema"
+        a = dict(p.analisis or {})
+        a["actividades_agregadas"] = list(a.get("actividades_agregadas") or []) + [{
+            "paso": nuevo["id"], "nombre": nuevo["nombre"], "desde": desde, "etapa": etapa, "retroceso": retrocede,
+            "fecha": sello.isoformat(), "por": quien}]
+        p.analisis = a
+        if retrocede:
+            p.etapa = etapa
+            p.historial = list(p.historial or []) + [{
+                "evento": "retroceso_por_actividad", "usuario": quien, "fecha": sello.isoformat(), "paso": nuevo["id"],
+                "texto": f"«{nuevo['nombre']}» agregada por {quien}: el candidato regresa de {nombre_etapa(desde)} a "
+                         f"{nombre_etapa(etapa)} hasta completarla",
+            }]
+            registrar(db, quien, "retroceso_por_actividad", "postulacion", p.codigo,
+                      {"paso": nuevo["id"], "desde": desde, "a": etapa, "correo_rh": getattr(u, "correo", "")})
     return nuevo
+
+
+# C12 (prueba del 11 de octubre): actividades agregadas por RH — obligatorias, con retroceso de columna
+
+
+def agregadas_pendientes(p: Postulacion) -> List[dict]:
+    """Actividades que RH agregó a ESTA postulación y siguen pendientes ({paso, nombre, desde, etapa, retroceso})."""
+    return [x for x in ((p.analisis or {}).get("actividades_agregadas") or []) if isinstance(x, dict) and not x.get("resuelta")]
+
+
+def texto_agregada(x: dict) -> str:
+    return f"Actividad agregada: {x.get('nombre') or 'actividad'} pendiente"
+
+
+AVISO_PROPUESTA_ENVIADA = ("La propuesta ya fue enviada al candidato. Si el resultado de esta actividad cambia la decisión, "
+                           "avísale al candidato antes de continuar.")
+
+
+def agregada_resumen(p: Postulacion) -> Optional[dict]:
+    """{paso, nombre, texto, desde, advertencia} de la PRIMERA actividad agregada pendiente (None si no hay)."""
+    pend = agregadas_pendientes(p)
+    if not pend:
+        return None
+    x = pend[0]
+    estado_prop = (((p.analisis or {}).get("propuesta")) or {}).get("estado")
+    return {"paso": x.get("paso"), "nombre": x.get("nombre"), "texto": texto_agregada(x), "desde": x.get("desde"),
+            "desdeTexto": nombre_etapa(x["desde"]) if x.get("desde") in ETAPAS_CANDIDATO else "",
+            "advertencia": AVISO_PROPUESTA_ENVIADA if estado_prop in ("enviada", "aceptada") else ""}
+
+
+def restaurar_tras_agregadas(db: Session, p: Postulacion, pasos: Optional[List[dict]] = None) -> Optional[str]:
+    """Una actividad agregada que ya se completó (cumpliendo su regla), se omitió o se canceló queda resuelta; cuando no
+    queda ninguna pendiente, el candidato VUELVE a su columna original (la de antes de agregarla). Hace commit si cambia
+    algo. Regresa la etapa a la que volvió (o None)."""
+    pend = agregadas_pendientes(p)
+    if not pend or not p.activa or not tiene_proceso(p):
+        return None
+    pasos = pasos if pasos is not None else estado_pasos(p)
+    por_id = {x["id"]: x for x in pasos}
+    lista = [dict(x) for x in (p.analisis or {}).get("actividades_agregadas") or []]
+    resueltas = []
+    for x in lista:
+        if x.get("resuelta"):
+            continue
+        e = por_id.get(x.get("paso"))
+        if e is None or _satisfecho(e):
+            x.update({"resuelta": True, "resuelta_en": _ahora().isoformat(),
+                      "como": (e or {}).get("estado") or "eliminada"})
+            resueltas.append(x)
+    if not resueltas:
+        return None
+    a = dict(p.analisis or {})
+    a["actividades_agregadas"] = lista
+    p.analisis = a
+    regreso = None
+    if not [x for x in lista if not x.get("resuelta")]:
+        origenes = [x["desde"] for x in resueltas if x.get("retroceso") and x.get("desde") in ETAPAS_CANDIDATO]
+        destino = max(origenes, key=_indice) if origenes else None
+        if destino and _indice(destino) > _indice(p.etapa):
+            sello = _ahora()
+            como = "omitida" if any(x["como"] in ("omitida", "cancelada") for x in resueltas) else "completada"
+            nombres = ", ".join(f"«{x['nombre']}»" for x in resueltas)
+            p.etapa = destino
+            p.historial = list(p.historial or []) + [{
+                "evento": "regreso_tras_actividad", "usuario": "sistema", "fecha": sello.isoformat(),
+                "texto": f"{nombres} {'omitida' if como == 'omitida' else 'completada'}: el candidato vuelve a {nombre_etapa(destino)}",
+            }]
+            registrar(db, "sistema", "regreso_tras_actividad", "postulacion", p.codigo, {"a": destino, "actividades": nombres})
+            regreso = destino
+    db.commit()
+    return regreso
 
 
 def paso_adhoc_para_evaluacion(db: Session, p: Postulacion, ev: Evaluacion, u) -> Optional[dict]:

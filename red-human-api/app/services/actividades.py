@@ -372,7 +372,9 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
         validar_config(tipo, config, ya, resultado, nombre)
         if tipo != "entrevista_humana" and not p.consentimiento:
             raise HTTPException(409, "Falta el consentimiento de privacidad del candidato (LFPDPPP).")
-    crudo = {"tipo": tipo, "obligatorio": bool(datos.get("obligatorio")), **({"nombre": nombre} if nombre else {}), **extra_alias}
+    # C12 (prueba del 11 de octubre): toda actividad agregada es OBLIGATORIA (ya no hay casilla) y regresa al candidato a
+    # la columna de esa actividad si es anterior a la actual
+    crudo = {"tipo": tipo, "obligatorio": True, **({"nombre": nombre} if nombre else {}), **extra_alias}
     config.pop("cita_adjuntos", None)  # nunca metadata de archivos enviada por el cliente (solo lo que se sube aquí)
     if adjuntos_cita and es_eval and not ya:
         # 2026-10-10: adjuntos de la cita (imágenes/PDF, máx. 5) — se guardan tal cual y salen con el aviso al candidato
@@ -381,12 +383,16 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
         config["cita_adjuntos"] = await scitas.guardar_adjuntos(adjuntos_cita, f"citas/{p.id}", u.nombre)
     if es_eval and not ya:
         crudo["config"] = config
+    etapa_antes = p.etapa
     try:
-        paso = sproc.agregar_paso_adhoc(db, p, crudo, u)
+        paso = sproc.agregar_paso_adhoc(db, p, crudo, u, retroactivo=True)
     except sproc.ErrorProceso as e:
         raise HTTPException(e.status, e.mensaje)
     db.commit()
     salida = {"paso": paso, "iniciada": False, "yaRealizada": ya, "mensaje": f"«{paso['nombre']}» agregada.", "bloqueo": ""}
+    resumen_ag = sproc.agregada_resumen(p)
+    salida["retroceso"] = {"desde": etapa_antes, "a": p.etapa} if p.etapa != etapa_antes else None
+    salida["advertencia"] = (resumen_ag or {}).get("advertencia") or ""
     if ya and es_eval:
         score = resultado.get("score")
         comentarios = str(resultado.get("comentarios") or "")

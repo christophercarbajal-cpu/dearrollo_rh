@@ -2591,6 +2591,11 @@ async def enviar_propuesta(
                              ("fecha de ingreso", datos.fecha_ingreso)) if not (v or "").strip()]
     if faltan:
         raise HTTPException(400, f"Para enviar la propuesta falta: {', '.join(faltan)}.")
+    p = _por_codigo(db, codigo, cuenta.id)
+    pendiente = sproc.agregada_resumen(p)
+    if pendiente:
+        # C12 (prueba del 11 de octubre): con una actividad agregada pendiente, «Enviar propuesta» queda desactivado
+        raise HTTPException(409, f"Primero completa «{pendiente['nombre']}» (actividad agregada) para enviar la propuesta.")
     guardar_condiciones_contratacion(codigo, datos, db=db, u=u, cuenta=cuenta)
     p = _por_codigo(db, codigo, cuenta.id)
     if not p.activa:

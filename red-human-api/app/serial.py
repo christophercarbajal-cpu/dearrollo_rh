@@ -488,6 +488,12 @@ def sin_alertas_escolaridad(ev: Optional[dict]) -> dict:
     return salida
 
 
+def _agregada(p: Postulacion) -> Optional[dict]:
+    from .services.proceso import agregada_resumen
+
+    return agregada_resumen(p)
+
+
 def recomendacion_operativa(evaluacion: Optional[dict]) -> Optional[dict]:
     """C6/C11: {clave, texto, requisitos[], faltan[]} de la entrevista OPERATIVA evaluada; None si no la hay."""
     op = (evaluacion or {}).get("operativa")
@@ -582,6 +588,8 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "card_score": score_tablero(p),
         # C11: lo que la tarjeta muestra en lugar del número
         "card_label": etiqueta_tablero(p),
+        # C12: «Actividad agregada: [nombre] pendiente»
+        "added_activity": (lambda x: x["texto"] if x else None)(sproc.agregada_resumen(p)),
         "score_reason": razon_score(p),
         "source_channel": canal_origen(p),
         "next_step": (siguiente or {}).get("nombre") or None,
@@ -657,6 +665,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "pideCv": _pide_cv(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)
         "prefiltroDatos": prefiltro_datos(p),
+        # C12 (prueba del 11 de octubre): actividad agregada pendiente (bloquea lo siguiente y «Enviar propuesta»)
+        "actividadAgregada": _agregada(p),
         "experiencia": c.experiencia or "",
         "ubicacion": c.ubicacion or "",
         "aplicado": hace(p.creado_en),

@@ -3877,6 +3877,8 @@ export function fetchPrecargaActividad(codigoPostulacion: string, tipo: string) 
 export type RespuestaAgregarActividad = RespuestaPaso & {
   paso: PasoProceso; iniciada: boolean; yaRealizada: boolean; mensaje: string; bloqueo: string; evaluacion?: string;
   faltan?: string[]; advertencias?: string[]; pendienteAgendar?: boolean;
+  /** C12: el candidato regresó a la columna de la actividad agregada · advertencia si la propuesta ya se envió. */
+  retroceso?: { desde: string; a: string } | null; advertencia?: string;
 };
 export function agregarActividadConfigurada(codigoPostulacion: string, datos: {
   tipo: string; nombre?: string; obligatorio?: boolean; config?: ConfigActividad; ya_realizada?: boolean; resultado?: ResultadoYaRealizada;

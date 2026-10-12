@@ -243,7 +243,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
     setGuardando(true);
     setError("");
     const r = await agregarActividadConfigurada(c.id, {
-      tipo: f.tipo, nombre: f.nombre.trim() || undefined, obligatorio: f.obligatorio,
+      tipo: f.tipo, nombre: f.nombre.trim() || undefined, obligatorio: true,
       ...(f.yaRealizada
         ? { ya_realizada: true, resultado: {
             conclusion: f.conclusion, score: f.score.trim() ? Number(f.score) : null, realizada_por: f.realizadaPor.trim(), comentarios: f.comentarios.trim(),
@@ -255,9 +255,12 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
     if (!r.ok) return setError(r.error);
     const d = r.data;
     const adv = d.advertencias?.length ? ` ${d.advertencias.join(" ")}` : "";
+    // C12: si la actividad es de una columna anterior, el candidato regresa a ella hasta completarla
+    const regreso = d.retroceso ? ` El candidato regresa de ${nombreEtapa(d.retroceso.desde)} a ${nombreEtapa(d.retroceso.a)} hasta completarla.` : "";
+    const propuesta = d.advertencia ? ` ${d.advertencia}` : "";
     onAgregada(d, {
-      tono: d.bloqueo || d.faltan?.length || d.pendienteAgendar || adv ? "warn" : "ok",
-      texto: `${d.mensaje}${d.bloqueo ? ` ${d.bloqueo}.` : ""}${d.faltan?.includes("correo") ? " Falta el correo del candidato: agrégalo y la prueba se envía sola." : ""}${adv}`,
+      tono: d.bloqueo || d.faltan?.length || d.pendienteAgendar || adv || propuesta ? "warn" : "ok",
+      texto: `${d.mensaje}${regreso}${d.bloqueo && !d.retroceso ? ` ${d.bloqueo}.` : ""}${d.faltan?.includes("correo") ? " Falta el correo del candidato: agrégalo y la prueba se envía sola." : ""}${adv}${propuesta}`,
     });
   }
 
@@ -298,10 +301,11 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
               <CamposResultado f={f} set={set} ver={ver} conclusiones={precarga?.conclusiones ?? []} onArchivos={setArchivos} />
             )}
 
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.obligatorio} onChange={(e) => set("obligatorio", e.target.checked)} />
-              Obligatoria (el candidato no avanza de etapa sin cumplirla)
-            </label>
+            {/* C12 (prueba del 11 de octubre): toda actividad agregada es obligatoria — ya no hay casilla */}
+            <p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-ink-2">
+              Obligatoria: lo que sigue en la ruta queda bloqueado hasta completarla. Si es de una columna anterior, el candidato
+              regresa a ella; si la omites, vuelve a su columna.
+            </p>
             {evaluacion && !f.yaRealizada && (
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.iniciarAlGuardar} onChange={(e) => set("iniciarAlGuardar", e.target.checked)} />

@@ -391,9 +391,9 @@ def agregar_actividad(codigo: str, datos: ActividadAdHocIn, db: Session = Depend
     if not p.activa:
         raise HTTPException(409, "La postulación está cerrada.")
     crudo = {k: v for k, v in datos.model_dump().items() if v not in (None, "", [])}
-    crudo["obligatorio"] = datos.obligatorio
     try:
-        paso = sproc.agregar_paso_adhoc(db, p, crudo, u)
+        # C12 (prueba del 11 de octubre): obligatoria y con retroceso a su columna si es anterior
+        paso = sproc.agregar_paso_adhoc(db, p, crudo, u, retroactivo=True)
     except sproc.ErrorProceso as e:
         raise _error(e)
     db.commit()

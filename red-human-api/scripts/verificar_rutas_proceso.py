@@ -232,8 +232,9 @@ with TestClient(app) as client:
     n_pasos_pl = len(client.get("/procesos/plantillas").json()[0]["pasos"])
     proc_vac = client.get(f"/procesos/vacantes/{V_MAS}").json()["proceso"]
     r = client.post(f"/procesos/postulaciones/{P_VAC}/pasos", json={"tipo": "tecnica", "nombre": "Prueba práctica de montacargas"})
-    check(r.status_code == 201 and r.json()["paso"]["adhoc"] and not r.json()["paso"]["obligatorio"] and r.json()["paso"]["etapa"] == "Prefiltro",
-          "actividad AD HOC: solo para este candidato, opcional y en su etapa actual")
+    # C12 (prueba del 11 de octubre): toda actividad agregada es OBLIGATORIA
+    check(r.status_code == 201 and r.json()["paso"]["adhoc"] and r.json()["paso"]["obligatorio"] and r.json()["paso"]["etapa"] == "Prefiltro",
+          "actividad AD HOC: solo para este candidato, obligatoria y en su etapa actual")
     check(client.get(f"/procesos/vacantes/{V_MAS}").json()["proceso"]["pasos"] == proc_vac["pasos"]
           and len(client.get("/procesos/plantillas").json()[0]["pasos"]) == n_pasos_pl,
           "…sin tocar la vacante ni la plantilla")

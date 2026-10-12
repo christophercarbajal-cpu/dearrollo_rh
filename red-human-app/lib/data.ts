@@ -270,6 +270,8 @@ export interface SeguimientoProceso {
   descarteSugerido?: DescarteSugerido | null;
   /** 2026-10-08 (todas las Cuentas): obligatoria «No aprobada» → «Confirmar descarte» o «Continuar por decisión de RH». */
   bloqueo?: DescarteSugerido | null;
+  /** C12 (prueba del 11 de octubre): actividad agregada pendiente — bloquea lo siguiente y «Enviar propuesta». */
+  actividadAgregada?: ActividadAgregada | null;
   /** Recomendación derivada de la ruta (misma fuente que la acción principal); null = la de Red Human. */
   recomendacion?: { texto: string; motivo: string; tono: "bad" | "warn" | "good" } | null;
 }
@@ -384,6 +386,10 @@ export interface Candidato {
   psychometric_alert?: "sin_enviar" | "sin_respuesta" | "error_envio" | "falta_correo" | null;
   /** Ruta automática: actividad obligatoria «No aprobada» → RH confirma el descarte. */
   suggested_discard?: DescarteSugerido | null;
+  /** C12: «Actividad agregada: [nombre] pendiente». */
+  added_activity?: string | null;
+  /** C12: la actividad agregada pendiente (ficha). */
+  actividadAgregada?: ActividadAgregada | null;
   /** Proceso configurable (2026-10-06): vista de seguimiento — solo en el detalle de la ficha. */
   proceso?: SeguimientoProceso;
   tieneProceso?: boolean;
@@ -784,4 +790,15 @@ export interface RecomendacionOperativa {
   texto: string;
   requisitos: RequisitoOperativo[];
   faltan: string[];
+}
+
+/** C12 (prueba del 11 de octubre): actividad que RH agregó a ESTA postulación y sigue pendiente. */
+export interface ActividadAgregada {
+  paso: string;
+  nombre: string;
+  texto: string;
+  desde: string;
+  desdeTexto: string;
+  /** «La propuesta ya fue enviada…» cuando la propuesta salió antes de agregarla. */
+  advertencia: string;
 }

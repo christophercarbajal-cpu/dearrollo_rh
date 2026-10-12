@@ -1436,6 +1436,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "automatica": paso["tipo"] in TIPOS_AUTOMATICOS or (auto and paso["tipo"] in TIPOS_DISPARABLES),
             "liga": r.get("liga"),
             "error": r.get("error"),
+            # C8: estado del aviso al entrevistador / evaluador, aparte del estado de la actividad
+            "aviso": r.get("aviso"),
             "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
             "excepcionRH": r.get("excepcion"),
             "faltaCorreo": bool(r.get("falta_correo")),
@@ -1576,12 +1578,36 @@ def _con_cuello(paso: dict, r: dict, ev: Optional[Evaluacion], env: Optional[dic
     if estado == "fallido":
         canales = ((env.get(quien) or {}).get("canales") or [])
         motivo = "; ".join(f"{c['canal'] or 'sin canal'}: {c['detalle']}" for c in canales if c.get("detalle"))[:240]
+        if quien != "candidato" and ev is not None:
+            # C8 (prueba del 11 de octubre): el estado de la ACTIVIDAD («Programada · …») y el del AVISO («No enviado») van
+            # por separado; RH copia la liga o el mensaje completo para compartirlo por otro medio
+            return {**r, "aviso": aviso_no_enviado(ev, quien, canales)}
         return {**r, "error": f"No se pudo enviar {que} {a_quien}" + (f" ({motivo})" if motivo else ""),
                 "espera": f"Error de envío {a_quien}: reenvía o copia la liga"}
     if estado is None and not cuello.get("legado"):
         # a quien debe actuar no le ha salido nada todavía: la actividad no ha empezado (copiar la liga no cuenta)
         return {**r, "cuello": {**cuello, "clave": "sin_iniciar", "texto": "Sin enviar"}, "espera": f"Falta enviar {que} {a_quien}"}
     return r
+
+
+def aviso_no_enviado(ev: Evaluacion, quien: str, canales: List[dict]) -> dict:
+    """C8: {a, aQuien, estado, texto, motivo, mensaje, liga} del aviso que NO le llegó al entrevistador / evaluador."""
+    from . import evaluaciones as sev
+
+    detalles = [str(c.get("detalle") or "") for c in canales or [] if c.get("detalle")]
+    sin_bot = next((d for d in detalles if "todavía no ha abierto el bot" in d), None)
+    motivo = sin_bot or (detalles[0] if detalles else "No se pudo entregar el aviso.")
+    db = object_session(ev)
+    p = ev.postulacion if hasattr(ev, "postulacion") else None
+    if p is None and db is not None:
+        p = db.get(Postulacion, ev.postulacion_id)
+    mensaje = sev.texto_aviso(db, ev, p, "entrevistador") if (db is not None and p is not None) else ""
+    try:
+        liga = sev.liga_evaluador(ev) if ev.forma == "asignada" else ""
+    except Exception:  # noqa: BLE001
+        liga = ""
+    return {"a": quien, "aQuien": TEXTO_DESTINATARIO.get(quien, ""), "estado": "no_enviado", "texto": "No enviado",
+            "motivo": motivo[:300], "sinBot": bool(sin_bot), "mensaje": mensaje, "liga": liga}
 
 
 def _reenvios(paso: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:

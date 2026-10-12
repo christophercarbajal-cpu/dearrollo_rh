@@ -147,7 +147,10 @@ with TestClient(app) as client:
     CORREOS.clear(); WA.clear()
     n = asyncio.run(sre.revisar_recordatorios_entrevista())
     check(n == 1, "cita dentro de las próximas 24 h → 1 recordatorio")
-    check(any(c[0] == "carlos@correo.mx" and "Recordatorio" in c[1] and "<!doctype html>" in c[2].lower() for c in CORREOS), "candidato: correo HTML de recordatorio")
+    # C10 (prueba del 11 de octubre): el candidato acaba de recibir su primer aviso («quedó programada») dentro de la
+    # ventana: un «te recordamos» minutos después sobra (el recordatorio con un primer aviso viejo lo cubre verificar_citas_avisos)
+    check(not any(c[0] == "carlos@correo.mx" and "Recordatorio" in c[1] for c in CORREOS),
+          "candidato: sin recordatorio repetido minutos después de su primer aviso")
     # 2026-10-11: UN solo aviso por cita al entrevistador — su aviso de esta cita salió hace minutos (dentro de la ventana
     # del recordatorio), así que el recordatorio automático no se le repite
     check(not any(c[0] == admin.correo and "Recordatorio" in c[1] for c in CORREOS) and not any(t[0] == "3399998888" for t in WA),

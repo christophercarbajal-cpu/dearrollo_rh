@@ -751,6 +751,9 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
         )
     except Exception as ex:  # noqa: BLE001 — un aviso caído nunca rompe la acción de RH
         resultados = [{"destinatario": "sistema", "canal": "", "destino": "", "enviado": False, "detalle": f"No se pudo avisar: {ex}"[:300]}]
+    resultados = mensajes_amigables(resultados, ev, p)
+    if matriz["entrevistador"] and evento_ != "evaluacion_cancelada":
+        resultados += await respaldo_correo_evaluador(db, ev, p, evento_, actor, resultados, extra)
     if resultados:
         # también los fallidos: el estado del envío se muestra junto a cada liga (nunca en silencio)
         evento(db, ev, "envio", actor, "sistema", evento=evento_, firma_cita=firma,
@@ -765,6 +768,66 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
     return resultados
 
 
+# C8 (prueba del 11 de octubre): Telegram no deja escribirle primero a quien no ha abierto el bot. En lugar del error
+# técnico, RH ve «[Nombre] todavía no ha abierto el bot…», puede copiar la liga o el mensaje completo, y si la persona
+# tiene correo el aviso le sale por correo.
+SIN_BOT = "bot de Telegram"
+DESTINATARIOS_EVALUADOR = ("entrevistador", "evaluador", "medico")
+
+
+def texto_sin_bot(nombre: str) -> str:
+    return (f"{(nombre or '').strip() or 'Esta persona'} todavía no ha abierto el bot de Telegram de Red Human, por eso no le "
+            "llegó el aviso. Copia la liga o el mensaje completo y compártelo por otro medio.")
+
+
+def mensajes_amigables(resultados: List[dict], ev: Evaluacion, p: Postulacion) -> List[dict]:
+    for r in resultados or []:
+        if isinstance(r, dict) and not r.get("enviado") and SIN_BOT in str(r.get("detalle") or ""):
+            nombre = ev.evaluador_nombre if r.get("destinatario") in DESTINATARIOS_EVALUADOR else (p.nombre or "")
+            r["detalle"] = texto_sin_bot(nombre)
+            r["sin_bot"] = True
+    return resultados
+
+
+async def respaldo_correo_evaluador(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, actor: str,
+                                    resultados: List[dict], extra: dict) -> List[dict]:
+    """Si al entrevistador / evaluador no le llegó nada por mensajería y tiene correo (y la regla no lo mandó ya por
+    correo), el MISMO aviso sale por correo. Nunca lanza."""
+    from . import notificaciones
+
+    suyos = [r for r in resultados or [] if isinstance(r, dict) and r.get("destinatario") == "entrevistador"]
+    if not suyos or any(r.get("enviado") for r in suyos) or any(r.get("canal") == "correo" for r in suyos):
+        return []
+    eh = CitaComoEntrevista(ev)
+    try:
+        if not notificaciones._correo_entrevistador(db, eh):
+            return []
+        solo_correo = {"candidato_correo": False, "candidato_whatsapp": False, "entrevistador_whatsapp": False,
+                       "entrevistador_correo": True, "cliente_correo": False, "cliente_whatsapp": False}
+        mas = await notificaciones.disparar(db, evento_, p, actor, eh=eh, override=solo_correo, extra=extra)
+    except Exception as ex:  # noqa: BLE001
+        return [{"destinatario": "entrevistador", "canal": "correo", "destino": "", "enviado": False,
+                 "detalle": f"Respaldo por correo: {ex}"[:300], "respaldo": True}]
+    for r in mas:
+        r["respaldo"] = True
+    return mas
+
+
+def texto_aviso(db: Session, ev: Evaluacion, p: Postulacion, audiencia: str = "entrevistador") -> str:
+    """El MENSAJE COMPLETO del aviso de la cita (el mismo texto que sale por WhatsApp/Telegram) para «Copiar mensaje
+    completo» cuando no se pudo enviar."""
+    from . import notificaciones
+
+    eh = CitaComoEntrevista(ev)
+    extra = {"_datos_evaluacion": datos_evaluacion(ev, p)}
+    try:
+        extra["_datos_entrevista"] = notificaciones.datos_entrevista_humana(db, eh, p)
+        return notificaciones._mensaje("evaluacion_asignada", audiencia, "whatsapp", p, eh, "", extra) or ""
+    except Exception as ex:  # noqa: BLE001 — copiar el mensaje nunca tumba la ficha
+        print(f"[evaluaciones] no se pudo armar el mensaje del aviso: {ex}")
+        return ""
+
+
 def firma_cita(ev: Evaluacion) -> str:
     """Identifica UNA cita (fecha, rango, lugar/liga y a quién se le avisa): cambia si se reprograma o cambia el evaluador."""
     if not ev.cita_fecha_hora:
@@ -773,12 +836,13 @@ def firma_cita(ev: Evaluacion) -> str:
                                            ev.cita_liga_videollamada, ev.evaluador_correo, ev.evaluador_whatsapp))
 
 
-def ultimo_aviso_entrevistador(db: Session, ev: Evaluacion, firma: str) -> Optional[datetime]:
-    """Cuándo recibió el entrevistador (con éxito) el aviso de asignación/reprogramación de ESTA cita. None = nunca."""
+def ultimo_aviso_entrevistador(db: Session, ev: Evaluacion, firma: str, destinatario: str = "entrevistador") -> Optional[datetime]:
+    """Cuándo recibió `destinatario` (con éxito) el aviso de asignación/reprogramación de ESTA cita. None = nunca.
+    C10: también para el candidato (su primer aviso «quedó programada» no se repite como «te recordamos»)."""
     for e in reversed(eventos_de(db, ev)):
         d = e.detalle or {}
         if (e.accion == "envio" and d.get("firma_cita") == firma and d.get("evento") in ("evaluacion_asignada", "evaluacion_reprogramada")
-                and any(x.get("destinatario") == "entrevistador" and x.get("enviado") for x in d.get("envios") or [])):
+                and any(x.get("destinatario") == destinatario and x.get("enviado") for x in d.get("envios") or [])):
             return e.fecha
     return None
 

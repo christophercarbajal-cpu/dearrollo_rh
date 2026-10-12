@@ -58,11 +58,23 @@ async def revisar_recordatorios_entrevista() -> int:
                 continue
             db.refresh(ev)
             # 2026-10-11: UN solo aviso por cita al entrevistador — si su aviso de esta misma cita salió ya dentro de la
-            # ventana del recordatorio (cita agendada para «mañana»), el recordatorio automático no se le repite
-            aviso = sev.ultimo_aviso_entrevistador(db, ev, sev.firma_cita(ev))
-            reciente = aviso is not None and aviso >= ev.cita_fecha_hora - timedelta(hours=horas)
-            resultados = await sev.notificar(db, ev, p, "recordatorio_evaluacion", "sistema",
-                                             audiencias={"candidato"} if reciente else None)
+            # ventana del recordatorio (cita agendada para «mañana»), el recordatorio automático no se le repite.
+            # C10 (prueba del 11 de octubre): lo mismo para el candidato — su primer aviso dice «quedó programada»; un
+            # «te recordamos» minutos después sobra. Quien nunca recibió el primer aviso lo recibe ahora (no «te recordamos»).
+            firma = sev.firma_cita(ev)
+            limite = ev.cita_fecha_hora - timedelta(hours=horas)
+            recordar, primer_aviso = set(), set()
+            for aud in ("candidato", "entrevistador"):
+                aviso = sev.ultimo_aviso_entrevistador(db, ev, firma, aud)
+                if aviso is None:
+                    primer_aviso.add(aud)
+                elif aviso < limite:
+                    recordar.add(aud)
+            resultados = []
+            if recordar:
+                resultados += await sev.notificar(db, ev, p, "recordatorio_evaluacion", "sistema", audiencias=recordar)
+            if primer_aviso:
+                resultados += await sev.notificar(db, ev, p, "evaluacion_asignada", "sistema", audiencias=primer_aviso)
             sev.evento(db, ev, "recordatorio", "sistema", automatico=True)
             registrar(db, "sistema", "recordatorio_entrevista_automatico", "postulacion", p.codigo,
                       {"evaluacion": ev.codigo, "fecha": fechas.iso(ev.cita_fecha_hora), "notificaciones": resultados})

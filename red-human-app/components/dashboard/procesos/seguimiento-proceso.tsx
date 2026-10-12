@@ -287,6 +287,16 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     }
   }
 
+  /** C8: «Copiar liga» / «Copiar mensaje completo» del aviso que no le llegó al entrevistador. Copiar nunca lo marca enviado. */
+  async function copiarTexto(texto: string, que: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setAviso({ tono: "ok", texto: `${que} copiado.` });
+    } catch {
+      setAviso({ tono: "warn", texto: `Cópialo a mano: ${texto.slice(0, 300)}` });
+    }
+  }
+
   /** «Reintentar sincronización»: solo existe tras una falla CONFIRMADA de recuperación (el resultado llega solo). */
   async function sincronizar(paso: PasoSeguimiento) {
     if (!paso.evaluacion) return;
@@ -485,6 +495,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           </span>
                           {ps && ps.status === "error_envio" ? <EstadoFilaPsicometria ps={ps} />
                             : <Badge tone={TONO_ESTADO_U[estadoU] ?? "neutral"}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
+                          {/* C8: el estado del aviso va aparte del de la actividad («Programada» + «Aviso no enviado») */}
+                          {p.aviso && <Badge tone="bad">Aviso: {p.aviso.texto}</Badge>}
                         </button>
                         {menu.length > 0 ? (
                           <MenuAcciones acciones={menu} etiqueta={`Acciones de «${p.nombre}»`} className="shrink-0" />
@@ -493,14 +505,30 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                       {ps && <div className="px-4 pb-1"><DetalleFilaPsicometria ps={ps} /></div>}
                       {ab && (
                         <div className="flex flex-col gap-2 bg-surface-2/40 px-4 py-2.5 pl-10 text-[12px] text-ink-2">
+                          {/* C9 (prueba del 11 de octubre): en la Entrevista humana no se muestran «Requiere aprobación»,
+                              «Dictamen favorable» ni «en paralelo» (el resultado del entrevistador ya la resuelve) */}
                           <p>
-                            <b className="text-ink">{p.condicionTexto ?? (p.obligatorio ? "Obligatoria" : "Opcional")}</b> · Responsable: {p.responsable || "—"} · {p.reglaTexto}
-                            {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : " · en paralelo"}
+                            <b className="text-ink">{p.tipo === "entrevista_humana" ? (p.obligatorio ? "Obligatoria" : "Opcional") : p.condicionTexto ?? (p.obligatorio ? "Obligatoria" : "Opcional")}</b> · Responsable: {p.responsable || "—"}
+                            {p.tipo !== "entrevista_humana" && ` · ${p.reglaTexto}`}
+                            {p.dependeDe.length > 0 ? ` · espera a ${p.dependeDe.map((d) => pasos.find((x) => x.id === d)?.nombre ?? d).join(", ")}` : p.tipo !== "entrevista_humana" ? " · en paralelo" : ""}
                             {p.plazoDias != null && ` · plazo ${p.plazoDias} día(s)`}
                             {p.adhoc && " · solo este candidato"}
                             {p.heredado && " · fuera de la ruta vigente"}
                           </p>
                           {p.espera && <p className={cn("font-medium", p.error ? "text-bad" : "text-warn")}>{p.espera}</p>}
+                          {p.aviso && (
+                            <div className="flex flex-col gap-1.5 rounded-lg border border-bad/30 bg-bad-soft/30 px-2.5 py-2">
+                              <p><b className="text-bad">Aviso {p.aviso.aQuien}: {p.aviso.texto}.</b> {p.aviso.motivo}</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {p.aviso.liga && (
+                                  <Button size="sm" variant="ghost" onClick={() => copiarTexto(p.aviso!.liga, "Liga")}>Copiar liga</Button>
+                                )}
+                                {p.aviso.mensaje && (
+                                  <Button size="sm" variant="ghost" onClick={() => copiarTexto(p.aviso!.mensaje, "Mensaje completo")}>Copiar mensaje completo</Button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                           {(p.resultadoTexto || p.detalle) && (
                             <p>{p.resultadoTexto ? <b className="text-ink">{p.resultadoTexto}. </b> : null}{p.detalle}{p.revisadoPor && p.estado === "completada" ? ` · ${p.revisadoPor}` : ""}</p>
                           )}

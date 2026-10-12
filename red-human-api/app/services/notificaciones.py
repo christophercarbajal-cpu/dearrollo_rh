@@ -252,7 +252,9 @@ def _mensaje(evento: str, audiencia: str, canal: str, c: Postulacion, eh: Option
         # es el respaldo si la plantilla falla.
         d = extra.get("_datos_entrevista") or {}
         if audiencia == "candidato":
-            texto = f"¡Hola {primer_nombre}! 📅 Con base en tu entrevista con Red Human, te programamos una entrevista {cita}"
+            # C10 (prueba del 11 de octubre): el PRIMER aviso dice «quedó programada» (nunca «te recordamos») y no lleva la
+            # liga del entrevistador — esa le llega a él en su propio aviso
+            texto = f"Hola {primer_nombre}, tu entrevista para {puesto} quedó programada {cita}"
             return texto if canal == "whatsapp" else (plantillas_correo.html_candidato(d) if d else ("Tu entrevista con Red Human AI", _html_correo_candidato(eh, c)))
         if audiencia == "entrevistador":
             texto = f"Tienes una entrevista programada con {c.nombre} ({puesto}) {cita} Expediente: {d.get('liga_expediente', '')}".strip()

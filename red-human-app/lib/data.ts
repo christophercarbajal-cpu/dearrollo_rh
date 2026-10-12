@@ -142,6 +142,8 @@ export interface PasoSeguimiento {
   automatica?: boolean;
   /** Motivo del estado «Error» (envío fallido, disparo automático fallido…). */
   error?: string | null;
+  /** C8 (prueba del 11 de octubre): el aviso al entrevistador / evaluador NO salió — va aparte del estado de la actividad. */
+  aviso?: { a: string; aQuien: string; estado: "no_enviado"; texto: string; motivo: string; sinBot: boolean; mensaje: string; liga: string } | null;
   /** Ruta automática: el prefiltro quedó en «Revisar prefiltro» (decide RH). */
   revisarPrefiltro?: boolean;
   /** URL REAL de la actividad (sala, prueba, liga del evaluador, consentimiento, documentos). Abrirla/copiarla no marca nada. */

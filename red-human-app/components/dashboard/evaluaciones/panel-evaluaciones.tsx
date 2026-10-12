@@ -373,6 +373,9 @@ function ResultadoEnTarjeta({ e }: { e: Evaluacion }) {
           Revisada por {e.revision.revisadaPor}{e.revision.revisadaEn ? ` · ${textoFechaHora(e.revision.revisadaEn)}` : ""} · Conclusión de RH: <b>{e.revision.conclusionTexto}</b>
           {e.revision.comentario ? <span className="block text-ink-2">{e.revision.comentario}</span> : null}
         </p>
+      ) : e.conclusion && e.tipo === "entrevista_humana" ? (
+        // C13 (prueba del 11 de octubre): el resultado del entrevistador ya cumple la actividad; RH puede revisarlo si quiere
+        <p className="text-[12px] text-good"><BadgeCheck className="mr-1 inline h-3.5 w-3.5" />Resultado registrado: la actividad quedó cumplida.</p>
       ) : (
         <p className="text-[12px] text-warn">Resultado recibido · pendiente de revisión de RH.</p>
       )}

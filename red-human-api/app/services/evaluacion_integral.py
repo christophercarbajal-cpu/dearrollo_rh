@@ -33,10 +33,12 @@ from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, TIPOS_PASO_ENTREVIST
 RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
 
+# C6 (prueba del 11 de octubre): las etiquetas visibles son las de la recomendación — «No recomendable» reemplaza a «No
+# apto» (las claves internas no cambian)
 ESTADOS_INTEGRAL = {
-    "apto": "Apto",
-    "con_observaciones": "Apto con observaciones",
-    "no_apto": "No apto",
+    "apto": "Recomendable",
+    "con_observaciones": "Con reservas",
+    "no_apto": "No recomendable",
     "pendiente": "Pendiente",
 }
 TIPOS_OBLIGATORIOS = ("entrevista_humana", "medica")
@@ -78,14 +80,24 @@ def _validacion_red_human(clave: str, nombre: str, score: Optional[int], detalle
     }
 
 
+def _validacion_etiqueta(clave: str, nombre: str, resultado: Optional[str], etiqueta: str, faltan: List[str]) -> dict:
+    """C6: validación de Red Human SIN puntaje (entrevista operativa): Recomendable / Con reservas / No recomendable."""
+    estado = {"favorable": "aprobada", "con_observaciones": "observaciones"}.get(resultado or "", "no_apto")
+    return {
+        "clave": clave, "nombre": nombre, "obligatoria": True, "fuente": "red_human", "estado": estado,
+        "resultado": etiqueta, "detalle": ", ".join(faltan), "score": None, "faltan": faltan,
+        "revisadoPor": _revisado_por(RED_HUMAN), "codigo": None,
+    }
+
+
 def _validacion_evaluacion(ev: Evaluacion, obligatoria: bool) -> dict:
     conclusion = ev.conclusion_vigente
     legible = conclusiones_de(ev.tipo).get(conclusion, "")
     if conclusion in CONCLUSION_NEGATIVA:
         estado = "no_apto"  # «calificado como No apto» cuenta aunque RH aún no lo revise
     elif ev.estado != "con_resultado" or conclusion in CONCLUSION_PENDIENTE or (
-            not ev.revisada_en and not (ev.tipo == "entrevista_humana" and conclusion == "avanzar")):
-        # 2026-10-09: «Avanzar» registrado por el entrevistador cuenta sin esperar la revisión de RH
+            not ev.revisada_en and not (ev.tipo == "entrevista_humana" and conclusion)):
+        # C13 (prueba del 11 de octubre): la conclusión del entrevistador cuenta sin esperar la revisión de RH
         estado = "pendiente"
     elif conclusion in CONCLUSION_OBSERVACIONES:
         estado = "observaciones"
@@ -136,7 +148,16 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
                                               "" if score_cv is not None else "Aún no hay CV analizado."))
     ent = next((e for e in reversed(p.entrevistas or []) if e.estado == "evaluada" and e.evaluacion), None)
     match = score_de_entrevista(ent.evaluacion) if ent else None  # score propio de la entrevista (no el CV)
-    if match is not None or not _entrevista_ia_omitida(p):
+    op = (ent.evaluacion or {}).get("operativa") if ent else None
+    if op:
+        from .entrevista_operativa import RECOMENDACIONES
+
+        rec = op.get("recomendacion") if op.get("recomendacion") in RECOMENDACIONES else "con_reservas"
+        validaciones.append(_validacion_etiqueta(
+            "entrevista_red_human", "Entrevista Red Human",
+            {"recomendable": "favorable", "con_reservas": "con_observaciones"}.get(rec, "no_favorable"),
+            RECOMENDACIONES[rec][0], list(op.get("faltan") or [])))
+    elif match is not None or not _entrevista_ia_omitida(p):
         detalle = ""
         if ent is None:
             ultima = p.entrevistas[-1] if p.entrevistas else None
@@ -172,6 +193,12 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
     ligadas: set = set()
     for x in pasos:
         if x["estado"] in ("omitida", "cancelada"):
+            continue
+        if x["tipo"] in TIPOS_PASO_ENTREVISTA_IA and x.get("etiqueta") and x["estado"] == "completada":
+            # C6: entrevista operativa — etiqueta + requisitos que faltan, sin puntaje
+            v = _validacion_etiqueta(x["id"], x["nombre"], x["resultado"], x["etiqueta"], x.get("faltanRequisitos") or [])
+            v["obligatoria"] = x["obligatorio"]
+            validaciones.append(_con_excepcion(v, x))
             continue
         if x["tipo"] == "analisis_cv" or x["tipo"] in TIPOS_PASO_ENTREVISTA_IA:
             score = x["score"] if x["estado"] == "completada" else None
@@ -219,7 +246,7 @@ def _resultado(validaciones: List[dict]) -> dict:
     no_aptas = [v for v in validaciones if v["estado"] == "no_apto" and v["obligatoria"]]
     if no_aptas:
         estado = "no_apto"
-        motivo = "Requisito obligatorio calificado como No apto: " + ", ".join(f"{v['nombre']} ({v['resultado']})" for v in no_aptas) + "."
+        motivo = "Requisito obligatorio calificado como No recomendable: " + ", ".join(f"{v['nombre']} ({v['resultado']})" for v in no_aptas) + "."
     elif pendientes:
         estado = "pendiente"
         motivo = "Faltan validaciones: " + ", ".join(v["nombre"] for v in pendientes) + "."

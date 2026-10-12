@@ -220,6 +220,8 @@ with TestClient(app) as client:
     d = f.get("prefiltroDatos") or {}
     check(d.get("zona") == "por aquí" and d.get("trasladoMin") == 150 and "Metro" in d.get("transporte", "") and d.get("alerta") == "no_recomendable",
           "la ficha trae zona, traslado (~150 min) y transporte")
+    check(d.get("sueldoAcepta") is False and d.get("sueldo") == "No, está bajo" and "9,000" in d.get("sueldoOfrecido", ""),
+          "C5: la ficha trae su respuesta sobre el sueldo (y lo ofrecido)")
     check((f.get("puntosPorValidar") or [""])[0].startswith("Alerta: Traslado de ~150 min"), "traslado > 90 min → alerta al inicio de Puntos por validar")
     for _ in range(40):  # el resto de la entrevista (motor sin IA) hasta la despedida
         e = sent.entrevista_whatsapp_activa(fresca(p))

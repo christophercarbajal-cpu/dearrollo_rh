@@ -822,6 +822,14 @@ function ResultadosClave({ c }: { c: Candidato }) {
     ...(c.score != null && c.pideCv !== false ? [{ k: "CV", v: `${c.score}/100` }] : []),
     // 2026-10-08: el score de la entrevista es el SUYO (antes se mostraba la afinidad integral CV + entrevista)
     ...(c.scoreEntrevista != null ? [{ k: "Entrevista Red Human", v: `${c.scoreEntrevista}/100` }] : []),
+    // C6: la entrevista operativa se resume con su etiqueta, sin puntaje
+    ...(c.recomendacionOperativa
+      ? [{
+          k: "Entrevista Red Human",
+          v: c.recomendacionOperativa.texto + (c.recomendacionOperativa.faltan.length ? ` · ${c.recomendacionOperativa.faltan.join(" · ")}` : ""),
+          tono: c.recomendacionOperativa.clave === "recomendable" ? "text-good" : c.recomendacionOperativa.clave === "no_recomendable" ? "text-bad" : "text-warn",
+        }]
+      : []),
     ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),
   ];
   // 2026-10-11 (tarde): lo que dio en el prefiltro de WhatsApp; traslado > 90 min = alerta, > 120 min = no recomendable
@@ -837,6 +845,14 @@ function ResultadosClave({ c }: { c: Candidato }) {
             }]
           : []),
         ...(d.transporte ? [{ k: "Transporte", v: d.transporte }] : []),
+        // C5: su respuesta al sueldo («El sueldo es desde… ¿Te parece bien?»); un «no» nunca descarta
+        ...(d.sueldoAcepta != null || d.sueldo
+          ? [{
+              k: "Sueldo",
+              v: d.sueldoAcepta === true ? "Le parece bien" : d.sueldoAcepta === false ? `No le parece${d.sueldo ? ` («${d.sueldo}»)` : ""}` : d.sueldo,
+              tono: d.sueldoAcepta === false ? "text-bad" : d.sueldoAcepta === true ? "text-good" : undefined,
+            }]
+          : []),
       ]
     : [];
   return (

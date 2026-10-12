@@ -67,18 +67,23 @@ export const sinConsentimiento = (c: Candidato) => c.activa !== false && (c.has_
 export const expedienteIncompleto = (c: Candidato) =>
   (c.etapa === "Contratación" || c.etapa === "Onboarding") && c.expediente_pct != null && c.expediente_pct < 100;
 
-function tonoScore(s: number | null): string {
-  if (s == null) return "bg-kb-gray-bg text-kb-gray";
-  if (s >= 85) return "bg-kb-green-bg text-kb-green";
-  if (s >= 70) return "bg-kb-amber-bg text-kb-amber";
-  return "bg-kb-red-bg text-kb-red";
+
+/** C11: etiqueta de la tarjeta (sin número) y su tono. */
+export const RANGO_ETIQUETA: Record<string, number> = { recomendable: 3, con_reservas: 2, no_recomendable: 1 };
+export function tonoEtiqueta(clave?: string | null): string {
+  if (clave === "recomendable") return "bg-kb-green-bg text-kb-green";
+  if (clave === "con_reservas") return "bg-kb-amber-bg text-kb-amber";
+  if (clave === "no_recomendable") return "bg-kb-red-bg text-kb-red";
+  return "bg-kb-gray-bg text-kb-gray";
 }
 
-/** Orden por defecto: score descendente (sin score al final); alternativo: más días en la etapa primero. */
+/** Orden por defecto: recomendación (Recomendable → Con reservas → No recomendable → sin evaluar); alternativo: más
+ * días en la etapa primero. */
 export type OrdenTablero = "score" | "dias";
 export function ordenarTablero(a: Candidato, b: Candidato, orden: OrdenTablero): number {
   if (orden === "dias") return (diasEnEtapa(b) ?? -1) - (diasEnEtapa(a) ?? -1);
-  return (scoreTarjeta(b) ?? -1) - (scoreTarjeta(a) ?? -1);
+  const r = (RANGO_ETIQUETA[b.card_label?.clave ?? ""] ?? 0) - (RANGO_ETIQUETA[a.card_label?.clave ?? ""] ?? 0);
+  return r || (scoreTarjeta(b) ?? -1) - (scoreTarjeta(a) ?? -1);
 }
 
 /* ---------------------------------------------------------------- Chips de alerta (reemplazan el banner) */
@@ -135,7 +140,7 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
   onAbrir: (c: Candidato) => void;
   onIntentoArrastre?: () => void;
 }) {
-  const score = scoreTarjeta(c);
+  const etiqueta = c.card_label;
   const dias = diasEnEtapa(c);
   const atorado = estaAtorado(c);
   const nombre = c.name || c.nombre;
@@ -172,13 +177,19 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
           <p className="line-clamp-2 text-[15px] font-semibold leading-[1.3]">{nombre}</p>
           {subtitulo && <p className="text-[13px] text-kb-ink-2">{subtitulo}</p>}
         </div>
-        <span
-          aria-label={score == null ? "Sin score" : `Score ${score}`}
-          className={cn("grid h-[46px] w-[46px] shrink-0 place-items-center rounded-xl text-[19px] font-bold", tonoScore(score))}
-        >
-          {score == null ? "—" : score}
+        {/* C11 (prueba del 11 de octubre): sin puntaje numérico — solo la etiqueta de la recomendación */}
+        <span className={cn("shrink-0 rounded-lg px-2 py-1 text-xs font-bold", tonoEtiqueta(etiqueta?.clave))}>
+          {etiqueta?.texto ?? "Sin evaluar"}
         </span>
       </div>
+
+      {Boolean(etiqueta?.faltan?.length) && (
+        <p className="flex flex-wrap gap-1.5 text-[12px] font-medium text-kb-ink-2">
+          {etiqueta!.faltan.map((f) => (
+            <span key={f} className={cn("rounded-md px-1.5 py-0.5", f.startsWith("✗") ? "bg-kb-red-bg text-kb-red" : "bg-kb-amber-bg text-kb-amber")}>{f}</span>
+          ))}
+        </p>
+      )}
 
       {c.next_step && (
         <p className="flex items-start gap-1.5 text-[13px] font-medium">
@@ -187,7 +198,8 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
         </p>
       )}
 
-      {porque && <p className="rounded-lg bg-kb-bg px-2.5 py-2 text-[12.5px] leading-[1.45] text-kb-ink-2">{porque}</p>}
+      {/* C11: con etiqueta, la tarjeta muestra solo la etiqueta y lo que falta */}
+      {porque && !etiqueta && <p className="rounded-lg bg-kb-bg px-2.5 py-2 text-[12.5px] leading-[1.45] text-kb-ink-2">{porque}</p>}
 
       {pct != null && pct >= 100 && (
         <p className="text-xs font-semibold text-kb-green">

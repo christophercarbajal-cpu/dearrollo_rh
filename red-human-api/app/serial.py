@@ -185,6 +185,8 @@ def prefiltro_datos(p) -> Optional[dict]:
     m = d.get("traslado_min") if isinstance(d.get("traslado_min"), (int, float)) else None
     return {"escolaridad": d.get("escolaridad") or "", "nivel": d.get("nivel") or "", "zona": d.get("zona") or "",
             "traslado": d.get("traslado") or "", "trasladoMin": m, "transporte": d.get("transporte_medio") or d.get("transporte") or "",
+            # C5 (prueba del 11 de octubre): su respuesta a «El sueldo es desde… ¿Te parece bien?»
+            "sueldo": d.get("sueldo") or "", "sueldoAcepta": d.get("sueldo_acepta"), "sueldoOfrecido": d.get("sueldo_ofrecido") or "",
             "alerta": None if m is None or m <= TRASLADO_MAX_MIN else ("no_recomendable" if m > TRASLADO_NO_RECOMENDABLE_MIN else "alerta")}
 
 
@@ -222,7 +224,8 @@ def _sintesis_global(p: Postulacion) -> dict:
     # interrumpida (sin respuestas / desconexión) o parcial no aporta score ni fortalezas.
     entrevista_valida = bool(ultima_ent and ultima_ent.estado == "evaluada" and ultima_ent.evaluacion)
     eval_ia = sin_alertas_escolaridad(ultima_ent.evaluacion or {}) if entrevista_valida else {}
-    match_ia = eval_ia.get("match_perfil")
+    # C6: la entrevista operativa no tiene puntaje — tampoco aporta a la afinidad numérica
+    match_ia = eval_ia.get("match_perfil") if not eval_ia.get("operativa") else None
     respuestas = a.get("respuestas_prefiltro") or []
     hay_cv = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"))
 
@@ -350,6 +353,8 @@ def _sintesis_global(p: Postulacion) -> dict:
         "afinidadGlobal": afinidad,
         # 2026-10-08: score PROPIO de la Entrevista Red Human (sin el CV); «Resultados clave» lo muestra como tal
         "scoreEntrevista": score_de_entrevista(eval_ia) if eval_ia else None,
+        # C6: recomendación operativa (etiqueta + 5 requisitos ✓ / ✗ / ?), sin puntaje
+        "recomendacionOperativa": recomendacion_operativa(eval_ia),
         "sintesisAfinidad": " · ".join(fuentes),
         "fortalezasPrincipales": fortalezas,
         "puntosPorValidar": puntos_por_validar,
@@ -483,6 +488,37 @@ def sin_alertas_escolaridad(ev: Optional[dict]) -> dict:
     return salida
 
 
+def recomendacion_operativa(evaluacion: Optional[dict]) -> Optional[dict]:
+    """C6/C11: {clave, texto, requisitos[], faltan[]} de la entrevista OPERATIVA evaluada; None si no la hay."""
+    op = (evaluacion or {}).get("operativa")
+    if not op:
+        return None
+    from .services.entrevista_operativa import RECOMENDACIONES, REQUISITOS
+
+    clave = op.get("recomendacion") if op.get("recomendacion") in RECOMENDACIONES else "con_reservas"
+    reqs = op.get("requisitos") or {}
+    return {"clave": clave, "texto": RECOMENDACIONES[clave][0],
+            "requisitos": [{"clave": k, **reqs[k]} for k, _ in REQUISITOS if k in reqs],
+            "faltan": list(op.get("faltan") or [])}
+
+
+def etiqueta_tablero(p: Postulacion) -> Optional[dict]:
+    """C11 (prueba del 11 de octubre): la tarjeta ya no muestra un número — solo la etiqueta de la Entrevista Red Human
+    evaluada (Recomendable / Con reservas / No recomendable) y los requisitos que faltan (✗ / ?)."""
+    ev = _entrevista_ia(p)
+    if not ev:
+        return None
+    op = recomendacion_operativa(ev)
+    if op is not None:
+        return {"clave": op["clave"], "texto": op["texto"], "faltan": op["faltan"]}
+    clave = {"avanzar": "recomendable", "revision": "con_reservas", "no_avanzar": "no_recomendable"}.get(ev.get("recomendacion") or "")
+    if not clave:
+        return None
+    from .services.entrevista_operativa import RECOMENDACIONES
+
+    return {"clave": clave, "texto": RECOMENDACIONES[clave][0], "faltan": []}
+
+
 def score_tablero(p: Postulacion) -> Optional[int]:
     """`card_score` (2026-10-07): el score del agente IA leído de la base — Análisis de CV REAL (`Postulacion.score`)
     y/o el score PROPIO de la Entrevista Red Human evaluada (`models.score_de_entrevista`), promediados como en la
@@ -544,6 +580,8 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "stage": ETAPA_TABLERO.get(p.etapa, "prefiltro"),
         "filter_status": _FILTRO_TABLERO.get(p.estado or ""),
         "card_score": score_tablero(p),
+        # C11: lo que la tarjeta muestra en lugar del número
+        "card_label": etiqueta_tablero(p),
         "score_reason": razon_score(p),
         "source_channel": canal_origen(p),
         "next_step": (siguiente or {}).get("nombre") or None,

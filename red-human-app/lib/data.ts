@@ -324,6 +324,10 @@ export interface Candidato {
     traslado: string;
     trasladoMin: number | null;
     transporte: string;
+    /** C5: respuesta a «El sueldo es desde… ¿Te parece bien?» (null = no la dio o no se preguntó). */
+    sueldo?: string;
+    sueldoAcepta?: boolean | null;
+    sueldoOfrecido?: string;
     alerta: "alerta" | "no_recomendable" | null;
   } | null;
   pideCv?: boolean;
@@ -366,6 +370,8 @@ export interface Candidato {
   fusionadas?: string[];
   /** Score del agente IA (Análisis de CV real + Entrevista Red Human evaluada); null = sin evaluación real. */
   card_score?: number | null;
+  /** C11 (prueba del 11 de octubre): la tarjeta muestra la ETIQUETA (sin número) y los requisitos que faltan (✗ / ?). */
+  card_label?: { clave: ClaveRecomendacion; texto: string; faltan: string[] } | null;
   score_reason?: { fortaleza: string; faltante: string } | null;
   source_channel?: "whatsapp" | "web" | "referido" | "telegram";
   next_step?: string | null;
@@ -488,8 +494,10 @@ export interface Candidato {
   /** true solo cuando la Evaluación Integral (CV + Entrevista Red Human válida) existe. */
   evaluacionIntegral?: boolean;
   afinidadGlobal?: number | null;
-  /** Score PROPIO de la Entrevista Red Human (sin el CV), 2026-10-08. */
+  /** Score PROPIO de la Entrevista Red Human (sin el CV), 2026-10-08. null en la entrevista operativa (C6). */
   scoreEntrevista?: number | null;
+  /** C6: recomendación operativa por 5 requisitos (✓ / ✗ / ?), sin puntaje. */
+  recomendacionOperativa?: RecomendacionOperativa | null;
   sintesisAfinidad?: string;
   fortalezasPrincipales?: string[];
   puntosPorValidar?: string[];
@@ -759,3 +767,19 @@ export const conversacionDemo = [
       "Puedes solicitarlas directamente por aquí: dime las fechas que quieres y genero tu solicitud con folio para que tu jefe(a) la autorice. También puedo revisar tu saldo actual de días disponibles antes de continuar. ¿Qué fechas tienes en mente?",
   },
 ];
+
+/** C6 (prueba del 11 de octubre): recomendación de la entrevista operativa — sin puntaje. */
+export type ClaveRecomendacion = "recomendable" | "con_reservas" | "no_recomendable";
+export interface RequisitoOperativo {
+  clave: "traslado" | "sueldo" | "experiencia" | "indispensables" | "inicio";
+  nombre: string;
+  estado: "cumple" | "no_cumple" | "sin_dato" | "no_aplica";
+  simbolo: string;
+  evidencia: string;
+}
+export interface RecomendacionOperativa {
+  clave: ClaveRecomendacion;
+  texto: string;
+  requisitos: RequisitoOperativo[];
+  faltan: string[];
+}

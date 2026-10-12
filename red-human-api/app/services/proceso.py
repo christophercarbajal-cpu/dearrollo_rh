@@ -815,10 +815,12 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         if regla["tipo"] == "ninguna":
             cumple = True
         elif regla["tipo"] == "validacion":
-            # 2026-10-09: «Avanzar» del entrevistador ya es la decisión de una persona: no espera la revisión de RH
-            avanzar = ev.tipo == "entrevista_humana" and conclusion == "avanzar"
-            cumple = (bool(ev.revisada_en) or avanzar) and conclusion not in CONCLUSION_NEGATIVA
-            if not ev.revisada_en and not avanzar:
+            # C13 (prueba del 11 de octubre): el resultado que guarda el ENTREVISTADOR (entrevista humana) ya es la
+            # decisión de una persona — la actividad queda cumplida sin «pendiente de revisión de RH». Las demás
+            # evaluaciones con regla de validación (referencias, psicometría…) siguen esperando la revisión de RH.
+            del_entrevistador = ev.tipo == "entrevista_humana" and bool(conclusion)
+            cumple = (bool(ev.revisada_en) or del_entrevistador) and conclusion not in CONCLUSION_NEGATIVA
+            if not ev.revisada_en and not del_entrevistador:
                 espera = "Falta la revisión de RH"
         else:  # dictamen / calificación
             cumple = conclusion in (regla.get("aceptados") or [])
@@ -960,6 +962,19 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     # entrevista_agente / entrevista_whatsapp / llamada_agente: cada actividad lee SOLO sus entrevistas (2026-10-09)
     entrevistas = entrevistas_de_paso(p, tipo)
     evaluada = next((e for e in reversed(entrevistas) if e.estado == "evaluada" and e.evaluacion), None)
+    op = (evaluada.evaluacion or {}).get("operativa") if evaluada is not None else None
+    if op:
+        # C6 (prueba del 11 de octubre): la entrevista operativa NO tiene puntaje ni mínimo — se resuelve con su etiqueta.
+        # «No recomendable» no descarta: deja la actividad «No aprobada» y la ruta se detiene hasta que RH decida.
+        from .entrevista_operativa import RECOMENDACIONES
+
+        rec = op.get("recomendacion") if op.get("recomendacion") in RECOMENDACIONES else "con_reservas"
+        faltan = list(op.get("faltan") or [])
+        return {**base, "estado": "completada", "cumple": rec != "no_recomendable",
+                "resultado": {"recomendable": "favorable", "con_reservas": "con_observaciones"}.get(rec, "no_favorable"),
+                "detalle": RECOMENDACIONES[rec][0] + (f" · {', '.join(faltan)}" if faltan else ""),
+                "etiqueta": RECOMENDACIONES[rec][0], "faltanRequisitos": faltan,
+                "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(evaluada.finalizada_en)}
     puntaje = score_de_entrevista(evaluada.evaluacion) if evaluada is not None else None
     if puntaje is not None:
         r = _con_score(base, regla, puntaje)  # score PROPIO de la entrevista (2026-10-08), nunca el del CV
@@ -1412,6 +1427,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "detalle": r.get("detalle", ""), "cumpleRegla": bool(r["cumple"]) and r["estado"] in ("completada", "omitida", "cancelada"),
             "espera": espera, "disponible": disponible, "revisadoPor": r.get("revisadoPor", ""),
             "evaluacion": r.get("evaluacion"), "score": r.get("score"),
+            # C6: entrevista operativa sin puntaje — etiqueta y requisitos que faltan (✗ / ?)
+            "etiqueta": r.get("etiqueta"), "faltanRequisitos": r.get("faltanRequisitos") or [],
             "plazoDias": paso.get("plazo_dias"), "fechaLimite": limite.isoformat() if limite else None, "vencido": vencido,
             "decision": r.get("decision"), "heredado": bool(paso.get("heredado")), "adhoc": bool(paso.get("adhoc")),
             "sincronizable": bool(r.get("sincronizable")),
@@ -2019,7 +2036,7 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
         # 2026-10-08 (todas las Cuentas): una obligatoria «No aprobada» detiene la ruta → «Confirmar descarte» o
         # «Continuar por decisión de RH». La recomendación de la ficha sale de ESTE mismo cálculo.
         "bloqueo": bloqueo,
-        "recomendacion": _recomendacion_ruta(bloqueo, accion_principal, p),
+        "recomendacion": _recomendacion_ruta(bloqueo, accion_principal, p, pasos),
         "plantilla": p.proceso.get("plantilla_nombre") or "", "origen": p.proceso.get("origen") or "vacante",
         "personalizado": bool(p.proceso.get("personalizado")),
         "version": int(p.proceso.get("vacante_version") or p.proceso.get("version") or 1),
@@ -2034,7 +2051,8 @@ def resumen(p: Postulacion, evaluaciones=None) -> dict:
     }
 
 
-def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict, p: Optional[Postulacion] = None) -> Optional[dict]:
+def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict, p: Optional[Postulacion] = None,
+                        pasos: Optional[List[dict]] = None) -> Optional[dict]:
     """Recomendación derivada de la RUTA (misma fuente que la acción principal y los avisos). None = la ficha muestra
     la recomendación de Red Human (CV + entrevista). 2026-10-08: en Contratación y Onboarding la recomendación es SIEMPRE
     el pendiente actual (nunca «Avanzar a contratación» de la entrevista humana, que ya quedó atrás)."""
@@ -2044,6 +2062,20 @@ def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict, p: Optional[Postu
     if accion.get("accion", {}) and (accion.get("accion") or {}).get("clave") == "agregar_correo":
         return {"texto": "Falta un dato para continuar", "motivo": "Agrega el correo del candidato: la prueba se envía sola al guardarlo.",
                 "tono": "warn"}
+    excepcion = next((x for x in pasos or [] if x.get("excepcionRH")), None)
+    if excepcion is not None and p is not None and p.etapa not in ("Contratación", "Onboarding"):
+        # C7 (prueba del 11 de octubre): RH decidió continuar — la recomendación es la acción ACTUAL de la ruta, nunca el
+        # «No avanzar» de la evaluación que RH ya decidió pasar por alto
+        d = excepcion["excepcionRH"]
+        motivo = f"RH decidió continuar ({d.get('por', '')}): {d.get('motivo', '')}".strip()
+        sig = next((x for x in pasos if x["id"] == accion.get("paso")), None) or next(
+            (x for x in pasos if x["obligatorio"] and not x.get("heredado") and x["estado"] not in ("omitida", "cancelada")
+             and not _satisfecho(x)), None)
+        if sig is not None:
+            return {"texto": f"Siguiente paso: {sig['nombre']}", "motivo": motivo, "tono": "good"}
+        if accion.get("tipo") == "avanzar" and accion.get("etapa"):
+            return {"texto": f"Siguiente paso: {nombre_etapa(accion['etapa'])}", "motivo": motivo, "tono": "good"}
+        return {"texto": "Continúa por decisión de RH", "motivo": motivo, "tono": "good"}
     if p is None or p.etapa not in ("Contratación", "Onboarding"):
         return None
     tipo = accion.get("tipo")

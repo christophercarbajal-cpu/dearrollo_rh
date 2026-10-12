@@ -2107,6 +2107,8 @@ def score_de_entrevista(evaluacion: Optional[dict]) -> Optional[int]:
     evaluaciones previas (sin ese campo) lo derivan de sus calificaciones de la entrevista (experiencia y comunicación,
     0-10). `match_perfil` NUNCA: es la afinidad integral (CV + entrevista). None sin datos."""
     ev = evaluacion or {}
+    if ev.get("operativa"):
+        return None  # C6 (prueba del 11 de octubre): la entrevista operativa se resuelve por etiqueta, sin puntaje
     valor = ev.get("score_entrevista")
     if isinstance(valor, (int, float)):
         return max(0, min(100, int(round(valor))))

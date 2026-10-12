@@ -289,8 +289,15 @@ CRITERIOS = (
 RESULTADOS = ("cumple", "parcial", "no_cumple", "sin_dato")
 TEXTO_RESULTADO = {"cumple": "Cumple", "parcial": "Parcial", "no_cumple": "No cumple", "sin_dato": "Sin dato"}
 RECOMENDACIONES = {"recomendable": ("Recomendable", "avanzar"),
-                   "con_reservas": ("Recomendable con reservas", "revision"),
+                   "con_reservas": ("Con reservas", "revision"),
                    "no_recomendable": ("No recomendable", "no_avanzar")}
+# C6 (prueba del 11 de octubre): SIN puntaje. La recomendación sale de 5 requisitos, cada uno ✓ (cumple), ✗ (no cumple)
+# o ? (sin dato): algún ✗ → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»; lo demás
+# → «Con reservas». «no_aplica» (p. ej. vacante sin sueldo capturado) no cuenta.
+INICIO_MAX_DIAS = 14
+REQUISITOS = (("traslado", f"Traslado ≤ {TRASLADO_MAX_MIN} min"), ("sueldo", "Sueldo"), ("experiencia", "Experiencia"),
+              ("indispensables", "Indispensables"), ("inicio", f"Inicio ≤ {INICIO_MAX_DIAS} días"))
+SIMBOLO = {"cumple": "✓", "no_cumple": "✗", "sin_dato": "?", "no_aplica": "—"}
 
 
 def _n(t: str) -> str:
@@ -942,6 +949,36 @@ def minutos_traslado(texto: str) -> Optional[int]:
     return int(total) if hubo else None
 
 
+_DIAS_SEMANA = r"lunes|martes|miercoles|jueves|viernes|sabado|domingo"
+_RE_INMEDIATO = re.compile(r"\b(inmediat\w*|ya mismo|desde ya|de una vez|hoy|manana|ahorita|cuando (sea|ustedes|me digan|gusten|quieran)|"
+                           r"lo antes posible|en cuanto (me|ustedes)|ya puedo|cuando usted\w*)\b")
+_RE_SEMANA = re.compile(r"\b(esta semana|la (proxima|siguiente|otra) semana|la semana que (entra|viene)|el (proximo )?(" + _DIAS_SEMANA
+                        + r")|(este |el )?fin de semana|pasado manana)\b")
+_RE_MES = re.compile(r"\b(el (proximo|siguiente) mes|el mes que (entra|viene)|la (proxima|siguiente|otra) quincena)\b")
+_RE_CANTIDAD_TIEMPO = re.compile(r"\b(\d+|un|una|dos|tres|cuatro|cinco|seis|media)\s*(dias?|semanas?|mes(?:es)?|quincenas?)\b")
+
+
+def dias_inicio(texto: str) -> Optional[int]:
+    """Días hasta que puede empezar, leídos de su respuesta («mañana» → 1, «el lunes» → 7, «en 2 semanas» → 14, «no
+    puedo antes de un mes» → 30). None si no da un dato concreto."""
+    t = _n(texto)
+    if not t:
+        return None
+    m = _RE_CANTIDAD_TIEMPO.search(t)
+    if m:
+        n = _num(m.group(1)) if m.group(1) != "media" else 0.5
+        unidad = m.group(2)
+        mult = 1 if unidad.startswith("dia") else 7 if unidad.startswith("semana") else 15 if unidad.startswith("quincena") else 30
+        return int(round(n * mult))
+    if _RE_MES.search(t):
+        return 30 if "mes" in t else 15
+    if _RE_SEMANA.search(t):
+        return 7
+    if _RE_INMEDIATO.search(t) and not _RE_NEGATIVA_LOGISTICA.search(t):
+        return 1
+    return None
+
+
 def _meses(texto: str) -> Optional[float]:
     m = _RE_DURACION.search(_n(texto))
     if not m:
@@ -1091,7 +1128,8 @@ class EvaluacionOperativaIA(BaseModel):
                                                                   "escolaridad ni documentos.")
 
 
-def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] = None, titulo: str = "") -> Tuple[dict, bool]:
+def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] = None, titulo: str = "",
+            prefiltro: Optional[dict] = None) -> Tuple[dict, bool]:
     """Criterios A-D (IA o determinista) + alertas (las deterministas SIEMPRE se suman) + recomendación estricta."""
     from . import ia
 
@@ -1136,9 +1174,22 @@ def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] =
         base["criterios"]["C"] = _criterio("cumple", "La vacante no tiene indispensables por explorar.")
     alertas = []
     for a in alertas_deterministas(transcript, guion) + list(base.get("alertas") or []):
-        if a and not es_alerta_escolaridad(a) and _n(a) not in {_n(x) for x in alertas}:
+        if a and not es_alerta_escolaridad(a) and not es_soft_skill(a) and _n(a) not in {_n(x) for x in alertas}:
             alertas.append(a)
-    return resultado(base["criterios"], alertas, perfil), con_ia
+    reqs = requisitos_de(base["criterios"], transcript, guion, prefiltro)
+    return resultado(base["criterios"], alertas, perfil, reqs), con_ia
+
+
+# C6: «Puntos por validar» de la entrevista operativa = hechos verificables; nunca habilidades blandas
+_RE_SOFT = re.compile(r"\b(comunicacion|comunica\w*|actitud|liderazgo|trabajo en equipo|proactiv\w*|personalidad|confianza en si|"
+                      r"seguridad en si|iniciativa|empatia|habilidades blandas|soft skills?|expresion|se expresa|fluidez|entusiasmo|"
+                      r"motivacion|motivado|interes genuino|disposicion|actitud de servicio|orientacion al cliente|"
+                      r"inteligencia emocional|manejo del estres|adaptabilidad|creatividad|claridad al hablar|respuestas breves|"
+                      r"respuestas cortas|poco detalle|profundiz\w*)\b")
+
+
+def es_soft_skill(texto: str) -> bool:
+    return bool(_RE_SOFT.search(_n(texto)))
 
 
 _RE_ESCOLARIDAD = re.compile(r"\b(escolaridad|secundaria|preparatoria|bachillerato|certificado de estudios|titulo|estudios|"
@@ -1150,29 +1201,91 @@ def es_alerta_escolaridad(texto: str) -> bool:
     return bool(_RE_ESCOLARIDAD.search(_n(texto)))
 
 
-def recomendacion_de(criterios: Dict[str, dict]) -> str:
-    """Regla ESTRICTA: falla en indispensables (C) o logística (D) → «No recomendable» (no descarta: RH decide). Todo
-    cumple → «Recomendable». Lo demás → «Recomendable con reservas»."""
-    res = {k: (criterios.get(k) or {}).get("resultado") for k, _ in CRITERIOS}
-    if res.get("C") == "no_cumple" or res.get("D") == "no_cumple":
+def contexto_prefiltro(p) -> dict:
+    """Lo que el prefiltro de WhatsApp ya respondió y la entrevista NO vuelve a preguntar: traslado y sueldo."""
+    from . import ia
+
+    d = (((getattr(p, "analisis", None) or {}).get("prefiltro_datos")) or {}) if p is not None else {}
+    v = getattr(p, "vacante", None) if p is not None else None
+    m = d.get("traslado_min")
+    return {"traslado_min": int(m) if isinstance(m, (int, float)) else None, "traslado": d.get("traslado") or "",
+            "sueldo_aplica": bool(ia.pregunta_sueldo((v.sueldo if v is not None else "") or "")) or "sueldo" in d,
+            "sueldo_acepta": d.get("sueldo_acepta"), "sueldo": d.get("sueldo") or ""}
+
+
+def _req(estado: str, evidencia: str = "") -> dict:
+    return {"estado": estado, "evidencia": (evidencia or "").strip()[:200]}
+
+
+def requisitos_de(criterios: Dict[str, dict], transcript: List[dict], guion: dict, prefiltro: Optional[dict]) -> Dict[str, dict]:
+    """Los 5 requisitos de la recomendación operativa (C6), cada uno ✓ / ✗ / ?."""
+    pf = prefiltro or {}
+    reqs: Dict[str, dict] = {}
+    m = pf.get("traslado_min")
+    reqs["traslado"] = _req("sin_dato") if m is None else (
+        _req("cumple", f"~{m} min") if m <= TRASLADO_MAX_MIN else _req("no_cumple", f"~{m} min"))
+    if not pf.get("sueldo_aplica"):
+        reqs["sueldo"] = _req("no_aplica", "La vacante no tiene sueldo capturado")
+    elif pf.get("sueldo_acepta") is True:
+        reqs["sueldo"] = _req("cumple", pf.get("sueldo") or "Le parece bien")
+    elif pf.get("sueldo_acepta") is False:
+        reqs["sueldo"] = _req("no_cumple", pf.get("sueldo") or "No le parece")
+    else:
+        reqs["sueldo"] = _req("sin_dato")
+    a = (criterios.get("A") or {})
+    b = (criterios.get("B") or {}).get("resultado")
+    if a.get("resultado") == "no_cumple":
+        reqs["experiencia"] = _req("no_cumple", a.get("evidencia", ""))
+    elif a.get("resultado") == "cumple" and b != "no_cumple":
+        reqs["experiencia"] = _req("cumple", a.get("evidencia", ""))
+    else:
+        reqs["experiencia"] = _req("sin_dato", a.get("evidencia", ""))
+    c = criterios.get("C") or {}
+    reqs["indispensables"] = _req({"cumple": "cumple", "no_cumple": "no_cumple"}.get(c.get("resultado"), "sin_dato"), c.get("evidencia", ""))
+    por = respuestas_por_seccion(transcript, guion)
+    resp = [r for q, r in por.get("logistica", []) if _tema_logistica(q) in ("inicio", None)]
+    dias = next((x for x in (dias_inicio(r) for r in resp) if x is not None), None)
+    if dias is None:
+        d = (criterios.get("D") or {}).get("resultado")
+        reqs["inicio"] = _req("no_cumple" if d == "no_cumple" else "sin_dato", (resp or [""])[0])
+    else:
+        reqs["inicio"] = _req("cumple" if dias <= INICIO_MAX_DIAS else "no_cumple", f"«{resp[0].strip()[:80]}» (~{dias} días)")
+    return reqs
+
+
+def recomendacion_de(requisitos: Dict[str, dict]) -> str:
+    """Regla ESTRICTA (C6): algún ✗ → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»;
+    lo demás (algún ?) → «Con reservas». Sin puntaje."""
+    estados = [r.get("estado") for r in requisitos.values() if r.get("estado") != "no_aplica"]
+    if "no_cumple" in estados:
         return "no_recomendable"
-    if all(v == "cumple" for v in res.values()):
+    if all(e == "cumple" for e in estados):
         return "recomendable"
     return "con_reservas"
 
 
-PUNTOS = {"cumple": 25, "parcial": 12, "sin_dato": 8, "no_cumple": 0}
+def faltan_de(requisitos: Dict[str, dict]) -> List[str]:
+    """«✗ Traslado ≤ 90 min», «? Inicio ≤ 14 días»: lo que la tarjeta y la ficha muestran (primero los ✗)."""
+    nombres = dict(REQUISITOS)
+    orden = sorted([k for k, _ in REQUISITOS if (requisitos.get(k) or {}).get("estado") in ("no_cumple", "sin_dato")],
+                   key=lambda k: 0 if requisitos[k]["estado"] == "no_cumple" else 1)
+    return [f"{SIMBOLO[requisitos[k]['estado']]} {nombres[k]}" for k in orden]
 
 
-def resultado(criterios: Dict[str, dict], alertas: List[str], perfil: Optional[dict] = None) -> dict:
-    rec = recomendacion_de(criterios)
+def resultado(criterios: Dict[str, dict], alertas: List[str], perfil: Optional[dict] = None,
+              requisitos: Optional[Dict[str, dict]] = None) -> dict:
+    requisitos = requisitos if requisitos is not None else requisitos_de(criterios, [], {}, None)
+    rec = recomendacion_de(requisitos)
+    nombres = dict(REQUISITOS)
     return {
         "oficio": (perfil or {}).get("oficio") or "", "nombre_oficio": (perfil or {}).get("nombre") or "",
         "criterios": {k: {"nombre": nombre, **(criterios.get(k) or _criterio("sin_dato")),
                           "texto": TEXTO_RESULTADO[(criterios.get(k) or {}).get("resultado") or "sin_dato"]} for k, nombre in CRITERIOS},
+        "requisitos": {k: {"nombre": nombres[k], **requisitos[k], "simbolo": SIMBOLO[requisitos[k]["estado"]]} for k, _ in REQUISITOS},
+        "faltan": faltan_de(requisitos),
         "alertas": alertas[:8],
         "recomendacion": rec, "recomendacion_texto": RECOMENDACIONES[rec][0],
-        "score": sum(PUNTOS[(criterios.get(k) or {}).get("resultado") or "sin_dato"] for k, _ in CRITERIOS),
+        "score": None,  # C6: la recomendación operativa no tiene puntaje (ni base 100 ni mínimo 70)
     }
 
 
@@ -1195,14 +1308,16 @@ def alerta_traslado(minutos: Optional[int]) -> Optional[str]:
 
 
 def aplicar_traslado(ev, operativa: Optional[dict], minutos: Optional[int]):
-    """2026-10-11 (tarde): con el traslado del prefiltro, > 90 min = alerta en Puntos por validar y > 120 min = la
-    recomendación de la entrevista pasa a «No recomendable». Nunca descarta (RH decide)."""
+    """2026-10-11 (tarde): con el traslado del prefiltro, > 90 min = alerta en Puntos por validar. En la entrevista
+    OPERATIVA el traslado ya es uno de los 5 requisitos (C6: > 90 min = ✗ → «No recomendable»); en las demás, > 120 min
+    pasa la recomendación a «No recomendable». Nunca descarta (RH decide)."""
     alerta = alerta_traslado(minutos)
     if not alerta:
         return ev
     ev.riesgos = [alerta] + [r for r in (ev.riesgos or []) if "traslado de" not in _n(r)]
     if operativa is not None:
         operativa["alertas"] = [alerta[len(PREFIJO_ALERTA):]] + [a for a in operativa.get("alertas") or [] if "traslado de" not in _n(a)]
+        return ev
     if minutos > TRASLADO_NO_RECOMENDABLE_MIN:
         ev.recomendacion = RECOMENDACIONES["no_recomendable"][1]
         if operativa is not None:
@@ -1216,9 +1331,11 @@ def aplicar(ev, op: dict):
     """Lleva el resultado operativo a la evaluación de siempre (`ia.EvaluacionEntrevista`): recomendación y score de la
     entrevista salen de los criterios A-D; las alertas encabezan «Puntos por validar». Nunca descarta."""
     ev.recomendacion = RECOMENDACIONES[op["recomendacion"]][1]
-    ev.score_entrevista = int(op["score"])
-    riesgos = [r for r in (ev.riesgos or []) if not es_alerta_escolaridad(r)]
-    ev.riesgos = [f"{PREFIJO_ALERTA}{a}" for a in op["alertas"]] + [r for r in riesgos if not r.startswith(PREFIJO_ALERTA)]
+    ev.score_entrevista = None  # C6: sin puntaje — la actividad se resuelve con la etiqueta (models.score_de_entrevista)
+    # C6: Puntos por validar = alertas verificables + contradicciones; nunca habilidades blandas de la IA
+    riesgos = [r for r in (ev.riesgos or []) if not es_alerta_escolaridad(r) and not es_soft_skill(r)]
+    ev.riesgos = [f"{PREFIJO_ALERTA}{a}" for a in op["alertas"]] + [r for r in riesgos if not r.startswith(PREFIJO_ALERTA)
+                                                                     and r.lower().startswith("inconsistencia")]
     cumplidos = [f"{c['nombre']}: {c['evidencia']}" for c in op["criterios"].values() if c["resultado"] == "cumple" and c["evidencia"]]
     if not ev.fortalezas or ev.fortalezas == ["Completó la entrevista"]:
         ev.fortalezas = cumplidos[:4] or list(ev.fortalezas or [])

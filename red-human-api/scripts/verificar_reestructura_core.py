@@ -245,8 +245,22 @@ with TestClient(app) as client:
                      realizada_por="Ana Entrevistadora", codigo="EVA-1")
     r = sproc._paso_evaluacion(paso, ev2)
     check(r["cumple"] and "revisión de RH" not in r["espera"], "«Avanzar» del entrevistador cumple sin esperar la revisión de RH")
-    ev2.conclusion = "favorable"
-    check(not sproc._paso_evaluacion(paso, ev2)["cumple"], "otra conclusión con regla de validación sigue esperando a RH")
+    # C13 (prueba del 11 de octubre): cualquier resultado guardado por el entrevistador deja la actividad resuelta
+    ev2.conclusion = "no_avanzar"
+    r = sproc._paso_evaluacion(paso, ev2)
+    check(r["estado"] == "completada" and r["resultado"] == "no_favorable" and "revisión de RH" not in r["espera"],
+          "C13: «No avanzar» del entrevistador queda resuelto (No aprobada) sin «pendiente de revisión de RH»")
+    from app.services.evaluacion_integral import _validacion_evaluacion
+    ev2.conclusion, ev2.estado = "avanzar", "con_resultado"
+    check(_validacion_evaluacion(ev2, True)["estado"] == "aprobada", "C13: la evaluación integral la cuenta sin revisión de RH")
+    ev2.conclusion = "avanzar"
+    ev2.conclusion = "requiere_otra_entrevista"
+    check(not sproc._paso_evaluacion(paso, ev2)["cumple"], "«Requiere otra entrevista» no cumple la actividad")
+    # C13 (prueba del 11 de octubre): fuera de la entrevista humana, la regla de validación sigue esperando a RH
+    ev3 = Evaluacion(tipo="referencias", forma="asignada", estado="con_resultado", conclusion="favorable", consentimiento="no_requerido",
+                     realizada_por="Ana", codigo="EVA-2")
+    r3 = sproc._paso_evaluacion({"id": "ref", "tipo": "referencias", "regla": {"tipo": "validacion"}}, ev3)
+    check(not r3["cumple"] and r3["espera"] == "Falta la revisión de RH", "otra evaluación con regla de validación sigue esperando a RH")
     p = post(PD)
     p.proceso = {**p.proceso, "pasos": [{"id": "pref", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro", "etapa": "Prefiltro", "obligatorio": False,
                                          "depende_de": [], "responsable": {"tipo": "red_human"}, "regla": {"tipo": "validacion"}, "plazo_dias": None},

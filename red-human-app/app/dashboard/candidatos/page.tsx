@@ -108,7 +108,7 @@ import {
 } from "@/lib/api";
 import { useCuentaDemo, usePuedeDecidir, useModoPrueba, useSesion } from "@/components/sesion";
 import {
-  ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta,
+  ALERTAS_TABLERO, ChipsAlerta, TableroKanban, diasEnEtapa, ordenarTablero, scoreTarjeta, tonoEtiqueta,
   type AlertaTablero, type OrdenTablero,
 } from "@/components/dashboard/candidatos/tablero-kanban";
 import { ContactoCandidato } from "@/components/dashboard/candidatos/contacto-candidato";
@@ -566,7 +566,7 @@ function CandidatosContenido() {
             onChange={(e) => setOrden(e.target.value as OrdenTablero)}
             className="h-10 rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
           >
-            <option value="score">Ordenar: Score</option>
+            <option value="score">Ordenar: Recomendación</option>
             <option value="dias">Ordenar: Días en etapa</option>
           </select>
         </div>
@@ -861,7 +861,7 @@ function CandidatosContenido() {
                 <th className="px-4 py-3 text-left">Etapa</th>
                 <th className="px-4 py-3 text-left">Prefiltro</th>
                 <th className="px-4 py-3 text-left">Evaluación integral</th>
-                <th className="px-4 py-3 text-left">Score</th>
+                <th className="px-4 py-3 text-left">Recomendación</th>
                 <th className="px-4 py-3 text-left">Fuente</th>
                 <th className="px-4 py-3 text-left">Última Actividad</th>
                 <th className="px-4 py-3 text-right">Acción</th>
@@ -950,9 +950,12 @@ function CandidatosContenido() {
                       {c.resultadoIntegral ? <BadgeIntegral r={c.resultadoIntegral} compacto /> : <span className="text-xs text-ink-3">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs font-semibold text-ink">
-                        {scoreTarjeta(c) != null ? `${scoreTarjeta(c)}%` : "—"}
-                      </span>
+                      {/* C11: sin puntaje numérico — la etiqueta y lo que falta */}
+                      {c.card_label ? (
+                        <span title={c.card_label.faltan.join(" · ")} className={cn("rounded-md px-1.5 py-0.5 text-xs font-semibold", tonoEtiqueta(c.card_label.clave))}>
+                          {c.card_label.texto}{c.card_label.faltan.length ? ` · ${c.card_label.faltan.length} por validar` : ""}
+                        </span>
+                      ) : <span className="text-xs text-ink-3">—</span>}
                     </td>
                     <td className="px-4 py-3 text-ink-2">
                       {c.fuente === "WhatsApp" ? (
@@ -1949,7 +1952,8 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
     | { resumen?: string; fortalezas?: string[]; riesgos?: string[]; areas_desarrollo?: string[]; perfil?: PerfilProfundo | null; match_perfil?: number; recomendacion?: string; faltante?: string[];
         /* 2026-10-10: entrevista operativa — criterios A-D y recomendación estricta (nunca descarta) */
         operativa?: { nombre_oficio?: string; recomendacion_texto: string; recomendacion: string; alertas: string[];
-          criterios: Record<string, { nombre: string; resultado: string; texto: string; evidencia: string }> } }
+          criterios: Record<string, { nombre: string; resultado: string; texto: string; evidencia: string }>;
+          requisitos?: Record<string, { nombre: string; estado: string; simbolo: string; evidencia: string }> } }
     | null
     | undefined;
 
@@ -2050,9 +2054,10 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
             3 · Evaluación integral (CV + Entrevista Red Human)
           </span>
           <div className="mt-2 flex flex-wrap items-center gap-4">
-            {evalAvatar.match_perfil != null && <ScoreRing score={evalAvatar.match_perfil} />}
+            {/* C6: la entrevista operativa no tiene puntaje — se ve su etiqueta y sus 5 requisitos abajo */}
+            {evalAvatar.match_perfil != null && !evalAvatar.operativa && <ScoreRing score={evalAvatar.match_perfil} />}
             <div>
-              {evalAvatar.match_perfil != null && <p className="font-display text-lg font-bold text-ink">Afinidad {evalAvatar.match_perfil}/100</p>}
+              {evalAvatar.match_perfil != null && !evalAvatar.operativa && <p className="font-display text-lg font-bold text-ink">Afinidad {evalAvatar.match_perfil}/100</p>}
               {evalAvatar.recomendacion && (
                 <p className="text-xs text-ink-2">
                   Recomendación preliminar: <b className="text-ink">{evalAvatar.recomendacion === "avanzar" ? "avanzar" : evalAvatar.recomendacion === "no_avanzar" ? "no avanzar" : "revisión humana"}</b> — la decisión final es de RH.
@@ -2068,10 +2073,22 @@ function PestanaEvaluaciones({ c, live, onCambio, versionEval = 0 }: { c: Candid
               </p>
               <p className={cn("mt-1 text-sm font-bold", evalAvatar.operativa.recomendacion === "no_recomendable" ? "text-bad"
                 : evalAvatar.operativa.recomendacion === "recomendable" ? "text-good" : "text-warn")}>
-                {evalAvatar.operativa.recomendacion_texto}
+                {c.recomendacionOperativa?.texto ?? evalAvatar.operativa.recomendacion_texto}
                 <span className="ml-1 text-xs font-normal text-ink-3">— solo recomienda; la decisión es de RH.</span>
               </p>
-              <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+              {/* C6: los 5 requisitos (✓ cumple · ✗ no cumple · ? sin dato) */}
+              {evalAvatar.operativa.requisitos && (
+                <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {Object.entries(evalAvatar.operativa.requisitos).filter(([, r]) => r.estado !== "no_aplica").map(([k, r]) => (
+                    <li key={k} className="text-xs leading-relaxed text-ink-2">
+                      <b className={r.estado === "cumple" ? "text-good" : r.estado === "no_cumple" ? "text-bad" : "text-warn"}>{r.simbolo}</b>{" "}
+                      <b className="text-ink">{r.nombre}</b>
+                      {r.evidencia ? <span className="block text-ink-3">{r.evidencia}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <ul className={cn("mt-2 grid gap-1.5 sm:grid-cols-2", evalAvatar.operativa.requisitos && "hidden")}>
                 {["A", "B", "C", "D"].map((k) => {
                   const cr = evalAvatar.operativa!.criterios[k];
                   if (!cr) return null;

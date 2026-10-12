@@ -23,19 +23,14 @@ const TONO_VALIDACION: Record<ValidacionIntegral["estado"], "good" | "warn" | "b
   pendiente: "neutral",
 };
 
-function textoScore(r: ResultadoIntegral): string {
-  if (r.score == null) return "sin score aún";
-  return r.scoreParcial ? `score parcial ${r.score}` : `score ${r.score}`;
-}
-
 /** Tarjeta del Kanban / lista: «Evaluación integral: Pendiente · score parcial 78». */
 export function BadgeIntegral({ r, compacto = false }: { r?: ResultadoIntegral; compacto?: boolean }) {
   if (!r) return null;
   return (
     <span title={`Evaluación integral: ${r.texto} — ${r.motivo}`} className="inline-flex">
+      {/* C11 (prueba del 11 de octubre): sin puntaje numérico en la tarjeta — solo la etiqueta */}
       <Badge tone={TONO[r.estado]} dot>
         {compacto ? r.texto : `Integral: ${r.texto}`}
-        <span className="ml-1 font-mono text-[10px] opacity-80">· {textoScore(r)}</span>
       </Badge>
     </span>
   );
@@ -53,9 +48,9 @@ export function PanelResultadoIntegral({ r }: { r?: ResultadoIntegral }) {
         </div>
         <div className="flex items-center gap-2">
           <Badge tone={TONO[r.estado]} dot>{r.texto}</Badge>
-          <span className="font-mono text-xs font-semibold text-ink-2">
-            {r.score == null ? "Score: —" : `${r.scoreParcial ? "Score parcial" : "Score"}: ${r.score}/100`}
-          </span>
+          {r.score != null && (
+            <span className="font-mono text-xs font-semibold text-ink-2">{`${r.scoreParcial ? "Score parcial" : "Score"}: ${r.score}/100`}</span>
+          )}
         </div>
       </div>
       <p className="mt-2 text-[11px] text-ink-3">

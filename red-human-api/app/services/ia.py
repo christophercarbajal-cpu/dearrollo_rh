@@ -1275,11 +1275,13 @@ def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str = "", nombre: str = 
     candidato aceptó. Se concatena con la primera pregunta del guion:
     «Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n¿Cuál fue tu último trabajo?».
     `pedir_permiso` solo para una postulación sin consentimiento registrado (no debería pasar: el prefiltro lo exige)."""
+    # Cambio 19 (2026-10-12): texto EXACTO «Listo, [nombre]. Ahora unas preguntas sobre tu experiencia. [primera]» — sin
+    # pedir permiso y sin volver a presentarse (ya se presentó en el saludo del prefiltro)
     inicio = f"Listo, {nombre.strip()}." if (nombre or "").strip() else "Listo."
-    texto = f"{inicio} Soy Red Human, te haré unas preguntas sobre tu experiencia."
+    texto = f"{inicio} Ahora unas preguntas sobre tu experiencia."
     if pedir_permiso:
         return f"{texto} ¿Comenzamos?"
-    return f"{texto}\n{primera.strip()}" if (primera or "").strip() else texto
+    return f"{texto} {primera.strip()}" if (primera or "").strip() else texto
 
 
 CANAL_ENTREVISTA = {
@@ -1401,6 +1403,14 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
     qs0 = [q for q in (preguntas or []) if (q or "").strip()]
     primera_hecha = bool(qs0 and historial and historial[0]["rol"] == "assistant"
                          and " ".join(texto_pregunta(qs0[0]).split()) in " ".join(historial[0]["texto"].split()))
+    if operativo:
+        # Cambio 19: el motivo de salida se repregunta UNA vez (despido, conflicto, renuncia sin motivo o vaga) —
+        # garantizado en código, con o sin IA
+        from .entrevista_operativa import repregunta_pendiente
+
+        rq = repregunta_pendiente(historial)
+        if rq:
+            return TurnoEntrevista(respuesta=rq, terminada=False), client is not None
     if client is None and operativo:
         from .entrevista_operativa import turno_demo
 
@@ -1447,6 +1457,7 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
     )
     turno = resp.output_parsed
     turno.respuesta = sin_promesas(turno.respuesta)  # retro 2026-10-09: garantizado en código, no solo en el prompt
+    turno.respuesta = dosificar_agradecimiento(sin_conteo(turno.respuesta), historial)  # Cambio 19
     # 2026-10-11: la marca de una condicional del guion («[Solo si responde sí]») nunca llega al candidato
     turno.respuesta = re.sub(r"\[\s*solo si (?:responde|contesta|dice)[^\]]*\]\s*", "", turno.respuesta, flags=re.IGNORECASE).strip()
     return turno, True
@@ -1458,6 +1469,41 @@ _RE_PROMESA = re.compile(
     r"vas (muy )?bien|seguro (que )?(pasas|avanzas|quedas)|(vas a|vas|seguro) (avanzar|pasar|quedar)|"
     r"avanzar[aá]s|pasar[aá]s a la siguiente|(quedaste|est[aá]s) (seleccionad|contratad|aceptad)\w*)\b[^.!?\n]*[.!?]?",
     re.IGNORECASE)
+
+
+# Cambio 19 (2026-10-12): el agente no anuncia cuántas preguntas faltan ni dice «gracias» en cada mensaje
+_RE_CONTEO = re.compile(
+    r"[^.!?:¿\n]*\b((me |nos |te )?(faltan|quedan|falta|queda) (solo |nada mas |unas |un par de )?(\d+|una|dos|tres|cuatro|cinco|pocas|"
+    r"unas cuantas)? ?(preguntas?|cosas|datos)|pregunta (\d+|numero \d+) de \d+|(es la |la |esta es la |una )?[uú]ltima pregunta|"
+    r"ya (casi )?(terminamos|acabamos)|estamos por terminar|unas? (preguntas?|cosas) m[aá]s)\b[^.!?:¿\n]*[.!?:]?",
+    re.IGNORECASE)
+_RE_GRACIAS_INICIAL = re.compile(r"^\s*[¡!]?\s*(perfecto|muy bien|excelente|genial|de acuerdo|ok|vale|claro)?[,!]?\s*(muchas )?gracias"
+                                 r"( por [^.!?\n]*)?\s*[.!,]*\s*(🙌|🙂|😊|👍)?\s*", re.IGNORECASE)
+VARIANTES_GRACIAS = ("Gracias.", "Perfecto, gracias.", "Muy bien, gracias.", "Gracias por contarme.")
+CADA_CUANTOS_GRACIAS = 3
+
+
+def sin_conteo(texto: str) -> str:
+    """Quita las frases que anuncian cuántas preguntas faltan («Solo me faltan 2 preguntas», «Última pregunta»)."""
+    limpio = _RE_CONTEO.sub("", texto or "")
+    limpio = re.sub(r"[ \t]{2,}", " ", limpio).strip(" ,")
+    if not re.search(r"\w", limpio):
+        return (texto or "").strip()
+    i = 1 if limpio.startswith("¿") else 0
+    return limpio[:i] + limpio[i:i + 1].upper() + limpio[i + 1:]
+
+
+def dosificar_agradecimiento(texto: str, historial: List[dict]) -> str:
+    """«Gracias» como mucho una vez cada 3 mensajes del agente: si alguno de los últimos 2 ya agradeció, se quita el
+    agradecimiento del inicio (la pregunta queda intacta)."""
+    recientes = [m.get("texto") or "" for m in historial or [] if m.get("rol") == "assistant"][-(CADA_CUANTOS_GRACIAS - 1):]
+    if not any(re.search(r"\bgracias\b", r, re.IGNORECASE) for r in recientes):
+        return texto
+    m = _RE_GRACIAS_INICIAL.match(texto or "")
+    if not m or not (texto or "")[m.end():].strip():
+        return texto
+    resto = texto[m.end():].strip()
+    return resto[0].upper() + resto[1:] if resto[:1].islower() else resto
 
 
 def sin_promesas(texto: str) -> str:

@@ -139,7 +139,7 @@ def entrevista_whatsapp_activa(p: Postulacion) -> Optional[Entrevista]:
     return next((e for e in reversed(list(p.entrevistas or [])) if e.tipo == "whatsapp" and e.estado in ("programada", "en_curso")), None)
 
 
-def system_prompt(e: Entrevista) -> str:
+def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
     """El MISMO prompt del entrevistador para las tres actividades, con el guion de la vacante y su canal."""
     from ..serial import nombre_empresa_candidato
     from ..routers.entrevistas import _nombre_entrevistado as nombre_para_entrevista
@@ -152,7 +152,7 @@ def system_prompt(e: Entrevista) -> str:
         from . import entrevista_operativa as eop
         from .evaluacion_integral import respuestas_previas
 
-        bloque = eop.bloque_prompt(guion, respuestas_previas(p) if p else [])
+        bloque = eop.bloque_prompt(guion, respuestas_previas(p) if p else [], historial if historial is not None else e.transcript)
     return ia.prompt_entrevistador(
         v.titulo if v else "vacante general", v.requisitos if v else "", nombre_para_entrevista(e),
         list(guion.get("preguntas") or []), empresa=nombre_empresa_candidato(v) if v else "la empresa",
@@ -164,20 +164,21 @@ def system_prompt(e: Entrevista) -> str:
     )
 
 
-def preguntas_de(e: Entrevista) -> list:
-    """Preguntas que se hacen en esta entrevista. Operativa: sin las de logística que ya cubrió el prefiltro."""
+def preguntas_de(e: Entrevista, historial: Optional[list] = None) -> list:
+    """Preguntas que se hacen en esta entrevista. Operativa: sin las de inicio/condiciones que ya cubrió el prefiltro ni
+    la evidencia de un indispensable que el candidato ya demostró (Cambio 19)."""
     guion = e.guion or {}
     if guion.get("operativo") and e.postulacion is not None:
         from . import entrevista_operativa as eop
         from .evaluacion_integral import respuestas_previas
 
-        return eop.preguntas_para_conversacion(guion, respuestas_previas(e.postulacion))
+        return eop.preguntas_para_conversacion(guion, respuestas_previas(e.postulacion), historial if historial is not None else e.transcript)
     return list(guion.get("preguntas") or [])
 
 
 def mensaje_inicial(p: Postulacion, primera: str = "", pedir_permiso: bool = False) -> str:
-    """«Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n[primera pregunta]» (2026-10-11
-    tarde): un solo mensaje, sin reglas internas ni «¿Comenzamos?»."""
+    """«Listo, [nombre]. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?» (Cambio 19): un solo
+    mensaje, sin presentarse de nuevo, sin reglas internas ni «¿Comenzamos?»."""
     from ..routers.candidatos import nombre_ficha
 
     nombre = nombre_ficha(p).split(" ")[0] if nombre_ficha(p) and not nombre_ficha(p).startswith("Candidato") else ""
@@ -270,7 +271,8 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
     historial = list(e.transcript or []) + [{"rol": "user", "texto": texto[:2000]}]
-    turno, con_ia = ia.entrevista_turno(system_prompt(e), historial, preguntas=preguntas_de(e), operativo=bool((e.guion or {}).get("operativo")))
+    turno, con_ia = ia.entrevista_turno(system_prompt(e, historial), historial, preguntas=preguntas_de(e, historial),
+                                        operativo=bool((e.guion or {}).get("operativo")))
     e.transcript = historial + [{"rol": "assistant", "texto": turno.respuesta}]
     terminada = turno.terminada or ia.DESPEDIDA_ENTREVISTA.lower() in (turno.respuesta or "").lower()
     salida = await responder(turno.respuesta, ia_entrevista=con_ia)

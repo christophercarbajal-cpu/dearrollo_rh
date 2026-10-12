@@ -193,6 +193,10 @@ with TestClient(app) as client:
         "almacenes trabajaste": "En Bodega Norte y en un centro de distribución de abarrotes.",
         "revisas al montacargas": "Hago el checklist: frenos, claxon, nivel de gas, llantas y uñas; si hay falla lo reporto y no lo opero.",
         "cumplido con esto": "Tengo mi DC-3 desde 2023 y siempre he rolado turnos en la bodega.",
+        # Cambio 19: preguntas de evidencia de los indispensables
+        "te tocó": "Tengo mi DC-3 desde 2023 y siempre he rolado turnos en la bodega.",
+        "adquiriste": "En Bodega Norte, 3 años operando montacargas.",
+        "cumpliste": "Tengo mi DC-3 desde 2023 y siempre he rolado turnos en la bodega.",
         "situación laboral": "Ahorita estoy buscando trabajo desde hace dos semanas.",
         "te interesa": "Me interesa la estabilidad y que es mi oficio.",
         "de tu casa": "Como 40 minutos en camión.",

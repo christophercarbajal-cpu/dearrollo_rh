@@ -435,6 +435,8 @@ def pregunta_evidencia(req: str) -> str:
         q = f"¿Dónde adquiriste tu {ia._de_experiencia(tema)[3:]}?"
     elif re.match(r"^conocimientos? (de|en|sobre) ", t):
         q = f"¿Dónde aprendiste {re.sub(r'^conocimientos? (de|en|sobre) ', '', r, flags=re.I)}?"
+    elif re.match(r"^(licencia|constancia|certificaci\w*|certificado|curso|carnet|cartilla)\b", t):
+        q = f"¿Desde cuándo tienes {r}?"
     elif re.match(r"^disponibilidad (para|de) ", t):
         q = f"¿En qué trabajo anterior te tocó {re.sub(r'^disponibilidad (para|de) ', '', r, flags=re.I)}?"
     elif re.fullmatch(r"[a-z]+(ar|er|ir)(se)?", (t.split() or [""])[0]):
@@ -870,9 +872,56 @@ def ya_respondido(previas: List[dict]) -> List[str]:
     return salida[:15]
 
 
-def preguntas_para_conversacion(guion: dict, previas: List[dict]) -> List[str]:
-    """Preguntas del guion operativo SIN las de logística que el prefiltro ya cubrió (ubicación/traslado, horario,
-    inicio): una pregunta por mensaje y sin repetir lo del prefiltro (garantizado en código, no solo en el prompt)."""
+# ============================================================ memoria de la conversación (Cambio 19, 2026-10-12)
+
+_VACIAS_EVIDENCIA = {"experiencia", "disponibilidad", "conocimiento", "conocimientos", "capacidad", "para", "como", "tener", "contar",
+                     "minimo", "menos", "anos", "meses", "kilos", "puesto", "trabajo", "requisito", "cumplir", "saber", "poder",
+                     "manejo", "manejar", "buena", "bueno", "desde", "hasta", "sobre", "entre"}
+_RE_NEGADA = re.compile(r"\b(no|nunca|jamas|tampoco|ningun\w*)\b")
+
+
+def _raices(texto: str) -> set:
+    return {w[:4] for w in re.findall(r"[a-z]{4,}", _n(texto)) if w not in _VACIAS_EVIDENCIA}
+
+
+def evidencia_de(requisito: str, respuestas: List[str]) -> bool:
+    """¿El candidato ya dio EVIDENCIA de este indispensable en lo que contó («cargaba cajas» ↔ «Cargar cajas de 25 kg»)?
+    Busca las palabras clave del requisito (por raíz) en una misma frase afirmativa — sin negaciones."""
+    claves = _raices(requisito)
+    if not claves:
+        return False
+    necesarias = len(claves) if len(claves) <= 2 else 2
+    for r in respuestas or []:
+        for frase in re.split(r"[.;:!?\n]+|\bpero\b", _n(r)):
+            if frase.strip() and not _RE_NEGADA.search(frase) and len(_raices(frase) & claves) >= necesarias:
+                return True
+    return False
+
+
+def _ya_preguntada(q: str, transcript: List[dict]) -> bool:
+    t = _n(texto_pregunta(q))
+    return any(m.get("rol") == "assistant" and t and t in _n(m.get("texto") or "") for m in transcript or [])
+
+
+def indispensables_demostrados(guion: dict, transcript: List[dict]) -> List[str]:
+    """Preguntas de «Evidencia de indispensables» que se OMITEN porque el candidato ya dio esa evidencia antes de que se
+    le hicieran (memoria de la conversación). Una pregunta ya hecha nunca se omite (no se pierde el hilo)."""
+    op = (guion or {}).get("operativo") or {}
+    sec = next((s for s in op.get("secciones") or [] if s.get("clave") == "indispensables"), None)
+    if not sec:
+        return []
+    dichas = [str(m.get("texto") or "") for m in transcript or [] if m.get("rol") == "user"]
+    salida = []
+    for q, req in zip(sec.get("preguntas") or [], sec.get("requisitos") or []):
+        if not _ya_preguntada(q, transcript) and evidencia_de(req, dichas):
+            salida.append(q)
+    return salida
+
+
+def preguntas_para_conversacion(guion: dict, previas: List[dict], transcript: Optional[List[dict]] = None) -> List[str]:
+    """Preguntas del guion operativo SIN las de inicio/condiciones que el prefiltro ya cubrió y SIN la evidencia de un
+    indispensable que el candidato ya demostró (Cambio 19): una pregunta por mensaje y sin repetir (garantizado en
+    código, no solo en el prompt)."""
     preguntas = list((guion or {}).get("preguntas") or [])
     op = (guion or {}).get("operativo")
     if not op:
@@ -884,13 +933,14 @@ def preguntas_para_conversacion(guion: dict, previas: List[dict]) -> List[str]:
             if any(_n(p) in t for p in palabras):
                 cubiertos.add(tema)
     logistica = {q for s in op.get("secciones") or [] if s.get("clave") in ("logistica", "condiciones") for q in s.get("preguntas") or []}
-    return [q for q in preguntas if not (q in logistica and _tema_logistica(q) in cubiertos)]
+    demostrados = set(indispensables_demostrados(guion, transcript or []))
+    return [q for q in preguntas if not (q in logistica and _tema_logistica(q) in cubiertos) and q not in demostrados]
 
 
-def bloque_prompt(guion: dict, previas: List[dict]) -> str:
+def bloque_prompt(guion: dict, previas: List[dict], transcript: Optional[List[dict]] = None) -> str:
     """Instrucciones del modo Operativo para el prompt del entrevistador (piezas fijas, en orden)."""
     op = (guion or {}).get("operativo") or {}
-    lista = preguntas_para_conversacion(guion, previas)
+    lista = preguntas_para_conversacion(guion, previas, transcript)
     permitidas = set(lista)
     lineas = []
     for i, s in enumerate(op.get("secciones") or [], 1):
@@ -914,6 +964,12 @@ def bloque_prompt(guion: dict, previas: List[dict]) -> str:
         "y continúa con la siguiente pregunta aunque la segunda respuesta siga siendo general.\n"
         "«NO ENTIENDO» o una pregunta de vuelta: reformula la MISMA pregunta con otras palabras más sencillas, sin cambiar de "
         "tema ni pasar a la siguiente.\n"
+        "MEMORIA: si en lo que ya contó dio evidencia de un indispensable (p. ej. «cargaba cajas» cuando se pide cargar "
+        "cajas), NO hagas esa pregunta de evidencia.\n"
+        "MOTIVO DE SALIDA (una sola repregunta): despido → «¿Por qué te despidieron?»; problemas o conflicto → «¿Con quién "
+        "tuviste problemas?»; renuncia sin motivo → «¿Por qué renunciaste?»; respuesta vaga → «¿Por qué decidiste salir?».\n"
+        "NO digas «gracias» en cada mensaje (como mucho uno de cada 3 o 4, con variantes) y NUNCA anuncies cuántas preguntas "
+        "faltan ni cuál es la última.\n"
         + "\n".join(lineas) + "\n"
         + (f"EXCLUYENTES DEL OFICIO ({perfil.get('nombre') or 'oficio'}): {excl} Si su experiencia es con algo excluyente, "
            "pregúntale con naturalidad si tiene experiencia con lo que pide el puesto; no le expliques la regla.\n" if excl else "")
@@ -950,6 +1006,71 @@ def _reformula(q: str) -> str:
     return f"{PREFIJO_REFORMULA}, con tus palabras: ¿{t[:1].lower() + t[1:]}?"
 
 
+# ============================================================ motivo de salida (Cambio 19): UNA repregunta
+
+REPREGUNTA_SALIDA = {"despido": "¿Por qué te despidieron?", "conflicto": "¿Con quién tuviste problemas?",
+                     "renuncia": "¿Por qué renunciaste?", "vago": "¿Por qué decidiste salir?"}
+_RE_PREG_SALIDA = re.compile(r"\bpor que (saliste|dejaste|te saliste|te fuiste|lo dejaste|la dejaste)\b")
+_RE_SAL_DESPIDO = re.compile(r"\b(me (corrieron|despidieron|liquidaron|sacaron|dieron de baja|botaron)|despid\w*|me (hicieron|pidieron) "
+                             r"(la )?renuncia)\b")
+_RE_SAL_RAZON_EXTERNA = re.compile(r"\b(recorte\w*|cerr(o|aron)|quebr\w*|se acabo|termino (el|mi) contrato|se termino|fin de (contrato|temporada|"
+                                   r"obra|proyecto)|temporal|por temporada|reestructura\w*|liquidaron a todos)\b")
+_RE_SAL_CONFLICTO = re.compile(r"\b(problema\w*|conflicto\w*|pleito\w*|me pele\w*|discut\w*|no me llevaba|mal ambiente|me trataban mal|"
+                               r"acoso|hostig\w*|roces?)\b")
+_RE_SAL_CON_QUIEN = re.compile(r"\bcon (mi|mis|el|la|los|las|un|una|unos|unas) (jefe|jefa|supervisor\w*|encargad\w*|compa\w*|patron\w*|"
+                               r"gerente|coordinador\w*|lider|dueno|duena|cliente\w*)\b")
+_RE_SAL_RENUNCIA = re.compile(r"\b(renunci\w*|me sali|me fui|lo deje|la deje|deje (el|ese) (trabajo|empleo)|decidi salir(me)?)\b")
+_RE_SAL_RAZON = re.compile(r"\b(porque|por que|ya que|debido|pues (me|mi|el|la|se)|por (el|la|mi|mis|un|una|falta|faltas|cambio|"
+                           r"horario|sueldo|salud|estudi\w*|distancia|lejos|enfermedad|mudanza|embarazo)|para (estudiar|cuidar|buscar)|"
+                           r"me (cambie|mude)|cambio de casa|me pagaban|pagaban (poco|muy)|horario|sueldo|estudiar|cuidar)\b")
+_RE_SAL_VAGA = re.compile(r"\b(personal(es)?|pues ya|nomas|nada mas|ya no quise|por nada|no se|cosas|asi paso|equis|ya no)\b")
+
+
+def motivo_salida(respuesta: str) -> Optional[str]:
+    """Clasifica el motivo de salida que dio el candidato: «despido» | «conflicto» | «renuncia» (sin motivo) | «vago» |
+    None (dio una razón concreta)."""
+    t = _n(respuesta)
+    if not t:
+        return None
+    if _RE_SAL_DESPIDO.search(t):
+        return None if _RE_SAL_RAZON_EXTERNA.search(t) or _RE_SAL_RAZON.search(t) else "despido"
+    if _RE_SAL_CONFLICTO.search(t):
+        return None if _RE_SAL_CON_QUIEN.search(t) else "conflicto"
+    if _RE_SAL_RAZON_EXTERNA.search(t):
+        return None
+    if _RE_SAL_VAGA.search(t) and not _RE_SAL_RAZON.search(t.replace("personales", "")):
+        return "vago"
+    if _RE_SAL_RENUNCIA.search(t):
+        return None if _RE_SAL_RAZON.search(t) else "renuncia"
+    if _RE_SAL_RAZON.search(t) or len(t.split()) > 3:
+        return None
+    return "vago"
+
+
+def repregunta_salida(respuesta: str) -> Optional[str]:
+    m = motivo_salida(respuesta)
+    return REPREGUNTA_SALIDA.get(m) if m else None
+
+
+def es_pregunta_salida(texto: str) -> bool:
+    t = _n(texto)
+    return bool(_RE_PREG_SALIDA.search(t)) and t not in {_n(x) for x in REPREGUNTA_SALIDA.values()}
+
+
+def repregunta_pendiente(historial: List[dict]) -> Optional[str]:
+    """Si la última pregunta fue la del motivo de salida y la respuesta es despido, conflicto, renuncia sin motivo o
+    vaga → la repregunta (UNA sola vez: la repregunta misma nunca dispara otra)."""
+    if not historial or historial[-1].get("rol") != "user":
+        return None
+    previo = next((m for m in reversed(historial[:-1]) if m.get("rol") == "assistant"), None)
+    if previo is None:
+        return None
+    ultima_linea = (str(previo.get("texto") or "").strip().splitlines() or [""])[-1]
+    if not es_pregunta_salida(ultima_linea):
+        return None
+    return repregunta_salida(historial[-1].get("texto") or "")
+
+
 def turno_demo(preguntas: List[str], historial: List[dict]) -> Tuple[str, bool]:
     """Siguiente mensaje de la entrevistadora SIN IA (guion operativo). Respeta las condicionales «[Solo si responde
     sí/no]», ante una respuesta vaga pide UN dato concreto (una sola vez por pregunta) y ante «no entiendo» reformula la
@@ -974,8 +1095,12 @@ def turno_demo(preguntas: List[str], historial: List[dict]) -> Tuple[str, bool]:
     tras = [_n(m.get("texto") or "") for m in (historial or [])[desde + 1:] if m.get("rol") == "assistant"]
     if ultimo and _RE_NO_ENTIENDE.match(ultimo) and sum(1 for x in tras if x.startswith(_n(PREFIJO_REFORMULA))) < 2:
         return _reformula(qs[actual]), False
+    rq = repregunta_pendiente(historial or [])
+    if rq:
+        return rq, False  # Cambio 19: motivo de salida — una sola repregunta
+    repreguntada = any(x in {_n(r) for r in REPREGUNTA_SALIDA.values()} for x in tras)
     es_parental = actual + 1 < len(qs) and bool(condicion_de(qs[actual + 1])[0])
-    if ultimo and _RE_VAGA.match(ultimo) and not es_parental and not any(x.startswith(_n(PREFIJO_DATO)) for x in tras):
+    if ultimo and _RE_VAGA.match(ultimo) and not es_parental and not repreguntada and not any(x.startswith(_n(PREFIJO_DATO)) for x in tras):
         return f"{PREFIJO_DATO}, dame un dato concreto: ¿dónde, cuánto tiempo o con qué equipo?", False
     k = actual + 1
     while k < len(qs):
@@ -1170,18 +1295,27 @@ def evaluar_demo(transcript: List[dict], guion: dict, previas: Optional[List[dic
         res = "cumple" if len(hits) >= 2 else ("parcial" if hits else "no_cumple")
         criterios["B"] = _criterio(res, ("Mencionó: " + ", ".join(hits)) if hits else f"Respuesta sin los pasos esperados: {resp_b[:160]}")
 
-    # C — indispensables (máximo 3 explorados; lo demás lo cubrió el prefiltro)
+    # C — indispensables (máximo 3 explorados; lo demás lo cubrió el prefiltro). Cambio 19: el que ya demostró en lo que
+    # contó (memoria: la pregunta se omitió) cuenta como cubierto
     resp_c = por.get("indispensables", [])
+    sec_c = next((s for s in op.get("secciones") or [] if s.get("clave") == "indispensables"), {}) or {}
+    dichas = [str(m.get("texto") or "") for m in transcript or [] if m.get("rol") == "user"]
+    preguntadas = {q for q, _ in resp_c}
+    demostrados = [req for q, req in zip(sec_c.get("preguntas") or [], sec_c.get("requisitos") or [])
+                   if q not in preguntadas and evidencia_de(req, dichas)]
     if not op.get("indispensables"):
         criterios["C"] = _criterio("cumple", "La vacante no tiene indispensables por explorar.")
+    elif not resp_c and demostrados:
+        criterios["C"] = _criterio("cumple" if len(demostrados) >= len(op.get("indispensables") or []) else "parcial",
+                                   "Lo demostró en su trayectoria: " + ", ".join(demostrados))
     elif not resp_c:
         criterios["C"] = _criterio("sin_dato")
     elif any(_RE_NEGACION.search(_n(r)) for _, r in resp_c):
         r = next(r for _, r in resp_c if _RE_NEGACION.search(_n(r)))
         criterios["C"] = _criterio("no_cumple", f"«{r.strip()[:160]}»")
     else:
-        criterios["C"] = _criterio("cumple" if len(resp_c) >= len(op.get("indispensables") or []) else "parcial",
-                                   " · ".join(r.strip()[:80] for _, r in resp_c))
+        criterios["C"] = _criterio("cumple" if len(resp_c) + len(demostrados) >= len(op.get("indispensables") or []) else "parcial",
+                                   " · ".join([r.strip()[:80] for _, r in resp_c] + [f"Demostrado: {d}" for d in demostrados]))
 
     # D — logística
     resp_d = por.get("logistica", [])

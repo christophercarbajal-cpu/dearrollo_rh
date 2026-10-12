@@ -875,6 +875,78 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
 
 # ============================================================ turno del chat
 
+def saludo(p: Postulacion, pregunta: str) -> str:
+    """«Hola, [nombre]. Soy Red Human, el asistente virtual que te acompaña en tu postulación a [vacante]. Primero
+    confírmame: [primera pregunta]» (Cambio 19, texto definido por el usuario)."""
+    from ..routers.candidatos import nombre_ficha
+
+    nombre = nombre_ficha(p) or ""
+    nombre = "" if not nombre or nombre.startswith("Candidato") else nombre.split(" ")[0]
+    vacante = p.vacante.titulo if p.vacante else "la vacante"
+    q = re.sub(r"^\s*para confirmar,?\s*", "", (pregunta or "").strip(), flags=re.IGNORECASE)
+    q = q[:1].upper() + q[1:] if q[:1] != "¿" else "¿" + q[1:2].upper() + q[2:]
+    return (f"Hola{', ' + nombre if nombre else ''}. Soy Red Human, el asistente virtual que te acompaña en tu postulación a "
+            f"*{vacante}*. Primero confírmame: {q}")
+
+
+def con_acuse(e: dict, pregunta: str) -> str:
+    """«Gracias» como mucho una vez cada 3 mensajes, con variantes (Cambio 19); los demás van directo a la pregunta."""
+    from .ia import CADA_CUANTOS_GRACIAS, VARIANTES_GRACIAS
+
+    n = int(e.get("sin_gracias") or 0) + 1
+    if n < CADA_CUANTOS_GRACIAS:
+        e["sin_gracias"] = n
+        return pregunta
+    e["sin_gracias"] = 0
+    i = int(e.get("variante_gracias") or 0)
+    e["variante_gracias"] = i + 1
+    return f"{VARIANTES_GRACIAS[i % len(VARIANTES_GRACIAS)]} {pregunta}"
+
+
+def _limite_minutos(texto: str) -> Optional[int]:
+    """«¿Haces menos de 1 hora a la planta?» → 60. None si la pregunta no trae un tiempo."""
+    t = limpiar(texto)
+    if not re.search(r"\b(hora|horas|minutos?|mins?|min)\b", t):
+        return None
+    return minutos_de(re.sub(r"^.*?\b(menos de|maximo|hasta|no mas de|a lo mucho)\b", "", t))
+
+
+def contradicciones_web(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict, texto: str, extra: dict) -> Optional[dict]:
+    """Cambio 19: un dato del chat que CONTRADICE lo que contestó en el formulario web (web: «Sí, menos de 1 hora» → chat:
+    «3 horas»; web: «Sí terminé la secundaria» → chat: «1ro de secundaria») queda como «Inconsistencia: [requisito]». Si
+    el requisito contradicho es INDISPENSABLE, la respuesta del formulario deja de valer y el agente descarta. Regresa el
+    criterio contradicho o None. No hace commit."""
+    respuestas = e.get("respuestas") or {}
+    for w in criterios:
+        r = respuestas.get(w["id"]) or {}
+        if w["id"] == c.get("reconfirma") or r.get("fuente") != "web" or r.get("valor") != "si" or r.get("contradicha"):
+            continue
+        texto_w = f"{w['criterio']} {w['pregunta']}"
+        contradice = False
+        if c.get("dato") == "traslado" and extra.get("minutos") is not None:
+            limite = _limite_minutos(texto_w)
+            contradice = limite is not None and extra["minutos"] > limite
+        elif c.get("dato") == "escolaridad":
+            from .ia import RE_NIVEL_ESTUDIOS
+
+            if RE_NIVEL_ESTUDIOS.search(w["criterio"]):
+                contradice = cumple_nivel(nivel_estudios(w["criterio"])[0], texto) == "no"
+        if not contradice:
+            continue
+        a = dict(p.analisis or {})
+        a["inconsistencias"] = list(a.get("inconsistencias") or []) + [{
+            "criterio": w["criterio"], "web": r.get("respuesta", ""), "whatsapp": texto.strip()[:200], "aclarada": False,
+            "fuente": "dato_chat", "indispensable": bool(w["indispensable"]), "en": _ahora()}]
+        p.analisis = a
+        flag_modified(p, "analisis")
+        registrar(db, ACTOR, "prefiltro_inconsistencia_detectada", "postulacion", p.codigo,
+                  {"criterio": w["criterio"], "web": r.get("respuesta", ""), "chat": texto[:200], "indispensable": bool(w["indispensable"])})
+        if w["indispensable"]:
+            e["respuestas"] = {**respuestas, w["id"]: {**r, "valor": "no", "contradicha": True, "chat": texto.strip()[:200]}}
+        return w
+    return None
+
+
 
 async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion: bool = False) -> Optional[dict]:
     """Un turno del bot (el mensaje del candidato ya está guardado). None = el prefiltro ya está resuelto y el turno lo
@@ -936,6 +1008,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             e["respuestas"] = {**(e.get("respuestas") or {}),
                                pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": fuente, "en": _ahora(), **extra}}
         guardar_datos(p, pendiente, texto, extra)
+        if valor is not None:
+            contradicciones_web(db, p, criterios, e, pendiente, texto, extra)  # Cambio 19: contradice al formulario web
         if pendiente.get("reconfirma"):
             base = (e.get("respuestas") or {}).get(pendiente["reconfirma"])
             if base is None:  # sin respuesta del formulario: la escolaridad exacta también responde el requisito
@@ -993,15 +1067,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         e["pendiente"] = siguiente["id"]
         e["preguntadas"] = list(e.get("preguntadas") or []) + [siguiente["id"]]
         if primera:
-            resp = e.get("respuestas") or {}
-            faltan = sum(1 for c in criterios if c["id"] not in resp and (c.get("dato") or not c.get("reconfirma") or (
-                (resp.get(c["reconfirma"]) or {}).get("valor") == "si" and (resp.get(c["reconfirma"]) or {}).get("fuente") == "web")))
-            web = any((r or {}).get("fuente") == "web" for r in (e.get("respuestas") or {}).values())
-            intro = (f"Ya tengo las respuestas de tu formulario; solo me falta confirmar {faltan} dato{'s' if faltan != 1 else ''}."
-                     if web else f"Para continuar con tu postulación a *{vacante}* te haré {faltan} "
-                                 f"{'preguntas breves' if faltan != 1 else 'pregunta breve'}, una a la vez.")
-            return await responder(f"{intro}\n\n{siguiente['chat']}")
-        return await responder(f"Gracias 🙌\n\n{siguiente['chat']}")
+            # Cambio 19: saludo EXACTO; la primera pregunta es un indispensable (orden de `criterios_de`) y nunca se
+            # anuncia cuántas preguntas faltan
+            return await responder(saludo(p, siguiente["chat"]))
+        return await responder(con_acuse(e, siguiente["chat"]))
 
     # Cumple: se aprueba al instante y la ruta sigue sola (la liga de la entrevista sale por el canal conectado)
     _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables de la vacante")

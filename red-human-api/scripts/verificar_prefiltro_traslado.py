@@ -204,7 +204,7 @@ with TestClient(app) as client:
     intro = next((c["text"]["body"] for c in WA[desde:] if c.get("type") == "text" and c.get("to", "").endswith(p.telefono)
                   and c["text"]["body"].startswith("Listo")), "")
     primera = sent.primera_pregunta(e)
-    check(intro == f"Listo, Ana. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n{primera}",
+    check(intro == f"Listo, Ana. Ahora unas preguntas sobre tu experiencia. {primera}",
           f"UN solo mensaje con la primera pregunta: {intro!r}")
     check(primera == "¿Cuál fue tu último trabajo?", "la primera pregunta del guion operativo es «¿Cuál fue tu último trabajo?»")
     check(not any(x in intro for x in ("Comenzamos", "10 minutos", "revisa", "inteligencia artificial")),

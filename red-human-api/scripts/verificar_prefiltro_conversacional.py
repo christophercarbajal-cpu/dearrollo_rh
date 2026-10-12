@@ -219,7 +219,8 @@ with TestClient(app) as client:
         return textos_wa(tel[-10:], antes)
 
     salida = wa("Hola, ya llené el formulario")
-    check(len(salida) == 1 and salida[0].endswith("¿Terminaste la secundaria?") and "formulario" in salida[0],
+    # Cambio 19: saludo exacto «Hola, [nombre]. Soy Red Human… Primero confírmame: [indispensable]» (sin contar preguntas)
+    check(len(salida) == 1 and salida[0].endswith("Primero confírmame: ¿Terminaste la secundaria?") and salida[0].startswith("Hola, Ana. Soy Red Human"),
           "el bot pregunta SOLO lo que falta, una pregunta por mensaje (turnos ya venía del formulario)")
     salida = wa("hola")
     check(len(salida) == 1 and salida[0].endswith("\n\n¿Terminaste la secundaria?") and salida[0].startswith("Retomemos"),

@@ -520,9 +520,9 @@ def etiqueta_tablero(p: Postulacion) -> Optional[dict]:
     clave = {"avanzar": "recomendable", "revision": "con_reservas", "no_avanzar": "no_recomendable"}.get(ev.get("recomendacion") or "")
     if not clave:
         return None
-    from .services.entrevista_operativa import RECOMENDACIONES
-
-    return {"clave": clave, "texto": RECOMENDACIONES[clave][0], "faltan": []}
+    # C6 regla 6: el perfil Corporativo conserva sus etiquetas (Apto / Apto con observaciones / No apto)
+    texto = {"recomendable": "Apto", "con_reservas": "Apto con observaciones", "no_recomendable": "No apto"}[clave]
+    return {"clave": clave, "texto": texto, "faltan": []}
 
 
 def score_tablero(p: Postulacion) -> Optional[int]:

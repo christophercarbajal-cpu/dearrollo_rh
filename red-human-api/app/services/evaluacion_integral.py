@@ -33,14 +33,28 @@ from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, TIPOS_PASO_ENTREVIST
 RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
 
-# C6 (prueba del 11 de octubre): las etiquetas visibles son las de la recomendación — «No recomendable» reemplaza a «No
-# apto» (las claves internas no cambian)
 ESTADOS_INTEGRAL = {
+    "apto": "Apto",
+    "con_observaciones": "Apto con observaciones",
+    "no_apto": "No apto",
+    "pendiente": "Pendiente",
+}
+# C6 (prueba del 11 de octubre, regla 6): SOLO el perfil OPERATIVO usa las etiquetas de la recomendación; el perfil
+# Corporativo queda sin cambios (Apto / Apto con observaciones / No apto). Las claves internas son las mismas.
+ESTADOS_INTEGRAL_OPERATIVO = {
     "apto": "Recomendable",
     "con_observaciones": "Con reservas",
     "no_apto": "No recomendable",
     "pendiente": "Pendiente",
 }
+
+
+def es_operativo(p: Postulacion) -> bool:
+    """¿La postulación sigue el perfil operativo? (enfoque de la vacante o entrevista evaluada con guion operativo)."""
+    v = p.vacante
+    if v is not None and (v.enfoque_entrevista or "") == "operativo":
+        return True
+    return any((e.evaluacion or {}).get("operativa") for e in (p.entrevistas or []) if e.estado == "evaluada")
 TIPOS_OBLIGATORIOS = ("entrevista_humana", "medica")
 CONCLUSION_NEGATIVA = ("no_avanzar", "no_apto", "desfavorable")
 CONCLUSION_OBSERVACIONES = ("con_observaciones", "apto_con_restricciones")
@@ -137,7 +151,7 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
     from . import proceso as sproc
 
     if sproc.tiene_proceso(p):
-        return _resultado(_validaciones_de_proceso(p, evaluaciones, vivas))
+        return _resultado(_validaciones_de_proceso(p, evaluaciones, vivas), es_operativo(p))
     a = p.analisis or {}
     validaciones: List[dict] = []
 
@@ -180,7 +194,7 @@ def calcular(p: Postulacion, evaluaciones: Optional[Iterable[Evaluacion]] = None
                 "revisadoPor": PENDIENTE_REVISION, "codigo": None,
             })
 
-    return _resultado(validaciones)
+    return _resultado(validaciones, es_operativo(p))
 
 
 def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], vivas: List[Evaluacion]) -> List[dict]:
@@ -239,14 +253,15 @@ def _con_excepcion(v: dict, x: dict) -> dict:
             "revisadoPor": f"Revisado por: {d.get('por', '')} (decisión de RH: {d.get('motivo', '')})"}
 
 
-def _resultado(validaciones: List[dict]) -> dict:
+def _resultado(validaciones: List[dict], operativo: bool = False) -> dict:
+    textos = ESTADOS_INTEGRAL_OPERATIVO if operativo else ESTADOS_INTEGRAL
     scores = [v["score"] for v in validaciones if v["score"] is not None]
     score = round(sum(scores) / len(scores)) if scores else None
     pendientes = [v for v in validaciones if v["estado"] == "pendiente"]
     no_aptas = [v for v in validaciones if v["estado"] == "no_apto" and v["obligatoria"]]
     if no_aptas:
         estado = "no_apto"
-        motivo = "Requisito obligatorio calificado como No recomendable: " + ", ".join(f"{v['nombre']} ({v['resultado']})" for v in no_aptas) + "."
+        motivo = f"Requisito obligatorio calificado como {textos['no_apto']}: " + ", ".join(f"{v['nombre']} ({v['resultado']})" for v in no_aptas) + "."
     elif pendientes:
         estado = "pendiente"
         motivo = "Faltan validaciones: " + ", ".join(v["nombre"] for v in pendientes) + "."
@@ -258,7 +273,7 @@ def _resultado(validaciones: List[dict]) -> dict:
         motivo = "Todas las validaciones están completas y aprobadas."
     return {
         "estado": estado,
-        "texto": ESTADOS_INTEGRAL[estado],
+        "texto": textos[estado],
         "score": score,
         "scoreParcial": score is not None and estado == "pendiente",
         "motivo": motivo,

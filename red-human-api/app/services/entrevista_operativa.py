@@ -292,8 +292,9 @@ RECOMENDACIONES = {"recomendable": ("Recomendable", "avanzar"),
                    "con_reservas": ("Con reservas", "revision"),
                    "no_recomendable": ("No recomendable", "no_avanzar")}
 # C6 (prueba del 11 de octubre): SIN puntaje. La recomendación sale de 5 requisitos, cada uno ✓ (cumple), ✗ (no cumple)
-# o ? (sin dato): algún ✗ → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»; lo demás
-# → «Con reservas». «no_aplica» (p. ej. vacante sin sueldo capturado) no cuenta.
+# o ? (sin dato): un ✗ GRAVE → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»; lo
+# demás → «Con reservas». El traslado de 91-120 min incumple la regla de 90 min pero NO es grave (→ «Con reservas»);
+# solo más de 120 min lo es. «no_aplica» (p. ej. vacante sin sueldo capturado) no cuenta.
 INICIO_MAX_DIAS = 14
 REQUISITOS = (("traslado", f"Traslado ≤ {TRASLADO_MAX_MIN} min"), ("sueldo", "Sueldo"), ("experiencia", "Experiencia"),
               ("indispensables", "Indispensables"), ("inicio", f"Inicio ≤ {INICIO_MAX_DIAS} días"))
@@ -1223,7 +1224,8 @@ def requisitos_de(criterios: Dict[str, dict], transcript: List[dict], guion: dic
     reqs: Dict[str, dict] = {}
     m = pf.get("traslado_min")
     reqs["traslado"] = _req("sin_dato") if m is None else (
-        _req("cumple", f"~{m} min") if m <= TRASLADO_MAX_MIN else _req("no_cumple", f"~{m} min"))
+        _req("cumple", f"~{m} min") if m <= TRASLADO_MAX_MIN else
+        {**_req("no_cumple", f"~{m} min"), "grave": m > TRASLADO_NO_RECOMENDABLE_MIN})
     if not pf.get("sueldo_aplica"):
         reqs["sueldo"] = _req("no_aplica", "La vacante no tiene sueldo capturado")
     elif pf.get("sueldo_acepta") is True:
@@ -1254,10 +1256,12 @@ def requisitos_de(criterios: Dict[str, dict], transcript: List[dict], guion: dic
 
 
 def recomendacion_de(requisitos: Dict[str, dict]) -> str:
-    """Regla ESTRICTA (C6): algún ✗ → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»;
-    lo demás (algún ?) → «Con reservas». Sin puntaje."""
-    estados = [r.get("estado") for r in requisitos.values() if r.get("estado") != "no_aplica"]
-    if "no_cumple" in estados:
+    """Regla ESTRICTA (C6): algún ✗ grave → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ →
+    «Recomendable»; lo demás (algún ? o un ✗ no grave, como traslado de 91-120 min) → «Con reservas». Sin puntaje.
+    Un ✗ es grave salvo que el requisito diga `grave: False`."""
+    vigentes = [r for r in requisitos.values() if r.get("estado") != "no_aplica"]
+    estados = [r.get("estado") for r in vigentes]
+    if any(r.get("estado") == "no_cumple" and r.get("grave", True) for r in vigentes):
         return "no_recomendable"
     if all(e == "cumple" for e in estados):
         return "recomendable"

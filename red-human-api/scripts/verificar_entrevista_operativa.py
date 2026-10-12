@@ -5,7 +5,7 @@
 Cubre: biblioteca de 10 oficios (fija, ajustable solo por vacante), guion ARMADO de 6 secciones (máx. 3 indispensables),
 prompt del modo operativo sin repetir lo del prefiltro (una pregunta por mensaje), evaluación A-B-C-D y — C6 (prueba del 11
 de octubre) — recomendación SIN puntaje por 5 requisitos ✓ / ✗ / ? (traslado ≤ 90 min, sueldo, experiencia, indispensables,
-inicio ≤ 14 días): algún ✗ → «No recomendable» (detiene la ruta, nunca descarta); alertas sin habilidades blandas; C7
+inicio ≤ 14 días): un ✗ grave (traslado > 120 min incluido) → «No recomendable» (detiene la ruta, nunca descarta); alertas sin habilidades blandas; C7
 «Siguiente paso: …» tras la decisión de RH; C11 etiqueta en la tarjeta.
 """
 
@@ -76,6 +76,14 @@ check(eop.recomendacion_de({**TODO_OK, "inicio": {"estado": "sin_dato"}}) == "co
 check(eop.recomendacion_de({**TODO_OK, "inicio": {"estado": "sin_dato"}, "traslado": {"estado": "no_cumple"}}) == "no_recomendable",
       "C6: algún ✗ → No recomendable (aunque haya ?)")
 check(eop.recomendacion_de({**TODO_OK, "sueldo": {"estado": "no_aplica"}}) == "recomendable", "C6: sin sueldo capturado el requisito no cuenta")
+# corrección: traslado de 91-120 min incumple los 90 min pero NO es grave → «Con reservas»; más de 120 → «No recomendable»
+for minutos, esperado in ((60, "recomendable"), (100, "con_reservas"), (120, "con_reservas"), (121, "no_recomendable")):
+    reqs = eop.requisitos_de({k: {"resultado": "cumple"} for k in "ABCD"}, [], {}, {"traslado_min": minutos, "sueldo_aplica": False})
+    reqs["inicio"] = {"estado": "cumple"}
+    check(eop.recomendacion_de(reqs) == esperado, f"traslado de {minutos} min → {esperado}")
+from app.services import evaluacion_integral as sint  # noqa: E402
+check(sint._resultado([], operativo=False)["texto"] == "Apto" and sint._resultado([], operativo=True)["texto"] == "Recomendable",
+      "C6 regla 6: el perfil Corporativo conserva «Apto»; solo el Operativo usa «Recomendable»")
 check([eop.dias_inicio(x) for x in ("mañana", "el lunes", "en 2 semanas", "en un mes", "no sé")] == [1, 7, 14, 30, None],
       "C6: la fecha de inicio se lee en días (≤ 14 cumple)")
 check(eop.faltan_de({**TODO_OK, "inicio": {"estado": "sin_dato"}, "traslado": {"estado": "no_cumple"}}) == ["✗ Traslado ≤ 90 min", "? Inicio ≤ 14 días"],

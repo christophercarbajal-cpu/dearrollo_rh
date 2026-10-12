@@ -331,4 +331,29 @@ check(eop.salidas_conflictivas(tr) == ["Salida por conflicto: «Tuve problemas c
 op, _ = eop.evaluar(tr, eop.armar_guion("Ayudante", None, [], []), [], "Ayudante", prefiltro={"traslado_min": 300})
 check(op["score"] is None and not any("raslado" in x for x in op["puntos"]), "300 min de traslado no generan nada: sin umbrales")
 
+# ================= Corrección: primera pregunta inyectada en código =================
+print("\n--- Primera pregunta fija (el LLM no la redacta) ---")
+from types import SimpleNamespace  # noqa: E402
+
+from app.services import entrevistas as sent  # noqa: E402
+
+desviado = eop.armar_guion("Ayudante", None, ["Cargar cajas de 25 kg"], [])
+creativa = "Cuéntame sobre las actividades operativas que has realizado."
+desviado["operativo"]["secciones"][0]["preguntas"][0] = creativa
+desviado["preguntas"][0] = creativa
+ent = SimpleNamespace(tipo="whatsapp", guion=desviado, postulacion=None, transcript=[])
+check(sent.primera_pregunta(ent) == "¿Cuál fue tu último trabajo?", "la transición SIEMPRE lleva «¿Cuál fue tu último trabajo?» aunque el guion diga «Cuéntame…»")
+qs = sent.preguntas_de(ent)
+check(qs[0] == "¿Cuál fue tu último trabajo?" and creativa not in qs and qs[1] == "¿Qué hacías en ese trabajo?",
+      "el guion que se conversa empieza con la fija y el LLM sigue desde la pregunta 2")
+conv = sent.guion_conversacion(ent)
+check(conv["operativo"]["secciones"][0]["preguntas"][0] == "¿Cuál fue tu último trabajo?"
+      and desviado["preguntas"][0] == creativa, "el prompt usa la fija; el guion guardado de la vacante no se toca")
+check(ia.mensaje_inicial_entrevista_whatsapp("Ayudante", "Luis", sent.primera_pregunta(ent))
+      == "Listo, Luis. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?", "texto EXACTO de la transición")
+h = [{"rol": "assistant", "texto": "Listo, Luis. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?"},
+     {"rol": "user", "texto": "Ayudante en una bodega"}]
+t, _ = ia.entrevista_turno("x", h, qs, operativo=True)
+check(t.respuesta == "¿Qué hacías en ese trabajo?", "con la respuesta del candidato la conversación sigue con la pregunta 2")
+
 print(f"\n🎉 {OK} comprobaciones OK — Cambio 19")

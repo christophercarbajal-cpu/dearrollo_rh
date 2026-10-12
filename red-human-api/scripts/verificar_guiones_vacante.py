@@ -270,8 +270,10 @@ with TestClient(app) as client:
           and e3.guion.get("seccion") == "entrevista_whatsapp",
           f"«Iniciar» la Entrevista por WhatsApp crea la entrevista con el guion de la vacante y arranca ({r.status_code})")
     intro = (e3.transcript or [{}])[0].get("texto", "")
-    check(intro.endswith(" Cuéntame de tu último turno en patio (editada).") and "¿Comenzamos?" not in intro and p3.espera_respuesta,
-          f"la transición trae la PRIMERA pregunta del guion vigente (con la edición de RH), sin pedir permiso: {intro!r}")
+    # 2026-10-12: la primera pregunta de la transición se inyecta FIJA (nunca la del guion ni la del LLM); el guion
+    # vigente (con la edición de RH) sigue desde su pregunta 2
+    check(intro == "Listo, Rosa. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?" and p3.espera_respuesta,
+          f"la transición lleva la primera pregunta FIJA, sin pedir permiso: {intro!r}")
     r2 = asyncio.run(procesar_prefiltro(db, p3, "No tengo experiencia operando montacargas; trabajé en almacén acomodando cajas.", "whatsapp"))
     check(r2["respuesta"] == "Cuéntame cómo cuidas la seguridad al cargar.", "segunda pregunta del guion, en orden")
     p3 = db.query(Postulacion).filter_by(codigo=P3).one()

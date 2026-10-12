@@ -139,6 +139,37 @@ def entrevista_whatsapp_activa(p: Postulacion) -> Optional[Entrevista]:
     return next((e for e in reversed(list(p.entrevistas or [])) if e.tipo == "whatsapp" and e.estado in ("programada", "en_curso")), None)
 
 
+# 2026-10-12: la transición a la Entrevista Red Human por WhatsApp lleva SIEMPRE esta primera pregunta, inyectada en código
+# (nunca la redacta el LLM ni sale del guion guardado, que pudo quedar con «Cuéntame…»). El LLM toma el control desde la
+# respuesta del candidato a esta pregunta, con la pregunta 2 del guion.
+PRIMERA_PREGUNTA_FIJA = "¿Cuál fue tu último trabajo?"
+
+
+def guion_conversacion(e: Entrevista) -> dict:
+    """El guion que se conversa. Por WhatsApp, la primera pregunta es SIEMPRE `PRIMERA_PREGUNTA_FIJA`: sustituye a la
+    primera de Trayectoria del guion operativo (en los demás enfoques, a la primera del guion) — así la lista que ven el LLM y el
+    motor sin IA coincide con lo que ya se preguntó en la transición."""
+    import copy
+
+    from . import entrevista_operativa as eop
+
+    guion = copy.deepcopy(e.guion or {})
+    if e.tipo != "whatsapp":
+        return guion
+    preguntas = list(guion.get("preguntas") or [])
+    op = guion.get("operativo") or {}
+    tray = next((s for s in op.get("secciones") or [] if s.get("clave") == "trayectoria"), None)
+    if tray and tray.get("preguntas"):
+        vieja = tray["preguntas"][0]
+        tray["preguntas"] = [PRIMERA_PREGUNTA_FIJA] + [q for q in tray["preguntas"][1:] if eop._n(eop.texto_pregunta(q)) != eop._n(PRIMERA_PREGUNTA_FIJA)]
+        preguntas = [q for q in preguntas if q != vieja]
+    else:
+        preguntas = preguntas[1:]  # la primera del guion es la de apertura: la sustituye la fija (el LLM sigue con la 2)
+    preguntas = [PRIMERA_PREGUNTA_FIJA] + [q for q in preguntas if eop._n(eop.texto_pregunta(q)) != eop._n(PRIMERA_PREGUNTA_FIJA)]
+    guion["preguntas"] = preguntas
+    return guion
+
+
 def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
     """El MISMO prompt del entrevistador para las tres actividades, con el guion de la vacante y su canal."""
     from ..serial import nombre_empresa_candidato
@@ -146,7 +177,7 @@ def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
 
     p = e.postulacion
     v = p.vacante if p else None
-    guion = e.guion or {}
+    guion = guion_conversacion(e)
     bloque = ""
     if guion.get("operativo"):
         from . import entrevista_operativa as eop
@@ -161,13 +192,14 @@ def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
         modalidad=(v.modalidad if v else "") or "", sueldo=(v.sueldo if v else "") or "",
         beneficios=list(v.beneficios or []) if v else [], area=(v.area if v else "") or "",
         canal=e.tipo, guion_de_vacante=bool(guion.get("seccion")), bloque_operativo=bloque,
-    )
+    ) + (f"\nLA PRIMERA PREGUNTA («{PRIMERA_PREGUNTA_FIJA}») YA SE HIZO en el mensaje de transición: no la repitas ni "
+         "vuelvas a presentarte; toma su respuesta y continúa con la SIGUIENTE pregunta del guion.\n" if e.tipo == "whatsapp" else "")
 
 
 def preguntas_de(e: Entrevista, historial: Optional[list] = None) -> list:
     """Preguntas que se hacen en esta entrevista. Operativa: sin las de inicio/condiciones que ya cubrió el prefiltro ni
     la evidencia de un indispensable que el candidato ya demostró (Cambio 19)."""
-    guion = e.guion or {}
+    guion = guion_conversacion(e)
     if guion.get("operativo") and e.postulacion is not None:
         from . import entrevista_operativa as eop
         from .evaluacion_integral import respuestas_previas
@@ -186,11 +218,14 @@ def mensaje_inicial(p: Postulacion, primera: str = "", pedir_permiso: bool = Fal
 
 
 def primera_pregunta(e: Entrevista) -> str:
-    """Primera pregunta del guion (sin la marca de condicional) — va en el mismo mensaje de la transición."""
+    """Primera pregunta — va en el mismo mensaje de la transición. Por WhatsApp es SIEMPRE la fija (inyectada en código,
+    nunca generada); en otros canales, la primera del guion."""
     from . import entrevista_operativa as eop
 
+    if e.tipo == "whatsapp":
+        return PRIMERA_PREGUNTA_FIJA
     qs = [q for q in preguntas_de(e) if str(q or "").strip()]
-    return eop.texto_pregunta(qs[0]) if qs else "¿Cuál fue tu último trabajo?"
+    return eop.texto_pregunta(qs[0]) if qs else PRIMERA_PREGUNTA_FIJA
 
 
 def _paso_de(e: Entrevista) -> str:
@@ -267,9 +302,12 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         e.estado = "en_curso"
         e.iniciada_en = ahora
         intro = mensaje_inicial(p, pedir_permiso=True)
-        e.transcript = [{"rol": "assistant", "texto": intro}]
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
+        # la primera pregunta se inyecta fija (el LLM empieza con la respuesta del candidato a ella)
+        e.transcript = [{"rol": "assistant", "texto": intro}, {"rol": "user", "texto": texto[:2000]},
+                        {"rol": "assistant", "texto": PRIMERA_PREGUNTA_FIJA}]
+        return await responder(PRIMERA_PREGUNTA_FIJA, ia_entrevista=False)
     historial = list(e.transcript or []) + [{"rol": "user", "texto": texto[:2000]}]
     turno, con_ia = ia.entrevista_turno(system_prompt(e, historial), historial, preguntas=preguntas_de(e, historial),
                                         operativo=bool((e.guion or {}).get("operativo")))

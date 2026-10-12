@@ -549,9 +549,9 @@ export interface BloquePlataforma {
 
 export interface CriterioFiltro {
   pregunta: string;
-  /** «dato» (2026-10-11, tarde): escolaridad, colonia, traslado y transporte del prefiltro de WhatsApp (fijos). */
+  /** «dato» (2026-10-11, tarde): escolaridad, colonia, traslado, transporte y sueldo del prefiltro de WhatsApp (fijos). */
   tipo: "si_no" | "numero" | "opcion" | "texto_corto" | "dato";
-  dato?: "escolaridad" | "zona" | "traslado" | "transporte";
+  dato?: "escolaridad" | "zona" | "traslado" | "transporte" | "sueldo";
   valida: string;
   respuesta_esperada: string;
   descarta: boolean;

@@ -563,19 +563,32 @@ PROMPT_GENERACION = (
     "trabajo y sus condicionales (dónde y cuánto tiempo / cómo lo cumpliría), o el segundo requisito. Nunca escolaridad.\n"
     "   - 14 a 16 · Situación actual (3): «¿Estás trabajando actualmente?» y una condicional para el sí y otra para el no.\n"
     "   - 17 · Motivación (1): qué le interesa de este trabajo.\n"
-    "   - 18 · Logística (1): SOLO la fecha de inicio («¿Cuándo podrías empezar a trabajar?»). El traslado, la colonia y el "
-    "transporte ya se preguntaron en el prefiltro: NO los vuelvas a preguntar.\n"
+    "   - 18 · Logística (1): SOLO la fecha de inicio («¿Cuándo podrías empezar a trabajar?»).\n"
+    "   YA SE PREGUNTARON EN EL PREFILTRO y están PROHIBIDOS en la entrevista: ubicación (colonia, municipio, dónde vive), "
+    "traslado (tiempo o transporte), sueldo (cuánto gana o ganaba, pretensiones) y escolaridad.\n"
     "4. Condicionales: una pregunta puede llevar condicion «si» (solo si responde sí) o «no» (solo si responde no); aplica "
     "a la pregunta ANTERIOR, que debe contestarse con sí o no.\n"
     "5. PROHIBIDO: preguntas de manual de RH (fortalezas, debilidades, virtudes, trabajo bajo presión, errores, «¿dónde te "
     "ves en 5 años?», desarrollarte, crecer, «¿cómo organizas…?», «cuéntame un ejemplo»), pedir documentos (INE, CURP, RFC, comprobantes, actas, certificados) o hablar de escolaridad o "
-    "estudios, e inventar condiciones (sueldo, horario, ubicación) que no estén en los datos."
+    "estudios, preguntar por ubicación, traslado o sueldo (ya están en el prefiltro), e inventar condiciones (sueldo, "
+    "horario, ubicación) que no estén en los datos."
 )
 
 _RE_PROHIBIDAS = re.compile(r"\b(error|errores|equivocaste|presion|fortaleza|fortalezas|debilidad|debilidades|virtud|virtudes|"
                             r"cualidad|cualidades|punto debil|puntos debiles|donde te ves|en cinco anos|en 5 anos|"
                             r"deberiamos contratarte|te definirias|desarrollarte|desarrollar\w*|crecer|crecimiento|"
                             r"como organizas|como te organizas|cuentame un ejemplo|dame un ejemplo)\b")
+
+
+# C4 (prueba del 11 de octubre): ubicación, traslado y sueldo ya se preguntaron en el prefiltro — la entrevista no los repite
+_RE_TEMA_PREFILTRO = re.compile(r"\b(sueldo|salario|ganabas|ganas|ganarias|te pagaban|pretension\w*|traslad\w*|transporte|"
+                                r"colonia|municipio|donde vives|de tu casa|que tan lejos|ubicacion)\b")
+
+
+def tema_de_prefiltro(texto: str) -> Optional[str]:
+    """El tema del prefiltro (ubicación, traslado, sueldo) que repite una pregunta de la entrevista, o None."""
+    m = _RE_TEMA_PREFILTRO.search(_n(texto))
+    return m.group(1) if m else None
 
 
 def revisar_guion(guion: dict) -> List[str]:
@@ -616,6 +629,8 @@ def revisar_guion(guion: dict) -> List[str]:
             problemas.append(f"«{corto}»: usa una palabra prohibida («{hallada.group(1)}»).")
         if _RE_ESCOLARIDAD.search(_n(t)):
             problemas.append(f"«{corto}»: pide documentos o habla de escolaridad.")
+        if tema_de_prefiltro(t):
+            problemas.append(f"«{corto}»: pregunta ubicación, traslado o sueldo (ya están en el prefiltro).")
         if cond and not anterior:
             problemas.append(f"«{corto}»: es condicional pero no sigue a una pregunta de sí o no.")
         if not cond:
@@ -814,7 +829,8 @@ def bloque_prompt(guion: dict, previas: List[dict]) -> str:
            "pregúntale con naturalidad si tiene experiencia con lo que pide el puesto; no le expliques la regla.\n" if excl else "")
         + ("YA LO RESPONDIÓ EN EL PREFILTRO O EL FORMULARIO (NO lo vuelvas a preguntar; si hace falta, parte de ahí):\n"
            + "\n".join(f"- {x}" for x in previo) + "\n" if previo else "")
-        + "No hables de escolaridad ni pidas documentos: eso se valida en Documentos.\n"
+        + "No hables de escolaridad ni pidas documentos: eso se valida en Documentos. Tampoco preguntes ubicación, traslado "
+          "ni sueldo: ya se preguntaron en el prefiltro.\n"
     )
 
 

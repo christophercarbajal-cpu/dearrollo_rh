@@ -477,7 +477,8 @@ function CriteriosEditor({ items, onChange, cerradas = false }: { items: Criteri
           <p className="mt-0.5 text-[11px] text-ink-3">
             {c.dato === "escolaridad"
               ? c.descarta ? `Dato fijo · descarta si no cumple: ${c.valida}` : "Dato fijo · solo se registra"
-              : c.dato === "traslado" ? "Dato fijo · no descarta (más de 90 min = alerta para RH)" : "Dato fijo · solo se registra"}
+              : c.dato === "traslado" ? "Dato fijo · no descarta (más de 90 min = alerta para RH)"
+              : c.dato === "sueldo" ? "Dato fijo · se registra si le parece bien (nunca descarta)" : "Dato fijo · solo se registra"}
           </p>
         </div>
       ) : (

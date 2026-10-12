@@ -2872,6 +2872,9 @@ def preguntas_clave_extra(ficha: FichaGuion, ya: List[dict], faltan: int) -> Lis
     for r in textos:
         if r and _RE_EXIGENCIA.search(r) and not RE_NIVEL_ESTUDIOS.search(r) and len(r.split()) <= 14:
             agregar(_pregunta_exigencia(r), r)
+    mod = (ficha.modalidad or "").strip()
+    if mod and not mod.lower().startswith("presencial"):  # C1 (prueba del 11 de octubre): la modalidad también es clave
+        agregar(f"¿Puedes trabajar en modalidad {mod.lower()}?", f"Modalidad: {mod}", clave="modalidad")
     if (ficha.ubicacion or "").strip() and not (ficha.modalidad or "").lower().startswith("remot"):
         agregar(f"¿Puedes trasladarte a {ficha.ubicacion.strip()}?", f"Trasladarse a {ficha.ubicacion.strip()}",
                 clave="ubicacion", solo_con_ubicacion=True)
@@ -2888,7 +2891,24 @@ def preguntas_clave_extra(ficha: FichaGuion, ya: List[dict], faltan: int) -> Lis
 # 2026-10-11 (tarde): el prefiltro de WhatsApp recolecta, una pregunta por mensaje y en este orden estricto, escolaridad
 # exacta, colonia/municipio, tiempo de traslado y medio de transporte. Solo la escolaridad puede descartar (si la vacante
 # pide un nivel como indispensable); el traslado NO descarta en esta etapa.
-DATOS_PREFILTRO = ("escolaridad", "zona", "traslado", "transporte")
+# C2 (prueba del 11 de octubre): 5) el sueldo — «El sueldo es desde… ¿Te parece bien?». Se registra; NUNCA descarta. Sin
+# sueldo capturado («A convenir») no se pregunta (Red Human nunca inventa condiciones).
+DATOS_PREFILTRO = ("escolaridad", "zona", "traslado", "transporte", "sueldo")
+
+
+def pregunta_sueldo(sueldo: str) -> str:
+    """«Desde $9,000 MXN mensuales» → «El sueldo es desde $9,000 MXN mensuales. ¿Te parece bien?»."""
+    t = " ".join(str(sueldo or "").split()).strip().rstrip(".")
+    if not t or t.lower() in ("a convenir", "por definir"):
+        return ""
+    if t.lower().startswith("desde "):
+        cuerpo = "desde " + t[6:]
+    elif "–" in t or " - " in t:
+        a, b = [x.strip() for x in re.split(r"\s*[–-]\s+|\s+[–-]\s*", t, maxsplit=1)]
+        cuerpo = f"de {a} a {b}"
+    else:
+        cuerpo = f"de {t}"
+    return f"El sueldo es {cuerpo}. ¿Te parece bien?"
 
 
 def preguntas_datos_whatsapp(ficha: FichaGuion) -> List[dict]:
@@ -2905,7 +2925,8 @@ def preguntas_datos_whatsapp(ficha: FichaGuion) -> List[dict]:
          "descarta": False, "opciones": []},
         {"pregunta": "¿En qué transporte llegarías?", "tipo": "dato", "dato": "transporte", "valida": "Medio de transporte",
          "respuesta_esperada": "", "descarta": False, "opciones": []},
-    ]
+    ] + ([{"pregunta": pregunta_sueldo(ficha.sueldo), "tipo": "dato", "dato": "sueldo", "valida": f"Sueldo: {ficha.sueldo.strip()}",
+           "respuesta_esperada": "Sí", "descarta": False, "opciones": []}] if pregunta_sueldo(ficha.sueldo) else [])
 
 
 def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion, hay_web: bool,
@@ -2946,7 +2967,7 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
             salida_web += preguntas_clave_extra(ficha, salida_web, MIN_PREFILTRO_WEB - len(salida_web))
     salida_wa: List[dict] = []
     if hay_whatsapp:
-        # 1) escolaridad · 2) colonia/municipio · 3) traslado · 4) transporte — siempre primero y en este orden
+        # 1) escolaridad · 2) colonia/municipio · 3) traslado · 4) transporte · 5) sueldo — siempre primero y en este orden
         salida_wa = preguntas_datos_whatsapp(ficha)
         nivel = salida_wa[0]["respuesta_esperada"]
         if hay_web:

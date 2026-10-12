@@ -26,7 +26,8 @@ contradicción entra a «Puntos por validar».
 
 Datos de WhatsApp (2026-10-11, tarde): si la vacante trae en «Prefiltro · WhatsApp» las preguntas `tipo: "dato"`
 (`ia.DATOS_PREFILTRO`), el bot las hace PRIMERO y en este orden estricto, una por mensaje: 1) escolaridad exacta (hasta
-qué año), 2) colonia/municipio, 3) tiempo de traslado, 4) medio de transporte. Ante una respuesta vaga repregunta por un
+qué año), 2) colonia/municipio, 3) tiempo de traslado, 4) medio de transporte, 5) sueldo («El sueldo es desde… ¿Te
+parece bien?», solo si la vacante tiene sueldo capturado; se registra y NUNCA descarta). Ante una respuesta vaga repregunta por un
 dato concreto UNA sola vez; si sigue vaga queda en Puntos por validar. La escolaridad DESCARTA de inmediato si no cumple
 el nivel indispensable de la vacante (mensaje de cierre); el traslado NUNCA descarta en esta etapa. Los datos quedan en
 `analisis.prefiltro_datos` (la ficha los muestra).
@@ -148,6 +149,11 @@ def criterios_de(v) -> List[dict]:
                       "esperada": "si", "tipo": "dato"})
     if not datos:
         return salida
+    q_sueldo = ia.pregunta_sueldo(v.sueldo or "")
+    if q_sueldo and not any(d["dato"] == "sueldo" for d in datos):
+        # C2 (prueba del 11 de octubre): vacantes con los 4 datos ya guardados también preguntan el sueldo (sin regenerar)
+        datos.append({"id": "dato-sueldo", "clave": "sueldo", "dato": "sueldo", "criterio": f"Sueldo: {v.sueldo.strip()}",
+                      "pregunta": q_sueldo, "chat": q_sueldo, "indispensable": False, "esperada": "si", "tipo": "dato"})
     datos.sort(key=lambda d: ia.DATOS_PREFILTRO.index(d["dato"]))
     base = next((c for c in salida if c["indispensable"] and not c.get("reconfirma") and ia.RE_NIVEL_ESTUDIOS.search(c["criterio"])), None)
     esc = next((d for d in datos if d["dato"] == "escolaridad"), None)
@@ -263,6 +269,7 @@ REPREGUNTA_DATO = {
     "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
     "traslado": "¿Cuántos minutos más o menos? Por ejemplo, «40 minutos» o «1 hora y media».",
     "transporte": "¿Qué transporte usarías, por ejemplo camión, metro o auto?",
+    "sueldo": "Solo para confirmar: ¿el sueldo te parece bien?",
 }
 
 
@@ -288,6 +295,10 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
     if dato == "transporte":
         medio = medio_de(texto)
         return (None, {}) if medio is None else ("si", {"medio": medio})
+    if dato == "sueldo":
+        # C2 (prueba del 11 de octubre): se registra si le parece bien; un «no» nunca descarta (RH lo ve en la ficha)
+        v = clasificar({"criterio": "sueldo", "pregunta": c.get("pregunta") or "", "chat": c.get("chat") or ""}, texto)
+        return (None, {}) if v is None else (v, {"acepta": v == "si"})
     return "si", {}
 
 
@@ -300,6 +311,9 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
         d["traslado_min"] = extra.get("minutos")
     elif c["dato"] == "transporte":
         d["transporte_medio"] = extra.get("medio") or texto.strip()[:60]
+    elif c["dato"] == "sueldo":
+        d["sueldo_acepta"] = extra.get("acepta")
+        d["sueldo_ofrecido"] = str(c.get("criterio") or "").removeprefix("Sueldo: ").strip()
     elif c["dato"] == "escolaridad":
         d["nivel"] = extra.get("nivel") or ""
         d["terminado"] = extra.get("terminado")
@@ -552,7 +566,7 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         if c["id"] in respuestas:
             return False
         if c.get("dato"):
-            return True  # 2026-10-11 (tarde): los 4 datos de WhatsApp siempre se preguntan (primero y en orden)
+            return True  # 2026-10-11 (tarde): los datos de WhatsApp siempre se preguntan (primero y en orden)
         if c.get("reconfirma"):
             # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
             base = respuestas.get(c["reconfirma"]) or {}

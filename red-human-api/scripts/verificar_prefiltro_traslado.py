@@ -79,7 +79,7 @@ swa._meta_post = _meta_falso
 print("\n--- 1. Generación del prefiltro ---")
 ficha = ia.FichaGuion(titulo="Cargador", requisitos_indispensables=["Secundaria terminada"],
                       responsabilidades=["Cargar y descargar cajas de hasta 25 kg", "Acomodar mercancía en tarimas"],
-                      ubicacion="Tlalnepantla, Estado de México")
+                      ubicacion="Tlalnepantla, Estado de México", sueldo="Desde $9,000 MXN mensuales")
 web, wa = ia.asegurar_prefiltros([], [], ficha, hay_web=True, hay_whatsapp=True)
 check(len(web) >= 3, f"con 1 indispensable el prefiltro web se completa a {len(web)} preguntas clave (exigencias / ubicación)")
 check(all(q["opciones"] == ["Sí", "No"] for q in web) and not any("Parcial" in str(q) for q in web), "todas se responden solo Sí / No")
@@ -87,8 +87,16 @@ check([q for q in web if q["descarta"]] == [web[0]] and web[0]["valida"] == "Sec
       "solo el indispensable de RH es eliminatorio (lo agregado nunca descarta)")
 check(any("cargar y descargar cajas" in q["pregunta"] for q in web) and any(q.get("clave") == "ubicacion" for q in web),
       "salen de las exigencias del trabajo y de la ubicación")
-check([q.get("dato") for q in wa[:4]] == ["escolaridad", "zona", "traslado", "transporte"],
-      "WhatsApp: escolaridad → colonia/municipio → traslado → transporte, en ese orden")
+check([q.get("dato") for q in wa[:5]] == ["escolaridad", "zona", "traslado", "transporte", "sueldo"],
+      "WhatsApp: escolaridad → colonia/municipio → traslado → transporte → sueldo, en ese orden")
+check(wa[4]["pregunta"] == "El sueldo es desde $9,000 MXN mensuales. ¿Te parece bien?" and not wa[4]["descarta"],
+      "5) «El sueldo es desde… ¿Te parece bien?» — se registra, nunca descarta")
+_, wa_sin = ia.asegurar_prefiltros([], [], ficha.model_copy(update={"sueldo": ""}), hay_web=True, hay_whatsapp=True)
+check("sueldo" not in [q.get("dato") for q in wa_sin], "sin sueldo capturado no se pregunta (nunca se inventa)")
+mod, _ = ia.asegurar_prefiltros([], [], ia.FichaGuion(titulo="Capturista", requisitos_indispensables=["Saber Excel"],
+                                                      modalidad="Híbrido", horario="Lunes a viernes de 9 a 6"), hay_web=True, hay_whatsapp=False)
+check(len(mod) == 3 and any(q.get("clave") == "modalidad" for q in mod) and any(q.get("clave") == "horario" for q in mod),
+      "la modalidad y el horario también completan las 3 preguntas clave")
 check(wa[0]["descarta"] and wa[0]["valida"] == "Secundaria terminada" and not any(q.get("reconfirma") == "Secundaria terminada" for q in wa),
       "la escolaridad exacta reconfirma el nivel indispensable (sin pregunta sí/no repetida)")
 check("Tlalnepantla" in wa[2]["pregunta"] and not wa[2]["descarta"], "el traslado usa la ubicación real y nunca descarta")
@@ -136,7 +144,7 @@ with TestClient(app) as client:
     # ================= 3. Conversación por WhatsApp =================
     print("\n--- 3. Datos por WhatsApp: uno por mensaje, repregunta única ---")
     v = db.query(Vacante).filter(Vacante.estado == "Publicada").order_by(Vacante.id).first()
-    v.cuenta_id, v.titulo, v.ubicacion = cuenta.id, "Cargador", "Tlalnepantla"
+    v.cuenta_id, v.titulo, v.ubicacion, v.sueldo = cuenta.id, "Cargador", "Tlalnepantla", "Desde $9,000 MXN mensuales"
     v.enfoque_entrevista, v.guiones = "operativo", {}
     v.preguntas_filtro = web
     v.preguntas_filtro_whatsapp = wa
@@ -175,11 +183,16 @@ with TestClient(app) as client:
     r = turno(p, "como 2 horas y media")
     check(r["respuesta"].endswith("¿En qué transporte llegarías?"), "4) al final el medio de transporte; el traslado largo NO descarta")
     r = turno(p, "En camión y metro")
+    check(r["respuesta"].endswith("El sueldo es desde $9,000 MXN mensuales. ¿Te parece bien?"), "5) al final el sueldo")
+    r = turno(p, "mmm")
+    check(r["respuesta"] == pconv.REPREGUNTA_DATO["sueldo"], "respuesta vaga sobre el sueldo → repregunta una vez")
+    r = turno(p, "No, está bajo")
     p = fresca(p)
     d = p.analisis.get("prefiltro_datos") or {}
     check(p.activa and (p.analisis.get("prefiltro_web") or {}).get("resultado") == "cumple", "con la escolaridad cumplida el prefiltro aprueba")
     check(d.get("traslado_min") == 150 and d.get("nivel") == "Secundaria" and "Metro" in d.get("transporte_medio", "")
           and d.get("zona") == "por aquí", "los datos quedan guardados para la ficha (zona, minutos, transporte, escolaridad)")
+    check(d.get("sueldo_acepta") is False, "un «no» al sueldo se registra y NO descarta")
 
     print("\n--- 3b. Transición natural a la entrevista (Bloque 2) ---")
     desde = 0

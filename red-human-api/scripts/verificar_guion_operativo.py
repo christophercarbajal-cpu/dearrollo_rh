@@ -128,6 +128,17 @@ for frase in ("¿Cómo te ves para crecer aquí?", "¿Qué quieres desarrollarte
     g1["operativo"] = {**base18["operativo"], "secciones": [{**base18["operativo"]["secciones"][0], "preguntas": [frase] + base18["operativo"]["secciones"][0]["preguntas"][1:]}]
                        + base18["operativo"]["secciones"][1:]}
     check(any("palabra prohibida" in x for x in eop.revisar_guion(g1)), f"palabra prohibida: «{frase}»")
+# C4 (prueba del 11 de octubre): ubicación, traslado, sueldo y escolaridad ya están en el prefiltro
+for frase in ("¿Cuánto ganabas en ese trabajo?", "¿En qué colonia vives?", "¿Cuánto tiempo haces de tu casa?",
+              "¿Qué transporte usas?", "¿Cuál es tu pretensión de sueldo?"):
+    g1 = {**base18, "preguntas": [frase] + base18["preguntas"][1:]}
+    g1["operativo"] = {**base18["operativo"], "secciones": [{**base18["operativo"]["secciones"][0], "preguntas": [frase] + base18["operativo"]["secciones"][0]["preguntas"][1:]}]
+                       + base18["operativo"]["secciones"][1:]}
+    check(any("ya están en el prefiltro" in x for x in eop.revisar_guion(g1)), f"tema del prefiltro en la entrevista: «{frase}»")
+check("PROHIBIDOS en la entrevista: ubicación" in eop.PROMPT_GENERACION and "sueldo" in eop.PROMPT_GENERACION,
+      "las instrucciones del LLM prohíben ubicación, traslado, sueldo y escolaridad")
+check(all(not eop.revisar_guion(eop.armar_guion(x["nombre"], None, ["Rolar turnos"], [])) for x in eop.BIBLIOTECA.values()),
+      "los guiones de los 10 oficios pasan la revisión (ninguno repite temas del prefiltro)")
 check(not any(eop.es_alerta_escolaridad(q) for q in eop.armar_guion("Cargador", None, ["Secundaria terminada", "Rolar turnos"], [])["preguntas"]),
       "un indispensable de escolaridad nunca entra a la entrevista (se valida en el prefiltro)")
 check(eop.revisar_guion(eop.armar_guion("Montacarguista", perfil, REQS, [], ubicacion="Tultitlán, Estado de México",

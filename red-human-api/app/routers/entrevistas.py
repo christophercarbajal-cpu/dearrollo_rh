@@ -549,13 +549,11 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
         # (falla en indispensables o logística → «No recomendable»), nunca descarta.
         from ..services import entrevista_operativa as eop
 
+        # Cambio 19: sin umbrales fijos — las contradicciones que detectó la evaluación general cuentan como Puntos por validar
+        extra = [str(x) for x in (ev.inconsistencias or [])] + [r for r in ev.riesgos or [] if str(r).lower().startswith("inconsistencia")]
         operativa, _ = eop.evaluar(e.transcript or [], e.guion or {}, respuestas_previas(p) if p else [], v.titulo if v else "",
-                                   prefiltro=eop.contexto_prefiltro(p))
+                                   prefiltro=eop.contexto_prefiltro(p), extra=extra)
         ev = eop.aplicar(ev, operativa)
-    # 2026-10-11 (tarde): traslado del prefiltro > 90 min → alerta; > 120 min → «No recomendable» (nunca descarta)
-    from ..services import entrevista_operativa as _eop
-
-    ev = _eop.aplicar_traslado(ev, operativa, _eop.minutos_prefiltro(p))
     e.evaluacion = {**ev.model_dump(), **({"operativa": operativa} if operativa else {})}
     e.estado = "evaluada"
     # p.score / p.evidencia son el resultado de Luna sobre el CV (ver ia.AjustePerfil,

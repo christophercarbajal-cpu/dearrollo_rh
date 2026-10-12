@@ -180,14 +180,13 @@ def prefiltro_datos(p) -> Optional[dict]:
     d = ((p.analisis or {}).get("prefiltro_datos")) or {}
     if not d:
         return None
-    from .services.entrevista_operativa import TRASLADO_MAX_MIN, TRASLADO_NO_RECOMENDABLE_MIN
-
     m = d.get("traslado_min") if isinstance(d.get("traslado_min"), (int, float)) else None
     return {"escolaridad": d.get("escolaridad") or "", "nivel": d.get("nivel") or "", "zona": d.get("zona") or "",
             "traslado": d.get("traslado") or "", "trasladoMin": m, "transporte": d.get("transporte_medio") or d.get("transporte") or "",
             # C5 (prueba del 11 de octubre): su respuesta a «El sueldo es desde… ¿Te parece bien?»
             "sueldo": d.get("sueldo") or "", "sueldoAcepta": d.get("sueldo_acepta"), "sueldoOfrecido": d.get("sueldo_ofrecido") or "",
-            "alerta": None if m is None or m <= TRASLADO_MAX_MIN else ("no_recomendable" if m > TRASLADO_NO_RECOMENDABLE_MIN else "alerta")}
+            # Cambio 19: sin umbrales fijos — el traslado solo se registra (ninguna alerta por minutos)
+            "alerta": None}
 
 
 def _dedupe_cap(items: List[Optional[str]], maximo: int) -> List[str]:
@@ -284,15 +283,13 @@ def _sintesis_global(p: Postulacion) -> dict:
         4,
     )
     # 2026-10-09: una contradicción entre respuestas (formulario, chat, entrevista, CV) es «Inconsistencia» — va primero
-    inconsistencias_txt = [
-        f"Inconsistencia: {i.get('criterio')} — formulario «{i.get('web')}», chat «{i.get('whatsapp')}»"
-        + (f" (aclaró: {str(i.get('aclaracion'))[:120]})" if i.get("aclarada") and i.get("aclaracion") else "")
-        for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
-    from .services.entrevista_operativa import alerta_traslado, minutos_prefiltro
+    from .services.entrevista_operativa import texto_inconsistencia
 
+    inconsistencias_txt = [texto_inconsistencia(i) for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
+    # Cambio 19: sin umbrales fijos (ya no hay alerta de traslado por minutos); las condiciones de la vacante que no cumple
     puntos_por_validar = _dedupe_cap(
-        [alerta_traslado(minutos_prefiltro(p)),  # 2026-10-11 (tarde): traslado > 90 min del prefiltro, siempre primero
-         *inconsistencias_txt,
+        [*inconsistencias_txt,
+         *[str(x) for x in (a.get("condiciones_no_cumplidas") or [])],
          *[str(x) for x in (a.get("puntos_validar_prefiltro") or [])],  # 2026-10-10: lo que el prefiltro no pudo concluir
          *(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],

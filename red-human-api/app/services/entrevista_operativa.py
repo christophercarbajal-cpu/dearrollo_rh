@@ -26,10 +26,12 @@ ni escolaridad); si falla se regenera con los problemas como retroalimentación 
 tampoco pasa, se guarda con `operativo.revision.problemas` para que RH vea qué falló. Sin IA se usa el guion determinista
 (`armar_guion`), que cumple las mismas reglas.
 
-Evaluación (garantizada en código, `evaluar` + `aplicar`): cuatro criterios — A Experiencia en el oficio, B Procedimiento
-(la situación esperada), C Indispensables, D Logística. Si C o D fallan la recomendación es «No recomendable» (solo
-recomienda: NUNCA descarta; la decisión es de RH). Las alertas (empleo < 3 meses, despido, traslado > 90 min, …) van a
-«Puntos por validar».
+Evaluación (Cambio 19, garantizada en código, `evaluar` + `aplicar`): SIN puntaje y SIN umbrales fijos. Criterios A-D
+(experiencia, procedimiento, indispensables, logística) como evidencia; la recomendación sale SOLO de la experiencia en
+un puesto similar (A con datos concretos) y de los «Puntos por validar» — condiciones de la vacante no cumplidas,
+sueldo no aceptado u otra cifra, inconsistencias y salidas por despido o conflicto (nunca habilidades blandas):
+Recomendable = experiencia y ningún punto · No recomendable = sin experiencia y con puntos · lo demás (o una respuesta
+dudosa) Con reservas. Solo recomienda: NUNCA descarta; la ruta se detiene y RH decide.
 """
 
 import copy
@@ -49,9 +51,6 @@ MAX_PALABRAS = 15
 MAX_REGENERACIONES = 2  # 1 intento + 2 regeneraciones; al tercero que falle se guarda con los problemas a la vista de RH
 MARCA_SI = "[Solo si responde sí]"
 MARCA_NO = "[Solo si responde no]"
-TRASLADO_MAX_MIN = 90
-TRASLADO_NO_RECOMENDABLE_MIN = 120
-EMPLEO_MIN_MESES = 3
 
 # ============================================================ Biblioteca de Perfiles (10 oficios, estándar de la industria)
 
@@ -296,13 +295,10 @@ TEXTO_RESULTADO = {"cumple": "Cumple", "parcial": "Parcial", "no_cumple": "No cu
 RECOMENDACIONES = {"recomendable": ("Recomendable", "avanzar"),
                    "con_reservas": ("Con reservas", "revision"),
                    "no_recomendable": ("No recomendable", "no_avanzar")}
-# C6 (prueba del 11 de octubre): SIN puntaje. La recomendación sale de 5 requisitos, cada uno ✓ (cumple), ✗ (no cumple)
-# o ? (sin dato): un ✗ GRAVE → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ → «Recomendable»; lo
-# demás → «Con reservas». El traslado de 91-120 min incumple la regla de 90 min pero NO es grave (→ «Con reservas»);
-# solo más de 120 min lo es. «no_aplica» (p. ej. vacante sin sueldo capturado) no cuenta.
-INICIO_MAX_DIAS = 14
-REQUISITOS = (("traslado", f"Traslado ≤ {TRASLADO_MAX_MIN} min"), ("sueldo", "Sueldo"), ("experiencia", "Experiencia"),
-              ("indispensables", "Indispensables"), ("inicio", f"Inicio ≤ {INICIO_MAX_DIAS} días"))
+# Cambio 19 (2026-10-12): SIN puntaje y SIN umbrales fijos (se eliminaron traslado ≤ 90/120 min, inicio ≤ 14 días y
+# empleo < 3 meses). La recomendación sale de dos requisitos: experiencia en un puesto similar con datos concretos y
+# ningún «Punto por validar».
+REQUISITOS = (("experiencia", "Experiencia en puesto similar"), ("puntos", "Sin puntos por validar"))
 SIMBOLO = {"cumple": "✓", "no_cumple": "✗", "sin_dato": "?", "no_aplica": "—"}
 
 
@@ -1011,7 +1007,7 @@ def _reformula(q: str) -> str:
 REPREGUNTA_SALIDA = {"despido": "¿Por qué te despidieron?", "conflicto": "¿Con quién tuviste problemas?",
                      "renuncia": "¿Por qué renunciaste?", "vago": "¿Por qué decidiste salir?"}
 _RE_PREG_SALIDA = re.compile(r"\bpor que (saliste|dejaste|te saliste|te fuiste|lo dejaste|la dejaste)\b")
-_RE_SAL_DESPIDO = re.compile(r"\b(me (corrieron|despidieron|liquidaron|sacaron|dieron de baja|botaron)|despid\w*|me (hicieron|pidieron) "
+_RE_SAL_DESPIDO = re.compile(r"\b((me|lo|la|nos|los|las) (corrieron|despidieron|liquidaron|sacaron|dieron de baja|botaron)|despid\w*|me (hicieron|pidieron) "
                              r"(la )?renuncia)\b")
 _RE_SAL_RAZON_EXTERNA = re.compile(r"\b(recorte\w*|cerr(o|aron)|quebr\w*|se acabo|termino (el|mi) contrato|se termino|fin de (contrato|temporada|"
                                    r"obra|proyecto)|temporal|por temporada|reestructura\w*|liquidaron a todos)\b")
@@ -1218,34 +1214,47 @@ def respuestas_por_seccion(transcript: List[dict], guion: dict) -> Dict[str, Lis
     return salida
 
 
-def alertas_deterministas(transcript: List[dict], guion: dict) -> List[str]:
-    """Alertas garantizadas en código (Puntos por validar): empleo < 3 meses, despido, traslado > 90 min, trabaja
-    actualmente (confirmar fecha de salida), horario o inicio condicionados."""
-    por = respuestas_por_seccion(transcript, guion)
-    alertas: List[str] = []
-    trayectoria = " ".join(r for _, r in por.get("trayectoria", []))
-    candidato = " ".join(str(m.get("texto") or "") for m in transcript or [] if m.get("rol") == "user")
-    for q, r in por.get("trayectoria", []) or [("", candidato)]:
-        meses = _meses(r)
-        if meses is not None and meses < EMPLEO_MIN_MESES and (_RE_CONTEXTO_EMPLEO.search(_n(r)) or "cuanto tiempo" in _n(q)):
-            alertas.append(f"Empleo reciente de menos de {EMPLEO_MIN_MESES} meses («{r.strip()[:90]}»).")
-            break
-    if _RE_DESPIDO.search(_n(trayectoria or candidato)):
-        alertas.append("Mencionó un despido en su trayectoria: validar el motivo con referencias.")
-    for q, r in por.get("logistica", []):
-        tema = _tema_logistica(q)
-        if tema == "traslado":
-            mins = minutos_traslado(r)
-            if mins is not None and mins > TRASLADO_MAX_MIN:
-                alertas.append(f"Traslado de más de {TRASLADO_MAX_MIN} minutos (~{mins} min).")
-        elif tema in ("horario", "inicio") and _RE_NEGATIVA_LOGISTICA.search(_n(r)):
-            alertas.append(("Horario condicionado" if tema == "horario" else "Fecha de inicio condicionada") + f": «{r.strip()[:90]}».")
-    actual = " ".join(r for _, r in por.get("situacion_actual", []))
-    afirma_trabajar = any("trabajando actualmente" in _n(q) and _n(r).split()[:1] in (["si"], ["claro"], ["sip"], ["simon"])
-                          for q, r in por.get("situacion_actual", []) if _n(r))
-    if _RE_TRABAJA.search(_n(actual)) or afirma_trabajar:
-        alertas.append("Trabaja actualmente: confirmar su fecha de salida y disponibilidad de inicio.")
-    return alertas
+def salidas_conflictivas(transcript: List[dict]) -> List[str]:
+    """Puntos por validar por el MOTIVO DE SALIDA (Cambio 19): lo que contestó a «¿Por qué saliste…?» (o a su repregunta)
+    cuando fue un despido (no un cierre o recorte) o un conflicto."""
+    puntos: List[str] = []
+    repreguntas = {_n(x) for x in REPREGUNTA_SALIDA.values()}
+    pendiente = False
+    for m in transcript or []:
+        texto = str(m.get("texto") or "")
+        if m.get("rol") == "assistant":
+            ultima = (texto.strip().splitlines() or [""])[-1]
+            pendiente = es_pregunta_salida(ultima) or _n(ultima) in repreguntas
+            continue
+        if not pendiente or not texto.strip():
+            continue
+        pendiente = False
+        t = _n(texto)
+        if _RE_SAL_DESPIDO.search(t) and not _RE_SAL_RAZON_EXTERNA.search(t):
+            puntos.append(f"Salida por despido: «{texto.strip()[:120]}»")
+        elif _RE_SAL_CONFLICTO.search(t):
+            puntos.append(f"Salida por conflicto: «{texto.strip()[:120]}»")
+    return puntos[:3]
+
+
+def es_salida_conflictiva(texto: str) -> bool:
+    t = _n(texto)
+    return bool((_RE_SAL_DESPIDO.search(t) and not _RE_SAL_RAZON_EXTERNA.search(t)) or _RE_SAL_CONFLICTO.search(t))
+
+
+def texto_inconsistencia(i: dict) -> str:
+    """Texto ÚNICO de una inconsistencia guardada en `analisis.inconsistencias` (ficha y evaluación lo comparten)."""
+    return (f"Inconsistencia: {i.get('criterio')} — formulario «{i.get('web')}», chat «{i.get('whatsapp')}»"
+            + (f" (aclaró: {str(i.get('aclaracion'))[:120]})" if i.get("aclarada") and i.get("aclaracion") else ""))
+
+
+_RE_SIN_PROBLEMA = re.compile(r"\b(no (tengo|hay) (ningun )?problema|sin problema|no me (molesta|cuesta)|no importa)\b")
+
+
+def _niega(texto: str) -> bool:
+    """«No lo he hecho», «nunca» → niega; «no tengo problema» no cuenta como negación."""
+    t = _n(texto)
+    return bool(_RE_NEGACION.search(t)) and not _RE_SIN_PROBLEMA.search(t)
 
 
 def _criterio(resultado: str, evidencia: str = "") -> dict:
@@ -1281,7 +1290,8 @@ def evaluar_demo(transcript: List[dict], guion: dict, previas: Optional[List[dic
         elif _contiene(texto_a, perfil.get("palabras_excluyentes") or []):
             criterios["A"] = _criterio("no_cumple", f"Su experiencia es con algo excluyente: {texto_a[:160]}")
         else:
-            criterios["A"] = _criterio("parcial", texto_a[:200])
+            # Cambio 19: sin datos concretos del oficio no hay «experiencia en puesto similar» (la duda la marca la IA)
+            criterios["A"] = _criterio("no_cumple", f"Sin experiencia comprobable en el oficio: {texto_a[:160]}")
     else:
         criterios["A"] = _criterio("cumple" if len(texto_a) > 40 else "parcial", texto_a[:200])
 
@@ -1310,8 +1320,8 @@ def evaluar_demo(transcript: List[dict], guion: dict, previas: Optional[List[dic
                                    "Lo demostró en su trayectoria: " + ", ".join(demostrados))
     elif not resp_c:
         criterios["C"] = _criterio("sin_dato")
-    elif any(_RE_NEGACION.search(_n(r)) for _, r in resp_c):
-        r = next(r for _, r in resp_c if _RE_NEGACION.search(_n(r)))
+    elif any(_niega(r) for _, r in resp_c):
+        r = next(r for _, r in resp_c if _niega(r))
         criterios["C"] = _criterio("no_cumple", f"«{r.strip()[:160]}»")
     else:
         criterios["C"] = _criterio("cumple" if len(resp_c) + len(demostrados) >= len(op.get("indispensables") or []) else "parcial",
@@ -1340,14 +1350,15 @@ class EvaluacionOperativaIA(BaseModel):
     B: CriterioIA = Field(description="Procedimiento: ¿su respuesta a la situación incluye los pasos esperados?")
     C: CriterioIA = Field(description="Indispensables explorados: no_cumple si dijo que no lo cumple o su ejemplo lo contradice.")
     D: CriterioIA = Field(description="Logística: no_cumple SOLO si no puede cubrir el horario, la ubicación o el inicio.")
-    alertas: List[str] = Field(default_factory=list, description="Alertas para RH: empleo de menos de 3 meses, despido, traslado de "
-                                                                  "más de 90 minutos, rotación alta, horario condicionado, etc. NUNCA "
-                                                                  "escolaridad ni documentos.")
+    alertas: List[str] = Field(default_factory=list, description="SOLO si salió de un trabajo por despido o por un conflicto "
+                                                                  "(con quién): «Salida por despido: …» / «Salida por conflicto: …». "
+                                                                  "NUNCA habilidades blandas, escolaridad ni documentos.")
 
 
 def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] = None, titulo: str = "",
-            prefiltro: Optional[dict] = None) -> Tuple[dict, bool]:
-    """Criterios A-D (IA o determinista) + alertas (las deterministas SIEMPRE se suman) + recomendación estricta."""
+            prefiltro: Optional[dict] = None, extra: Optional[List[str]] = None) -> Tuple[dict, bool]:
+    """Criterios A-D (IA o determinista) + Puntos por validar (Cambio 19) + recomendación. `extra`: inconsistencias que
+    detectó la evaluación general de la entrevista (contradicciones con el formulario, el prefiltro o el CV)."""
     from . import ia
 
     op = (guion or {}).get("operativo") or {}
@@ -1363,10 +1374,11 @@ def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] =
                 model=ia.MODEL,
                 instructions=(
                     "Evalúas una ENTREVISTA OPERATIVA (puestos masivos, México) con cuatro criterios y nada más: A experiencia real en "
-                    "el oficio, B procedimiento (la situación planteada), C indispensables explorados, D logística. Califica SOLO con "
-                    "lo que dijo el candidato (cumple / parcial / no_cumple / sin_dato) y cita la evidencia. Lo excluyente del oficio "
-                    "NO cuenta como experiencia. Si un dato ya lo confirmó en el prefiltro y la entrevista no lo contradice, cuenta. "
-                    "Nunca evalúes escolaridad ni documentos (se validan aparte). "
+                    "un puesto similar (con datos concretos: dónde, cuánto tiempo, qué hacía), B procedimiento (la situación planteada), "
+                    "C indispensables explorados, D logística. Califica SOLO con lo que dijo el candidato (cumple / parcial / no_cumple "
+                    "/ sin_dato) y cita la evidencia. Lo excluyente del oficio NO cuenta como experiencia. Si un dato ya lo confirmó "
+                    "en el prefiltro y la entrevista no lo contradice, cuenta. No apliques umbrales propios (minutos, días, meses). "
+                    "Nunca evalúes escolaridad, documentos ni habilidades blandas. "
                     f"PROHIBIDO usar datos sobre: {ia.DATOS_SENSIBLES_PROHIBIDOS}."
                 ),
                 input=(
@@ -1389,12 +1401,11 @@ def evaluar(transcript: List[dict], guion: dict, previas: Optional[List[dict]] =
         base = evaluar_demo(transcript, guion, previas)
     if not op.get("indispensables"):
         base["criterios"]["C"] = _criterio("cumple", "La vacante no tiene indispensables por explorar.")
-    alertas = []
-    for a in alertas_deterministas(transcript, guion) + list(base.get("alertas") or []):
-        if a and not es_alerta_escolaridad(a) and not es_soft_skill(a) and _n(a) not in {_n(x) for x in alertas}:
-            alertas.append(a)
-    reqs = requisitos_de(base["criterios"], transcript, guion, prefiltro)
-    return resultado(base["criterios"], alertas, perfil, reqs), con_ia
+    # de la IA solo se aceptan salidas por despido/conflicto (las demás «alertas» no son Puntos por validar)
+    ia_salidas = [a for a in base.get("alertas") or [] if es_salida_conflictiva(a) and not es_soft_skill(a)]
+    puntos = puntos_de(base["criterios"], transcript, prefiltro, list(extra or []) + ia_salidas)
+    reqs = requisitos_de(base["criterios"], transcript, guion, prefiltro, puntos)
+    return resultado(base["criterios"], puntos, perfil, reqs), con_ia
 
 
 # C6: «Puntos por validar» de la entrevista operativa = hechos verificables; nunca habilidades blandas
@@ -1419,82 +1430,108 @@ def es_alerta_escolaridad(texto: str) -> bool:
 
 
 def contexto_prefiltro(p) -> dict:
-    """Lo que el prefiltro de WhatsApp ya respondió y la entrevista NO vuelve a preguntar: traslado y sueldo."""
+    """Lo que el prefiltro ya dejó registrado y alimenta los Puntos por validar (Cambio 19): sueldo (si no lo aceptó),
+    condiciones de la vacante no cumplidas, inconsistencias con el formulario y respuestas dudosas."""
     from . import ia
 
-    d = (((getattr(p, "analisis", None) or {}).get("prefiltro_datos")) or {}) if p is not None else {}
+    a = (getattr(p, "analisis", None) or {}) if p is not None else {}
+    d = a.get("prefiltro_datos") or {}
     v = getattr(p, "vacante", None) if p is not None else None
-    m = d.get("traslado_min")
-    return {"traslado_min": int(m) if isinstance(m, (int, float)) else None, "traslado": d.get("traslado") or "",
-            "sueldo_aplica": bool(ia.pregunta_sueldo((v.sueldo if v is not None else "") or "")) or "sueldo" in d,
-            "sueldo_acepta": d.get("sueldo_acepta"), "sueldo": d.get("sueldo") or ""}
+    return {"sueldo_aplica": bool(ia.pregunta_sueldo((v.sueldo if v is not None else "") or "")) or "sueldo" in d,
+            "sueldo_acepta": d.get("sueldo_acepta"), "sueldo": d.get("sueldo") or "", "sueldo_ofrecido": d.get("sueldo_ofrecido") or "",
+            "condiciones": [str(x) for x in a.get("condiciones_no_cumplidas") or [] if str(x or "").strip()],
+            "inconsistencias": [texto_inconsistencia(i) for i in a.get("inconsistencias") or [] if isinstance(i, dict)],
+            "dudas": [str(x) for x in a.get("puntos_validar_prefiltro") or [] if str(x or "").strip()]}
 
 
 def _req(estado: str, evidencia: str = "") -> dict:
     return {"estado": estado, "evidencia": (evidencia or "").strip()[:200]}
 
 
-def requisitos_de(criterios: Dict[str, dict], transcript: List[dict], guion: dict, prefiltro: Optional[dict]) -> Dict[str, dict]:
-    """Los 5 requisitos de la recomendación operativa (C6), cada uno ✓ / ✗ / ?."""
+def _unicos(xs: List[str]) -> List[str]:
+    vistos, salida = set(), []
+    for x in xs:
+        if x and _n(x) not in vistos:
+            vistos.add(_n(x))
+            salida.append(x)
+    return salida
+
+
+def puntos_de(criterios: Dict[str, dict], transcript: List[dict], prefiltro: Optional[dict], extra: Optional[List[str]] = None) -> List[str]:
+    """«Puntos por validar» (Cambio 19) — SOLO: condiciones de la vacante no cumplidas, sueldo no aceptado u otra cifra,
+    inconsistencias (con el formulario, el prefiltro o la entrevista) y salidas por despido o conflicto. Nunca habilidades
+    blandas, escolaridad como alerta, documentos ni umbrales fijos."""
     pf = prefiltro or {}
-    reqs: Dict[str, dict] = {}
-    m = pf.get("traslado_min")
-    reqs["traslado"] = _req("sin_dato") if m is None else (
-        _req("cumple", f"~{m} min") if m <= TRASLADO_MAX_MIN else
-        {**_req("no_cumple", f"~{m} min"), "grave": m > TRASLADO_NO_RECOMENDABLE_MIN})
-    if not pf.get("sueldo_aplica"):
-        reqs["sueldo"] = _req("no_aplica", "La vacante no tiene sueldo capturado")
-    elif pf.get("sueldo_acepta") is True:
-        reqs["sueldo"] = _req("cumple", pf.get("sueldo") or "Le parece bien")
-    elif pf.get("sueldo_acepta") is False:
-        reqs["sueldo"] = _req("no_cumple", pf.get("sueldo") or "No le parece")
-    else:
-        reqs["sueldo"] = _req("sin_dato")
-    a = (criterios.get("A") or {})
-    b = (criterios.get("B") or {}).get("resultado")
-    if a.get("resultado") == "no_cumple":
-        reqs["experiencia"] = _req("no_cumple", a.get("evidencia", ""))
-    elif a.get("resultado") == "cumple" and b != "no_cumple":
-        reqs["experiencia"] = _req("cumple", a.get("evidencia", ""))
-    else:
-        reqs["experiencia"] = _req("sin_dato", a.get("evidencia", ""))
+    puntos: List[str] = list(pf.get("condiciones") or [])
+    if pf.get("sueldo_aplica") and pf.get("sueldo_acepta") is False:
+        r = str(pf.get("sueldo") or "").strip()
+        if re.search(r"\d", r) or re.search(r"\b(mil|pesos|varos)\b", _n(r)):
+            puntos.append(f"Sueldo: pide otra cifra («{r[:80]}»)")
+        else:
+            puntos.append(f"Sueldo: no aceptó {pf.get('sueldo_ofrecido') or 'el sueldo ofrecido'}" + (f" («{r[:80]}»)" if r else ""))
+    puntos += list(pf.get("inconsistencias") or [])
     c = criterios.get("C") or {}
-    reqs["indispensables"] = _req({"cumple": "cumple", "no_cumple": "no_cumple"}.get(c.get("resultado"), "sin_dato"), c.get("evidencia", ""))
-    por = respuestas_por_seccion(transcript, guion)
-    resp = [r for q, r in por.get("logistica", []) if _tema_logistica(q) in ("inicio", None)]
-    dias = next((x for x in (dias_inicio(r) for r in resp) if x is not None), None)
-    if dias is None:
-        d = (criterios.get("D") or {}).get("resultado")
-        reqs["inicio"] = _req("no_cumple" if d == "no_cumple" else "sin_dato", (resp or [""])[0])
-    else:
-        reqs["inicio"] = _req("cumple" if dias <= INICIO_MAX_DIAS else "no_cumple", f"«{resp[0].strip()[:80]}» (~{dias} días)")
-    return reqs
+    if c.get("resultado") == "no_cumple":
+        puntos.append(f"Inconsistencia: indispensables — cumplía en el prefiltro y en la entrevista dijo {c.get('evidencia') or 'que no'}")
+    for x in extra or []:
+        x = str(x or "").strip()
+        if not x or es_soft_skill(x):
+            continue
+        if es_salida_conflictiva(x) and not x.lower().startswith(("salida por", "inconsistencia")):
+            x = f"Salida por {'conflicto' if _RE_SAL_CONFLICTO.search(_n(x)) else 'despido'}: {x}"
+        elif not es_salida_conflictiva(x) and not x.lower().startswith("inconsistencia"):
+            continue  # solo inconsistencias y salidas por despido o conflicto son Puntos por validar
+        puntos.append(x)
+    puntos += salidas_conflictivas(transcript)
+    return _unicos(puntos)[:8]
+
+
+def requisitos_de(criterios: Dict[str, dict], transcript: List[dict], guion: dict, prefiltro: Optional[dict],
+                  puntos: Optional[List[str]] = None) -> Dict[str, dict]:
+    """Los 2 requisitos de la recomendación operativa (Cambio 19), cada uno ✓ / ✗ / ?: experiencia en un puesto similar
+    con datos concretos (A) y ningún Punto por validar."""
+    puntos = puntos_de(criterios, transcript, prefiltro) if puntos is None else puntos
+    a = criterios.get("A") or {}
+    estado_a = {"cumple": "cumple", "parcial": "sin_dato"}.get(a.get("resultado"), "no_cumple")
+    dudas = list((prefiltro or {}).get("dudas") or [])
+    return {
+        "experiencia": _req(estado_a, a.get("evidencia", "") or ("Sin datos concretos de experiencia" if estado_a == "no_cumple" else "")),
+        "puntos": {**_req("no_cumple" if puntos else "cumple", " · ".join(puntos)), "cantidad": len(puntos), "dudas": dudas[:4]},
+    }
 
 
 def recomendacion_de(requisitos: Dict[str, dict]) -> str:
-    """Regla ESTRICTA (C6): algún ✗ grave → «No recomendable» (no descarta: detiene la ruta para RH); todos ✓ →
-    «Recomendable»; lo demás (algún ? o un ✗ no grave, como traslado de 91-120 min) → «Con reservas». Sin puntaje.
-    Un ✗ es grave salvo que el requisito diga `grave: False`."""
-    vigentes = [r for r in requisitos.values() if r.get("estado") != "no_aplica"]
-    estados = [r.get("estado") for r in vigentes]
-    if any(r.get("estado") == "no_cumple" and r.get("grave", True) for r in vigentes):
-        return "no_recomendable"
-    if all(e == "cumple" for e in estados):
+    """Cambio 19 (sin umbrales): «Recomendable» = experiencia en puesto similar con datos concretos y NINGÚN Punto por
+    validar (ni respuesta dudosa); «No recomendable» = SIN experiencia y CON Puntos por validar; lo demás (algún punto,
+    experiencia dudosa o respuesta dudosa) → «Con reservas». Solo recomienda: nunca descarta."""
+    exp = (requisitos.get("experiencia") or {}).get("estado")
+    pts = requisitos.get("puntos") or {}
+    hay_puntos = pts.get("estado") == "no_cumple"
+    if exp == "cumple" and not hay_puntos and not pts.get("dudas"):
         return "recomendable"
+    if exp == "no_cumple" and hay_puntos:
+        return "no_recomendable"
     return "con_reservas"
 
 
 def faltan_de(requisitos: Dict[str, dict]) -> List[str]:
-    """«✗ Traslado ≤ 90 min», «? Inicio ≤ 14 días»: lo que la tarjeta y la ficha muestran (primero los ✗)."""
-    nombres = dict(REQUISITOS)
-    orden = sorted([k for k, _ in REQUISITOS if (requisitos.get(k) or {}).get("estado") in ("no_cumple", "sin_dato")],
-                   key=lambda k: 0 if requisitos[k]["estado"] == "no_cumple" else 1)
-    return [f"{SIMBOLO[requisitos[k]['estado']]} {nombres[k]}" for k in orden]
+    """Lo que la tarjeta y la ficha muestran: «✗ Experiencia en puesto similar», «2 puntos por validar»…"""
+    salida = []
+    exp = requisitos.get("experiencia") or {}
+    if exp.get("estado") in ("no_cumple", "sin_dato"):
+        salida.append(f"{SIMBOLO[exp['estado']]} Experiencia en puesto similar")
+    pts = requisitos.get("puntos") or {}
+    n = int(pts.get("cantidad") or (1 if pts.get("estado") == "no_cumple" else 0))
+    if n:
+        salida.append(f"✗ {n} punto{'s' if n != 1 else ''} por validar")
+    if pts.get("dudas"):
+        salida.append("? Respuesta dudosa en el prefiltro")
+    return salida
 
 
-def resultado(criterios: Dict[str, dict], alertas: List[str], perfil: Optional[dict] = None,
+def resultado(criterios: Dict[str, dict], puntos: List[str], perfil: Optional[dict] = None,
               requisitos: Optional[Dict[str, dict]] = None) -> dict:
-    requisitos = requisitos if requisitos is not None else requisitos_de(criterios, [], {}, None)
+    requisitos = requisitos if requisitos is not None else requisitos_de(criterios, [], {}, None, puntos)
     rec = recomendacion_de(requisitos)
     nombres = dict(REQUISITOS)
     return {
@@ -1503,59 +1540,19 @@ def resultado(criterios: Dict[str, dict], alertas: List[str], perfil: Optional[d
                           "texto": TEXTO_RESULTADO[(criterios.get(k) or {}).get("resultado") or "sin_dato"]} for k, nombre in CRITERIOS},
         "requisitos": {k: {"nombre": nombres[k], **requisitos[k], "simbolo": SIMBOLO[requisitos[k]["estado"]]} for k, _ in REQUISITOS},
         "faltan": faltan_de(requisitos),
-        "alertas": alertas[:8],
+        "puntos": list(puntos),
+        "alertas": list(puntos),  # compatibilidad: la ficha lee «alertas»
         "recomendacion": rec, "recomendacion_texto": RECOMENDACIONES[rec][0],
-        "score": None,  # C6: la recomendación operativa no tiene puntaje (ni base 100 ni mínimo 70)
+        "score": None,  # sin puntaje (ni base 100 ni mínimo 70)
     }
 
 
-PREFIJO_ALERTA = "Alerta: "
-
-
-def minutos_prefiltro(p) -> Optional[int]:
-    """Minutos de traslado que dio el candidato en el prefiltro de WhatsApp (`analisis.prefiltro_datos`)."""
-    m = (((getattr(p, "analisis", None) or {}).get("prefiltro_datos")) or {}).get("traslado_min") if p is not None else None
-    return int(m) if isinstance(m, (int, float)) else None
-
-
-def alerta_traslado(minutos: Optional[int]) -> Optional[str]:
-    """Texto ÚNICO de la alerta de traslado (ficha y evaluación lo comparten: no se duplica en Puntos por validar)."""
-    if minutos is None or minutos <= TRASLADO_MAX_MIN:
-        return None
-    if minutos > TRASLADO_NO_RECOMENDABLE_MIN:
-        return f"{PREFIJO_ALERTA}Traslado de ~{minutos} min (más de 2 horas): entrevista no recomendable."
-    return f"{PREFIJO_ALERTA}Traslado de ~{minutos} min (más de {TRASLADO_MAX_MIN} min)."
-
-
-def aplicar_traslado(ev, operativa: Optional[dict], minutos: Optional[int]):
-    """2026-10-11 (tarde): con el traslado del prefiltro, > 90 min = alerta en Puntos por validar. En la entrevista
-    OPERATIVA el traslado ya es uno de los 5 requisitos (C6: > 90 min = ✗ → «No recomendable»); en las demás, > 120 min
-    pasa la recomendación a «No recomendable». Nunca descarta (RH decide)."""
-    alerta = alerta_traslado(minutos)
-    if not alerta:
-        return ev
-    ev.riesgos = [alerta] + [r for r in (ev.riesgos or []) if "traslado de" not in _n(r)]
-    if operativa is not None:
-        operativa["alertas"] = [alerta[len(PREFIJO_ALERTA):]] + [a for a in operativa.get("alertas") or [] if "traslado de" not in _n(a)]
-        return ev
-    if minutos > TRASLADO_NO_RECOMENDABLE_MIN:
-        ev.recomendacion = RECOMENDACIONES["no_recomendable"][1]
-        if operativa is not None:
-            operativa["recomendacion"] = "no_recomendable"
-            operativa["recomendacion_texto"] = RECOMENDACIONES["no_recomendable"][0]
-            operativa["motivo_traslado"] = f"Traslado de ~{minutos} min"
-    return ev
-
-
 def aplicar(ev, op: dict):
-    """Lleva el resultado operativo a la evaluación de siempre (`ia.EvaluacionEntrevista`): recomendación y score de la
-    entrevista salen de los criterios A-D; las alertas encabezan «Puntos por validar». Nunca descarta."""
+    """Lleva el resultado operativo a la evaluación de siempre (`ia.EvaluacionEntrevista`): la recomendación sale de la
+    regla de experiencia + Puntos por validar; «Puntos por validar» = SOLO los de `puntos_de` (Cambio 19). Nunca descarta."""
     ev.recomendacion = RECOMENDACIONES[op["recomendacion"]][1]
-    ev.score_entrevista = None  # C6: sin puntaje — la actividad se resuelve con la etiqueta (models.score_de_entrevista)
-    # C6: Puntos por validar = alertas verificables + contradicciones; nunca habilidades blandas de la IA
-    riesgos = [r for r in (ev.riesgos or []) if not es_alerta_escolaridad(r) and not es_soft_skill(r)]
-    ev.riesgos = [f"{PREFIJO_ALERTA}{a}" for a in op["alertas"]] + [r for r in riesgos if not r.startswith(PREFIJO_ALERTA)
-                                                                     and r.lower().startswith("inconsistencia")]
+    ev.score_entrevista = None  # sin puntaje — la actividad se resuelve con la etiqueta (models.score_de_entrevista)
+    ev.riesgos = list(op.get("puntos") or op.get("alertas") or [])
     cumplidos = [f"{c['nombre']}: {c['evidencia']}" for c in op["criterios"].values() if c["resultado"] == "cumple" and c["evidencia"]]
     if not ev.fortalezas or ev.fortalezas == ["Completó la entrevista"]:
         ev.fortalezas = cumplidos[:4] or list(ev.fortalezas or [])

@@ -2,6 +2,9 @@
 
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_cambio19.py
 
+Bloque 3 — evaluación sin umbrales fijos: Recomendable / Con reservas / No recomendable salen de la experiencia y de
+los Puntos por validar (condiciones no cumplidas, sueldo, inconsistencias, salida por despido o conflicto).
+
 Bloque 1 — generación: el prefiltro de WhatsApp sale de los indispensables («Descarta si…») y de las condiciones de la
 descripción («Se registra»), más colonia, traslado, transporte y sueldo; validación estricta (todos los indispensables,
 una idea por pregunta) con regeneración (máximo 2). El guion de la entrevista tiene 7 secciones dinámicas.
@@ -263,6 +266,69 @@ with TestClient(app) as client:
     pb = db.query(Postulacion).filter_by(codigo=B).one()
     check(((pb.analisis or {}).get("inconsistencias") or [{}])[-1].get("criterio") == "Traslado de menos de 1 hora" and pb.activa,
           "en un requisito NO indispensable solo se registra la inconsistencia y el prefiltro sigue")
+
+    print("\n--- Bloque 3 · condiciones de la descripción no cumplidas → Puntos por validar ---")
+    ficha_c = ia.FichaGuion(titulo="Ayudante C", requisitos_indispensables=["Cargar cajas de 25 kg"],
+                            requisitos_deseables=["Experiencia en almacén"], descripcion="Buscamos ayudante con secundaria terminada.")
+    vc = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([vi.id, vr.id])).order_by(Vacante.id).first()
+    vc.cuenta_id, vc.titulo, vc.preguntas_filtro = cuenta.id, "Ayudante C", []
+    vc.preguntas_filtro_whatsapp = ia.asegurar_prefiltros([], [], ficha_c, hay_web=False, hay_whatsapp=True)[1]
+    vc.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
+        {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
+    db.commit()
+    c = _crear_candidato(db, cuenta.id, "Sara Ruiz", "WhatsApp", False, telefono="5531900003")
+    C = crear_postulacion(db, c, vc, cuenta.id, "whatsapp", consentimiento=True).codigo
+    db.commit()
+    r = turno(C, "Hola")
+    check("Primero confírmame: ¿Puedes cargar cajas de 25 kg?" in r["respuesta"], "la primera pregunta es el indispensable")
+    r = turno(C, "Sí, sin problema")
+    check("¿Hasta qué año estudiaste?" in r["respuesta"], "después la escolaridad de la descripción")
+    turno(C, "Llegué hasta 1ro de secundaria")
+    turno(C, "No")
+    pc_ = db.query(Postulacion).filter_by(codigo=C).one()
+    cond = (pc_.analisis or {}).get("condiciones_no_cumplidas") or []
+    check(pc_.activa and "No terminó la secundaria" in cond and "No cumple: Experiencia en almacén" in cond,
+          f"no cumplir la descripción NO descarta: queda en Puntos por validar ({cond})")
+    pts = eop.puntos_de({}, [], eop.contexto_prefiltro(pc_))
+    check("No terminó la secundaria" in pts, "y alimenta los Puntos por validar de la evaluación")
     db.close()
+
+# ================= Bloque 3 · evaluación sin umbrales =================
+print("\n--- Bloque 3 · sin umbrales fijos ---")
+import re as _re  # noqa: E402
+
+fuentes = {f: (RAIZ / "app" / f).read_text(encoding="utf-8") for f in ("services/entrevista_operativa.py", "serial.py", "routers/entrevistas.py")}
+for patron in (r"TRASLADO_MAX_MIN", r"TRASLADO_NO_RECOMENDABLE_MIN", r"INICIO_MAX_DIAS", r"EMPLEO_MIN_MESES", r"aplicar_traslado", r"alerta_traslado"):
+    check(not any(_re.search(patron, src) for src in fuentes.values()), f"ya no existe {patron} en el código")
+check(not any(hasattr(eop, x) for x in ("TRASLADO_MAX_MIN", "alertas_deterministas", "INICIO_MAX_DIAS")), "ni en el módulo cargado")
+
+print("\n--- Bloque 3 · recomendación y Puntos por validar ---")
+A_SI = {"A": {"resultado": "cumple", "evidencia": "3 años cargando en Bodega Norte"}}
+A_NO = {"A": {"resultado": "no_cumple", "evidencia": "Sin experiencia"}}
+A_DUDA = {"A": {"resultado": "parcial", "evidencia": "algo de almacén"}}
+SIN = {}
+SUELDO_NO = {"sueldo_aplica": True, "sueldo_acepta": False, "sueldo": "No, está bajo", "sueldo_ofrecido": "Desde $9,000"}
+for crit, pf, esperado, nombre in (
+        (A_SI, SIN, "recomendable", "experiencia y sin puntos → Recomendable"),
+        (A_SI, SUELDO_NO, "con_reservas", "experiencia + sueldo no aceptado → Con reservas"),
+        (A_DUDA, SIN, "con_reservas", "experiencia dudosa → Con reservas"),
+        (A_SI, {"dudas": ["Respuesta no concluyente en «Turnos»"]}, "con_reservas", "respuesta dudosa en el prefiltro → Con reservas"),
+        (A_NO, SIN, "con_reservas", "sin experiencia pero sin puntos → Con reservas"),
+        (A_NO, SUELDO_NO, "no_recomendable", "sin experiencia y con puntos → No recomendable")):
+    reqs = eop.requisitos_de(crit, [], {}, pf)
+    check(eop.recomendacion_de(reqs) == esperado, nombre)
+pts = eop.puntos_de({}, [], {"condiciones": ["No terminó la secundaria"], "sueldo_aplica": True, "sueldo_acepta": False, "sueldo": "Quiero 12 mil",
+                             "inconsistencias": ["Inconsistencia: Traslado de menos de 1 hora — formulario «Sí», chat «3 horas»"]},
+                    ["Mostró poca comunicación", "Mencionó que lo corrieron"])
+check(pts[0] == "No terminó la secundaria" and "Sueldo: pide otra cifra («Quiero 12 mil»)" in pts
+      and any(x.startswith("Inconsistencia: Traslado") for x in pts) and any(x.startswith("Salida por despido") for x in pts)
+      and not any("comunicaci" in x for x in pts),
+      "Puntos = condiciones no cumplidas · sueldo · inconsistencias · salida por despido; nunca habilidades blandas")
+tr = [{"rol": "assistant", "texto": "¿Por qué saliste de ese trabajo?"}, {"rol": "user", "texto": "Tuve problemas con mi jefe"},
+      {"rol": "assistant", "texto": "¿Por qué dejaste ese empleo?"}, {"rol": "user", "texto": "Cerró la empresa"}]
+check(eop.salidas_conflictivas(tr) == ["Salida por conflicto: «Tuve problemas con mi jefe»"],
+      "salida por conflicto sí; un cierre de la empresa no es Punto por validar")
+op, _ = eop.evaluar(tr, eop.armar_guion("Ayudante", None, [], []), [], "Ayudante", prefiltro={"traslado_min": 300})
+check(op["score"] is None and not any("raslado" in x for x in op["puntos"]), "300 min de traslado no generan nada: sin umbrales")
 
 print(f"\n🎉 {OK} comprobaciones OK — Cambio 19")

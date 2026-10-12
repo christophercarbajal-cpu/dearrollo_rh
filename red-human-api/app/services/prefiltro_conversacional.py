@@ -728,6 +728,17 @@ def _respuestas_adelantadas(criterios: List[dict], e: dict, texto: str, actual: 
     e["respuestas"] = respuestas
 
 
+def condicion_no_cumplida(p: Postulacion, texto: str) -> None:
+    """Cambio 19: una condición de la DESCRIPCIÓN que no cumple («No terminó la secundaria») → Puntos por validar.
+    Nunca descarta."""
+    a = dict(p.analisis or {})
+    previas = list(a.get("condiciones_no_cumplidas") or [])
+    if texto not in previas:
+        a["condiciones_no_cumplidas"] = previas + [texto[:300]]
+        p.analisis = a
+        flag_modified(p, "analisis")
+
+
 def punto_por_validar(p: Postulacion, texto: str) -> None:
     """Lo que el prefiltro no pudo concluir va a «Puntos por validar» (nunca a una revisión que frene al candidato)."""
     a = dict(p.analisis or {})
@@ -1008,6 +1019,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             e["respuestas"] = {**(e.get("respuestas") or {}),
                                pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": fuente, "en": _ahora(), **extra}}
         guardar_datos(p, pendiente, texto, extra)
+        if valor == "no" and pendiente.get("registra") and pendiente.get("dato") == "escolaridad":
+            nombre = NOMBRE_NIVEL.get(pendiente.get("nivel_requerido"), "") or pendiente["criterio"]
+            condicion_no_cumplida(p, f"No terminó la {nombre.lower()}" if pendiente.get("nivel_requerido") in (1, 2, 3, 4)
+                                  else f"No cumple: {pendiente['criterio']}")
         if valor is not None:
             contradicciones_web(db, p, criterios, e, pendiente, texto, extra)  # Cambio 19: contradice al formulario web
         if pendiente.get("reconfirma"):
@@ -1054,6 +1069,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         e["pendiente"] = None
         if pendiente.get("reconfirma") and valor == "no":
             registrar_inconsistencia(db, p, criterios, e, pendiente)  # → Puntos por validar; el prefiltro sigue
+        if pendiente.get("registra") and valor == "no":
+            condicion_no_cumplida(p, f"No cumple: {pendiente['criterio']}")  # Cambio 19: se registra, nunca descarta
         if valor == "si" and es_duda(texto):
             punto_por_validar(p, f"Respondió con duda en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
         _respuestas_adelantadas(criterios, e, texto, pendiente["id"], canal_registro(canal))

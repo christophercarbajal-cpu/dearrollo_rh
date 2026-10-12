@@ -70,24 +70,28 @@ check(eop.detectar_oficio("Montacarguista turno nocturno") == "montacarguista" a
 check("operativo" in ENFOQUES_ENTREVISTA, "nuevo enfoque «operativo»")
 check(eop.minutos_traslado("como hora y media") == 90 and eop.minutos_traslado("2 horas en camión") == 120
       and eop.minutos_traslado("40 minutos") == 40, "traslado se interpreta en minutos")
-TODO_OK = {k: {"estado": "cumple"} for k, _ in eop.REQUISITOS}
-check(eop.recomendacion_de(TODO_OK) == "recomendable", "C6: los 5 requisitos ✓ → Recomendable")
-check(eop.recomendacion_de({**TODO_OK, "inicio": {"estado": "sin_dato"}}) == "con_reservas", "C6: algún ? → Con reservas")
-check(eop.recomendacion_de({**TODO_OK, "inicio": {"estado": "sin_dato"}, "traslado": {"estado": "no_cumple"}}) == "no_recomendable",
-      "C6: algún ✗ → No recomendable (aunque haya ?)")
-check(eop.recomendacion_de({**TODO_OK, "sueldo": {"estado": "no_aplica"}}) == "recomendable", "C6: sin sueldo capturado el requisito no cuenta")
-# corrección: traslado de 91-120 min incumple los 90 min pero NO es grave → «Con reservas»; más de 120 → «No recomendable»
-for minutos, esperado in ((60, "recomendable"), (100, "con_reservas"), (120, "con_reservas"), (121, "no_recomendable")):
-    reqs = eop.requisitos_de({k: {"resultado": "cumple"} for k in "ABCD"}, [], {}, {"traslado_min": minutos, "sueldo_aplica": False})
-    reqs["inicio"] = {"estado": "cumple"}
-    check(eop.recomendacion_de(reqs) == esperado, f"traslado de {minutos} min → {esperado}")
+# Cambio 19: sin umbrales fijos — la recomendación sale de la experiencia y de los Puntos por validar
+EXP = {"experiencia": {"estado": "cumple"}, "puntos": {"estado": "cumple"}}
+check(eop.recomendacion_de(EXP) == "recomendable", "Cambio 19: experiencia en puesto similar y sin puntos → Recomendable")
+check(eop.recomendacion_de({**EXP, "puntos": {"estado": "no_cumple", "cantidad": 1}}) == "con_reservas", "experiencia + algún punto → Con reservas")
+check(eop.recomendacion_de({"experiencia": {"estado": "no_cumple"}, "puntos": {"estado": "no_cumple", "cantidad": 2}}) == "no_recomendable",
+      "sin experiencia y con puntos → No recomendable")
+check(eop.recomendacion_de({"experiencia": {"estado": "no_cumple"}, "puntos": {"estado": "cumple"}}) == "con_reservas",
+      "sin experiencia pero sin puntos → Con reservas")
+check(eop.recomendacion_de({"experiencia": {"estado": "sin_dato"}, "puntos": {"estado": "cumple"}}) == "con_reservas"
+      and eop.recomendacion_de({**EXP, "puntos": {"estado": "cumple", "dudas": ["Respuesta no concluyente"]}}) == "con_reservas",
+      "experiencia o respuesta dudosa → Con reservas")
+reqs = eop.requisitos_de({k: {"resultado": "cumple", "evidencia": "3 años en almacén"} for k in "ABCD"}, [], {}, {"traslado_min": 300})
+check(eop.recomendacion_de(reqs) == "recomendable" and not any(hasattr(eop, x) for x in ("TRASLADO_MAX_MIN", "TRASLADO_NO_RECOMENDABLE_MIN",
+                                                                                         "INICIO_MAX_DIAS", "EMPLEO_MIN_MESES")),
+      "un traslado de 300 min ya no cambia nada: no hay umbrales fijos en el código")
 from app.services import evaluacion_integral as sint  # noqa: E402
 check(sint._resultado([], operativo=False)["texto"] == "Apto" and sint._resultado([], operativo=True)["texto"] == "Recomendable",
       "C6 regla 6: el perfil Corporativo conserva «Apto»; solo el Operativo usa «Recomendable»")
 check([eop.dias_inicio(x) for x in ("mañana", "el lunes", "en 2 semanas", "en un mes", "no sé")] == [1, 7, 14, 30, None],
-      "C6: la fecha de inicio se lee en días (≤ 14 cumple)")
-check(eop.faltan_de({**TODO_OK, "inicio": {"estado": "sin_dato"}, "traslado": {"estado": "no_cumple"}}) == ["✗ Traslado ≤ 90 min", "? Inicio ≤ 14 días"],
-      "C11: lo que falta se lista con ✗ primero y ? después")
+      "la fecha de inicio se lee en días (solo informativo: ya no hay umbral)")
+check(eop.faltan_de({"experiencia": {"estado": "no_cumple"}, "puntos": {"estado": "no_cumple", "cantidad": 2}})
+      == ["✗ Experiencia en puesto similar", "✗ 2 puntos por validar"], "C11: lo que falta se lista en la tarjeta")
 check(eop.es_soft_skill("Mostró poca comunicación y actitud reservada") and not eop.es_soft_skill("Despido en su último empleo"),
       "C6: las habilidades blandas no son Puntos por validar")
 original = copy.deepcopy(eop.BIBLIOTECA)
@@ -245,32 +249,42 @@ with TestClient(app) as client:
     check(f1["recomendacionOperativa"]["texto"] == "Recomendable" and f1["scoreEntrevista"] is None,
           "C6: la ficha trae la recomendación operativa (sin «x/100»)")
 
-    # No recomendable por logística + alertas
+    # Cambio 19: «No recomendable» = SIN experiencia en puesto similar y CON Puntos por validar (despido, sueldo)
     MALAS = {**RESP_BUENAS,
-             "último trabajo": "Estuve 2 meses en una bodega operando montacargas, antes en otra empresa.",
+             "último trabajo": "Estuve 2 meses en una tienda de ropa atendiendo clientes.",
+             "otro trabajo antes": "No.",
+             "hacías en ese trabajo": "Atendía clientes en la caja.",
+             "cuánto tiempo trabajaste": "Dos meses.",
+             "montacargas has operado": "Ninguno, nunca he operado montacargas.",
+             "carga máxima": "No sé.",
+             "almacenes trabajaste": "En ninguno.",
+             "revisas al montacargas": "No sé.",
+             "adquiriste": "No tengo esa experiencia.",
              "saliste": "Me corrieron porque llegué tarde varias veces.",
              "empezar": "No puedo empezar antes de un mes.",
              "situación laboral": "Estoy trabajando todavía en una tienda."}
     p2 = postulacion("Nora Lejos")
-    # 2026-10-11 (tarde): el traslado lo dio en el prefiltro de WhatsApp (la entrevista ya no lo pregunta)
-    p2.analisis = {**(p2.analisis or {}), "prefiltro_datos": {"traslado": "Como 2 horas y 10", "traslado_min": 130}}
+    # el traslado de 130 min y el inicio en un mes ya NO cuentan (sin umbrales fijos); el sueldo no aceptado sí
+    p2.analisis = {**(p2.analisis or {}), "prefiltro_datos": {"traslado": "Como 2 horas y 10", "traslado_min": 130,
+                                                              "sueldo": "No, quiero 12 mil", "sueldo_acepta": False}}
     p2.etapa = "Entrevista IA"
     db.commit()
     e2, _ = asyncio.run(entrevistar(p2, MALAS))
     ev2 = e2.evaluacion or {}
     op2 = ev2.get("operativa") or {}
-    check(op2["requisitos"]["traslado"]["estado"] == "no_cumple" and op2["requisitos"]["inicio"]["estado"] == "no_cumple"
+    check(op2["requisitos"]["experiencia"]["estado"] != "cumple" and op2["requisitos"]["puntos"]["estado"] == "no_cumple"
           and op2["recomendacion"] == "no_recomendable" and ev2["recomendacion"] == "no_avanzar",
-          "C6: traslado de 130 min ✗ e inicio en un mes ✗ → «No recomendable»")
-    check(op2["faltan"][:2] == ["✗ Traslado ≤ 90 min", "✗ Experiencia"] or "✗ Inicio ≤ 14 días" in op2["faltan"],
-          f"C6: los requisitos que faltan quedan listados: {op2['faltan']}")
-    check(not any(eop.es_soft_skill(r) for r in ev2["riesgos"]), "C6: Puntos por validar sin habilidades blandas")
+          f"Cambio 19: sin experiencia y con Puntos por validar → «No recomendable» ({op2['requisitos']})")
+    check("✗ Experiencia en puesto similar" in op2["faltan"] and any("por validar" in x for x in op2["faltan"]),
+          f"los requisitos que faltan quedan listados: {op2['faltan']}")
+    check(not any(eop.es_soft_skill(r) for r in ev2["riesgos"]), "Puntos por validar sin habilidades blandas")
     db.refresh(p2)
     check(p2.activa and p2.motivo_cierre in (None, ""), "…y NO descarta: la postulación sigue activa (RH decide)")
-    alertas = " ".join(op2["alertas"])
-    check("menos de 3 meses" in alertas and "despido" in alertas and "Traslado de ~130 min" in alertas and "Trabaja actualmente" in alertas,
-          "alertas: empleo < 3 meses, despido, traslado > 90 min, trabaja actualmente")
-    check(any(r.startswith("Alerta: ") for r in ev2["riesgos"]), "las alertas encabezan «Puntos por validar»")
+    puntos = " ".join(op2["puntos"])
+    check("Salida por despido" in puntos and "Sueldo: pide otra cifra" in puntos and "raslado" not in puntos
+          and "3 meses" not in puntos and "Trabaja actualmente" not in puntos,
+          "Puntos por validar = salida por despido + sueldo; nada de umbrales (traslado, empleo corto, trabaja actualmente)")
+    check(ev2["riesgos"] == op2["puntos"], "«Puntos por validar» de la ficha = los de la evaluación (solo las 4 categorías)")
 
     # Excluyente del oficio: patín hidráulico no es montacargas
     EXCL = {**RESP_BUENAS,
@@ -281,7 +295,7 @@ with TestClient(app) as client:
     p3 = postulacion("Pepe Patín")
     e3, _ = asyncio.run(entrevistar(p3, EXCL))
     op3 = (e3.evaluacion or {}).get("operativa") or {}
-    esperado3 = "no_recomendable" if op3["criterios"]["A"]["resultado"] == "no_cumple" else "con_reservas"
+    esperado3 = "con_reservas"  # Cambio 19: sin experiencia pero sin Puntos por validar
     check(op3["requisitos"]["experiencia"]["estado"] != "cumple" and op3["recomendacion"] == esperado3,
           f"experiencia con algo excluyente (patín) no acredita el oficio → {op3['recomendacion_texto']}")
 
@@ -308,7 +322,7 @@ with TestClient(app) as client:
     t2 = next(x for x in lista if x["id"] == p2.codigo)
     check(t1["card_label"] == {"clave": "recomendable", "texto": "Recomendable", "faltan": []},
           "C11: la tarjeta muestra solo la etiqueta «Recomendable»")
-    check(t2["card_label"]["texto"] == "No recomendable" and "✗ Traslado ≤ 90 min" in t2["card_label"]["faltan"],
+    check(t2["card_label"]["texto"] == "No recomendable" and "✗ Experiencia en puesto similar" in t2["card_label"]["faltan"],
           "C11: …y los requisitos que faltan (✗ / ?)")
     integral = client.get(f"/candidatos/{p2.codigo}", headers=H).json()["resultadoIntegral"]
     check(integral["texto"] in ("Pendiente", "Con reservas", "Recomendable", "No recomendable") and "No apto" not in integral["texto"],

@@ -218,11 +218,11 @@ with TestClient(app) as client:
     print("\n--- 3c. Ficha: zona, traslado, transporte y alertas ---")
     f = client.get(f"/candidatos/{p.codigo}", headers=h).json()
     d = f.get("prefiltroDatos") or {}
-    check(d.get("zona") == "por aquí" and d.get("trasladoMin") == 150 and "Metro" in d.get("transporte", "") and d.get("alerta") == "no_recomendable",
-          "la ficha trae zona, traslado (~150 min) y transporte")
+    check(d.get("zona") == "por aquí" and d.get("trasladoMin") == 150 and "Metro" in d.get("transporte", "") and d.get("alerta") is None,
+          "la ficha trae zona, traslado (~150 min) y transporte — Cambio 19: sin alerta por minutos (solo se registra)")
     check(d.get("sueldoAcepta") is False and d.get("sueldo") == "No, está bajo" and "9,000" in d.get("sueldoOfrecido", ""),
           "C5: la ficha trae su respuesta sobre el sueldo (y lo ofrecido)")
-    check((f.get("puntosPorValidar") or [""])[0].startswith("Alerta: Traslado de ~150 min"), "traslado > 90 min → alerta al inicio de Puntos por validar")
+    check(not any("traslado" in x.lower() for x in f.get("puntosPorValidar") or []), "Cambio 19: el traslado no genera Puntos por validar")
     for _ in range(40):  # el resto de la entrevista (motor sin IA) hasta la despedida
         e = sent.entrevista_whatsapp_activa(fresca(p))
         if e is None:
@@ -231,17 +231,12 @@ with TestClient(app) as client:
     p = fresca(p)
     ent = next(x for x in p.entrevistas if x.tipo == "whatsapp")
     ev = ent.evaluacion or {}
-    check(ent.estado == "evaluada" and ev.get("recomendacion") == "no_avanzar" and (ev.get("operativa") or {}).get("recomendacion_texto") == "No recomendable",
-          "traslado > 120 min → la entrevista queda «No recomendable»")
-    check(p.activa and p.motivo_cierre in ("", None), "…pero NO se descarta (RH decide)")
-
-    class _Ev:
-        recomendacion, riesgos = "avanzar", []
-
-    x = eop.aplicar_traslado(_Ev(), None, 100)
-    check(x.recomendacion == "avanzar" and x.riesgos == ["Alerta: Traslado de ~100 min (más de 90 min)."],
-          "entre 90 y 120 min: solo alerta, la recomendación no cambia")
-    check(eop.alerta_traslado(80) is None, "90 min o menos: sin alerta")
+    op = ev.get("operativa") or {}
+    check(ent.estado == "evaluada" and any(x.startswith("Sueldo: no aceptó") for x in ev.get("riesgos") or [])
+          and not any("traslado" in x.lower() for x in ev.get("riesgos") or []) and op.get("recomendacion") != "recomendable",
+          "Cambio 19: el sueldo no aceptado es Punto por validar (→ no «Recomendable»); los 150 min de traslado no cuentan")
+    check(p.activa and p.motivo_cierre in ("", None), "…y NO se descarta (RH decide)")
+    check(not any(hasattr(eop, x) for x in ("aplicar_traslado", "alerta_traslado")), "sin umbrales fijos de traslado en el código")
 
     print("\n--- 4. Escolaridad que no cumple → descarte inmediato ---")
     q = nueva("Beto Parcial")

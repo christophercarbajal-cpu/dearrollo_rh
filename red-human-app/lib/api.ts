@@ -1496,7 +1496,7 @@ export interface Entrevista {
   nombre: string;
   puesto: string;
   tipo: "avatar" | "texto";
-  estado: "programada" | "en_curso" | "completada" | "evaluada" | "interrumpida" | "parcial";
+  estado: "programada" | "en_curso" | "completada" | "evaluada" | "interrumpida" | "parcial" | "cancelada";
   token: string;
   consentimiento: boolean;
   programada: string | null;

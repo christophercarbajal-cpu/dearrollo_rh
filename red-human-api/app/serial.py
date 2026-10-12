@@ -793,6 +793,30 @@ def candidato_dict(c: Candidato, detalle: bool = False) -> dict:
 # ------------------------------------------------------------
 
 
+def evaluacion_compatible(ev: Optional[dict]) -> Optional[dict]:
+    """2026-10-12 (crash de «Entrevistas»): la vista lee `calif_*`, `match_perfil`, `recomendacion`, `fortalezas` y
+    `riesgos` sin protección. Desde la entrevista operativa (sin puntaje) y las evaluaciones viejas algunos pueden venir
+    nulos o faltar: aquí SIEMPRE salen con su tipo (números, listas, recomendación válida). La operativa se conserva."""
+    if not ev:
+        return None
+    salida = dict(ev)
+
+    def num(v, defecto=0.0):
+        return float(v) if isinstance(v, (int, float)) else defecto
+
+    if not ev.get("parcial"):  # una entrevista parcial NUNCA lleva score (2026-09-13): no se inventan números
+        salida["calif_experiencia"] = num(ev.get("calif_experiencia"))
+        salida["calif_comunicacion"] = num(ev.get("calif_comunicacion"))
+        salida["match_perfil"] = int(round(num(ev.get("match_perfil"))))
+    salida["recomendacion"] = ev.get("recomendacion") if ev.get("recomendacion") in ("avanzar", "revision", "no_avanzar") else "revision"
+    salida["score_entrevista"] = ev.get("score_entrevista") if isinstance(ev.get("score_entrevista"), (int, float)) else None
+    for k in ("fortalezas", "riesgos", "areas_desarrollo", "faltante", "inconsistencias"):
+        salida[k] = [str(x) for x in (ev.get(k) or []) if x] if isinstance(ev.get(k) or [], list) else []
+    salida["resumen"] = str(ev.get("resumen") or "")
+    salida["evidencia"] = str(ev.get("evidencia") or "")
+    return salida
+
+
 def entrevista_dict(e: Entrevista) -> dict:
     p = e.postulacion
     c = e.candidato
@@ -814,7 +838,7 @@ def entrevista_dict(e: Entrevista) -> dict:
         "guion": e.guion or {},
         "mensajes": len(e.transcript or []),
         "turnosCandidato": sum(1 for m in (e.transcript or []) if m.get("rol") == "user"),
-        "evaluacion": sin_alertas_escolaridad(e.evaluacion) or None,
+        "evaluacion": evaluacion_compatible(sin_alertas_escolaridad(e.evaluacion) or None),
         # Fase 4: cómo cerró y cuándo; intentos previos si RH la reabrió.
         "cierre": e.cierre or "",
         "motivo": e.motivo or "",  # sin_respuestas | desconexion | parcial | "" (ver MOTIVOS_ENTREVISTA)

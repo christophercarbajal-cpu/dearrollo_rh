@@ -55,7 +55,13 @@ const estadoEntrevista: Record<Entrevista["estado"], { label: string; tone: "goo
   // Fase 4: cerró por desconexión/tiempo sin turnos suficientes; RH puede reabrir la misma liga.
   interrumpida: { label: "Interrumpida", tone: "bad" },
   parcial: { label: "Parcial", tone: "warn" },
+  // 2026-10-11: videollamada cancelada (p. ej. creada por error) — antes no estaba en el mapa y la vista tronaba
+  cancelada: { label: "Cancelada", tone: "neutral" },
 };
+/** Un estado nuevo o desconocido nunca tumba la vista. */
+const estadoDe = (estado: string) => estadoEntrevista[estado as Entrevista["estado"]] ?? { label: estado || "—", tone: "neutral" as const };
+const recomendacionDe = (r?: string) => recomendacionUI[r as EvaluacionEntrevista["recomendacion"]] ?? { label: "revisión humana", clase: "text-warn" };
+const decimal = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(1) : "—");
 
 const recomendacionUI: Record<EvaluacionEntrevista["recomendacion"], { label: string; clase: string }> = {
   avanzar: { label: "avanzar", clase: "text-good" },
@@ -236,16 +242,16 @@ export default function Entrevistas() {
                 <p className="mt-2 text-sm leading-relaxed text-ink-2">{evaluada.evaluacion.resumen}</p>
                 <p className="mt-2 text-sm text-ink-2">
                   Recomendación preliminar:{" "}
-                  <b className={recomendacionUI[evaluada.evaluacion.recomendacion].clase}>
-                    {recomendacionUI[evaluada.evaluacion.recomendacion].label}
+                  <b className={recomendacionDe(evaluada.evaluacion.recomendacion).clase}>
+                    {recomendacionDe(evaluada.evaluacion.recomendacion).label}
                   </b>{" "}
                   — la decisión final es de RH.
                 </p>
                 <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                   {[
-                    { l: "Experiencia", v: evaluada.evaluacion.calif_experiencia.toFixed(1) },
-                    { l: "Comunicación", v: evaluada.evaluacion.calif_comunicacion.toFixed(1) },
-                    { l: "Match perfil", v: `${evaluada.evaluacion.match_perfil}%` },
+                    { l: "Experiencia", v: decimal(evaluada.evaluacion.calif_experiencia) },
+                    { l: "Comunicación", v: decimal(evaluada.evaluacion.calif_comunicacion) },
+                    { l: "Match perfil", v: evaluada.evaluacion.match_perfil != null ? `${evaluada.evaluacion.match_perfil}%` : "—" },
                   ].map((m) => (
                     <div key={m.l} className="rounded-xl bg-surface-2 py-3">
                       <div className="font-display text-lg font-bold text-brand">{m.v}</div>
@@ -255,7 +261,7 @@ export default function Entrevistas() {
                 </div>
                 {evaluada.evaluacion.fortalezas.length > 0 && (
                   <div className="mt-4 space-y-1.5">
-                    {evaluada.evaluacion.fortalezas.slice(0, 3).map((f, i) => (
+                    {(evaluada.evaluacion.fortalezas ?? []).slice(0, 3).map((f, i) => (
                       <p key={i} className="flex gap-2 text-xs leading-relaxed text-ink-2">
                         <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-good" /> {f}
                       </p>
@@ -264,7 +270,7 @@ export default function Entrevistas() {
                 )}
                 {evaluada.evaluacion.riesgos.length > 0 && (
                   <div className="mt-3 space-y-1.5">
-                    {evaluada.evaluacion.riesgos.slice(0, 3).map((f, i) => (
+                    {(evaluada.evaluacion.riesgos ?? []).slice(0, 3).map((f, i) => (
                       <p key={i} className="flex gap-2 text-xs leading-relaxed text-ink-2">
                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" /> {f}
                       </p>
@@ -364,7 +370,7 @@ function FilaEntrevista({
   reabriendo?: boolean;
 }) {
   const [copiada, setCopiada] = useState(false);
-  const est = estadoEntrevista[e.estado];
+  const est = estadoDe(e.estado);
   const liga = typeof window === "undefined" ? `/entrevista/${e.token}` : `${window.location.origin}/entrevista/${e.token}`;
 
   function copiar() {
@@ -389,7 +395,7 @@ function FilaEntrevista({
         <p className="truncate text-sm font-semibold">{e.nombre}</p>
         <p className="truncate text-xs text-ink-3">
           {e.puesto || "Sin vacante"} · {e.creada}
-          {e.evaluacion ? ` · match ${e.evaluacion.match_perfil}%` : ""}
+          {e.evaluacion?.match_perfil != null ? ` · match ${e.evaluacion.match_perfil}%` : ""}
         </p>
       </div>
       <Badge tone={est.tone}>{est.label}</Badge>

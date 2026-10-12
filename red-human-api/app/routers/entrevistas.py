@@ -66,7 +66,8 @@ def metricas(db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual)
         .all()
     )
     evaluadas = [e for e in todas if e.estado == "evaluada" and e.evaluacion]
-    matches = [e.evaluacion.get("match_perfil", 0) for e in evaluadas]
+    # 2026-10-12: la entrevista operativa no tiene puntaje — un match nulo nunca tumba las métricas
+    matches = [e.evaluacion.get("match_perfil") for e in evaluadas if isinstance(e.evaluacion.get("match_perfil"), (int, float))]
     recomendaciones = {"avanzar": 0, "revision": 0, "no_avanzar": 0}
     for e in evaluadas:
         rec = e.evaluacion.get("recomendacion")

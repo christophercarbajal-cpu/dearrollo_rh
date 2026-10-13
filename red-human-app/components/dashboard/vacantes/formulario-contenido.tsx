@@ -47,6 +47,7 @@ import {
   type GuionConversacion,
   type MetaGuion,
   type ProcesoEntrada,
+  type PreguntaRequisito,
   type EntrevistaBaseConfig,
   MONEDAS_SUELDO,
   PERIODICIDADES_SUELDO,
@@ -87,6 +88,8 @@ export interface ContenidoVacante {
   beneficios: string[];
   /** Cambio 25: «Documentos y fotos que se piden». Con elementos, la ruta suma «Documentos» después del prefiltro. */
   documentos_solicitados: DocumentoSolicitado[];
+  /** Cambio 31: pregunta natural por requisito indispensable (la propone «Generar»; RH la puede ajustar). */
+  preguntas_requisitos: PreguntaRequisito[];
   /* --- 5. selección --- */
   /** Preguntas del prefiltro de la POSTULACIÓN WEB (/aplicar). */
   preguntas_filtro: CriterioFiltro[];
@@ -143,6 +146,7 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   requisitos_deseables: [],
   beneficios: [],
   documentos_solicitados: [],
+  preguntas_requisitos: [],
   preguntas_filtro: [],
   preguntas_filtro_whatsapp: [],
   enfoque_entrevista: "profesional",
@@ -220,6 +224,7 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     requisitos_deseables: [...(p.requisitosDeseables ?? [])],
     beneficios: [...(p.beneficios ?? [])],
     documentos_solicitados: [...(p.documentosSolicitados ?? [])],
+    preguntas_requisitos: [],
     preguntas_filtro: [...(p.preguntasFiltro ?? [])],
     preguntas_filtro_whatsapp: [...(p.preguntasFiltroWhatsapp ?? [])],
     enfoque_entrevista: p.enfoqueEntrevista ?? "profesional",
@@ -278,6 +283,7 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     requisitos_deseables: [...(v.requisitosDeseables ?? [])],
     beneficios: [...(v.beneficios ?? [])],
     documentos_solicitados: [...(v.documentosSolicitados ?? [])],
+    preguntas_requisitos: [...(v.preguntasRequisitos ?? [])],
     preguntas_filtro: [...((v.criterios ?? []) as CriterioFiltro[])],
     preguntas_filtro_whatsapp: [...((v.criteriosWhatsapp ?? []) as CriterioFiltro[])],
     enfoque_entrevista: v.enfoqueEntrevista ?? "profesional",
@@ -304,6 +310,7 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     beneficios: base.beneficios, // regla 4: solo lo capturado por RH
     // Cambio 25: lo capturado manda; si no hay, los documentos que menciona la descripción
     documentos_solicitados: base.documentos_solicitados.length ? base.documentos_solicitados : g.documentos_solicitados ?? [],
+    preguntas_requisitos: g.preguntas_requisitos ?? base.preguntas_requisitos,
     preguntas_filtro: base.preguntas_filtro.length ? base.preguntas_filtro : g.preguntas_filtro ?? [],
     preguntas_filtro_whatsapp: base.preguntas_filtro_whatsapp.length ? base.preguntas_filtro_whatsapp : g.preguntas_filtro_whatsapp ?? [],
     resumen: base.resumen || g.resumen,
@@ -412,6 +419,7 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     requisitos_deseables: c.requisitos_deseables,
     beneficios: c.beneficios,
     documentos_solicitados: c.documentos_solicitados,
+    preguntas_requisitos: c.preguntas_requisitos,
     preguntas_filtro: c.preguntas_filtro,
     preguntas_filtro_whatsapp: c.preguntas_filtro_whatsapp,
     enfoque_entrevista: c.enfoque_entrevista,
@@ -822,6 +830,22 @@ export function FormularioContenidoVacante({
           items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida" />
         <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
         <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
+        {value.preguntas_requisitos.length > 0 && (
+          <div>
+            <p className="text-sm font-semibold text-ink">Cómo pregunta Red Human cada requisito</p>
+            <p className="mt-0.5 text-xs text-ink-3">Lenguaje natural; el agente la usa tal cual en el chat.</p>
+            <ul className="mt-2 flex flex-col gap-2">
+              {value.preguntas_requisitos.map((q, i) => (
+                <li key={q.requisito} className="flex flex-col gap-1">
+                  <span className="text-[11px] text-ink-3">{q.requisito}</span>
+                  <input value={q.pregunta}
+                    onChange={(e) => onChange({ ...value, preguntas_requisitos: value.preguntas_requisitos.map((x, k) => (k === i ? { ...x, pregunta: e.target.value } : x)) })}
+                    className="min-h-10 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
           obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
         {avisosRuta.length > 0 && (

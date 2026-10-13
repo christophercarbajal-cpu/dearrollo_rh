@@ -64,6 +64,17 @@ def nombre_empresa_candidato(v: Vacante) -> str:
     return v.empresa or ""
 
 
+def _preguntas_requisitos(v) -> list:
+    try:
+        from .services import ia
+        from .routers.vacantes import requisitos_lista
+
+        guardadas = list(((v.guiones or {}).get("preguntas_requisitos")) or [])
+        return ia.asegurar_preguntas_requisitos(requisitos_lista(v.requisitos or ""), guardadas)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _sincronizacion(v) -> dict:
     """Cambio 28: lo que le falta a la vacante para publicarse según su ruta y las etapas de «Se pide en:»."""
     try:
@@ -166,6 +177,8 @@ def vacante_dict(
         # Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada
         "criteriosWhatsapp": [p for p in (v.preguntas_filtro_whatsapp or []) if isinstance(p, dict)],
         "documentosSolicitados": normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []),  # Cambio 25
+        # Cambio 31: pregunta natural por requisito indispensable (lo guardado o la determinista)
+        "preguntasRequisitos": _preguntas_requisitos(v),
         "ubicacionEstado": v.ubicacion_estado or "",
         "ubicacionMunicipio": v.ubicacion_municipio or "",
         # Capacitación universal (2026-09-16): curso que se asigna como filtro al quedar apto

@@ -126,6 +126,9 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
                        "esperada": "no" if _norm(pw.get("respuesta_esperada") or "Sí") == "no" else "si"})
     # 2026-10-09: reconfirmaciones de WhatsApp (dato concreto) de los indispensables del web
     por_criterio = {_norm(c["criterio"]): c for c in salida if c["indispensable"]}
+    from .guiones import preguntas_requisitos
+
+    naturales = preguntas_requisitos(v)
     for pw in (v.preguntas_filtro_whatsapp if v is not None else None) or []:
         if not isinstance(pw, dict) or not pw.get("reconfirma") or not str(pw.get("pregunta", "")).strip():
             continue
@@ -135,8 +138,9 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
         usados.add(f"rc-{base['id']}")
         opciones = [str(o) for o in pw.get("opciones") or [] if str(o).strip()]
         # especificación 2026-10-10: el chat NUNCA ofrece opciones múltiples ni numeradas — el candidato contesta con
-        # sus palabras y el bot interpreta (las opciones solo sirven para evaluar)
-        chat = ia.chat_natural(str(pw["pregunta"]).strip(), base["criterio"])
+        # sus palabras y el bot interpreta (las opciones solo sirven para evaluar). Cambio 31: la pregunta es la NATURAL
+        # del requisito (la que redactó el generador de la vacante), tal cual — nunca «Para confirmar: ¿cuánto tiempo…?»
+        chat = naturales.get(ia._norm_req(base["criterio"])) or ia.chat_natural(str(pw["pregunta"]).strip(), base["criterio"])
         salida.append({
             "id": f"rc-{base['id']}", "clave": "reconfirma", "criterio": base["criterio"], "pregunta": str(pw["pregunta"]).strip(),
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",

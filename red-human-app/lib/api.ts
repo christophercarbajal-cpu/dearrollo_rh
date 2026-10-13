@@ -705,10 +705,14 @@ export interface VacanteGenerada {
   guiones?: GuionesGenerados;
   /** Cambio 25: lo capturado tal cual o, si no hubo, los documentos que MENCIONA la vacante. */
   documentos_solicitados?: DocumentoSolicitado[];
+  /** Cambio 31: pregunta natural por requisito indispensable. */
+  preguntas_requisitos?: PreguntaRequisito[];
 }
 
 /** Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. `cantidad` = archivos que exige (las fotos
  *  del auto son 4); `foto` = la revisa RH a ojo (no se valida como documento oficial). */
+/** Cambio 31: cómo pregunta Red Human cada requisito indispensable (lenguaje natural, se usa tal cual). */
+export interface PreguntaRequisito { requisito: string; pregunta: string }
 export interface DocumentoSolicitado { nombre: string; cantidad: number; foto: boolean; /** Cambio 28: «Se pide en:» */ etapa?: EtapaCandidato }
 export const DOCUMENTOS_SUGERIDOS_VACANTE: DocumentoSolicitado[] = [
   { nombre: "INE", cantidad: 1, foto: false },
@@ -783,6 +787,8 @@ export interface DatosVacante extends SueldoEstructurado {
   conservar?: ClaveGuion[];
   /** Cambio 25: «Documentos y fotos que se piden». */
   documentos_solicitados?: DocumentoSolicitado[];
+  /** Cambio 31: pregunta natural por requisito indispensable (el bot la usa tal cual). */
+  preguntas_requisitos?: PreguntaRequisito[];
 }
 
 export function fetchVacantes(filtros?: {
@@ -1070,6 +1076,8 @@ export interface Plantilla {
   /** Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada. */
   preguntasFiltroWhatsapp?: CriterioFiltro[];
   documentosSolicitados?: DocumentoSolicitado[];  // Cambio 25
+  /** Cambio 31: pregunta natural por requisito indispensable. */
+  preguntasRequisitos?: PreguntaRequisito[];
   ubicacionEstado?: string;
   ubicacionMunicipio?: string;
   textoWhatsapp: string;
@@ -1101,6 +1109,8 @@ export interface DatosPlantilla {
   avisos_cumplimiento?: string[];
   preguntas_filtro?: CriterioFiltro[];
   documentos_solicitados?: DocumentoSolicitado[];  // Cambio 25
+  /** Cambio 31: pregunta natural por requisito indispensable (el bot la usa tal cual). */
+  preguntas_requisitos?: PreguntaRequisito[];
   texto_whatsapp?: string;
   texto_bolsa?: string;
   enfoque_entrevista?: EnfoqueEntrevista;

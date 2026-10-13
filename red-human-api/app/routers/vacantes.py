@@ -273,6 +273,8 @@ class GenerarIn(BaseModel):
     # Cambio 25: «Documentos y fotos que se piden» [{nombre, cantidad, foto}]; vacío al generar → la IA los toma de la
     # descripción si los menciona
     documentos_solicitados: List[dict] = []
+    # Cambio 31: pregunta natural por indispensable [{requisito, pregunta}] (la propone /generar; RH puede ajustarla)
+    preguntas_requisitos: List[dict] = []
     perfil_operativo: Optional[dict] = None  # 2026-10-10: oficio de la Biblioteca (ajustado para esta vacante), enfoque operativo
 
     def ubicacion_texto(self) -> str:
@@ -421,6 +423,9 @@ def _aplicar_generado(v: Vacante, g: ia.VacanteGenerada) -> None:
     v.requisitos = SEPARADOR_REQUISITOS.join(g.requisitos_indispensables) or v.requisitos
     v.requisitos_deseables = g.requisitos_deseables
     v.beneficios = g.beneficios
+    from ..services import guiones as _sg
+
+    _sg.guardar_preguntas_requisitos(v, [x.model_dump() for x in g.preguntas_requisitos])  # Cambio 31
     v.palabras_clave = v.palabras_clave or g.palabras_clave
     v.seniority = v.seniority or g.seniority
     v.avisos_cumplimiento = g.avisos_cumplimiento
@@ -559,6 +564,9 @@ def crear(
         sgui.generar_para_vacante(db, v, u.nombre)  # conserva lo que RH ya escribió; genera lo que falte de la ruta
     _validar_minimo_prefiltro(db, v, explicito=datos.guiones is not None)
     _sincronizar_ruta(db, v, publicar=datos.publicar)
+    from ..services import guiones as _sg
+
+    _sg.guardar_preguntas_requisitos(v, datos.preguntas_requisitos)  # Cambio 31
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -774,6 +782,7 @@ class ActualizarIn(BaseModel):
     preguntas_filtro: Optional[List[dict]] = None
     preguntas_filtro_whatsapp: Optional[List[dict]] = None  # Fase 4
     documentos_solicitados: Optional[List[dict]] = None  # Cambio 25
+    preguntas_requisitos: Optional[List[dict]] = None  # Cambio 31
     ubicacion_estado: Optional[str] = None  # Fase 4
     ubicacion_municipio: Optional[str] = None
     curso_filtro: Optional[str] = None  # Capacitación universal: código CUR-#### ("" = quitar)
@@ -852,6 +861,7 @@ def actualizar(
 
     if "documentos_solicitados" in cambios:
         cambios["documentos_solicitados"] = normalizar_documentos_vacante(cambios["documentos_solicitados"])
+    preguntas_req = cambios.pop("preguntas_requisitos", None)  # Cambio 31: se guardan en `guiones` (abajo)
     for campo, valor in cambios.items():
         setattr(v, campo, valor)
     if "proceso" in cambios or "enfoque_entrevista" in cambios:
@@ -863,6 +873,10 @@ def actualizar(
     if web_nuevo is not None or "proceso" in cambios:
         _validar_minimo_prefiltro(db, v, explicito=web_nuevo is not None)
     _sincronizar_ruta(db, v, publicar=v.estado == "Publicada" and cambios.get("estado") == "Publicada")
+    if preguntas_req is not None or "requisitos" in cambios:
+        from ..services import guiones as _sg
+
+        _sg.guardar_preguntas_requisitos(v, preguntas_req)  # Cambio 31
     # Fase 4: si tocó Estado/Municipio, el texto de ubicación se deriva
     if any(k in cambios for k in ("ubicacion_estado", "ubicacion_municipio")):
         v.ubicacion = texto_ubicacion(v.ubicacion_estado, v.ubicacion_municipio, v.ubicacion)

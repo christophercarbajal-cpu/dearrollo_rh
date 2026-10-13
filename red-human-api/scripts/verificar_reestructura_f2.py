@@ -142,7 +142,9 @@ with TestClient(app) as client:
     check(r.status_code == 200 and chat_natural(v["criterios"][1]["pregunta"], v["criterios"][1].get("valida", "")) in r.json()["respuesta"],
           "el chat pregunta primero el indispensable que el formulario no respondió")
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Sí"})
-    check("Para confirmar" in r.json()["respuesta"], "el «Sí» del formulario se RECONFIRMA en el chat pidiendo un dato concreto")
+    # Cambio 31: la reconfirmación es la pregunta NATURAL del requisito (nunca «Para confirmar…»)
+    check(r.json()["respuesta"].rstrip().endswith("?") and "Para confirmar" not in r.json()["respuesta"],
+          "el «Sí» del formulario se RECONFIRMA en el chat con la pregunta natural del requisito")
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "No"})
     db.expire_all()
     p = db.query(Postulacion).filter_by(codigo=P).one()

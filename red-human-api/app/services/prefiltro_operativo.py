@@ -117,8 +117,16 @@ def _criterio(cid: str, dato: str, criterio: str, pregunta: str, indispensable: 
             "repregunta": REPREGUNTAS.get(dato), **extra}
 
 
-def _pregunta_indispensable(i: int, req: str) -> dict:
-    """Un indispensable como pregunta de DATO CONCRETO (nunca Sí/No)."""
+def _pregunta_indispensable(i: int, req: str, natural: str = "") -> dict:
+    """Un indispensable como pregunta de DATO CONCRETO (nunca Sí/No). Cambio 31: con la pregunta natural de la vacante
+    (`natural`), el chat la usa TAL CUAL; el tipo de dato solo decide cómo se evalúa la respuesta."""
+    c = _pregunta_indispensable_base(i, req)
+    if natural:
+        c["pregunta"] = c["chat"] = natural
+    return c
+
+
+def _pregunta_indispensable_base(i: int, req: str) -> dict:
     from . import ia
     from .prefiltro_conversacional import nivel_estudios
 
@@ -156,7 +164,7 @@ def _texto_sueldo(sueldo: str) -> str:
     return q.replace("¿Te parece bien?", "¿Te interesa?") if q else ""
 
 
-def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str]) -> List[dict]:
+def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str], naturales: Optional[dict] = None) -> List[dict]:
     """La base FIJA del prefiltro operativo (criterios del motor conversacional), en su orden."""
     salida: List[dict] = []
     edad: Optional[Tuple[Optional[int], Optional[int]]] = None
@@ -174,7 +182,9 @@ def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str]) ->
         if lim is not None:
             limite, limite_req = lim, req
             continue
-        salida.append(_pregunta_indispensable(i, req))
+        from . import ia
+
+        salida.append(_pregunta_indispensable(i, req, (naturales or {}).get(ia._norm_req(req), "")))
     # Edad: se registra; descarta solo si la vacante pide una edad (indispensable)
     salida.append(_criterio("dato-edad", "edad", edad_req or "Edad", "¿Cuántos años tienes?", edad is not None,
                             edad_min=(edad or (None, None))[0], edad_max=(edad or (None, None))[1]))
@@ -202,8 +212,10 @@ def criterios(v) -> List[dict]:
     from .prefiltro_conversacional import ubicacion_vacante
     from ..routers.vacantes import requisitos_lista
 
+    from .guiones import preguntas_requisitos
+
     return base(getattr(v, "titulo", "") or "", getattr(v, "sueldo", "") or "", ubicacion_vacante(v),
-                requisitos_lista(getattr(v, "requisitos", "") or ""))
+                requisitos_lista(getattr(v, "requisitos", "") or ""), preguntas_requisitos(v))
 
 
 def preguntas_guardables(ficha) -> List[dict]:

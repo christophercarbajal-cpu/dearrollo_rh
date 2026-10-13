@@ -628,6 +628,8 @@ export interface Vacante {
   criteriosWhatsapp?: { pregunta: string; tipo: string; valida: string; respuesta_esperada: string; descarta: boolean; opciones?: string[] }[];
   /** Cambio 25: «Documentos y fotos que se piden». */
   documentosSolicitados?: { nombre: string; cantidad: number; foto: boolean; etapa?: EtapaCandidato }[];
+  /** Cambio 31: pregunta natural por requisito indispensable (el bot la usa tal cual). */
+  preguntasRequisitos?: { requisito: string; pregunta: string }[];
   /** Cambio 28: lo que la ruta exige y falta (vacío = se puede publicar) y etapas de «Se pide en:». */
   faltantesPublicacion?: string[];
   etapasDocumentos?: EtapaCandidato[];

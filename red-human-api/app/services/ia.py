@@ -61,6 +61,15 @@ class BloquePlataforma(BaseModel):
         return self.model_dump(by_alias=True)
 
 
+class PreguntaRequisito(BaseModel):
+    """Cambio 31: la pregunta NATURAL con la que el agente explora un requisito indispensable (se usa tal cual)."""
+
+    requisito: str = Field(description="El requisito indispensable, copiado literal.")
+    pregunta: str = Field(description=(
+        "Pregunta directa en lenguaje natural, como la haría un reclutador por chat, que pide el DATO concreto del requisito "
+        "(ej. «Cuéntame, ¿cuántos años llevas en derecho corporativo?»). Una sola idea, sin «Para confirmar», sin opciones."))
+
+
 class PreguntaFiltro(BaseModel):
     """Pregunta de prefiltro ligada a un requisito, con criterio de descarte explícito."""
 
@@ -103,6 +112,16 @@ class VacanteGenerada(BaseModel):
             "ÚNICAMENTE con Sí / No (tipo 'si_no'). Prohibido texto libre: nada de «Describe», «Explica», "
             "«Cuéntanos», «Menciona». Un requisito numérico se convierte en umbral («¿Tienes al menos 2 años de experiencia en caja?»)."
         )
+    )
+    # Cambio 31: una pregunta NATURAL por requisito indispensable (el motor de conversación la usa tal cual)
+    preguntas_requisitos: List[PreguntaRequisito] = Field(
+        default_factory=list,
+        description=(
+            "UNA por cada requisito indispensable: la pregunta directa en lenguaje natural con la que un reclutador pediría "
+            "el dato concreto (ej. «Cuéntame, ¿cuántos años llevas en derecho corporativo?», «¿Qué tipo de licencia de manejo "
+            "tienes?»). Nunca «¿Cuánto tiempo de experiencia en…?», nunca «Para confirmar…», nunca Sí/No con opciones. La "
+            "escolaridad SIEMPRE es «¿Cuál es tu último grado de estudios?»."
+        ),
     )
     # 2026-09-16 (prefiltro dual): la IA elige SOLO los puntos críticos que vale la pena confirmar por chat.
     preguntas_filtro_whatsapp: List[PreguntaFiltro] = Field(
@@ -242,6 +261,9 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
         salida.preguntas_filtro_whatsapp = puntos_criticos_whatsapp(salida.preguntas_filtro)
     salida.preguntas_filtro = cerrar_preguntas_web(salida.preguntas_filtro)
     salida.preguntas_filtro_whatsapp = separar_preguntas_whatsapp(salida.preguntas_filtro_whatsapp)
+    # Cambio 31: cada indispensable trae su pregunta natural (la de la IA si sirve; si no, la determinista)
+    salida.preguntas_requisitos = [PreguntaRequisito(**x) for x in asegurar_preguntas_requisitos(
+        salida.requisitos_indispensables, [q.model_dump() for q in salida.preguntas_requisitos])]
     for p in salida.preguntas_filtro_whatsapp:
         if p.tipo == "numero" and not p.opciones:
             p.opciones = _RANGO_ANOS_GENERICO
@@ -545,6 +567,44 @@ def generar_vacante(ficha: FichaVacante) -> Tuple[VacanteGenerada, bool]:
         text_format=VacanteGenerada,
     )
     return _asegurar_capturado(resp.output_parsed, ficha), True
+
+
+_RE_PREGUNTA_ARMADA = re.compile(r"(cu[aá]nto tiempo de experiencia|para confirmar|primero conf[ií]rmame|cumples con|"
+                                 r"cu[aá]l de estas opciones|por ejemplo)", re.IGNORECASE)
+
+
+def pregunta_natural_requisito(req: str) -> str:
+    """Cambio 31 (sin IA): la pregunta natural de un requisito indispensable. Escolaridad → «¿Cuál es tu último grado
+    de estudios?»; experiencia → «Cuéntame, ¿cuántos años llevas en …?»; licencia → «¿Qué tipo de licencia tienes?»;
+    lo demás, en lenguaje natural directo («Cuéntame, ¿tienes disponibilidad para rolar turnos?»)."""
+    r = " ".join(str(req or "").split()).strip(" .")
+    if not r:
+        return ""
+    if RE_NIVEL_ESTUDIOS.search(r):
+        return PREGUNTA_ESCOLARIDAD
+    if _RE_ANOS.search(r) or "experiencia" in _clave_texto(r):
+        tema = _tema_experiencia(r)
+        primera = (tema.split() or [""])[0].lower()
+        if tema == "un puesto similar":
+            return "Cuéntame, ¿cuántos años de experiencia tienes en un puesto similar?"
+        return f"Cuéntame, ¿cuántos años llevas {tema}?" if primera.endswith(("ando", "endo", "iendo")) else f"Cuéntame, ¿cuántos años llevas en {tema}?"
+    if re.search(r"\blicencia\b", _clave_texto(r)):
+        return "¿Qué tipo de licencia tienes?"
+    q = pregunta_si_no_natural(r)
+    return f"Cuéntame, {q[0] + q[1].lower() + q[2:]}" if q.startswith("¿") else q
+
+
+def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optional[List[dict]] = None) -> List[dict]:
+    """Una pregunta natural por indispensable: la propuesta por la IA si es una sola pregunta natural (sin frases armadas
+    ni «Para confirmar»); si no, `pregunta_natural_requisito`. La escolaridad siempre con su pregunta fija."""
+    por_req = {_norm_req(x.get("requisito") or ""): str(x.get("pregunta") or "").strip() for x in propuestas or [] if isinstance(x, dict)}
+    salida = []
+    for req in [r for r in indispensables or [] if str(r or "").strip()]:
+        propia = por_req.get(_norm_req(req), "")
+        valida = (propia.count("?") == 1 and propia.endswith("?") and not _RE_PREGUNTA_ARMADA.search(propia)
+                  and not RE_NIVEL_ESTUDIOS.search(req) and len(propia.split()) <= 20)
+        salida.append({"requisito": req.strip(), "pregunta": propia if valida else pregunta_natural_requisito(req)})
+    return salida
 
 
 def texto_preguntas(preguntas: Optional[list]) -> List[str]:
@@ -2895,6 +2955,8 @@ _RE_EXIGENCIA = re.compile(r"\b(carg\w*|levant\w*|de pie|turno\w*|rolar|nocturn\
                            r"esfuerzo|intemperie|fr[ií]o|calor|maneja\w*|kg|kilos?)\b", re.IGNORECASE)
 _RE_HORARIO = re.compile(r"\b(horario|turno\w*|rolar|nocturn\w*|fines? de semana|lunes a|de \d{1,2}(:\d\d)? ?(a\.? ?m\.?|p\.? ?m\.?)?"
                          r" a \d)", re.IGNORECASE)
+# Cambio 31: la escolaridad se pregunta SIEMPRE así (sin variantes)
+PREGUNTA_ESCOLARIDAD = "¿Cuál es tu último grado de estudios?"
 RE_NIVEL_ESTUDIOS = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|escolaridad)\b", re.IGNORECASE)
 
 

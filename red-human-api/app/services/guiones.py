@@ -484,3 +484,41 @@ def asegurar(db: Session, v, clave: str, motivo: str = "") -> object:
     guardar_seccion(v, clave, crudo.get(clave), "Red Human", generado=True, generado_ia=con_ia, huella=huella_datos(datos))
     registrar(db, "Red Human", "guion_generado_jit", "vacante", v.codigo, {"seccion": clave, "ia": con_ia, "motivo": motivo[:200]})
     return contenido_de(v, clave)
+
+
+# ============================================================ Cambio 31: pregunta natural por requisito indispensable
+
+CLAVE_PREGUNTAS_REQUISITOS = "preguntas_requisitos"
+
+
+def guardar_preguntas_requisitos(v, propuestas=None) -> list:
+    """Guarda en `Vacante.guiones["preguntas_requisitos"]` UNA pregunta natural por indispensable (la de la IA si sirve;
+    si no, la determinista). Se recalcula con los indispensables vigentes."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from . import ia
+    from ..routers.vacantes import requisitos_lista
+
+    previas = list(((getattr(v, "guiones", None) or {}).get(CLAVE_PREGUNTAS_REQUISITOS)) or [])
+    lista = ia.asegurar_preguntas_requisitos(requisitos_lista(v.requisitos or ""), list(propuestas or []) + previas)
+    g = dict(v.guiones or {})
+    g[CLAVE_PREGUNTAS_REQUISITOS] = lista
+    v.guiones = g
+    try:
+        flag_modified(v, "guiones")
+    except Exception:  # noqa: BLE001 — objeto aún sin sesión
+        pass
+    return lista
+
+
+def preguntas_requisitos(v) -> dict:
+    """{requisito normalizado: pregunta natural} — lo guardado en la vacante y, para lo que falte, la pregunta determinista
+    (vacantes anteriores al Cambio 31). El motor de conversación la usa TAL CUAL."""
+    from . import ia
+    from ..routers.vacantes import requisitos_lista
+
+    if v is None:
+        return {}
+    guardadas = list(((getattr(v, "guiones", None) or {}).get(CLAVE_PREGUNTAS_REQUISITOS)) or [])
+    return {ia._norm_req(x["requisito"]): x["pregunta"]
+            for x in ia.asegurar_preguntas_requisitos(requisitos_lista(getattr(v, "requisitos", "") or ""), guardadas)}

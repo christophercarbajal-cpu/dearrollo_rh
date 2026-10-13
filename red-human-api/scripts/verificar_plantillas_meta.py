@@ -155,13 +155,13 @@ with TestClient(app) as client:
     db.refresh(p1)
     resp = r.get("respuesta") or ""
     check(resp.startswith("Hola, Luisa. Soy Red Human, el asistente virtual que te acompaña en tu postulación a *Almacenista*. "
-                          "Primero confírmame:") and resp.endswith("¿Hasta qué año estudiaste?"),
+                          "Primero confírmame:") and resp.endswith("¿Cuál es tu último grado de estudios?"),
           f"Masivos (Cambio 29): saludo estricto + primera pregunta de la base fija, sin «/start» → «{resp[:110]}…»")
     e = plantillas_meta.estado(p1)
     check(e.get("respondida_en") and e.get("ventana_hasta") and e.get("confirmo"), "la respuesta abre (y registra) la ventana de 24 h")
     check("Sí, empezar ahora" not in str((pconv.estado(p1).get("respuestas") or {})), "la confirmación NO se toma como respuesta a un criterio")
     r = asyncio.run(procesar_entrante(db, whatsapp.parsear_webhook(texto("5512770001", "Terminé la secundaria"))))
-    check("experiencia en almacén" in (r.get("respuesta") or ""), "el prefiltro sigue normal con la siguiente pregunta")
+    check("llevas en almacén" in (r.get("respuesta") or ""), "el prefiltro sigue normal con la siguiente pregunta")
 
     print("\n--- 2b. Corporativos (Cambio 19): misma apertura con el prefiltro configurable ---")
     vc = Vacante(codigo="VAC-PM2", titulo="Analista de compras", estado="Publicada", cuenta_id=cuenta.id, slug="analista-pm",

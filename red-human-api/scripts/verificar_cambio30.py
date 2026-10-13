@@ -302,8 +302,10 @@ with TestClient(app) as client:
     textos = [c.get("text", {}).get("body", "") for c in ENVIADOS[desde:] if c.get("type") == "text"]
     check(r.status_code == 201 and any(t.startswith("Hola Carla, tienes una capacitación programada para Operador de montacargas") for t in textos),
           f"candidato: «Tienes una capacitación programada para [puesto]» ({r.status_code})")
-    check(any(t.startswith("Aviso para el instructor. Vas a capacitar a Carla Curso") for t in textos),
-          "instructor: «Aviso para el instructor. Vas a capacitar a…»")
+    hsm = [c for c in ENVIADOS[desde:] if c.get("type") == "template" and c["template"]["name"] == "alerta_entrevista_asig"]
+    ps = [x["text"] for x in hsm[0]["template"]["components"][0]["parameters"]] if hsm else []
+    check(len(ps) == 8 and ps[2] == "Capacitación: Operador de montacargas" and ps[5] == "Candidato en espera",
+          f"instructor: plantilla HSM «alerta_entrevista_asig» con «Capacitación: [vacante]» → {ps}")
     x = paso_cap(pp)
     check(x["estado"] == "en_curso" and x["evaluacion"], "programada: la actividad queda en curso")
     ev_cod = r.json()["evaluacion"]["codigo"]

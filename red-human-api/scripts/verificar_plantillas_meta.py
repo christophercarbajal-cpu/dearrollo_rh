@@ -202,12 +202,14 @@ with TestClient(app) as client:
     d = {"entrevistador": "Mariana López", "candidato": "Luisa Pérez Gómez", "vacante": "Almacenista", "fecha": "jueves 15 de octubre",
          "hora": "10:30 h", "pregunta_por": "Ing. Pedro Salas", "indicaciones_entrevistador": "Validar turnos",
          "liga_expediente": "https://app/evaluacion/abc"}
+    # 2026-10-13 (fix HSM): {{6}} y {{7}} adaptados al entrevistador/instructor (textos fijos)
     check(notificaciones.parametros_plantilla_entrevista(d) == ["Mariana López", "Luisa Pérez Gómez", "Almacenista", "jueves 15 de octubre",
-                                                               "10:30 h", "Ing. Pedro Salas", "Validar turnos",
+                                                               "10:30 h", "Candidato en espera", "Por favor revisa su perfil y CV antes de iniciar la sesión",
                                                                "https://app/evaluacion/abc"],
-          "{{1}} entrevistador · {{2}} candidato · {{3}} vacante · {{4}} fecha · {{5}} hora · {{6}} Pregunta por · {{7}} indicaciones · {{8}} liga")
-    check(notificaciones.parametros_plantilla_entrevista({})[5:7] == ["Por confirmar", "Sin indicaciones"],
-          "nunca variables vacías (Meta las rechaza)")
+          "{{1}} entrevistador · {{2}} candidato · {{3}} vacante · {{4}} fecha · {{5}} hora · {{6}} «Candidato en espera» · {{7}} «Por favor revisa su perfil y CV…» · {{8}} liga")
+    check(notificaciones.parametros_plantilla_entrevista({**d, "capacitacion": True})[2] == "Capacitación: Almacenista",
+          "capacitación presencial → {{3}} «Capacitación: [vacante]»")
+    check(all(str(x).strip() for x in notificaciones.parametros_plantilla_entrevista({})), "nunca variables vacías (Meta las rechaza)")
     desde = len(ENVIADOS)
     env = asyncio.run(whatsapp.enviar_plantilla_entrevista("3399998888", notificaciones.parametros_plantilla_entrevista(d), "texto"))
     t = plantillas(desde)
@@ -215,7 +217,7 @@ with TestClient(app) as client:
           and len(t[0]["template"]["components"][0]["parameters"]) == 8, "sale `alerta_entrevista_asig` al número del entrevistador")
 
     print("\n--- 3b. De punta a punta: cita de entrevista humana con indicaciones ---")
-    admin.telefono = "3399997777"
+    admin.telefono = "+52 1 (33) 9999-7777"  # mismo formateo que el candidato: llega a la API como 52 + 10
     db.commit()
     p1 = db.query(Postulacion).filter_by(id=p1.id).one()
     p1.etapa = "Entrevista Humana"
@@ -229,9 +231,10 @@ with TestClient(app) as client:
     params = [x["text"] for x in t[0]["template"]["components"][0]["parameters"]] if t else []
     check(r.status_code in (200, 201) and t and t[0]["to"] == "523399997777" and len(params) == 8,
           f"la cita nueva le manda la plantilla al WhatsApp del entrevistador ({r.status_code})")
-    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and params[5] == admin.nombre
-          and "5512770001" not in " ".join(params) and params[6] == "Validar disponibilidad de turnos" and "/evaluacion/" in params[7],
-          f"variables: candidato, vacante, «Pregunta por» (responsable de la cita, nunca el teléfono del candidato), indicaciones y liga → {params}")
+    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and params[5] == "Candidato en espera"
+          and "5512770001" not in " ".join(params) and params[6] == "Por favor revisa su perfil y CV antes de iniciar la sesión"
+          and "/evaluacion/" in params[7],
+          f"variables adaptadas al entrevistador (nunca el teléfono del candidato) y liga → {params}")
 
     # ================= 4. Aviso de agenda =================
     print("\n--- 4. Confirmación de horario → aviso_proceso_rh ---")

@@ -118,20 +118,26 @@ def _aviso_cliente(titulo: str, texto: str, d: dict) -> tuple:
     return plantillas_correo.html_aviso(titulo, texto, d.get("empresa", "") if d else "", filas)
 
 
+PREGUNTA_POR_ENTREVISTADOR = "Candidato en espera"
+INDICACIONES_ENTREVISTADOR = "Por favor revisa su perfil y CV antes de iniciar la sesión"
+
+
 def parametros_plantilla_entrevista(d: dict) -> List[str]:
-    """Los 8 parámetros posicionales de `alerta_entrevista_asig` (2026-10-13), en este orden exacto: entrevistador,
-    candidato, vacante, fecha, hora, «Pregunta por» (responsable o contacto en el lugar de la cita), indicaciones para el
-    entrevistador y liga al expediente.
+    """Los 8 parámetros posicionales de `alerta_entrevista_asig` (2026-10-13), adaptados al ENTREVISTADOR o INSTRUCTOR
+    (interno o externo): {{1}} entrevistador · {{2}} candidato · {{3}} vacante («Capacitación: [vacante]» si es una
+    capacitación presencial) · {{4}} fecha · {{5}} hora · {{6}} «Candidato en espera» (campo «Pregunta por») ·
+    {{7}} «Por favor revisa su perfil y CV…» (campo «Indicaciones») · {{8}} liga al expediente.
     Meta no acepta variables vacías: lo que falte va con un texto neutro."""
+    vacante = d.get("vacante") or "Vacante"
     return [
         d.get("entrevistador") or "Entrevistador(a)",
         d.get("candidato") or "Candidato(a)",
-        d.get("vacante") or "-",
+        f"Capacitación: {vacante}" if d.get("capacitacion") else vacante,
         d.get("fecha") or "Por confirmar",
         d.get("hora") or "Por confirmar",
-        d.get("pregunta_por") or "Por confirmar",
-        d.get("indicaciones_entrevistador") or "Sin indicaciones",
-        d.get("liga_expediente") or "-",
+        PREGUNTA_POR_ENTREVISTADOR,
+        INDICACIONES_ENTREVISTADOR,
+        d.get("liga_expediente") or f"{settings.app_url}",
     ]
 
 
@@ -237,10 +243,14 @@ def _correo_entrevistador(db: Session, eh: EntrevistaHumana) -> str:
 
 
 def _whatsapp_entrevistador(db: Session, eh: EntrevistaHumana) -> str:
+    """WhatsApp del entrevistador/instructor con la MISMA normalización que el del candidato: 10 dígitos (sin «+52», sin
+    el «1» de celular, sin espacios ni guiones); la API lo manda como 52 + 10 (`whatsapp.numero_e164`)."""
+    from .telegram import telefono_10
+
     if eh.tipo == "interno" and eh.usuario_id:
         u = db.query(Usuario).filter(Usuario.id == eh.usuario_id).first()
-        return u.telefono if u else ""
-    return eh.whatsapp_externo
+        return telefono_10(u.telefono) if u and u.telefono else ""
+    return telefono_10(eh.whatsapp_externo) if eh.whatsapp_externo else ""
 
 
 # ------------------------------------------------------------
@@ -614,8 +624,9 @@ async def _enviar_y_registrar(
         if canal == "whatsapp" and plantilla_valores is not None:
             with de_cuenta(cuenta_canal):
                 envio = await enviar_plantilla_documentos(destino, plantilla_valores, contenido, nivel=int(plantilla_valores.get("nivel") or 1))
-        elif canal == "whatsapp" and plantilla_entrevista is not None and settings.whatsapp_provider == "meta" and (settings.meta_plantilla_entrevista or "").strip():
-            # plantilla de Meta «alerta_entrevista_asig» (8 parámetros); si Meta la rechaza cae a texto
+        elif canal == "whatsapp" and plantilla_entrevista is not None and settings.whatsapp_provider == "meta":
+            # plantilla de Meta «alerta_entrevista_asig» (8 parámetros) SIEMPRE con Meta: el entrevistador casi nunca está
+            # dentro de la ventana de 24 h; solo si Meta la rechaza cae a texto (otros proveedores no tienen plantillas)
             with de_cuenta(cuenta_canal):
                 envio = await enviar_plantilla_entrevista(destino, plantilla_entrevista, contenido)
         elif canal == "whatsapp":
@@ -792,8 +803,12 @@ async def disparar(
         if regla.entrevistador_whatsapp:
             texto = _mensaje(evento, "entrevistador", "whatsapp", c, eh, liga, extra)
             d_ev = extra.get("_datos_evaluacion") or {}
-            con_plantilla = evento == "entrevista_agendada" or (evento == "evaluacion_asignada" and d_ev.get("tipo") == "entrevista_humana" and d_ev.get("con_cita"))
-            params = parametros_plantilla_entrevista(extra["_datos_entrevista"]) if con_plantilla and extra.get("_datos_entrevista") else None
+            # cita NUEVA de entrevista humana o de capacitación presencial → plantilla HSM al entrevistador/instructor
+            con_plantilla = evento == "entrevista_agendada" or (
+                evento == "evaluacion_asignada" and d_ev.get("con_cita")
+                and (d_ev.get("tipo") == "entrevista_humana" or d_ev.get("capacitacion")))
+            params = (parametros_plantilla_entrevista({**extra["_datos_entrevista"], "capacitacion": bool(d_ev.get("capacitacion"))})
+                      if con_plantilla and extra.get("_datos_entrevista") else None)
             resultados.append(await _enviar_y_registrar(
                 db, c, evento, "entrevistador", "whatsapp", _whatsapp_entrevistador(db, eh), texto, plantilla_entrevista=params,
             ))

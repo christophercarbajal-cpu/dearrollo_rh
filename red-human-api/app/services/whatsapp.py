@@ -229,8 +229,8 @@ async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], text
     libre (que a su vez cae a META_PLANTILLA_AVISO)."""
     if _por_telegram(telefono, cuenta_id):
         return await telegram.enviar_texto(telefono, texto_fallback)
-    plantilla = (settings.meta_plantilla_entrevista or "").strip()
-    if settings.whatsapp_provider == "meta" and plantilla:
+    plantilla = (settings.meta_plantilla_entrevista or "").strip() or "alerta_entrevista_asig"
+    if settings.whatsapp_provider == "meta":
         if len(parametros) != 8:
             raise ValueError(f"La plantilla {plantilla} requiere 8 parámetros; llegaron {len(parametros)}")
         resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma)

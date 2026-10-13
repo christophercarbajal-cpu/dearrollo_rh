@@ -431,9 +431,11 @@ interface CanalExito {
 }
 
 function Exito({ titulo, conCv, canal }: { titulo: string; conCv: boolean; canal: CanalExito }) {
-  // 2026-10-06: el botón lo decide el canal de la Cuenta (Configuración → Cuentas → «Canal con candidatos»).
-  const conTelegram = canal.canal !== "whatsapp" && Boolean(canal.telegram);
-  const conWhatsapp = canal.canal !== "telegram" || !conTelegram;
+  // 2026-10-13: lo decide ESTRICTAMENTE el canal de la Cuenta (Configuración → Cuentas → «Canal con candidatos»):
+  // «WhatsApp» → solo el recuadro verde (la plantilla de WhatsApp sale sola; nada de Telegram) · «Telegram» → solo la
+  // tarjeta azul para abrir el chat y mandar /start · «ambos» → las dos. Sin liga de Telegram se cae al recuadro verde.
+  const conTelegram = (canal.canal === "telegram" || canal.canal === "ambos") && Boolean(canal.telegram);
+  const conWhatsapp = canal.canal === "whatsapp" || canal.canal === "ambos" || !conTelegram;
   const ambos = conTelegram && conWhatsapp;
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
@@ -464,7 +466,7 @@ function Exito({ titulo, conCv, canal }: { titulo: string; conCv: boolean; canal
           {conTelegram && (
             <div className="flex w-full max-w-md flex-col items-stretch gap-3 rounded-2xl border border-[#229ED9]/30 bg-[#229ED9]/10 p-5 text-left">
               <p className="text-sm leading-relaxed text-ink">
-                Continúa tu proceso en Telegram: abre el chat, comparte tu número cuando te lo pida y te guiamos paso a paso.
+                Continúa tu proceso en Telegram: abre el chat y toca «Iniciar» (/start). Desde ahí te guiamos paso a paso.
               </p>
               <a
                 href={canal.telegram}
@@ -487,7 +489,7 @@ function Exito({ titulo, conCv, canal }: { titulo: string; conCv: boolean; canal
                   Nuestro asistente virtual de RH te contactará por WhatsApp en breve para continuar tu proceso.
                 </p>
               </div>
-              {canal.whatsapp && (
+              {canal.whatsapp && ambos && (
                 <a
                   href={canal.whatsapp}
                   target="_blank"

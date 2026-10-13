@@ -932,11 +932,12 @@ async def postular(
     # Telegram (2026-10-06): el bot no puede escribir primero. Si la Cuenta atiende por Telegram, el portal muestra
     # «Continuar en Telegram» (deep link a ESTA postulación); con «solo Telegram» no se intenta la plantilla de WhatsApp.
     from ..services import telegram as tg
-    from ..services.mensajeria import canal_de_cuenta, telegram_demo
+    from ..services.mensajeria import canal_de_cuenta
 
     canal_cuenta = canal_de_cuenta(db, p.cuenta_id) if tg.activo() else "whatsapp"
-    demo_tg = telegram_demo(db, p.cuenta)
-    liga_telegram = tg.liga_postulacion(p) if canal_cuenta in ("telegram", "ambos") or demo_tg else ""
+    canales = canales_publicos(vac, db)
+    # 2026-10-13: la liga de Telegram de la postulación SOLO si el canal configurado incluye Telegram (nunca en «solo WhatsApp»)
+    liga_telegram = tg.liga_postulacion(p) if canales["canalCandidatos"] in ("telegram", "ambos") else ""
     if nueva_postulacion and canal_cuenta != "telegram":
         # 2026-10-13: `inicio_entrevista_rh` sale cuando la actividad «Prefiltro por WhatsApp» de SU ruta se habilita
         from ..services import plantillas_meta
@@ -961,7 +962,7 @@ async def postular(
         "telegram": liga_telegram,
         # 2026-10-06: canal de la Cuenta para la pantalla «Postulación exitosa» (botón de Telegram vac_<VAC-####>,
         # de WhatsApp o ambos).
-        **canales_publicos(vac, db),
+        **canales,
     }
 
 

@@ -183,8 +183,8 @@ def canales_publicos(vacante, db=None) -> dict:
 
     cuenta = getattr(vacante, "cuenta", None)
     canal = "telegram" if solo_telegram() else normalizar_canal_mensajeria(cuenta.canal_mensajeria if cuenta else "")
-    if canal == "whatsapp" and telegram_demo(db, cuenta):
-        canal = "ambos"  # Telegram demo: «Continuar en Telegram» desde cualquier Cuenta
+    # 2026-10-13: el canal configurado manda SIEMPRE — una Cuenta «solo WhatsApp» nunca muestra «Continuar en Telegram»
+    # (ni con Modo Prueba ni en Cuentas demo): el candidato espera la plantilla de WhatsApp que sale sola.
     bot = telegram.usuario_bot() if telegram.activo() else ""
     if not bot:
         canal = "whatsapp"

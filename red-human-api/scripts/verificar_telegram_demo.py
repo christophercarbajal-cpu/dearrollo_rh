@@ -3,7 +3,7 @@ SIMULAN (sin red).
 
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_telegram_demo.py
 
-Cubre: con Modo Prueba (o Cuenta demo) «Continuar en Telegram» existe en cualquier Cuenta y la liga `p_<token>` se abre
+Cubre (2026-10-13: el portal respeta SIEMPRE el canal configurado — «solo WhatsApp» nunca muestra Telegram): la liga `p_<token>` se abre
 desde cualquier cuenta de Telegram sin validar que el número sea el del formulario (Cambio 17: la primera vez se pide y
 guarda el número REAL); la liga abre EXACTAMENTE esa postulación (el chat se amarra a
 ella, reemplaza lo anterior y no se mezcla con otra persona de teléfono repetido); con Modo Prueba apagado se sigue
@@ -114,8 +114,18 @@ with TestClient(app) as client:
 
     # ================= 1. «Continuar en Telegram» desde cualquier Cuenta =================
     print("\n--- 1. Telegram demo: disponible en cualquier Cuenta ---")
-    check(mensajeria.canales_publicos(v1, db)["canalCandidatos"] == "ambos" and mensajeria.canales_publicos(v1, db)["telegramLiga"],
-          "Modo Prueba: una Cuenta solo WhatsApp también ofrece «Continuar en Telegram»")
+    # 2026-10-13: el canal configurado manda — «solo WhatsApp» nunca ofrece Telegram en el portal, ni con Modo Prueba
+    check(mensajeria.canales_publicos(v1, db)["canalCandidatos"] == "whatsapp" and not mensajeria.canales_publicos(v1, db)["telegramLiga"],
+          "Modo Prueba: una Cuenta solo WhatsApp NO ofrece «Continuar en Telegram» (manda su canal configurado)")
+    v1.estado, v1.slug = "Publicada", v1.slug or "solo-wa-v1"
+    db.commit()
+    r = client.post("/candidatos/postular", data={"vacante": v1.slug, "nombre": "Eva Solo WA", "telefono": "5551119999", "consentimiento": "true"})
+    check(r.status_code == 201 and r.json()["canalCandidatos"] == "whatsapp" and not r.json()["telegram"] and not r.json()["telegramLiga"],
+          f"«Postulación exitosa» de una Cuenta solo WhatsApp: sin liga ni canal de Telegram ({r.status_code})")
+    vista = (Path(__file__).resolve().parent.parent.parent / "red-human-app/app/aplicar/[slug]/formulario-aplicar.tsx").read_text(encoding="utf-8")
+    check('(canal.canal === "telegram" || canal.canal === "ambos") && Boolean(canal.telegram)' in vista
+          and 'canal.canal === "whatsapp" || canal.canal === "ambos" || !conTelegram' in vista,
+          "la pantalla de éxito: WhatsApp → solo el recuadro verde; Telegram → solo la tarjeta azul (/start)")
     cfg.modo_prueba = False
     db.commit()
     check(mensajeria.canales_publicos(v1, db)["canalCandidatos"] == "whatsapp", "Modo Prueba apagado: la Cuenta real conserva su canal")

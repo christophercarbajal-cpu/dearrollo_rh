@@ -92,7 +92,7 @@ export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
 /** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
 export interface AccionPaso {
   clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos"
-    | "agregar_correo" | "registrar_resultado" | "reenviar" | "marcar_realizada";
+    | "agregar_correo" | "registrar_resultado" | "reenviar" | "marcar_realizada" | "enviar_oferta";
   texto: string;
   /** «reenviar»: a quién (p. ej. «Solicitar referencias» = la liga del candidato). */
   a?: string;
@@ -330,6 +330,8 @@ export interface Candidato {
   /** Zona, traslado y transporte del prefiltro de WhatsApp (solo se registran; el límite de traslado sale del indispensable). */
   /** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos). */
   historialLaboral?: { empresa: string; puesto: string; tareas: string; duracion: string; motivo: string; actual: boolean }[];
+  /** Cambio 30: oferta laboral (de la ruta o del botón «Generar carta oferta»). */
+  oferta?: OfertaResumen | null;
   prefiltroDatos?: {
     escolaridad: string;
     nivel: string;
@@ -834,4 +836,20 @@ export interface ActividadAgregada {
   desdeTexto: string;
   /** «La propuesta ya fue enviada…» cuando la propuesta salió antes de agregarla. */
   advertencia: string;
+}
+
+/** Cambio 30 (2026-10-13): carta oferta — se genera con los datos de la vacante y se manda por WhatsApp. */
+export interface CartaOferta {
+  puesto: string; empresa: string; sueldo: string; ubicacion: string; modalidad: string; horario: string; prestaciones: string;
+  fecha_ingreso: string; tipo_contratacion: string; jefe_directo: string; mensaje: string;
+}
+export interface OfertaResumen {
+  estado: "generada" | "enviada" | "aceptada" | "no_aceptada";
+  enviadaEn: string | null;
+  enviadaPor?: string;
+  entregada?: boolean | null;
+  respondidaEn: string | null;
+  liga: string;
+  datos: Partial<CartaOferta>;
+  enRuta: boolean;
 }

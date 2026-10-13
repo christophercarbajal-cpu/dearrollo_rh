@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     meta_plantilla_inicio: str = "inicio_entrevista_rh"
     meta_plantilla_agenda: str = "aviso_proceso_rh"
     meta_plantilla_agenda_params: str = ""
+    # Cambio 30: «Oferta laboral» — «{{1}}, tenemos una oferta para ti. Revísala aquí: {{2}}» ({{1}} nombre, {{2}} liga).
+    # Si no está aprobada o falla, sale el mismo texto por el canal del candidato.
+    meta_plantilla_oferta: str = "oferta_laboral_rh"
 
     # --- Telegram (2026-10-06): canal adicional por Cuenta (`Cuenta.canal_mensajeria`) ---
     # TELEGRAM_BOT_TOKEN solo vive aquí (servidor). Vacío = Telegram no disponible: las Cuentas que lo elijan

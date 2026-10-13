@@ -24,7 +24,8 @@ const selectRH = cn(inputRH, "h-10 pr-8");
 // 2026-10-09: las tres actividades de IA (avatar, WhatsApp, llamada) son independientes y cada una lleva su enfoque
 const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "llamada_agente"]);
 // Cambio 28: «Otra actividad» (nombre + mensaje) y «Capacitación» (curso) también se configuran aquí
-const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
+// Cambio 30: la solicitud ya no tiene casilla «exige CV»: se elige «Solicitud web sin CV» o «con CV» del catálogo
+const CON_DETALLE = new Set(["entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
 
 /** Entrada del catálogo de un paso guardado (Cambio 30: la solicitud web es «sin CV» o «con CV»; la psicometría física
  *  es su propia entrada). */
@@ -103,6 +104,12 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
     const t = tipos[tipo];
     if (!t) return;
     const p = pasoNuevo(t, etapa, pasos);
+    const esSolicitud = (x: PasoProceso) => ["solicitud_web", "solicitud_sin_cv", "solicitud_con_cv"].includes(x.tipo);
+    if (esSolicitud(p) && pasos.some(esSolicitud)) {
+      // Cambio 30: «Solicitud web sin CV» y «con CV» se REEMPLAZAN entre sí (un proceso lleva una sola)
+      emitir(pasos.map((x) => (esSolicitud(x) ? { ...p, id: x.id } : x)));
+      return;
+    }
     emitir([...pasos, p]);
     if (CON_DETALLE.has(tipo)) setAbierto(p.id);
   }

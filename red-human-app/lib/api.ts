@@ -9,7 +9,7 @@
    ============================================================ */
 
 import type {
-  Candidato, EnvioDestinatario, EtapaCandidato, EtapasProceso, PasoProceso, ProcesoConfig, ReglaPaso, ResponsablePaso, SeguimientoProceso, Vacante,
+  Candidato, CartaOferta, EnvioDestinatario, OfertaResumen, EtapaCandidato, EtapasProceso, PasoProceso, ProcesoConfig, ReglaPaso, ResponsablePaso, SeguimientoProceso, Vacante,
 } from "@/lib/data";
 import type { NuevoIngreso, ResumenTableroOnboarding } from "@/lib/phase2";
 
@@ -3995,6 +3995,23 @@ export function excepcionRHPaso(codigoPostulacion: string, pasoId: string, motiv
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/excepcion`, { motivo });
 }
 /** Cambio 28: «Marcar como realizada» de una «Otra actividad» (solo RH la cumple). */
+/** Cambio 30: «Oferta laboral». */
+export function fetchOferta(codigo: string) {
+  return get<{ datos: CartaOferta; oferta: OfertaResumen | null; enRuta: boolean }>(`/candidatos/${codigo}/oferta`);
+}
+export function enviarOferta(codigo: string, datos: Partial<CartaOferta>) {
+  return post<{ enviada: boolean; detalle: string; texto: string; liga: string; oferta: OfertaResumen }>(`/candidatos/${codigo}/oferta`, { datos });
+}
+export function registrarRespuestaOferta(codigo: string, acepta: boolean) {
+  return post<{ respuesta: string; oferta: OfertaResumen }>(`/candidatos/${codigo}/oferta/respuesta`, { acepta });
+}
+export interface OfertaPublica { candidato: string; datos: Partial<CartaOferta>; respuesta: "acepta" | "no_acepta" | null; respondidaEn: string | null; activa: boolean }
+export function fetchOfertaPublica(token: string) {
+  return get<OfertaPublica>(`/ofertas/publica/${token}`);
+}
+export function responderOfertaPublica(token: string, acepta: boolean) {
+  return post<OfertaPublica>(`/ofertas/publica/${token}/responder`, { acepta });
+}
 export function marcarRealizadaPaso(codigoPostulacion: string, pasoId: string, comentario = "") {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/realizada`, { comentario });
 }

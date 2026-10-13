@@ -238,6 +238,9 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             paso["tipo_entrevista"] = t
         salida.append(paso)
 
+    if estrictos is not None and sum(1 for x in salida if x["tipo"] == "solicitud_web" and not x.get("heredado")) > 1:
+        # Cambio 30: «Solicitud web sin CV» y «con CV» se reemplazan entre sí — un proceso lleva UNA sola
+        raise ErrorProceso(400, "Un proceso lleva una sola solicitud web: «Solicitud web sin CV» o «Solicitud web con CV».")
     por_id = {p["id"]: p for p in salida}
     # 2026-10-09: dependencias del CATÁLOGO (misma etapa) — el editor ya no las captura; las explícitas que lleguen por
     # la API (rutas previas, agente) se conservan.
@@ -2175,6 +2178,8 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
+    if tipo == "oferta":  # Cambio 30: la carta oferta se genera con los datos de la vacante y se manda por WhatsApp
+        return {"clave": "enviar_oferta", "texto": "Reenviar oferta" if estado == "en_curso" else "Enviar oferta", "pestana": destino}
     if tipo == "condiciones":  # 2026-10-10: propuesta por WhatsApp
         return {"clave": "abrir", "texto": "Reenviar propuesta" if estado == "en_curso" else "Enviar propuesta", "pestana": destino}
     texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "oferta": "Enviar oferta", "alta": "Dar de alta",

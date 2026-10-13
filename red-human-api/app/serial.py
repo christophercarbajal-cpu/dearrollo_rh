@@ -223,6 +223,15 @@ def prefiltro_datos(p) -> Optional[dict]:
             "alerta": None}
 
 
+def _oferta(p) -> Optional[dict]:
+    try:
+        from .services.oferta import publica
+
+        return publica(p)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def historial_laboral(p) -> List[dict]:
     """Cambio 29: Empresa · Puesto · Tareas · Duración · Motivo de la entrevista fija por WhatsApp más reciente."""
     try:
@@ -715,6 +724,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "score": p.score,
         # 2026-10-11: ¿la ruta de esta postulación pide CV? Sin CV, la ficha no muestra score de CV
         "pideCv": _pide_cv(p),
+        # Cambio 30: oferta laboral (estado, fechas y liga) — también la del botón «Generar carta oferta»
+        "oferta": _oferta(p),
         # Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos)
         "historialLaboral": historial_laboral(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)

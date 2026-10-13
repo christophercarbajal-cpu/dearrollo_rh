@@ -933,9 +933,11 @@ def _no_concluyente(db: Session, p: Postulacion, e: dict, c: dict, respuesta: st
     registrar(db, ACTOR, "prefiltro_no_concluyente", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": respuesta[:200]})
 
 
-def _texto_cierre(c: dict) -> str:
-    return (f"Gracias por tu interés. Para esta vacante necesitamos {_requisito(c)}, por lo que en esta ocasión no continuaremos "
-            "con tu postulación.")
+def _texto_cierre(c: dict, empresa: str = "") -> str:
+    """Cambio 31: el cierre usa EXACTAMENTE la misma empresa que la presentación."""
+    en = f" en {empresa}" if empresa else ""
+    return (f"Gracias por tu interés{en}. Para esta vacante necesitamos {_requisito(c)}, por lo que en esta ocasión no "
+            "continuaremos con tu postulación.")
 
 
 def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> str:
@@ -950,7 +952,7 @@ def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: di
     }]
     p.cerrar(MOTIVO_CIERRE)
     registrar(db, ACTOR, "postulacion_cerrada_prefiltro", "postulacion", p.codigo, {"motivo": motivo, "criterio": c["criterio"]})
-    return _texto_cierre(c)
+    return _texto_cierre(c, empresa_de(p))
 
 
 MARCA_LIBERACION = "prefiltro_revision_liberada_2026_10_10"
@@ -1065,9 +1067,17 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
 
 # ============================================================ turno del chat
 
-def saludo(p: Postulacion, pregunta: str) -> str:
-    """«Hola, [nombre]. Soy Red Human, el asistente virtual que te acompaña en tu postulación a [vacante]. Primero
-    confírmame: [primera pregunta]» (Cambio 19, texto definido por el usuario)."""
+def empresa_de(p: Postulacion) -> str:
+    """Cambio 31: la empresa de la presentación y del cierre (una sola regla: `serial.nombre_empresa_candidato`)."""
+    from ..serial import nombre_empresa_candidato
+
+    return nombre_empresa_candidato(p.vacante) if p.vacante is not None else ""
+
+
+def saludo(p: Postulacion, pregunta: str, presentar: bool = True) -> str:
+    """Cambio 31 (2026-10-13): «Hola, [nombre]. Soy Red Human, el agente virtual de RH de [empresa]. [primera pregunta]»
+    (reemplaza «el asistente virtual que te acompaña… Primero confírmame:»). `presentar=False` (el candidato respondió a la
+    plantilla de WhatsApp, que ya lo presentó) → SOLO la primera pregunta."""
     from ..routers.candidatos import nombre_ficha
 
     nombre = nombre_ficha(p) or ""
@@ -1075,8 +1085,11 @@ def saludo(p: Postulacion, pregunta: str) -> str:
     vacante = p.vacante.titulo if p.vacante else "la vacante"
     q = re.sub(r"^\s*para confirmar,?\s*", "", (pregunta or "").strip(), flags=re.IGNORECASE)
     q = q[:1].upper() + q[1:] if q[:1] != "¿" else "¿" + q[1:2].upper() + q[2:]
-    return (f"Hola{', ' + nombre if nombre else ''}. Soy Red Human, el asistente virtual que te acompaña en tu postulación a "
-            f"*{vacante}*. Primero confírmame: {q}")
+    if not presentar:
+        return q
+    from .ia import presentacion_bot
+
+    return f"Hola{', ' + nombre if nombre else ''}. {presentacion_bot(empresa_de(p))} {q}"
 
 
 def con_acuse(e: dict, pregunta: str) -> str:
@@ -1149,10 +1162,13 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         return None
     from . import plantillas_meta
 
+    post_plantilla = False
     if plantillas_meta.marcar_respuesta(db, p, texto) and plantillas_meta.es_confirmacion_inicio(texto):
         # 2026-10-13: respuesta al botón de `inicio_entrevista_rh` («Sí, empezar ahora»): abre la ventana de 24 h y el bot
-        # contesta YA con el saludo estricto + la primera pregunta (nunca se toma como respuesta a un criterio)
+        # contesta YA con la primera pregunta (nunca se toma como respuesta a un criterio). Cambio 31: SIN presentarse —
+        # la plantilla ya lo presentó.
         reconexion = True
+        post_plantilla = True
     criterios = criterios_de(p.vacante, p)
     if not e.get("web_importada"):
         e = _sembrar_web(p, e, criterios)
@@ -1271,7 +1287,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         if primera:
             # Cambio 19: saludo EXACTO; la primera pregunta es un indispensable (orden de `criterios_de`) y nunca se
             # anuncia cuántas preguntas faltan
-            return await responder(saludo(p, siguiente["chat"]))
+            return await responder(saludo(p, siguiente["chat"], presentar=not post_plantilla))
         return await responder(con_acuse(e, siguiente["chat"]))
 
     # Cumple: se aprueba al instante y la ruta sigue sola (la liga de la entrevista sale por el canal conectado)
@@ -1289,6 +1305,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         return {"respuesta": ultimo.texto, "clasificacion": {"estado": "cumple", "evidencia": ""}, "ia": False,
                 "whatsapp": {"enviado": bool(ultimo.enviado)}, "prefiltro": "cumple"}
     # retro 2026-10-09: sin valoraciones ni promesas de avance («Tu perfil es compatible» está prohibido)
-    mensaje = (f"Gracias, {nombre_ficha(p).split(' ')[0]}. Registré tus respuestas; una persona del equipo de RH te escribirá "
+    _emp = empresa_de(p)  # Cambio 31: misma empresa que la presentación
+    mensaje = (f"Gracias, {nombre_ficha(p).split(' ')[0]}. Registré tus respuestas; una persona del equipo de RH{' de ' + _emp if _emp else ''} te escribirá "
                "por este medio. 🙌")
     return await responder(mensaje, clasificacion={"estado": "cumple", "evidencia": ""})

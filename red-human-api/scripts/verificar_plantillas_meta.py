@@ -154,8 +154,8 @@ with TestClient(app) as client:
     r = asyncio.run(procesar_entrante(db, msg))
     db.refresh(p1)
     resp = r.get("respuesta") or ""
-    check(resp.startswith("Hola, Luisa. Soy Red Human, el asistente virtual que te acompaña en tu postulación a *Almacenista*. "
-                          "Primero confírmame:") and resp.endswith("¿Cuál es tu último grado de estudios?"),
+    # Cambio 31: tras la plantilla el bot NO se vuelve a presentar — lanza directo la primera pregunta
+    check(resp == "¿Cuál es tu último grado de estudios?",
           f"Masivos (Cambio 29): saludo estricto + primera pregunta de la base fija, sin «/start» → «{resp[:110]}…»")
     e = plantillas_meta.estado(p1)
     check(e.get("respondida_en") and e.get("ventana_hasta") and e.get("confirmo"), "la respuesta abre (y registra) la ventana de 24 h")
@@ -186,8 +186,7 @@ with TestClient(app) as client:
     r = asyncio.run(procesar_entrante(db, whatsapp.parsear_webhook(texto("5512770002", "Claro"))))
     resp = r.get("respuesta") or ""
     primera = pconv.criterios_de(vc, p2)[0]
-    check(resp.startswith("Hola, Jorge. Soy Red Human, el asistente virtual que te acompaña en tu postulación a *Analista de compras*.")
-          and not primera.get("base_operativa") and ("Primero confírmame:" in resp),
+    check(resp == primera["chat"] and not primera.get("base_operativa") and "Soy Red Human" not in resp,
           f"«Claro» también abre: saludo estricto + primera pregunta del prefiltro configurable → «{resp[:120]}…»")
 
     print("\n--- 2c. Quien ya escribe por el chat no recibe la plantilla ---")

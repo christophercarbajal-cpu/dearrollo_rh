@@ -5,6 +5,8 @@ Bot API SIMULADOS (sin red).
 
 Bloque 1: Open Graph de las ligas del candidato («[Tipo de liga] · [puesto]» + «[empresa]», sin textos comerciales) y
 una pregunta NATURAL por requisito indispensable (el generador la redacta; el bot la usa tal cual).
+Bloque 2: presentación «Soy Red Human, el agente virtual de RH de [empresa].» (Cliente visible o Cuenta) en todas las
+rutas; tras responder a la plantilla de WhatsApp, directo a la primera pregunta; el cierre usa la misma empresa.
 """
 
 import asyncio
@@ -147,6 +149,70 @@ with TestClient(app) as client:
           f"el motor (Masivos) usa la pregunta natural tal cual → «{crit[0]['chat']}»")
     tsx = leer("components/dashboard/vacantes/formulario-contenido.tsx")
     check("preguntas_requisitos" in tsx and "Cómo pregunta Red Human cada requisito" in tsx, "el formulario muestra y guarda las preguntas")
+
+    # ================= Bloque 2 · presentación unificada y salto post-plantilla =================
+    print("\n--- Bloque 2 · presentación «Soy Red Human, el agente virtual de RH de [empresa].» ---")
+    from app.models import Cliente
+    from app.routers.webhooks import _texto_aviso_privacidad
+    from app.services import plantillas_meta
+
+    check(ia.presentacion_bot("Despacho Legal MX") == "Soy Red Human, el agente virtual de RH de Despacho Legal MX.", "cadena exacta")
+    cli = Cliente(cuenta_id=cuenta.id, nombre="Grupo Industrial interno", nombre_comercial="Grupo Industrial", estado="Activo")
+    db.add(cli)
+    db.flush()
+    vc = Vacante(codigo="VAC-C31C", titulo="Almacenista", estado="Publicada", cuenta_id=cuenta.id, cliente_id=cli.id,
+                 mostrar_cliente_candidato=True, requisitos="2 años de experiencia en almacén · Turnos · Mayor de edad")
+    db.add(vc)
+    db.flush()
+    vc.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
+    db.commit()
+    db.refresh(vc)
+    from app.serial import nombre_empresa_candidato
+
+    emp_cli = nombre_empresa_candidato(vc)
+
+    def chat(pp, texto):
+        r = client.post(f"/candidatos/{pp.codigo}/prefiltro", json={"texto": texto})
+        assert r.status_code == 200, r.text
+        return r.json().get("respuesta") or ""
+
+    def nuevo(nombre, tel, vac):
+        cc = _crear_candidato(db, cuenta.id, nombre, "Portal", False, telefono=tel)
+        pp = crear_postulacion(db, cc, vac, cuenta.id, "web", consentimiento=True)
+        db.commit()
+        return pp
+
+    pa = nuevo("Ana Cliente", "5531310002", vc)
+    r = chat(pa, "Hola")
+    check(emp_cli == "Grupo Industrial" and r == f"Hola, Ana. Soy Red Human, el agente virtual de RH de {emp_cli}. Cuéntame, ¿cuántos años llevas en almacén?",
+          f"saludo con el CLIENTE visible de la vacante → «{r}»")
+    pd = nuevo("Diego Directo", "5531310003", vm)
+    r = chat(pd, "Hola")
+    check(r.startswith("Hola, Diego. Soy Red Human, el agente virtual de RH de Despacho Legal MX. "), "sin Cliente: la Cuenta (directo)")
+    check(not any(x in r for x in ("asistente virtual", "Primero confírmame", "te acompaña")), "sin las frases anteriores")
+    aviso = _texto_aviso_privacidad("Ana", vc)
+    check(f"Soy Red Human, el agente virtual de RH de {emp_cli}." in aviso, "el aviso de privacidad usa la misma presentación")
+    check(ia.mensaje_inicial_entrevista("Almacenista", emp_cli).startswith(f"Hola. Soy Red Human, el agente virtual de RH de {emp_cli}."),
+          "la entrevista con avatar se presenta igual")
+
+    print("\n--- Bloque 2 · respuesta a la plantilla: sin presentación, directo a la primera pregunta ---")
+    pp = nuevo("Pepe Plantilla", "5531310004", vc)
+    plantillas_meta._guardar(pp, {"enviada_en": "2026-10-13T10:00:00+00:00", "plantilla": "inicio_entrevista_rh"})
+    db.commit()
+    r = chat(pp, "Sí, empezar ahora")
+    check(r == "Cuéntame, ¿cuántos años llevas en almacén?", f"«Sí, empezar ahora» → SOLO la primera pregunta → «{r}»")
+
+    print("\n--- Bloque 2 · cierre con la misma empresa ---")
+    pr = nuevo("Rita Rechazo", "5531310005", vc)
+    chat(pr, "Hola")
+    r = chat(pr, "Nunca he trabajado en almacén")
+    check(r.startswith(f"Gracias por tu interés en {emp_cli}.") , f"cierre por requisito con la misma empresa → «{r[:80]}…»")
+    from app.services import entrevista_whatsapp_fija as ewf
+
+    db.refresh(pa)
+    check(f"El equipo de {emp_cli} revisará" in ewf.cierre(pa), "cierre de la entrevista fija con la misma empresa")
+    src = (RAIZ / "app/services/prefiltro_conversacional.py").read_text(encoding="utf-8")
+    check("una persona del equipo de RH{' de ' + _emp if _emp else ''}" in src, "cierre del prefiltro aprobado con la misma empresa")
 
     app.dependency_overrides.clear()
     db.close()

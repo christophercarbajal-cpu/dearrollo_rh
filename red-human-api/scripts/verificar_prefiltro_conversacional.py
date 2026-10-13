@@ -220,7 +220,7 @@ with TestClient(app) as client:
 
     salida = wa("Hola, ya llené el formulario")
     # Cambio 19: saludo exacto «Hola, [nombre]. Soy Red Human… Primero confírmame: [indispensable]» (sin contar preguntas)
-    check(len(salida) == 1 and salida[0].endswith("Primero confírmame: ¿Terminaste la secundaria?") and salida[0].startswith("Hola, Ana. Soy Red Human"),
+    check(len(salida) == 1 and salida[0].endswith("¿Terminaste la secundaria?") and salida[0].startswith("Hola, Ana. Soy Red Human, el agente virtual de RH"),
           "el bot pregunta SOLO lo que falta, una pregunta por mensaje (turnos ya venía del formulario)")
     salida = wa("hola")
     check(len(salida) == 1 and salida[0].endswith("\n\n¿Terminaste la secundaria?") and salida[0].startswith("Retomemos"),
@@ -283,8 +283,10 @@ with TestClient(app) as client:
           "/start retoma la pregunta pendiente EXACTA (no la cuenta como respuesta)")
     salida = tg(text="No")
     pt = recargar(pt.codigo)
-    esperado = ("Gracias por tu interés. Para esta vacante necesitamos disponibilidad para rolar turnos, por lo que en esta ocasión "
-                "no continuaremos con tu postulación.")
+    from app.serial import nombre_empresa_candidato as _nec
+
+    esperado = (f"Gracias por tu interés en {_nec(pt.vacante)}. Para esta vacante necesitamos disponibilidad para rolar turnos, por lo "
+                "que en esta ocasión no continuaremos con tu postulación.")
     check(salida == [esperado], "mensaje de cierre con el requisito exacto, por Telegram")
     check(not pt.activa and pt.motivo_cierre == "descartado" and pt.estado == "no_cumple",
           "el agente decide: «Descartado» (mismo cierre que el descarte de RH)")

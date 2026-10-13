@@ -306,7 +306,7 @@ with TestClient(app) as client:
 
     q1 = postular_op("Laura Operativa", "5512990001")
     r = chat(q1, "Hola")
-    check(r.startswith("Hola, Laura. Soy Red Human, el asistente virtual que te acompaña en tu postulación a *Almacenista*. Primero confírmame:")
+    check(r.startswith("Hola, Laura. Soy Red Human, el agente virtual de RH de Operaciones MX. ")
           and r.endswith("¿Cuál es tu último grado de estudios?"), f"saludo exacto + primera pregunta indispensable → «{r[:90]}…»")
     r = chat(q1, "Terminé la secundaria")
     check("llevas en almacén" in r, f"siguiente indispensable con dato concreto (pregunta natural, Cambio 31) → «{r}»")

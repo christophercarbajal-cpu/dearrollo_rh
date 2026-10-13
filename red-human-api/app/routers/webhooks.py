@@ -640,10 +640,14 @@ async def _enviar_menu_vacantes(
 
 def _texto_aviso_privacidad(nombre: str, vacante: Optional[Vacante]) -> str:
     """Mensaje de bienvenida + aviso de privacidad LFPDPPP."""
+    from ..serial import nombre_empresa_candidato
+    from ..services.ia import presentacion_bot
+
     saludo = f"¡Hola{' ' + nombre if nombre else ''}! 👋"
-    puesto = f" para *{vacante.titulo}*" if vacante else ""
+    puesto = f" en *{vacante.titulo}*" if vacante else ""
+    # Cambio 31: presentación unificada («Soy Red Human, el agente virtual de RH de [empresa].»)
     return (
-        f"{saludo} Gracias por tu interés{puesto}. Soy Red Human.\n\n"
+        f"{saludo} {presentacion_bot(nombre_empresa_candidato(vacante) if vacante else '')} Gracias por tu interés{puesto}.\n\n"
         "Antes de comenzar, necesito tu autorización: tus datos personales serán tratados conforme "
         "a nuestro Aviso de Privacidad, exclusivamente para este proceso de selección. "
         # 2026-10-11 (tarde): el aviso de IA vive aquí (la entrevista por chat ya no lo repite ni pide permiso)

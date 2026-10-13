@@ -250,7 +250,7 @@ with TestClient(app) as client:
 
     A = postular("Rosa Pérez", vi, "5531900001")
     r = turno(A, "Hola")
-    check(r["respuesta"].startswith("Hola, Rosa. Soy Red Human, el asistente virtual") and "Primero confírmame: " in r["respuesta"]
+    check(r["respuesta"].startswith("Hola, Rosa. Soy Red Human, el agente virtual de RH") and "Primero confírmame" not in r["respuesta"]
           and "preguntas" not in r["respuesta"], f"saludo EXACTO y sin anunciar cuántas preguntas: {r['respuesta']!r}")
     turno(A, "En el Centro de Tultitlán")
     r = turno(A, "Como 3 horas")
@@ -280,7 +280,7 @@ with TestClient(app) as client:
     C = crear_postulacion(db, c, vc, cuenta.id, "whatsapp", consentimiento=True).codigo
     db.commit()
     r = turno(C, "Hola")
-    check("Primero confírmame: ¿Puedes cargar cajas de 25 kg?" in r["respuesta"], "la primera pregunta es el indispensable")
+    check(r["respuesta"].endswith("¿Puedes cargar cajas de 25 kg?"), "la primera pregunta es el indispensable")
     r = turno(C, "Sí, sin problema")
     check("¿Hasta qué año estudiaste?" in r["respuesta"], "después la escolaridad de la descripción")
     turno(C, "Llegué hasta 1ro de secundaria")

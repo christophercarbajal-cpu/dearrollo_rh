@@ -1318,13 +1318,20 @@ AVISO_SILENCIO = "{nombre}, no te escuché. ¿Comenzamos?"
 ESPERA_INICIO = "Tómate tu tiempo, avísame cuando quieras comenzar."
 
 
-def mensaje_inicial_entrevista(titulo_vacante: str) -> str:
-    """Introducción EXACTA (definida por el usuario, 2026-09-11): initialMessage del avatar y primer
-    mensaje del modo texto. Se presenta como «Red Human» — nunca con nombre de persona, nunca como
-    "asistente virtual" ni "agente de inteligencia artificial" — e inserta el nombre real de la vacante."""
+def presentacion_bot(empresa: str = "") -> str:
+    """Cambio 31 (2026-10-13): la presentación EXACTA del bot en TODAS las rutas: «Soy Red Human, el agente virtual de RH
+    de [empresa].» La empresa es la de `serial.nombre_empresa_candidato` (el Cliente de la vacante si se muestra al
+    candidato; si no, la Cuenta) — la MISMA que usa el cierre."""
+    empresa = " ".join(str(empresa or "").split())
+    return f"Soy Red Human, el agente virtual de RH de {empresa}." if empresa else "Soy Red Human, el agente virtual de RH."
+
+
+def mensaje_inicial_entrevista(titulo_vacante: str, empresa: str = "") -> str:
+    """Introducción EXACTA: initialMessage del avatar y primer mensaje del modo texto. Cambio 31: con la presentación
+    unificada («Soy Red Human, el agente virtual de RH de [empresa].») y el nombre real de la vacante."""
     puesto = (titulo_vacante or "").strip() or "el puesto"
     return (
-        f"Hola, soy Red Human. Gracias por participar en el proceso para {puesto}. "
+        f"Hola. {presentacion_bot(empresa)} Gracias por participar en el proceso para {puesto}. "
         "Vamos a conversar sobre tu experiencia, tus intereses y algunos aspectos relevantes para el puesto. ¿Comenzamos?"
     )
 

@@ -2358,12 +2358,34 @@ def paso_de_tipo(p: Postulacion, tipo: str) -> Optional[dict]:
     return next((x for x in (p.proceso or {}).get("pasos", []) if x["tipo"] == tipo and not x.get("heredado")), None)
 
 
+def ruta_es_masiva(ruta) -> bool:
+    """Cambio 27 (2026-10-12): ¿la ruta es de tipo Masivos? Ruta base «masivos_*», o trae la Entrevista Red Human por
+    WhatsApp SIN lo propio de Corporativos (Análisis de CV o entrevista con avatar). Acepta el proceso o la lista de pasos."""
+    if isinstance(ruta, dict):
+        if str(ruta.get("ruta_base") or "").startswith("masivos"):
+            return True
+        pasos = ruta.get("pasos") or []
+    else:
+        pasos = ruta or []
+    tipos = {x.get("tipo") for x in pasos if isinstance(x, dict)}
+    return "entrevista_whatsapp" in tipos and not tipos & {"analisis_cv", "entrevista_agente"}
+
+
+def enfoque_de_ruta(ruta) -> Optional[str]:
+    """Cambio 27: la plantilla de ruta define el enfoque — Masivos = Operativo, sin importar el seniority. None = lo decide
+    la vacante (Corporativos)."""
+    return "operativo" if ruta_es_masiva(ruta) else None
+
+
 def enfoque_entrevista_agente(p: Optional[Postulacion], v, tipo: str = "entrevista_agente") -> str:
-    """Enfoque de la entrevista de la IA (`tipo` = su actividad): el del paso del proceso si lo trae; si no, el de la
-    vacante."""
+    """Enfoque de la entrevista de la IA (`tipo` = su actividad). Cambio 27: una ruta Masivos lo define SIEMPRE (Operativo,
+    sin importar el seniority ni el «profesional» por defecto del paso); si no, el del paso del proceso si lo trae; si no,
+    el de la vacante."""
+    if p is not None and tiene_proceso(p) and enfoque_de_ruta(p.proceso):
+        return enfoque_de_ruta(p.proceso)
     paso = paso_de_tipo(p, tipo) if p is not None and tiene_proceso(p) else None
     if paso and (p.proceso or {}).get("origen") in ("cuenta", "base") and not paso.get("adhoc"):
-        paso = None  # ruta de la Cuenta o de respaldo: el enfoque lo decide la vacante (lo que RH eligió al crearla)
+        paso = None  # ruta de la Cuenta o de respaldo: el paso no trae enfoque propio
     if paso and paso.get("tipo_entrevista") in ENFOQUES_ENTREVISTA:
         return paso["tipo_entrevista"]
     return ((v.enfoque_entrevista if v else "profesional") or "profesional")

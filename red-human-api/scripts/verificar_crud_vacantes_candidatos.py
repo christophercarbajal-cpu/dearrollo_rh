@@ -95,6 +95,8 @@ with TestClient(app) as client:
                              {"pregunta": "¿Puedes trabajar fines de semana?", "tipo": "si_no", "valida": "Fines de semana", "respuesta_esperada": "Sí", "descarta": False}],
         "preguntas_filtro_whatsapp": [{"pregunta": "¿Vives en Monterrey?", "tipo": "si_no", "valida": "", "respuesta_esperada": "Sí", "descarta": False}],
         "enfoque_entrevista": "profesional_personal", "texto_bolsa": "Texto bolsa editado", "avisos_cumplimiento": ["aviso 1"],
+        # Cambio 27: con ruta Masivos el enfoque lo define la ruta (Operativo); en Corporativos lo elige RH
+        "proceso": {"pasos": __import__("app.services.proceso", fromlist=["x"]).ruta_base("corporativo")["pasos"]},
         "resumen": "Resumen editado", "perfil_ideal": "Perfil editado", "palabras_clave": ["caja"], "texto_whatsapp": "WA editado",
     }
     r = client.patch(f"/vacantes/{VAC}", json=cambios)

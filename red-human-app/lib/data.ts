@@ -320,7 +320,7 @@ export interface Candidato {
   etapa: EtapaCandidato;
   score: number; // 0-100 match con el perfil
   /** 2026-10-11: ¿la ruta pide CV? false = la ficha no muestra score de CV. */
-  /** 2026-10-11 (tarde): zona, traslado y transporte del prefiltro de WhatsApp (alerta > 90 min; > 120 no recomendable). */
+  /** Zona, traslado y transporte del prefiltro de WhatsApp (solo se registran; el límite de traslado sale del indispensable). */
   prefiltroDatos?: {
     escolaridad: string;
     nivel: string;

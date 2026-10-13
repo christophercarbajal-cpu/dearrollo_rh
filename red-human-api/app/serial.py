@@ -75,6 +75,14 @@ def _pide_cv(v) -> bool:
         return True
 
 
+def _sin_parcial(q: dict) -> dict:
+    """Cambio 27 (2026-10-12): «Parcial» ya no es respuesta del prefiltro web."""
+    opciones = q.get("opciones")
+    if isinstance(opciones, list) and any(str(o).strip().lower() == "parcial" for o in opciones):
+        return {**q, "opciones": [o for o in opciones if str(o).strip().lower() != "parcial"]}
+    return q
+
+
 def vacante_dict(
     v: Vacante,
     n_candidatos: int = 0,
@@ -133,7 +141,8 @@ def vacante_dict(
         "textoBolsa": v.texto_bolsa or "",
         # prefiltro
         "preguntas_filtro": texto_preguntas(v.preguntas_filtro),
-        "criterios": [p for p in (v.preguntas_filtro or []) if isinstance(p, dict)],
+        # Cambio 27: los formularios web solo ofrecen Sí / No — un «Parcial» guardado antes nunca llega a la pantalla
+        "criterios": [_sin_parcial(p) for p in (v.preguntas_filtro or []) if isinstance(p, dict)],
         # Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada
         "criteriosWhatsapp": [p for p in (v.preguntas_filtro_whatsapp or []) if isinstance(p, dict)],
         "documentosSolicitados": normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []),  # Cambio 25

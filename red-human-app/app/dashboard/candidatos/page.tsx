@@ -551,13 +551,12 @@ function CandidatosContenido() {
             aria-label="Vacante"
             value={filtroVacante}
             onChange={(e) => setFiltroVacante(e.target.value)}
-            className="h-10 max-w-[280px] rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
+            className="h-10 max-w-[320px] rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
           >
-            <option value="">Vacante: Todas</option>
+            {/* Cambio 27 (2026-10-12): primera opción «Todas las vacantes»; cada vacante = «[folio] [puesto] [ubicación]» */}
+            <option value="">Todas las vacantes</option>
             {vacantes.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.titulo}{v.cliente ? ` · ${v.cliente}` : ""}{v.ubicacion ? ` (${v.ubicacion})` : ""}
-              </option>
+              <option key={v.id} value={v.id}>{textoOpcionVacante(v)}</option>
             ))}
           </select>
 
@@ -3507,4 +3506,9 @@ function ResultadoPrefiltro({ c }: { c: Candidato }) {
   }
   if (c.etapa === "Prefiltro") return <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-ink-2">En proceso</span>;
   return <span className="text-xs text-ink-3">—</span>;
+}
+
+/** Cambio 27: texto del selector de vacantes del tablero — «[folio] [puesto] [ubicación]». */
+function textoOpcionVacante(v: { id: string; titulo: string; ubicacion?: string }): string {
+  return [v.id, v.titulo, v.ubicacion].filter((x) => x && String(x).trim()).join(" · ");
 }

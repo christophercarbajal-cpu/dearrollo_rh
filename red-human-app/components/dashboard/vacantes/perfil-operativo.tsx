@@ -10,11 +10,13 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { Field, Selector } from "@/components/dashboard/campos";
 import { fetchPerfilesOperativos, type OficioBiblioteca, type PerfilOperativo, type ProcesoEntrada } from "@/lib/api";
 
-/** ¿La ruta elegida es de tipo Masivos? (entrevista por WhatsApp). Sin ruta elegida, la predeterminada es Masivos. */
+/** ¿La ruta elegida es de tipo Masivos? (entrevista por WhatsApp sin Análisis de CV ni entrevista con avatar — misma regla
+ *  que `proceso.ruta_es_masiva`). Sin ruta elegida, la predeterminada es Masivos. */
 export function rutaMasiva(ruta?: ProcesoEntrada): boolean {
   if (!ruta) return true;
   if ("quitar" in ruta) return false;
-  return (ruta.pasos ?? []).some((p) => p.tipo === "entrevista_whatsapp");
+  const tipos = new Set((ruta.pasos ?? []).map((p) => p.tipo));
+  return tipos.has("entrevista_whatsapp") && !tipos.has("analisis_cv") && !tipos.has("entrevista_agente");
 }
 
 export function PerfilOperativoCampo({ value, detectado, onChange }: {

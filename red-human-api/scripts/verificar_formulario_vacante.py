@@ -68,7 +68,7 @@ with TestClient(app) as client:
     check(texto_sueldo(10000, 12000, "MXN", "mensual") == "$10,000 – $12,000 MXN mensuales", "texto_sueldo: rango mensual")
     check(texto_sueldo(3000, None, "MXN", "semanal") == "Desde $3,000 MXN semanales", "texto_sueldo: solo desde")
     check(texto_sueldo(None, None, "MXN", "") == "A convenir" and texto_sueldo(1, 2, "MXN", "a_convenir") == "A convenir", "texto_sueldo: sin montos / a convenir")
-    check("sueldo_periodicidad" in CAMPOS_PLANTILLA and len(CAMPOS_PLANTILLA) == 26, "CAMPOS_PLANTILLA incluye los 4 campos de sueldo y los 3 de Fase 4 (26)")
+    check("sueldo_periodicidad" in CAMPOS_PLANTILLA and len(CAMPOS_PLANTILLA) == 27 and "documentos_solicitados" in CAMPOS_PLANTILLA, "CAMPOS_PLANTILLA incluye los 4 campos de sueldo, los 3 de Fase 4 y los documentos del Cambio 25 (27)")
 
     # ---------- 2. /generar: respeta lo capturado, no inventa ----------
     ficha = {
@@ -116,6 +116,8 @@ with TestClient(app) as client:
         "requisitos_deseables": g["requisitos_deseables"], "beneficios": g["beneficios"], "preguntas_filtro": g["preguntas_filtro"],
         "publicaciones": {"occ": g["occ"], "linkedin": g["linkedin"], "portal": g["portal"]},
         "enfoque_entrevista": "profesional_personal", "publicar": True, "plataformas": ["WhatsApp", "Portal"],
+        # Cambio 27: con ruta Masivos el enfoque lo define la ruta (Operativo); en Corporativos lo elige RH
+        "proceso": {"pasos": __import__("app.services.proceso", fromlist=["x"]).ruta_base("corporativo")["pasos"]},
     })
     check(r.status_code == 201, "POST /vacantes desde el formulario nuevo")
     v = r.json()

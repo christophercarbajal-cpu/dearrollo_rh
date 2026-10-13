@@ -877,7 +877,8 @@ function ResultadosClave({ c }: { c: Candidato }) {
       : []),
     ...(c.expedienteId != null ? [{ k: "Expediente", v: `${c.expedienteProgreso ?? 0}%` }] : []),
   ];
-  // 2026-10-11 (tarde): lo que dio en el prefiltro de WhatsApp; traslado > 90 min = alerta, > 120 min = no recomendable
+  // Lo que dio en el prefiltro de WhatsApp. Cambio 27: el traslado solo se registra — su límite sale del indispensable
+  // de la vacante (si lo hay), nunca de una regla fija
   const d = c.prefiltroDatos;
   const traslado = d
     ? [
@@ -885,8 +886,7 @@ function ResultadosClave({ c }: { c: Candidato }) {
         ...(d.trasladoMin != null || d.traslado
           ? [{
               k: "Traslado",
-              v: d.trasladoMin != null ? `~${d.trasladoMin} min` + (d.alerta === "no_recomendable" ? " · no recomendable" : d.alerta ? " · alerta" : "") : d.traslado,
-              tono: d.alerta === "no_recomendable" ? "text-bad" : d.alerta ? "text-warn" : undefined,
+              v: d.trasladoMin != null ? `~${d.trasladoMin} min` : d.traslado,
             }]
           : []),
         ...(d.transporte ? [{ k: "Transporte", v: d.transporte }] : []),

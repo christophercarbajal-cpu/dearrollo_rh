@@ -28,7 +28,7 @@
    - Red Human respeta lo capturado: indispensable sigue indispensable, deseable sigue deseable;
      solo complementa lo vacío. `contenidoDesdeGenerado` aplica exactamente eso del lado del cliente. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, MessageSquareText, Sparkles, X } from "lucide-react";
 import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
@@ -487,7 +487,7 @@ function CriteriosEditor({ items, onChange, cerradas = false }: { items: Criteri
           <p className="mt-0.5 text-[11px] text-ink-3">
             {c.dato === "escolaridad"
               ? c.descarta ? `Dato fijo · descarta si no cumple: ${c.valida}` : "Dato fijo · solo se registra"
-              : c.dato === "traslado" ? "Dato fijo · no descarta (más de 90 min = alerta para RH)"
+              : c.dato === "traslado" ? "Dato fijo · solo se registra (el límite de traslado sale de los indispensables)"
               : c.dato === "sueldo" ? "Dato fijo · se registra si le parece bien (nunca descarta)" : "Dato fijo · solo se registra"}
           </p>
         </div>
@@ -689,6 +689,11 @@ export function FormularioContenidoVacante({
   const [firmaGen, setFirmaGen] = useState<string | null>(null);
   const [confirmar, setConfirmar] = useState<ClaveGuion[] | null>(null);
   const avisos = avisosVigentes(value);
+  // Cambio 27 (2026-10-12): la plantilla de ruta define el enfoque — Masivos = Operativo, sin importar el seniority
+  const enfoquePorRuta = conGuiones && rutaMasiva(rutaGeneracion);
+  useEffect(() => {
+    if (enfoquePorRuta && value.enfoque_entrevista !== "operativo") onChange({ ...value, enfoque_entrevista: "operativo" });
+  }, [enfoquePorRuta, value, onChange]);
   const desactualizado = conGuiones && generado && (firmaGen !== null ? firmaGen !== firmaGeneracion(value, rutaGeneracion) : value.guiones.desactualizado);
 
   async function generar(decision?: "conservar" | "sobrescribir") {
@@ -805,24 +810,23 @@ export function FormularioContenidoVacante({
         <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
         <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
         <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")} />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Selector
-            label="Enfoque de entrevista"
-            value={value.enfoque_entrevista}
-            onChange={(v) => set("enfoque_entrevista")(v as EnfoqueEntrevista)}
-            opciones={ENFOQUES_ENTREVISTA.map((e) => ({ valor: e.valor, texto: e.texto }))}
-          />
-          <p className="self-end pb-2 text-xs leading-relaxed text-ink-3">
-            {ENFOQUES_ENTREVISTA.find((e) => e.valor === value.enfoque_entrevista)?.detalle}
-          </p>
-        </div>
-        {conGuiones && value.enfoque_entrevista !== "operativo" && rutaMasiva(rutaGeneracion) && (
-          <p className="text-xs text-ink-3">
-            Para rutas Masivos se sugiere el enfoque Operativo.{" "}
-            <button type="button" className="font-semibold text-brand underline" onClick={() => set("enfoque_entrevista")("operativo")}>
-              Usar Operativo
-            </button>
-          </p>
+        {enfoquePorRuta ? (
+          <div className="rounded-xl border border-border-soft bg-surface-2/50 px-3.5 py-2.5">
+            <p className="text-sm font-semibold text-ink">Enfoque de entrevista: Operativo</p>
+            <p className="mt-0.5 text-xs text-ink-3">Lo define la ruta Masivos, sin importar el seniority.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Selector
+              label="Enfoque de entrevista"
+              value={value.enfoque_entrevista}
+              onChange={(v) => set("enfoque_entrevista")(v as EnfoqueEntrevista)}
+              opciones={ENFOQUES_ENTREVISTA.map((e) => ({ valor: e.valor, texto: e.texto }))}
+            />
+            <p className="self-end pb-2 text-xs leading-relaxed text-ink-3">
+              {ENFOQUES_ENTREVISTA.find((e) => e.valor === value.enfoque_entrevista)?.detalle}
+            </p>
+          </div>
         )}
         {conGuiones && value.enfoque_entrevista === "operativo" && (
           <PerfilOperativoCampo

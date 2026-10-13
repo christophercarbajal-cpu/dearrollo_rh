@@ -74,7 +74,10 @@ with TestClient(app) as client:
     r = client.post("/vacantes/generar", json={"titulo": "Cajero", "cliente_id": 9999})
     check(r.status_code == 400, "generar: Cliente de otra Cuenta/inexistente → 400")
     r = client.post("/vacantes", json={"titulo": "Cajero Sol", "empresa": "OTRO TEXTO", "cliente_id": cliente.id, "mostrar_cliente_candidato": True,
-                                       "descripcion": "x", "generar_si_falta": False, "enfoque_entrevista": "profesional_personal"})
+                                       "descripcion": "x", "generar_si_falta": False, "enfoque_entrevista": "profesional_personal",
+                                       # Cambio 27: con ruta Masivos el enfoque lo define la ruta (Operativo); en Corporativos lo elige RH
+                                       "proceso": {"pasos": [{**x, "tipo_entrevista": "profesional_personal"} if x["tipo"] == "entrevista_agente" else x
+                                                             for x in __import__("app.services.proceso", fromlist=["x"]).ruta_base("corporativo")["pasos"]]}})
     check(r.status_code == 201 and r.json()["empresa"] == "Sol Retail" and r.json()["enfoqueEntrevista"] == "profesional_personal",
           "crear vacante: empresa = nombre resuelto (no texto libre) y enfoque de entrevista guardado")
     VAC = r.json()["id"]

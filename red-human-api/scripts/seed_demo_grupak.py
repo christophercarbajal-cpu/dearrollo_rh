@@ -363,7 +363,7 @@ PERSPECTIVAS_360 = [
 DOCUMENTOS = [
     ("Manual del proceso de selección Grupak", "proceso",
      "Proceso de selección de Demo Grupak.\n\n"
-     "1. Prefiltro: el candidato se postula en el portal y responde preguntas cerradas (Sí / No / Parcial) sobre los "
+     "1. Prefiltro: el candidato se postula en el portal y responde preguntas cerradas (Sí / No) sobre los "
      "requisitos indispensables. Red Human solo recomienda; RH decide.\n"
      "2. Filtro Red Human: se aplican la batería psicométrica del puesto "
      "(Ayudante: Cleaver y Zavic; Cumplimiento: Terman, Cleaver y 16PF; Gerente: Terman, MOSS, Cleaver y 16PF; "
@@ -629,7 +629,7 @@ def asegurar_vacantes(db, cu: Cuenta, pl: PlantillaProceso, catalogo: dict, publ
             # v5: «Ayudante general» con los criterios del prefiltro conversacional (indispensables + solo registro)
             preguntas_filtro=[dict(q) for q in PREGUNTAS_AYUDANTE] if d["titulo"] == "Ayudante general" else
             [{"pregunta": f"¿Cumples con: {r}?", "tipo": "si_no", "valida": r, "respuesta_esperada": "Sí",
-              "descarta": True, "opciones": ["Sí", "No", "Parcial"]} for r in d["indispensables"]],
+              "descarta": True, "opciones": ["Sí", "No"]} for r in d["indispensables"]],
         )
         v.proceso = proceso_con_bateria(db, cu, pl, bateria.id)
         db.add(v)

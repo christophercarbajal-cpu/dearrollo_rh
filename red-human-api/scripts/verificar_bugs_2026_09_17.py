@@ -101,6 +101,8 @@ with TestClient(app) as client:
         {"id": "ea", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": True},
         {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA", "obligatorio": True},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "obligatorio": True}]})
+    # Cambio 27: creada sin ruta tomó la predeterminada (Masivos → enfoque Operativo); con esta ruta (avatar) RH elige el suyo
+    _v1.enfoque_entrevista = "profesional"
     db.commit()
     r = client.post("/candidatos", json={"nombre": "Liga Uno", "telefono": "5511110001", "vacante": v1["id"], "consentimiento": True, "fuente": "RH"})
     P1 = r.json()["id"]

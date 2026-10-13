@@ -352,7 +352,12 @@ def generar(
                "requisitos": list(resultado.requisitos_indispensables), "requisitos_deseables": list(resultado.requisitos_deseables),
                "ubicacion": datos.ubicacion_texto(), "modalidad": datos.modalidad, "sueldo": datos.sueldo_texto() or "A convenir",
                "enfoque_entrevista": datos.enfoque_entrevista if datos.enfoque_entrevista in ENFOQUES_ENTREVISTA else "profesional", "horario": ""}
-    if datos.enfoque_entrevista == "operativo" and datos.perfil_operativo:
+    from ..services import proceso as sproc
+
+    # Cambio 27: la plantilla de ruta define el enfoque (Masivos = Operativo), sin importar el seniority
+    datos_g["enfoque_entrevista"] = sproc.enfoque_de_ruta(pasos_ruta) or datos_g["enfoque_entrevista"]
+    salida["enfoque_entrevista"] = datos_g["enfoque_entrevista"]
+    if datos_g["enfoque_entrevista"] == "operativo" and datos.perfil_operativo:
         from ..services import entrevista_operativa as eop
 
         try:
@@ -528,6 +533,7 @@ def crear(
 
     con_ia = None
     v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
+    _enfoque_por_ruta(db, v)
     if datos.generar_si_falta and not datos.publicaciones and not datos.responsabilidades:
         from ..services import guiones as sgui
 
@@ -554,6 +560,17 @@ def crear(
     )
     db.commit()
     return _salida_rh(db, v)
+
+
+def _enfoque_por_ruta(db: Session, v: Vacante) -> None:
+    """Cambio 27: la plantilla de ruta define el enfoque de la entrevista — Masivos = Operativo, sin importar el seniority
+    ni lo que llegue del formulario. Corporativos conserva el que eligió RH."""
+    from ..services import guiones as sgui
+    from ..services import proceso as sproc
+
+    enfoque = sproc.enfoque_de_ruta(v.proceso) or sproc.enfoque_de_ruta(sgui.pasos_de_vacante(db, v))
+    if enfoque:
+        v.enfoque_entrevista = enfoque
 
 
 def _proceso_nuevo(db: Session, cuenta_id: int, datos: Optional[dict]) -> dict:
@@ -824,6 +841,8 @@ def actualizar(
         cambios["documentos_solicitados"] = normalizar_documentos_vacante(cambios["documentos_solicitados"])
     for campo, valor in cambios.items():
         setattr(v, campo, valor)
+    if "proceso" in cambios or "enfoque_entrevista" in cambios:
+        _enfoque_por_ruta(db, v)
     if entrada_guiones is not None or web_nuevo is not None or whatsapp_nuevo is not None:
         _guardar_guiones(v, entrada_guiones, u.nombre, web=web_nuevo, whatsapp=whatsapp_nuevo)
         cambios.update({k: True for k, x in (("guiones", entrada_guiones), ("preguntas_filtro", web_nuevo),

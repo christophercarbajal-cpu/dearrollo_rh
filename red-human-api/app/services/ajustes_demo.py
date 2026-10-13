@@ -27,17 +27,17 @@ IDS_RETIRADOS = ("persona-lluvia",)
 # Criterios del prefiltro de «Ayudante general» (los usa también scripts/seed_demo_grupak.py).
 PREGUNTAS_AYUDANTE = [
     {"clave": "secundaria", "pregunta": "¿Terminaste la secundaria?", "valida": "Secundaria terminada", "tipo": "si_no",
-     "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No", "Parcial"]},
+     "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No"]},
     {"clave": "turnos", "pregunta": "¿Tienes disponibilidad para rolar turnos?", "valida": "Disponibilidad para rolar turnos",
-     "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No", "Parcial"]},
+     "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No"]},
     {"clave": "ubicacion", "pregunta": "¿Vives cerca del centro de trabajo o puedes trasladarte sin problema?",
      "valida": "Ubicación / traslado", "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": False, "solo_con_ubicacion": True,
-     "opciones": ["Sí", "No", "Parcial"]},
+     "opciones": ["Sí", "No"]},
     {"clave": "nss_fiscal", "pregunta": "¿Cuentas con tu Número de Seguridad Social (NSS) y tu constancia de situación fiscal?",
      "valida": "NSS y situación fiscal", "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": False,
-     "opciones": ["Sí", "No", "Parcial"]},
+     "opciones": ["Sí", "No"]},
     {"clave": "experiencia", "pregunta": "¿Tienes experiencia en almacén o producción?", "valida": "Experiencia en almacén o producción",
-     "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": False, "opciones": ["Sí", "No", "Parcial"]},
+     "tipo": "si_no", "respuesta_esperada": "Sí", "descarta": False, "opciones": ["Sí", "No"]},
 ]
 TITULO_AYUDANTE = "Ayudante general"
 # lo que sembró la v1-v4 del script (si sigue así, RH no lo ha tocado)

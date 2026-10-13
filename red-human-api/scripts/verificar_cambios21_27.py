@@ -19,6 +19,10 @@ ruta suma «Documentos» después del prefiltro de WhatsApp; el agente manda la 
 «Súbela aquí, por favor: [liga]»; cada archivo es su propio registro (fotos del auto = 4; HEIC → JPG); RH aprueba, pide
 corrección (reemplazo por WhatsApp) o marca excepción; estados Pendiente / Por revisar / Corrección pedida / Documentos
 aprobados / Excepción.
+
+Bloque 4 (Cambios 25 y 27): los formularios web ya no muestran «Parcial» ni «más de 90 min = alerta» (el límite de
+traslado sale solo del indispensable); la plantilla de ruta define el enfoque (Masivos = Operativo) sin importar el
+seniority; el selector de vacantes del tablero muestra «[folio] [puesto] [ubicación]» y abre con «Todas las vacantes».
 """
 
 import asyncio
@@ -538,6 +542,62 @@ with TestClient(app) as client:
     q5 = db.get(Postulacion, q5.id)
     check(r.status_code == 200 and r.json()["expediente"]["estadoDocumentos"]["texto"] == "Excepción" and q5.etapa == "Entrevista IA",
           f"«Marcar excepción» deja la actividad cumplida con quién y por qué y la ruta sigue ({q5.etapa})")
+    app.dependency_overrides.clear()
+
+    # ================= Bloque 4 (Cambios 25 y 27) · ajustes menores y UI =================
+    print("\n--- Cambio 27 · la ruta define el enfoque (Masivos = Operativo) ---")
+    from app.serial import vacante_dict
+
+    for dep in (usuario_actual, usuario_decisor):
+        app.dependency_overrides[dep] = lambda: admin
+    app.dependency_overrides[cuenta_actual] = lambda: cuenta3
+    masivos = sproc.ruta_base("masivos_sin_documentos")
+    corporativo = sproc.ruta_base("corporativo")
+    check(sproc.enfoque_de_ruta(masivos) == "operativo" and sproc.enfoque_de_ruta(masivos["pasos"]) == "operativo"
+          and sproc.enfoque_de_ruta(corporativo) is None, "Masivos → Operativo; Corporativos → lo decide la vacante")
+    db.expire_all()
+    v4 = db.get(Vacante, v4.id)
+    r = client.patch(f"/vacantes/{v4.codigo}", json={"seniority": "Senior", "enfoque_entrevista": "profesional",
+                                                      "proceso": {"pasos": masivos["pasos"]}})
+    db.expire_all()
+    v4 = db.get(Vacante, v4.id)
+    check(r.status_code == 200 and v4.enfoque_entrevista == "operativo" and v4.seniority == "Senior",
+          f"vacante Senior con ruta Masivos: el enfoque queda Operativo ({r.status_code} {v4.enfoque_entrevista})")
+    r = client.patch(f"/vacantes/{v4.codigo}", json={"enfoque_entrevista": "profesional"})
+    db.expire_all()
+    check(db.get(Vacante, v4.id).enfoque_entrevista == "operativo", "con ruta Masivos no se puede cambiar a otro enfoque")
+    r = client.patch(f"/vacantes/{v4.codigo}", json={"enfoque_entrevista": "profesional", "proceso": {"pasos": corporativo["pasos"]}})
+    db.expire_all()
+    check(db.get(Vacante, v4.id).enfoque_entrevista == "profesional", "con ruta Corporativos se respeta el que eligió RH")
+    q6 = nueva_postulacion("Ruta Masiva", "5512350004", v3)
+    v3 = db.get(Vacante, v3.id)
+    v3.enfoque_entrevista = "profesional"
+    db.commit()
+    check(sproc.enfoque_entrevista_agente(q6, v3, "entrevista_whatsapp") == "operativo",
+          "la entrevista de una postulación con ruta Masivos usa el enfoque Operativo aunque la vacante diga otro")
+
+    print("\n--- Cambios 25/27 · formularios web sin «Parcial» ni «más de 90 min» ---")
+    v4.preguntas_filtro = [{"pregunta": "¿Tienes licencia?", "tipo": "si_no", "valida": "Licencia", "respuesta_esperada": "Sí",
+                            "descarta": True, "opciones": ["Sí", "No", "Parcial"]}]
+    db.commit()
+    check(vacante_dict(v4)["criterios"][0]["opciones"] == ["Sí", "No"], "un «Parcial» guardado antes nunca llega al formulario web")
+    from app.services import ajustes_demo
+
+    check(all("Parcial" not in (q.get("opciones") or []) for q in ajustes_demo.PREGUNTAS_AYUDANTE), "la demo ya no siembra «Parcial»")
+    app_dir = RAIZ.parent / "red-human-app"
+    form = (app_dir / "components/dashboard/vacantes/formulario-contenido.tsx").read_text(encoding="utf-8")
+    seg = (app_dir / "components/dashboard/procesos/seguimiento-proceso.tsx").read_text(encoding="utf-8")
+    check("90 min" not in form and "90 min" not in seg and "no recomendable" not in seg.split("const traslado")[1][:600],
+          "sin «más de 90 min = alerta»: el límite de traslado sale solo del indispensable")
+    check("Lo define la ruta Masivos, sin importar el seniority." in form and "Usar Operativo" not in form,
+          "el formulario muestra el enfoque que define la ruta (sin sugerencia por seniority)")
+
+    print("\n--- Cambio 27 · selector de vacantes del tablero ---")
+    tablero = (app_dir / "app/dashboard/candidatos/page.tsx").read_text(encoding="utf-8")
+    sel = tablero[tablero.index('id="filtro-vacante"'):]
+    sel = sel[:sel.index("</select>")]
+    check(sel.index('<option value="">Todas las vacantes</option>') < sel.index("vacantes.map"), "la primera opción es «Todas las vacantes»")
+    check("textoOpcionVacante(v)" in sel and "[v.id, v.titulo, v.ubicacion]" in tablero, "cada opción = «[folio] [puesto] [ubicación]»")
     app.dependency_overrides.clear()
 
 print(f"\n🎉 {OK} comprobaciones OK — Cambios 21-27")

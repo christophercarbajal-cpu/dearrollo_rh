@@ -131,7 +131,7 @@ with TestClient(app) as client:
     check(len(params) == 8, "exactamente 8 parámetros posicionales")
     check(params[0] == admin.nombre and params[1] == "Carlos Hernández" and params[2] == vac["titulo"], "1 entrevistador · 2 candidato · 3 vacante")
     check("2026" in params[3] and "septiembre" in params[3] and params[4].endswith(" h (hora de Ciudad de México)"), f"4 fecha «{params[3]}» · 5 hora «{params[4]}» (hora de México)")
-    check("5512345678" in params[5] and params[6] == "Sin indicaciones", f"6 contacto del candidato «{params[5]}» · 7 indicaciones para el entrevistador")
+    check(params[5] == admin.nombre and params[6] == "Sin indicaciones", f"6 «Pregunta por» «{params[5]}» · 7 indicaciones para el entrevistador")
     check(params[7].startswith(settings.app_url + "/evaluacion/") and len(params[7]) > len(settings.app_url) + 25, "8 liga al expediente del candidato (liga del evaluador)")
     check(res[("entrevistador", "whatsapp")]["enviado"] is True and "plantilla" in res[("entrevistador", "whatsapp")], "resultado visible para RH: plantilla enviada")
     check(any(t[0] == "5512345678" for t in WA_TEXTO), "el candidato recibe su WhatsApp de texto (aviso de entrevista)")

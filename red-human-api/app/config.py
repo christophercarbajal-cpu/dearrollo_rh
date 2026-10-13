@@ -78,15 +78,17 @@ class Settings(BaseSettings):
     meta_plantilla_recordatorio_3: str = ""
     # Plantilla aprobada en Meta para avisar al ENTREVISTADOR de una cita nueva (2026-10-13, plantillas oficiales).
     # 8 variables posicionales: {{1}} entrevistador, {{2}} candidato, {{3}} vacante, {{4}} fecha, {{5}} hora,
-    # {{6}} contacto del candidato, {{7}} indicaciones para el entrevistador, {{8}} liga al expediente.
+    # {{6}} «Pregunta por» (responsable o contacto en el lugar de la cita), {{7}} indicaciones para el entrevistador,
+    # {{8}} liga al expediente.
     # Si Meta la rechaza (no aprobada, nombre distinto) sale texto libre.
     meta_plantilla_entrevista: str = "alerta_entrevista_asig"
     # 2026-10-13 (plantillas oficiales, Cambios 28-29): al habilitarse «Prefiltro por WhatsApp» se abre el flujo con
     # META_PLANTILLA_INICIO ({{1}} nombre del candidato); cuando el candidato debe confirmar un horario,
-    # META_PLANTILLA_AGENDA con sus variables en el orden de META_PLANTILLA_AGENDA_PARAMS (nombre, vacante, empresa).
+    # META_PLANTILLA_AGENDA, que en Meta NO tiene variables (META_PLANTILLA_AGENDA_PARAMS vacío = 0 parámetros; solo si
+    # se registra otra versión con variables se llenan en ese orden: nombre, vacante, empresa).
     meta_plantilla_inicio: str = "inicio_entrevista_rh"
     meta_plantilla_agenda: str = "aviso_proceso_rh"
-    meta_plantilla_agenda_params: str = "nombre"
+    meta_plantilla_agenda_params: str = ""
 
     # --- Telegram (2026-10-06): canal adicional por Cuenta (`Cuenta.canal_mensajeria`) ---
     # TELEGRAM_BOT_TOKEN solo vive aquí (servidor). Vacío = Telegram no disponible: las Cuentas que lo elijan

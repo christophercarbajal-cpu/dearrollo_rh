@@ -79,7 +79,7 @@ def _datos(
         "ubicacion": ubicacion or "",
         "telefono_contacto": telefono or "",
         "telefono_candidato": telefono_candidato or "",
-        "contacto_candidato": telefono_candidato or "",  # {{6}} de `alerta_entrevista_asig`
+        "pregunta_por": entrevistador or "",  # {{6}} de `alerta_entrevista_asig` («Pregunta por»)
         "comentario": comentario or "",
         "liga_expediente": liga_expediente or f"{settings.app_url}/entrevista-humana/…",
         "logo_url": "",

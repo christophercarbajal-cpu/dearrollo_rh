@@ -6,7 +6,8 @@
 2. La respuesta al botón («Sí, empezar ahora») o cualquier confirmación abre la ventana de 24 h y el bot contesta YA con el
    saludo estricto y la primera pregunta (base fija en Masivos / prefiltro configurable en Corporativos), sin «/start».
 3. Aviso de cita al entrevistador: `alerta_entrevista_asig` con 8 variables en orden.
-4. Confirmación de horario del candidato: `aviso_proceso_rh`.
+   ({{6}} = «Pregunta por»: el responsable o contacto en el lugar de la cita).
+4. Confirmación de horario del candidato: `aviso_proceso_rh`, SIN variables (así está aprobada en Meta).
 """
 
 import asyncio
@@ -180,13 +181,13 @@ with TestClient(app) as client:
     # ================= 3. Aviso al entrevistador =================
     print("\n--- 3. alerta_entrevista_asig: 8 variables en orden ---")
     d = {"entrevistador": "Mariana López", "candidato": "Luisa Pérez Gómez", "vacante": "Almacenista", "fecha": "jueves 15 de octubre",
-         "hora": "10:30 h", "contacto_candidato": "5512770001 · luisa@correo.mx", "indicaciones_entrevistador": "Validar turnos",
+         "hora": "10:30 h", "pregunta_por": "Ing. Pedro Salas", "indicaciones_entrevistador": "Validar turnos",
          "liga_expediente": "https://app/evaluacion/abc"}
     check(notificaciones.parametros_plantilla_entrevista(d) == ["Mariana López", "Luisa Pérez Gómez", "Almacenista", "jueves 15 de octubre",
-                                                               "10:30 h", "5512770001 · luisa@correo.mx", "Validar turnos",
+                                                               "10:30 h", "Ing. Pedro Salas", "Validar turnos",
                                                                "https://app/evaluacion/abc"],
-          "{{1}} entrevistador · {{2}} candidato · {{3}} vacante · {{4}} fecha · {{5}} hora · {{6}} contacto · {{7}} indicaciones · {{8}} liga")
-    check(notificaciones.parametros_plantilla_entrevista({})[5:7] == ["Sin contacto registrado", "Sin indicaciones"],
+          "{{1}} entrevistador · {{2}} candidato · {{3}} vacante · {{4}} fecha · {{5}} hora · {{6}} Pregunta por · {{7}} indicaciones · {{8}} liga")
+    check(notificaciones.parametros_plantilla_entrevista({})[5:7] == ["Por confirmar", "Sin indicaciones"],
           "nunca variables vacías (Meta las rechaza)")
     desde = len(ENVIADOS)
     env = asyncio.run(whatsapp.enviar_plantilla_entrevista("3399998888", notificaciones.parametros_plantilla_entrevista(d), "texto"))
@@ -209,9 +210,9 @@ with TestClient(app) as client:
     params = [x["text"] for x in t[0]["template"]["components"][0]["parameters"]] if t else []
     check(r.status_code in (200, 201) and t and t[0]["to"] == "523399997777" and len(params) == 8,
           f"la cita nueva le manda la plantilla al WhatsApp del entrevistador ({r.status_code})")
-    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and "5512770001" in params[5]
-          and params[6] == "Validar disponibilidad de turnos" and "/evaluacion/" in params[7],
-          f"variables: candidato, vacante, contacto, indicaciones del entrevistador y liga al expediente → {params}")
+    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and params[5] == admin.nombre
+          and "5512770001" not in " ".join(params) and params[6] == "Validar disponibilidad de turnos" and "/evaluacion/" in params[7],
+          f"variables: candidato, vacante, «Pregunta por» (responsable de la cita, nunca el teléfono del candidato), indicaciones y liga → {params}")
 
     # ================= 4. Aviso de agenda =================
     print("\n--- 4. Confirmación de horario → aviso_proceso_rh ---")
@@ -229,8 +230,8 @@ with TestClient(app) as client:
     r = asyncio.run(rcand._avisar_apto_e_iniciar_agenda(db, p4))
     db.commit()
     t = plantillas(desde, "aviso_proceso_rh")
-    check(t and t[0]["to"] == "525512770004" and [x["text"] for x in t[0]["template"]["components"][0]["parameters"]] == ["Raúl"],
-          "se requiere confirmar horario → sale `aviso_proceso_rh` ({{1}} = nombre)")
+    check(t and t[0]["to"] == "525512770004" and "components" not in t[0]["template"] and plantillas_meta.parametros_agenda(p4) == [],
+          "se requiere confirmar horario → sale `aviso_proceso_rh` con 0 parámetros (sin variables en Meta)")
     textos = [c for c in ENVIADOS[desde:] if c.get("type") == "text"]
     check(textos and plantillas_meta.estado(p4) == {} and r.get("texto"), "después va la pregunta exacta de la agenda como texto")
 

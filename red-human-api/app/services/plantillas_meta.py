@@ -7,7 +7,7 @@
   (`marcar_respuesta`) y el bot contesta EN ESE MISMO TURNO con el saludo estricto y la primera pregunta del prefiltro
   (base fija en Masivos — Cambio 29 — o el prefiltro configurable en Corporativos — Cambio 19). No pide «/start».
 - `alerta_entrevista_asig` (8 variables) al entrevistador: `notificaciones.parametros_plantilla_entrevista`.
-- `aviso_proceso_rh`: cuando el candidato debe confirmar un horario (`enviar_aviso_agenda`).
+- `aviso_proceso_rh` (SIN variables en Meta): cuando el candidato debe confirmar un horario (`enviar_aviso_agenda`).
 Un envío fallido nunca bloquea el flujo; todo queda en la bitácora.
 """
 
@@ -110,7 +110,8 @@ def marcar_respuesta(db: Session, p: Postulacion, texto: str) -> bool:
 # ============================================================ aviso de agenda
 
 def parametros_agenda(p: Postulacion) -> list:
-    """Variables de `aviso_proceso_rh` en el orden de META_PLANTILLA_AGENDA_PARAMS (nombre, vacante, empresa)."""
+    """Variables de `aviso_proceso_rh`: la plantilla aprobada NO tiene variables (META_PLANTILLA_AGENDA_PARAMS vacío → []).
+    Solo si se configura otra versión con variables se llenan en ese orden (nombre, vacante, empresa)."""
     from ..routers.candidatos import nombre_ficha
     from ..serial import nombre_empresa_candidato
 
@@ -118,7 +119,7 @@ def parametros_agenda(p: Postulacion) -> list:
     nombre = nombre_ficha(p) or ""
     valores = {"nombre": "" if nombre.startswith("Candidato") else nombre.split(" ")[0],
                "vacante": (v.titulo if v else "") or "", "empresa": (nombre_empresa_candidato(v) if v else "") or ""}
-    claves = [k.strip().lower() for k in (settings.meta_plantilla_agenda_params or "nombre").split(",") if k.strip()]
+    claves = [k.strip().lower() for k in (settings.meta_plantilla_agenda_params or "").split(",") if k.strip()]
     return [valores.get(k) or "-" for k in claves if k in valores]
 
 

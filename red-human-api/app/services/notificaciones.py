@@ -94,8 +94,9 @@ def datos_entrevista_humana(db: Session, eh: EntrevistaHumana, c: Postulacion) -
         "mapa": getattr(eh, "mapa", "") or "",
         "telefono_contacto": eh.telefono_contacto or "",
         "telefono_candidato": c.telefono or "",
-        # 2026-10-13: {{6}} y {{7}} de `alerta_entrevista_asig` — cómo contactar al candidato y SUS indicaciones (Cambio 21)
-        "contacto_candidato": " · ".join(x for x in (c.telefono or "", c.correo or "") if x),
+        # 2026-10-13: {{6}} y {{7}} de `alerta_entrevista_asig` — «Pregunta por» (la MISMA regla del aviso de la cita al
+        # candidato: el evaluador asignado) y SUS indicaciones (Cambio 21)
+        "pregunta_por": getattr(eh, "pregunta_por", "") or "",
         "indicaciones_entrevistador": getattr(eh, "indicaciones_entrevistador", "") or "",
         "comentario": eh.comentario or "",
         # 2026-09-29 (Evaluaciones unificadas): la liga del evaluador es /evaluacion/{token}
@@ -119,7 +120,8 @@ def _aviso_cliente(titulo: str, texto: str, d: dict) -> tuple:
 
 def parametros_plantilla_entrevista(d: dict) -> List[str]:
     """Los 8 parámetros posicionales de `alerta_entrevista_asig` (2026-10-13), en este orden exacto: entrevistador,
-    candidato, vacante, fecha, hora, contacto del candidato, indicaciones para el entrevistador y liga al expediente.
+    candidato, vacante, fecha, hora, «Pregunta por» (responsable o contacto en el lugar de la cita), indicaciones para el
+    entrevistador y liga al expediente.
     Meta no acepta variables vacías: lo que falte va con un texto neutro."""
     return [
         d.get("entrevistador") or "Entrevistador(a)",
@@ -127,7 +129,7 @@ def parametros_plantilla_entrevista(d: dict) -> List[str]:
         d.get("vacante") or "-",
         d.get("fecha") or "Por confirmar",
         d.get("hora") or "Por confirmar",
-        d.get("contacto_candidato") or "Sin contacto registrado",
+        d.get("pregunta_por") or "Por confirmar",
         d.get("indicaciones_entrevistador") or "Sin indicaciones",
         d.get("liga_expediente") or "-",
     ]

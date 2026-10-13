@@ -981,7 +981,9 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
 
         rc = pconv.resumen(p)
         if rc is not None and rc["pendiente"]:
-            return {**base, "estado": "en_curso", "espera": f"Esperando respuesta del candidato: {rc['pendiente']}"}
+            # Cambio 29: la base fija siempre tiene preguntas — «En curso» solo cuando el bot ya empezó a preguntar
+            return {**base, "estado": "en_curso" if rc.get("iniciado") or not pconv.criterios_de(p.vacante, p)[0].get("base_operativa")
+                    else "pendiente", "espera": f"Esperando respuesta del candidato: {rc['pendiente']}"}
     if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
         web = bool(a.get("respuestas_web"))
         hecho = bool(p.prefiltro_completo) if tipo == "prefiltro_whatsapp" else (web or bool(p.prefiltro_completo))

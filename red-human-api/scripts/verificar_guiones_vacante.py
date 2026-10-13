@@ -341,6 +341,9 @@ with TestClient(app) as client:
                  preguntas_filtro=[{**web[0]}], preguntas_filtro_whatsapp=[rec])
     db.add(v6)
     db.flush()
+    # Cambio 29: en Masivos el prefiltro es la base fija; la reconfirmación web ↔ chat se prueba en una ruta propia
+    v6.proceso = sproc.proceso_para_vacante(db, demo.id, {}, {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"},
+                                                                         {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]})
     c6 = _crear_candidato(db, demo.id, "Iván Reconfirma", "web", False, telefono="5512340006")
     p6 = crear_postulacion(db, c6, v6, demo.id, "web")
     p6.consentimiento = True

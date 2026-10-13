@@ -342,6 +342,10 @@ export interface Candidato {
     /** Cambio 24 (ruta corporativa): expectativa de sueldo; sobre tope = más de 20 % arriba del de la vacante. */
     sueldoExpectativa?: number | null;
     sueldoSobreTope?: boolean;
+    /** Cambio 29: prefiltro operativo fijo — edad, interés en el puesto y si puede trasladarse. */
+    edad?: number | null;
+    interesPuesto?: boolean | null;
+    puedeTrasladarse?: boolean | null;
     alerta: "alerta" | "no_recomendable" | null;
   } | null;
   /** Cambio 22: por indispensable, lo que acredita el CV contra lo que respondió el candidato. */

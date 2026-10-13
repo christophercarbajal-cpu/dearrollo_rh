@@ -80,7 +80,12 @@ with TestClient(app) as client:
     v = db.query(Vacante).filter(Vacante.estado == "Publicada").first()
     v.cuenta_id, v.titulo = cuenta.id, "Operador de almacén"
     v.preguntas_filtro, v.preguntas_filtro_whatsapp = WEB, WA
-    v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
+    # Cambio 29: en Masivos el prefiltro es la base FIJA (verificar_cambios28_29.py); aquí se estresa el prefiltro
+    # conversacional configurable, que siguen usando las rutas propias
+    v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
+        {"id": "solicitud-web", "tipo": "solicitud_web", "etapa": "Prefiltro"}, {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
+        {"id": "llamada", "tipo": "llamada_agente", "etapa": "Entrevista IA"},
+        {"id": "entrevista-humana", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
     db.commit()
     tel = iter(range(5530000001, 5530009999))
 
@@ -142,7 +147,9 @@ with TestClient(app) as client:
     p = post(P)
     check(p.activa and p.analisis["prefiltro_web"]["resultado"] == "cumple" and p.etapa == "Entrevista IA",
           "con todo cumplido el agente decide solo: avanza a la entrevista")
-    check(any(e.tipo == "whatsapp" for e in p.entrevistas), "…en el MISMO chat (Entrevista Red Human por WhatsApp)")
+    # Cambio 29: la entrevista en el mismo chat es de Masivos (prefiltro fijo, verificar_cambios28_29.py); esta ruta propia
+    # sigue con la Llamada Red Human
+    check(any(x["tipo"] == "llamada_agente" for x in p.proceso["pasos"]), "…a la siguiente actividad de SU ruta (Llamada Red Human)")
 
     print("\n--- 7. respuesta larga que explica ---")
     P2 = nueva()

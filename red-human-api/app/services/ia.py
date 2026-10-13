@@ -2755,6 +2755,8 @@ class FichaGuion(BaseModel):
     enfoque_entrevista: str = "profesional"
     # 2026-10-10: perfil del oficio (copia de la Biblioteca de Perfiles ajustada por vacante) para el enfoque operativo
     perfil_operativo: Optional[dict] = None
+    # Cambio 29: la ruta es Masivos (operativos) → el prefiltro de WhatsApp es la base FIJA (`prefiltro_operativo`)
+    ruta_masiva: bool = False
     # Cambio 19 (2026-10-12): la descripción de la vacante — sus condiciones (p. ej. escolaridad) se REGISTRAN en el prefiltro
     descripcion: str = ""
 
@@ -3109,6 +3111,11 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
         if len(salida_web) < MIN_PREFILTRO_WEB:  # mínimo 3 preguntas clave (si lo capturado alcanza)
             salida_web += preguntas_clave_extra(ficha, salida_web, MIN_PREFILTRO_WEB - len(salida_web))
     salida_wa: List[dict] = []
+    if hay_whatsapp and ficha.ruta_masiva:
+        # Cambio 29: rutas Masivos (operativos) — base FIJA del prefiltro de WhatsApp (sin IA)
+        from . import prefiltro_operativo as pop
+
+        return salida_web, pop.preguntas_guardables(ficha)
     if hay_whatsapp:
         nivel = next((r for r in indisp if RE_NIVEL_ESTUDIOS.search(r)), "")
         # 1) indispensables («Descarta si…»): la escolaridad exacta reconfirma el nivel indispensable
@@ -3196,6 +3203,12 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
             armados[c] = _copy.deepcopy(guion_op)
         con_ia = con_ia or ia_op
         guion_claves = []
+    if ficha.ruta_masiva and "prefiltro_whatsapp" in claves and hay_whatsapp:
+        # Cambio 29: en rutas Masivos (operativos) el prefiltro de WhatsApp es la BASE FIJA — cero IA generativa
+        from . import prefiltro_operativo as pop
+
+        armados["prefiltro_whatsapp"] = pop.preguntas_guardables(ficha)
+        claves = [c for c in claves if c != "prefiltro_whatsapp"]
     if client is not None and claves and [c for c in claves if c not in armados]:
         def lista(xs: List[str]) -> str:
             return ("\n" + "\n".join(f"  - {x}" for x in xs)) if xs else " (sin dato)"

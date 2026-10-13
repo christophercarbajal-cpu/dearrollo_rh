@@ -9,6 +9,10 @@ Bloque 2 (Cambio 28): «Otra actividad» (nombre + mensaje por WhatsApp, «Marca
 de la ruta: aprueba → sigue sola, reprueba → «No aprobó el curso», nunca descarta); sincronización Proceso ↔ Vacante
 (documentos tras el prefiltro, documentos obligatorios, CV obligatorio, 3 indispensables, «Publicar» bloqueado, «Se pide
 en:» por documento).
+
+Bloque 3 (Cambio 29): en rutas Masivos el prefiltro de WhatsApp es una BASE FIJA sin IA — saludo exacto, indispensables
+con datos concretos (descartan), edad (menor de 18 → Puntos por validar), puesto, sueldo, colonia, «¿Puedes
+trasladarte?» y tiempo de traslado (descarta solo con límite en la vacante); sin transporte ni habilidades blandas.
 """
 
 import asyncio
@@ -246,6 +250,103 @@ with TestClient(app) as client:
     pag = leer("app/dashboard/vacantes/page.tsx")
     check("Se pide en:" in form and "avisosPublicacion" in form, "el formulario muestra «Se pide en:» y lo que falta para publicar")
     check("v.faltantesPublicacion?.length" in pag, "el botón «Publicar» se desactiva con alerta")
+
+    # ================= Bloque 3 · Cambio 29: prefiltro operativo FIJO =================
+    print("\n--- Bloque 3 · prefiltro operativo fijo (rutas Masivos) ---")
+    from app.services import ia, prefiltro_operativo as pop
+    from app.services import prefiltro_conversacional as pconv
+
+    REQS = "Secundaria terminada · 1 año de experiencia en almacén · Disponibilidad para rolar turnos · Trabajo en equipo"
+    vo = Vacante(codigo="VAC-OP29", titulo="Almacenista", estado="Publicada", cuenta_id=cuenta.id, requisitos=REQS,
+                 descripcion="Surtir pedidos en el CEDIS.", sueldo="Desde $9,500 MXN mensuales", ubicacion="Zapopan, Jalisco",
+                 ubicacion_estado="Jalisco", ubicacion_municipio="Zapopan", enfoque_entrevista="operativo",
+                 preguntas_filtro_whatsapp=[{"pregunta": "¿Te consideras una persona organizada?", "tipo": "si_no", "descarta": True}])
+    db.add(vo)
+    db.flush()
+    vo.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
+    db.commit()
+    crit = pconv.criterios_de(vo)
+    check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "edad", "interes", "sueldo",
+                                                            "zona", "puede_trasladarse", "traslado"],
+          f"ruta Masivos: base fija en orden (indispensables → edad → puesto → sueldo → colonia → traslado) {[c['dato'] for c in crit]}")
+    check(not any(c["dato"] == "transporte" for c in crit) and not any("organizad" in c["chat"] or "equipo" in c["chat"].lower() for c in crit),
+          "sin pregunta de transporte ni habilidades blandas (lo generado antes por IA se ignora)")
+    check([c["indispensable"] for c in crit[:3]] == [True, True, True] and not crit[3]["indispensable"] and not crit[-1]["indispensable"],
+          "los indispensables descartan; edad y traslado (sin límite) solo se registran")
+    check(not any(c["chat"].startswith(("¿Tienes", "¿Cuentas", "¿Cumples")) for c in crit[:3]),
+          "los indispensables se confirman con DATOS concretos (no Sí/No)")
+    check(crit[4]["chat"] == "El puesto es Almacenista. ¿Te interesa?" and crit[5]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"
+          and crit[7]["chat"] == "El trabajo es en Zapopan, Jalisco. ¿Puedes trasladarte?", "textos fijos de puesto, sueldo y traslado")
+    ficha = ia.FichaGuion(titulo="Almacenista", requisitos_indispensables=REQS.split(" · "), sueldo="Desde $9,500 MXN mensuales",
+                          ubicacion="Zapopan, Jalisco", enfoque_entrevista="operativo", ruta_masiva=True)
+    wa = ia.generar_guiones(ficha, ["prefiltro_whatsapp"], hay_whatsapp=True)[0]["prefiltro_whatsapp"]
+    check([q["dato"] for q in wa] == [c["dato"] for c in crit] and all(q.get("base_operativa") for q in wa),
+          "la generación de Masivos NO usa IA: guarda la misma base fija")
+
+    def chat(p, texto):
+        r = client.post(f"/candidatos/{p.codigo}/prefiltro", json={"texto": texto})
+        assert r.status_code == 200, r.text
+        return r.json().get("respuesta") or ""
+
+    def postular_op(nombre, tel):
+        c = _crear_candidato(db, cuenta.id, nombre, "Portal", False, telefono=tel)
+        p = crear_postulacion(db, c, vo, cuenta.id, "web", consentimiento=True)
+        db.commit()
+        return p
+
+    q1 = postular_op("Laura Operativa", "5512990001")
+    r = chat(q1, "Hola")
+    check(r.startswith("Hola, Laura. Soy Red Human, el asistente virtual que te acompaña en tu postulación a *Almacenista*. Primero confírmame:")
+          and r.endswith("¿Hasta qué año estudiaste?"), f"saludo exacto + primera pregunta indispensable → «{r[:90]}…»")
+    r = chat(q1, "Terminé la secundaria")
+    check("experiencia en almacén" in r, f"siguiente indispensable con dato concreto → «{r}»")
+    r = chat(q1, "sí")
+    check("tiempo exacto" in r, "un «sí» a secas no es un dato: se pide el dato concreto")
+    r = chat(q1, "2 años")
+    check("rolar turnos" in r, f"→ «{r}»")
+    r = chat(q1, "Puedo mañana y tarde")
+    check(r.endswith("¿Cuántos años tienes?"), f"edad después de los indispensables → «{r}»")
+    r = chat(q1, "17")
+    check(r.endswith("El puesto es Almacenista. ¿Te interesa?"), "puesto")
+    r = chat(q1, "sí")
+    check(r.endswith("El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"), "sueldo")
+    r = chat(q1, "claro")
+    check(r.endswith("¿En qué colonia y municipio vives?"), "colonia y municipio")
+    r = chat(q1, "Colonia Centro, Zapopan")
+    check(r.endswith("¿Puedes trasladarte?"), "¿puedes trasladarte?")
+    r = chat(q1, "sí")
+    check(r.endswith("¿Cuánto tiempo harías de tu casa al trabajo?"), "tiempo de traslado")
+    r = chat(q1, "2 horas")
+    db.refresh(q1)
+    datos = (q1.analisis or {}).get("prefiltro_datos") or {}
+    puntos = (q1.analisis or {}).get("puntos_validar_prefiltro") or []
+    check(q1.activa and pconv.estado(q1).get("resultado") == "cumple" and datos.get("traslado_min") == 120 and datos.get("edad") == 17,
+          "sin límite de traslado en la vacante, 2 horas solo se registra y el prefiltro se cumple")
+    check(any("Menor de 18" in x for x in puntos), "menor de 18 → Puntos por validar")
+    textos = [m.texto for m in q1.mensajes if m.rol == "assistant"]
+    check(not any("transporte" in t.lower() for t in textos), "nunca pregunta el transporte")
+
+    q2 = postular_op("Pedro Novato", "5512990002")
+    chat(q2, "Hola")
+    chat(q2, "Terminé la secundaria")
+    r = chat(q2, "6 meses")
+    db.refresh(q2)
+    check(not q2.activa and q2.motivo_cierre == "descartado" and "1 año de experiencia en almacén" in r,
+          f"el dato no cumple el indispensable → descarta con el mensaje de cierre → «{r[:100]}»")
+
+    vo.requisitos = REQS + " · Vivir a máximo 60 minutos de la planta · Mayor de edad"
+    db.commit()
+    crit = pconv.criterios_de(vo)
+    trasl = next(c for c in crit if c["dato"] == "traslado")
+    edad = next(c for c in crit if c["dato"] == "edad")
+    check(trasl["indispensable"] and trasl["limite_min"] == 60 and edad["indispensable"] and edad["edad_min"] == 18,
+          "con límite de traslado (y edad) en la vacante, esos datos sí descartan")
+    q3 = postular_op("Rosa Lejana", "5512990003")
+    for t in ("Hola", "Terminé la secundaria", "3 años", "Fines de semana y entre semana", "30", "sí", "sí", "Las Águilas, Zapopan", "sí"):
+        chat(q3, t)
+    r = chat(q3, "hora y media")
+    db.refresh(q3)
+    check(not q3.activa and "60 minutos" in r, "traslado mayor al límite de la vacante → descarta")
 
     app.dependency_overrides.clear()
     db.close()

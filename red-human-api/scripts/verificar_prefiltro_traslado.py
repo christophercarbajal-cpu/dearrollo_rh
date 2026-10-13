@@ -109,6 +109,9 @@ check(len(pocos) < 3, "sin datos suficientes el generador no inventa: quedan men
 RUTA = [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
         {"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro", "obligatorio": True},
         {"id": "ew", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA", "obligatorio": True},
+        # Cambio 29: con la entrevista con avatar (opcional) la ruta NO es Masivos — aquí se prueba el prefiltro y la
+        # entrevista configurables; la base fija de Masivos se prueba en verificar_cambios28_29.py
+        {"id": "av", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": False},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]
 
 with TestClient(app) as client:

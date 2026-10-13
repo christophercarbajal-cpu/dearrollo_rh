@@ -236,7 +236,7 @@ with TestClient(app) as client:
         r = client.post(f"/vacantes/{v.codigo}/guiones/generar", headers=H, json={"sobrescribir_editadas": True})
     finally:
         ia._client = original
-    check(r.status_code == 200, f"genera con la IA simulada ({r.status_code})")
+    check(r.status_code == 200, f"genera con la IA simulada ({r.status_code} {r.text[:200]})")
     db.expire_all()
     vista = sgui.vista(db.get(Vacante, v.id), db=db)
     sec = next(s for s in vista["secciones"] if s["clave"] == "entrevista_whatsapp")

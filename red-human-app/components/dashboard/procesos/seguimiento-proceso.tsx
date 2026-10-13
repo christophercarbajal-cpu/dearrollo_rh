@@ -894,7 +894,11 @@ function ResultadosClave({ c }: { c: Candidato }) {
   const d = c.prefiltroDatos;
   const traslado = d
     ? [
+        // Cambio 29: prefiltro operativo fijo — edad (menor de 18 = Puntos por validar), interés y traslado
+        ...(d.edad != null ? [{ k: "Edad", v: `${d.edad} años`, tono: d.edad < 18 ? "text-warn" : undefined }] : []),
+        ...(d.interesPuesto != null ? [{ k: "Le interesa el puesto", v: d.interesPuesto ? "Sí" : "No", tono: d.interesPuesto ? undefined : "text-bad" }] : []),
         ...(d.zona ? [{ k: "Zona", v: d.zona }] : []),
+        ...(d.puedeTrasladarse != null ? [{ k: "Puede trasladarse", v: d.puedeTrasladarse ? "Sí" : "No", tono: d.puedeTrasladarse ? undefined : "text-bad" }] : []),
         ...(d.trasladoMin != null || d.traslado
           ? [{
               k: "Traslado",

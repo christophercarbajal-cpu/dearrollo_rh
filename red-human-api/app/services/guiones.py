@@ -136,10 +136,15 @@ def normalizar_pregunta(q) -> Optional[dict]:
         return None
     from . import ia
 
-    if q.get("tipo") == "dato" and q.get("dato") in ia.DATOS_PREFILTRO:
+    from . import prefiltro_operativo as pop
+
+    if q.get("tipo") == "dato" and (q.get("dato") in ia.DATOS_PREFILTRO
+                                    or (q.get("base_operativa") and q.get("dato") in pop.DATOS_OPERATIVOS)):
+        # Cambio 29: la base FIJA del prefiltro operativo (datos concretos: experiencia, licencia, edad…) también es «dato»
         return {"pregunta": _texto(q["pregunta"]), "tipo": "dato", "dato": q["dato"], "valida": _texto(q.get("valida") or q["pregunta"], 200),
                 "respuesta_esperada": _texto(q.get("respuesta_esperada"), 200), "descarta": bool(q.get("descarta")), "opciones": [],
-                **({"regla": _texto(q["regla"], 200)} if _texto(q.get("regla")) else {})}
+                **({"regla": _texto(q["regla"], 200)} if _texto(q.get("regla")) else {}),
+                **({"base_operativa": True} if q.get("base_operativa") else {})}
     tipo = q.get("tipo") if q.get("tipo") in TIPOS_PREGUNTA_CERRADA else None
 
     if ia.es_autopercepcion(_texto(q.get("pregunta"))):
@@ -402,7 +407,11 @@ def generar(datos: dict, pasos: list, actuales: Optional[dict] = None, conservar
     claves = [c for c in objetivo if c not in conservadas]
     huella = huella_datos(datos)
     web_actual = actuales.get("prefiltro_web") if "prefiltro_web" not in claves else None
-    crudo, con_ia = ia.generar_guiones(ficha_guion(datos, empresa), claves, web_actual=web_actual,
+    from .proceso import ruta_es_masiva
+
+    ficha = ficha_guion(datos, empresa)
+    ficha.ruta_masiva = ruta_es_masiva(pasos)  # Cambio 29: Masivos → prefiltro de WhatsApp FIJO (sin IA)
+    crudo, con_ia = ia.generar_guiones(ficha, claves, web_actual=web_actual,
                                        hay_web="prefiltro_web" in aplican, hay_whatsapp="prefiltro_whatsapp" in aplican)
     secciones, meta = {}, {}
     for c in claves:

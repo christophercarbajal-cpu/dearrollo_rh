@@ -217,6 +217,8 @@ def prefiltro_datos(p) -> Optional[dict]:
             "sueldo": d.get("sueldo") or "", "sueldoAcepta": d.get("sueldo_acepta"), "sueldoOfrecido": d.get("sueldo_ofrecido") or "",
             # Cambio 24 (ruta corporativa): expectativa del candidato y si supera en más de 20 % el sueldo de la vacante
             "sueldoExpectativa": d.get("sueldo_expectativa"), "sueldoSobreTope": bool(d.get("sueldo_sobre_tope")),
+            # Cambio 29 (prefiltro operativo fijo): edad, interés en el puesto y si puede trasladarse
+            "edad": d.get("edad"), "interesPuesto": d.get("interes_puesto"), "puedeTrasladarse": d.get("puede_trasladarse"),
             # Cambio 19: sin umbrales fijos — el traslado solo se registra (ninguna alerta por minutos)
             "alerta": None}
 

@@ -75,7 +75,11 @@ def ubicacion_vacante(v) -> str:
 def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     """Criterios del prefiltro de la vacante, en el orden configurado. Con `p` se ajustan a SU ruta (Cambio 24: en la
     ruta corporativa no se pregunta colonia ni transporte y el sueldo es la expectativa) y se suman las brechas de SU
-    Análisis de CV (Cambio 22)."""
+    Análisis de CV (Cambio 22). Cambio 29: en rutas Masivos (operativos) es la BASE FIJA de `prefiltro_operativo`."""
+    from . import prefiltro_operativo as pop
+
+    if pop.aplica(v, p):
+        return pop.criterios(v)
     salida: List[dict] = []
     usados = set()
     ubic = ubicacion_vacante(v)
@@ -452,6 +456,10 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
     dato = c.get("dato")
     if not t:
         return None, {}
+    if c.get("operativo"):
+        from . import prefiltro_operativo as pop  # Cambio 29: datos concretos del prefiltro operativo
+
+        return pop.clasificar(c, texto)
     if dato == "escolaridad":
         nivel, terminado = nivel_estudios(texto)
         if nivel is None:
@@ -503,6 +511,10 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
     elif c["dato"] == "escolaridad":
         d["nivel"] = extra.get("nivel") or ""
         d["terminado"] = extra.get("terminado")
+    if c.get("base_operativa"):
+        from . import prefiltro_operativo as pop
+
+        pop.guardar(a, d, c, texto, extra)
     d["en"] = _ahora()
     a["prefiltro_datos"] = d
     p.analisis = a
@@ -721,8 +733,10 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
     web = {_norm(r.get("pregunta", "")): str(r.get("respuesta", "")).strip()
            for r in (p.analisis or {}).get("respuestas_web") or [] if isinstance(r, dict)}
     for c in criterios:
-        if c["id"] in respuestas or c.get("por_brecha"):
-            continue  # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»
+        if c["id"] in respuestas or c.get("por_brecha") or c.get("base_operativa"):
+            # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»; Cambio 29: en el
+            # prefiltro operativo cada indispensable se confirma con un dato concreto en el chat
+            continue
         valor = web.get(_norm(c["pregunta"])) or web.get(_norm(c["criterio"]))
         if not valor:
             continue

@@ -152,6 +152,9 @@ check(t.respuesta == "¿Por qué quieres cambiar de trabajo?", "si la IA copia l
 print("\n--- 4. Chat: prefiltro → «Listo, … Soy Red Human…» + primera pregunta → entrevista ---")
 RUTA = [{"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
         {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
+        # Cambio 29: con la entrevista con avatar (opcional) la ruta NO es Masivos — aquí se prueba la conversación configurable;
+        # la base fija de Masivos (prefiltro y entrevista) se prueba en verificar_cambios28_29.py
+        {"id": "av", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": False},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]
 FILTRO = [{"pregunta": "¿Cumples con: Secundaria terminada?", "tipo": "si_no", "valida": "Secundaria terminada", "respuesta_esperada": "Sí",
            "descarta": True, "opciones": ["Sí", "No", "Parcial"]},

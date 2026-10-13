@@ -85,6 +85,9 @@ with TestClient(app) as client:
         "titulo": "Cajero F4", "descripcion": "x", "generar_si_falta": False,
         "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan",
         "preguntas_filtro": web, "preguntas_filtro_whatsapp": wa,
+        # Cambio 29: ruta propia (no Masivos) — en Masivos el prefiltro de WhatsApp es la base fija
+        "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
+                              {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]},
     })
     check(r.status_code == 201, "POST /vacantes con Estado/Municipio y dos listas de prefiltro")
     v = r.json()

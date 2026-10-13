@@ -40,7 +40,7 @@ import { PanelTareasOnboarding } from "@/components/dashboard/onboarding/tareas-
 import {
   cerrarOnboarding, fetchCandidato, fetchTareasOnboarding, type TareaOnboarding,
   actualizarContactoCandidato, agregarActividadProceso, esCorreoValido, excepcionRHPaso, fetchEntrevistadores, fetchOpcionesProceso, fetchSeguimiento, iniciarActividad, subirAdjuntosCitaPaso,
-  moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
+  marcarRealizadaPaso, moverEtapaCandidato, nombreEtapa, omitirPasoProceso, ordenEtapa, reactivarPasoProceso, reenviarActividad, registrarResultadoActividad,
   sincronizarEvaluacion, type Entrevistador, type OpcionesProceso, type RespuestaIniciar,
 } from "@/lib/api";
 import type { AccionPaso, Candidato, EnvioDestinatario, EstadoUnificado, EtapaCandidato, ItemMenuPaso, PasoSeguimiento, SeguimientoProceso as Seg } from "@/lib/data";
@@ -126,6 +126,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (accion.clave === "agregar_correo" && paso) return setPedirCorreo(paso);
     if (accion.clave === "registrar_resultado" && paso) return setRegistrar(paso);
     if (accion.clave === "reenviar" && paso) return void reenviar(paso, accion.a ?? "candidato");
+    if (accion.clave === "marcar_realizada" && paso) return void marcarRealizada(paso);
     if (accion.clave === "consultar_evaluacion") return onAbrir("evaluaciones");
     if (accion.clave === "solicitar_documentos") return onSolicitarDocumentos();
     if (accion.clave === "validar_documentos") return onAbrir("documentos");
@@ -183,6 +184,17 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   }
 
   /** Reenvío granular: SU liga a ese destinatario; nunca cambia el estado de la actividad. */
+  /** Cambio 28: «Otra actividad» — solo RH la cumple. */
+  async function marcarRealizada(paso: PasoSeguimiento) {
+    setOcupado(`real-${paso.id}`);
+    const r = await marcarRealizadaPaso(c.id, paso.id);
+    setOcupado("");
+    if (!r.ok) return setAviso({ tono: "error", texto: r.error });
+    setSeg(r.data.proceso);
+    onCambio(r.data.candidato);
+    setAviso({ tono: "ok", texto: `«${paso.nombre}» marcada como realizada.` });
+  }
+
   async function reenviar(paso: PasoSeguimiento, a: string) {
     setOcupado(`env-${paso.id}`);
     const r = await reenviarActividad(c.id, paso.id, a);

@@ -116,15 +116,17 @@ with TestClient(app) as client:
         "requisitos_deseables": g["requisitos_deseables"], "beneficios": g["beneficios"], "preguntas_filtro": g["preguntas_filtro"],
         "publicaciones": {"occ": g["occ"], "linkedin": g["linkedin"], "portal": g["portal"]},
         "enfoque_entrevista": "profesional_personal", "publicar": True, "plataformas": ["WhatsApp", "Portal"],
+        # Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+        "requisitos_indispensables": ficha["requisitos_indispensables"] + ["Mayor de edad"],
         # Cambio 27: con ruta Masivos el enfoque lo define la ruta (Operativo); en Corporativos lo elige RH
         "proceso": {"pasos": __import__("app.services.proceso", fromlist=["x"]).ruta_base("corporativo")["pasos"]},
     })
-    check(r.status_code == 201, "POST /vacantes desde el formulario nuevo")
+    check(r.status_code == 201, f"POST /vacantes desde el formulario nuevo ({r.status_code} {r.text[:160]})")
     v = r.json()
     check(v["estado"] == "Publicada" and v.get("publicadaEn"), "punto 10: publicar desde el formulario → estado Publicada con fecha")
     check(v["sueldo"] == "$9,000 – $10,500 MXN mensuales" and v["sueldoDesde"] == 9000 and v["sueldoPeriodicidad"] == "mensual",
           "sueldo estructurado guardado y texto derivado")
-    check(v["requisitos"] == "Carrera técnica en farmacia · Disponibilidad de fin de semana", "indispensables capturados → `requisitos` (« · »)")
+    check(v["requisitos"] == "Carrera técnica en farmacia · Disponibilidad de fin de semana · Mayor de edad", "indispensables capturados → `requisitos` (« · »)")
     check(v["beneficios"] == ["Vales de despensa"] and v["seniority"] == "Junior" and v["enfoqueEntrevista"] == "profesional_personal", "beneficios/seniority/enfoque tal cual")
     r = client.get(f"/vacantes/{v['id']}")
     check(r.json()["estado"] == "Publicada", "GET /vacantes/{codigo} sigue reportando Publicada")

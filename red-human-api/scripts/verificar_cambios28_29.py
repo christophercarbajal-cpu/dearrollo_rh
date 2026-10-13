@@ -4,8 +4,15 @@
 
 Bloque 1 (Cambio 28): catálogo ESTRICTO de actividades por etapa («Otra actividad» en todas); «Documentos» y «Carta de
 intención» sin «(opcional)»; sin casilla «Obligatoria»; descripción fija por etapa; «Partir de:» al crear un proceso.
+
+Bloque 2 (Cambio 28): «Otra actividad» (nombre + mensaje por WhatsApp, «Marcar como realizada»); «Capacitación» (curso
+de la ruta: aprueba → sigue sola, reprueba → «No aprobó el curso», nunca descarta); sincronización Proceso ↔ Vacante
+(documentos tras el prefiltro, documentos obligatorios, CV obligatorio, 3 indispensables, «Publicar» bloqueado, «Se pide
+en:» por documento).
 """
 
+import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -32,7 +39,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import ACTIVIDADES_POR_ETAPA, Cuenta, Usuario, UsuarioCuenta  # noqa: E402
+from app.models import ACTIVIDADES_POR_ETAPA, AsignacionCurso, Bitacora, Cuenta, Curso, Usuario, UsuarioCuenta, Vacante  # noqa: E402
+from app.routers.candidatos import _crear_candidato, crear_postulacion  # noqa: E402
 from app.services import proceso as sproc  # noqa: E402
 from app.services.configuracion import obtener  # noqa: E402
 
@@ -87,7 +95,7 @@ with TestClient(app) as client:
         {"tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"tipo": "condiciones", "etapa": "Prefiltro"}]})
     check(r.status_code == 400 and "no puede ir en" in r.json()["detail"], f"una actividad fuera de su etapa → 400 ({r.status_code})")
     r = client.post("/procesos/plantillas", json={"nombre": "Con otra", "pasos": [
-        {"tipo": "otra", "etapa": "Prefiltro", "nombre": "Llamar al candidato"}, {"tipo": "otra", "etapa": "Onboarding"}]})
+        {"tipo": "otra", "etapa": "Prefiltro", "nombre": "Llamar al candidato"}, {"tipo": "otra", "etapa": "Onboarding", "nombre": "Bienvenida"}]})
     check(r.status_code == 201, f"«Otra actividad» en cualquier etapa ({r.status_code})")
     viejo = [{"id": "cv", "tipo": "analisis_cv", "etapa": "Entrevista IA"}]
     check(sproc.normalizar_pasos(viejo, previos=viejo)[0]["etapa"] == "Entrevista IA",
@@ -109,6 +117,135 @@ with TestClient(app) as client:
     check("Obligatoria" not in ed.split("*/", 1)[1] and "e.descripcion" in ed and "e.actividades" in ed,
           "el editor no tiene casilla «Obligatoria», muestra la descripción y usa el catálogo de la etapa")
     check("Partir de:" in pl and "opciones.partirDe" in pl, "el modal de nuevo proceso empieza con «Partir de:»")
+
+    # ================= Bloque 2 · Cambio 28: actividades especiales y sincronización =================
+    print("\n--- Bloque 2 · «Otra actividad» ---")
+    v = db.query(Vacante).filter(Vacante.estado == "Publicada").order_by(Vacante.id).first()
+    v.cuenta_id = cuenta.id
+    v.requisitos = "Secundaria terminada · Disponibilidad de turnos · Experiencia en almacén"
+    v.descripcion = v.descripcion or "Almacenista para centro de distribución."
+    db.commit()
+
+    def postular(nombre, tel, pasos, etapa="Prefiltro"):
+        c = _crear_candidato(db, cuenta.id, nombre, "Portal", False, telefono=tel)
+        p = crear_postulacion(db, c, v, cuenta.id, "web", consentimiento=True)
+        p.proceso = {**sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": pasos}), "etapa_base": "Prefiltro"}
+        p.etapa = etapa
+        db.commit()
+        return p
+
+    def paso_de(p, pid):
+        db.refresh(p)
+        return next(x for x in sproc.estado_pasos(p) if x["id"] == pid)
+
+    r = client.post("/procesos/plantillas", json={"nombre": "Otra sin nombre", "pasos": [{"tipo": "otra", "etapa": "Prefiltro"}]})
+    check(r.status_code == 400 and "nombre" in r.json()["detail"], "«Otra actividad» sin nombre no se guarda en la ruta")
+    p1 = postular("Otra Uno", "5512880001", [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
+                                              {"id": "llamar", "tipo": "otra", "etapa": "Prefiltro", "nombre": "Llamada de bienvenida",
+                                               "mensaje": "Te llamaremos hoy para darte la bienvenida."}])
+    check(next(x for x in p1.proceso["pasos"] if x["id"] == "llamar")["mensaje"].startswith("Te llamaremos"), "el mensaje viaja en la actividad")
+    asyncio.run(sproc.avanzar_seguro(db, p1))
+    x = paso_de(p1, "llamar")
+    check(bool((p1.proceso_estado or {}).get("llamar", {}).get("mensaje_enviado")), "al habilitarse, el agente manda el mensaje (una vez)")
+    check(x["otraSimple"] and x["estado"] != "completada" and x["accion"]["clave"] == "marcar_realizada",
+          "se queda ahí hasta «Marcar como realizada»")
+    asyncio.run(sproc.avanzar_seguro(db, p1))
+    check(db.query(Bitacora).filter(Bitacora.accion == "actividad_mensaje_enviado", Bitacora.entidad_id == p1.codigo).count() == 1,
+          "el mensaje no se repite")
+    r = client.post(f"/procesos/postulaciones/{p1.codigo}/pasos/llamar/realizada", json={"comentario": "Se le llamó"})
+    check(r.status_code == 200 and paso_de(p1, "llamar")["estado"] == "completada", f"«Marcar como realizada» la cumple ({r.status_code})")
+    r = client.post(f"/procesos/postulaciones/{p1.codigo}/pasos/llamar/realizada", json={})
+    check(r.status_code == 409, "no se marca dos veces")
+    r = client.post(f"/procesos/postulaciones/{p1.codigo}/pasos/sw/realizada", json={})
+    check(r.status_code == 409, "solo «Otra actividad» se marca a mano")
+    r = client.post(f"/procesos/postulaciones/{p1.codigo}/actividades",
+                    data={"datos": json.dumps({"tipo": "otra", "nombre": "Recoger uniforme", "mensaje": "Pasa por tu uniforme."})})
+    check(r.status_code in (200, 201) and r.json()["paso"]["mensaje"] == "Pasa por tu uniforme.",
+          f"«Agregar actividad» → «Otra»: nombre + mensaje, sin evaluador ({r.status_code} {r.text[:120]})")
+
+    print("\n--- Bloque 2 · «Capacitación» ---")
+    curso = Curso(codigo="CUR-C28", titulo="Seguridad en almacén", estado="Publicado", cuenta_id=cuenta.id, calificacion_minima=70)
+    db.add(curso)
+    db.commit()
+    p2 = postular("Curso Dos", "5512880002", [{"id": "cap", "tipo": "induccion", "etapa": "Onboarding", "curso": "CUR-C28"},
+                                              {"id": "alta", "tipo": "alta", "etapa": "Onboarding"}], etapa="Onboarding")
+    check(p2.proceso["pasos"][0]["curso"] == "CUR-C28", "RH elige el curso en la actividad")
+    asyncio.run(sproc.avanzar_seguro(db, p2))
+    a = db.query(AsignacionCurso).filter(AsignacionCurso.postulacion_id == p2.id).first()
+    check(a is not None and a.curso_id == curso.id, "al habilitarse se asigna el curso (el bot manda la liga)")
+    asyncio.run(sproc.avanzar_seguro(db, p2))
+    check(db.query(AsignacionCurso).filter(AsignacionCurso.postulacion_id == p2.id).count() == 1, "no se asigna dos veces")
+    a.estado, a.aprobado, a.calificacion = "completado", False, 40
+    db.commit()
+    x = paso_de(p2, "cap")
+    check(x["estadoUnificadoTexto"] == "No aprobó el curso" and x["noAproboCurso"] and not x["cumpleRegla"],
+          "reprueba → «No aprobó el curso»")
+    check(p2.activa and not p2.motivo_cierre, "reprobar el curso NUNCA descarta: RH decide")
+    a.aprobado, a.calificacion = True, 90
+    db.commit()
+    x = paso_de(p2, "cap")
+    check(x["estado"] == "completada" and x["cumpleRegla"], "aprueba → la actividad se cumple y la ruta sigue sola")
+
+    print("\n--- Bloque 2 · sincronización Proceso ↔ Vacante ---")
+    masivos = sproc.ruta_base("masivos_sin_documentos")["pasos"]
+    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": masivos},
+                                                   "documentos_solicitados": [{"nombre": "INE"}, {"nombre": "Licencia de conducir"}]})
+    db.expire_all()
+    v = db.get(Vacante, v.id)
+    ids = [x["id"] for x in v.proceso["pasos"]]
+    check(r.status_code == 200 and "documentos-vacante" in ids and ids.index("documentos-vacante") == ids.index("prefiltro-whatsapp") + 1,
+          f"la vacante pide documentos y su ruta no tenía la actividad → se agrega sola después del prefiltro ({r.status_code})")
+    con_docs = sproc.ruta_base("masivos_con_documentos")["pasos"]
+    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": con_docs}, "documentos_solicitados": []})
+    db.expire_all()
+    v = db.get(Vacante, v.id)
+    check(r.status_code == 200 and any("Documentos" in f for f in r.json()["faltantesPublicacion"]),
+          f"ruta con «Documentos» y sin documentos en la vacante → falta para publicar ({r.json().get('faltantesPublicacion')} "
+          f"{v.documentos_solicitados} {[(x['id'], x['etapa'], x.get('documentos_vacante')) for x in v.proceso['pasos']]})")
+    v.estado = "En revisión"
+    db.commit()
+    r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
+    check(r.status_code == 409 and "Documentos" in r.json()["detail"], f"«Publicar» se bloquea con la alerta ({r.status_code})")
+    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}], "requisitos": "Secundaria terminada"})
+    check(any("3 requisitos indispensables" in f for f in r.json()["faltantesPublicacion"]), "con prefiltro, la vacante exige 3 indispensables")
+    r = client.patch(f"/vacantes/{v.codigo}", json={"requisitos": "Secundaria terminada · Turnos rotativos · Experiencia en almacén"})
+    check(r.json()["faltantesPublicacion"] == [], "completos los datos, ya no falta nada")
+    r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
+    check(r.status_code == 200 and r.json()["estado"] == "Publicada", f"y se publica ({r.status_code} {r.text[:200]})")
+
+    corp = sproc.ruta_base("corporativo")["pasos"]
+    corp = [{**x, "con_cv": False} if x["tipo"] == "solicitud_web" else x for x in corp]
+    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": corp}})
+    db.expire_all()
+    v = db.get(Vacante, v.id)
+    check(next(x for x in v.proceso["pasos"] if x["tipo"] == "solicitud_web")["con_cv"] is True and r.json()["exigeCv"],
+          "ruta con Análisis de CV → la solicitud web exige CV")
+    app.dependency_overrides.pop(cuenta_actual, None)
+    r = client.post("/candidatos/postular", data={"vacante": v.codigo, "nombre": "Sin CV", "telefono": "5512880003", "consentimiento": "true"})
+    check(r.status_code == 400 and "CV" in r.json()["detail"], f"sin CV la postulación web se rechaza ({r.status_code})")
+    app.dependency_overrides[cuenta_actual] = lambda: cuenta
+
+    print("\n--- Bloque 2 · «Se pide en:» ---")
+    con_docs = sproc.ruta_base("masivos_con_documentos")["pasos"]
+    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": con_docs}, "documentos_solicitados": [
+        {"nombre": "INE"}, {"nombre": "Comprobante de domicilio", "etapa": "Contratación"}]})
+    db.expire_all()
+    v = db.get(Vacante, v.id)
+    check(r.json()["etapasDocumentos"] == ["Prefiltro", "Contratación"], "con «Documentos» en varias etapas se ofrece «Se pide en:»")
+    check(r.json()["documentosSolicitados"][1]["etapa"] == "Contratación", "cada documento guarda su etapa")
+    temprano = next(x for x in v.proceso["pasos"] if x["tipo"] == "documentos" and x["etapa"] == "Prefiltro")
+    check(temprano.get("documentos") == ["INE"], "lo de Contratación no se pide en el Prefiltro")
+    p3 = postular("Docs Tres", "5512880004", v.proceso["pasos"])
+    r = client.patch(f"/candidatos/{p3.codigo}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True,
+                                                              "comentario": "Prueba de documentos por etapa"})
+    db.refresh(p3)
+    check(r.status_code == 200 and p3.expediente is not None and any(d.tipo == "Comprobante de domicilio" for d in p3.expediente.documentos),
+          f"al llegar a Contratación el documento entra al expediente ({r.status_code} {r.text[:150]})")
+
+    form = leer("components/dashboard/vacantes/formulario-contenido.tsx")
+    pag = leer("app/dashboard/vacantes/page.tsx")
+    check("Se pide en:" in form and "avisosPublicacion" in form, "el formulario muestra «Se pide en:» y lo que falta para publicar")
+    check("v.faltantesPublicacion?.length" in pag, "el botón «Publicar» se desactiva con alerta")
 
     app.dependency_overrides.clear()
     db.close()

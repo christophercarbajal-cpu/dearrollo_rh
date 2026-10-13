@@ -72,6 +72,8 @@ notif.enviar_correo = _fake_correo
 
 PDF_MIN = b"%PDF-1.4\n" + b"%" * 600 + b"\n%%EOF\n"
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     db = SessionLocal()
     admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()
@@ -100,7 +102,7 @@ with TestClient(app) as client:
 
     # ============ 1. Contadores de la vacante ============
     print("\n--- 1. Contadores por etapa ---")
-    r = client.post("/vacantes", json={"titulo": "Cajero F1", "descripcion": "x", "generar_si_falta": False, "cliente_id": cliente.id, "publicar": True})
+    r = client.post("/vacantes", json={"titulo": "Cajero F1", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "cliente_id": cliente.id, "publicar": True})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar")
     codigos = []

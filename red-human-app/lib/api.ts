@@ -690,7 +690,7 @@ export interface VacanteGenerada {
 
 /** Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. `cantidad` = archivos que exige (las fotos
  *  del auto son 4); `foto` = la revisa RH a ojo (no se valida como documento oficial). */
-export interface DocumentoSolicitado { nombre: string; cantidad: number; foto: boolean }
+export interface DocumentoSolicitado { nombre: string; cantidad: number; foto: boolean; /** Cambio 28: «Se pide en:» */ etapa?: EtapaCandidato }
 export const DOCUMENTOS_SUGERIDOS_VACANTE: DocumentoSolicitado[] = [
   { nombre: "INE", cantidad: 1, foto: false },
   { nombre: "Licencia de conducir", cantidad: 1, foto: false },
@@ -3936,6 +3936,8 @@ export type RespuestaAgregarActividad = RespuestaPaso & {
 };
 export function agregarActividadConfigurada(codigoPostulacion: string, datos: {
   tipo: string; nombre?: string; obligatorio?: boolean; config?: ConfigActividad; ya_realizada?: boolean; resultado?: ResultadoYaRealizada;
+  /** Cambio 28: «Otra actividad» — mensaje opcional por WhatsApp. */
+  mensaje?: string;
 }, archivos: File[] = [], adjuntosCita: File[] = []) {
   const form = new FormData();
   form.append("datos", JSON.stringify(datos));
@@ -3972,6 +3974,10 @@ export function dictaminarReferencia(codigoEvaluacion: string, rid: string, dato
 /** «Continuar por decisión de RH» (2026-10-08): libera una actividad «No aprobada» sin cambiar su resultado ni omitirla. */
 export function excepcionRHPaso(codigoPostulacion: string, pasoId: string, motivo: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/excepcion`, { motivo });
+}
+/** Cambio 28: «Marcar como realizada» de una «Otra actividad» (solo RH la cumple). */
+export function marcarRealizadaPaso(codigoPostulacion: string, pasoId: string, comentario = "") {
+  return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/realizada`, { comentario });
 }
 export function reactivarPasoProceso(codigoPostulacion: string, pasoId: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/reactivar`);

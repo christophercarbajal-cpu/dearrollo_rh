@@ -865,6 +865,12 @@ async def postular(
     if vac.estado != "Publicada":  # 2026-09-16: una liga vieja a una vacante eliminada/cerrada no abre postulaciones
         raise HTTPException(410, "Esta vacante ya no está disponible.")
 
+    from ..services import guiones as _sg
+    from ..services import sincronizacion_vacante as _ssv
+
+    if _ssv.exige_cv(_sg.pasos_de_vacante(db, vac)) and not (cv and cv.filename):
+        # Cambio 28: la ruta trae Análisis de CV → el CV es obligatorio en la solicitud web
+        raise HTTPException(400, "Esta vacante pide tu CV: adjúntalo para postularte.")
     tel = _telefono(telefono)
     prueba = modo_prueba_activo(db)
 
@@ -2339,6 +2345,11 @@ async def aplicar_movimiento(
                 "Regístralo antes de continuar.",
             )
         _abrir_expediente(db, p, u)
+    if datos.etapa in ("Contratación", "Onboarding") and p.expediente is not None:
+        # Cambio 28: documentos de la vacante con «Se pide en: Contratación» (u Onboarding) entran al expediente
+        from ..services import documentos_vacante as _sdv
+
+        _sdv.asegurar_finales(db, p)
 
     # 2026-09-22: leyenda explícita en el historial del expediente/postulación. Solo se AGREGA: la
     # entrevista IA parcial, el chat, el análisis de CV y el score se conservan tal cual.

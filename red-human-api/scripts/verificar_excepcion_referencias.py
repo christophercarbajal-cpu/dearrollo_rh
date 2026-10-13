@@ -224,7 +224,7 @@ with TestClient(app) as client:
     print("\n--- 3. Ruta automática: referencias se solicitan solas · captura manual ---")
     actual["c"] = auto
     PASOS_AUTO = [{"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
-                  {"id": "refs", "tipo": "referencias", "etapa": "Prefiltro"}]
+                  {"id": "refs", "tipo": "referencias", "etapa": "Entrevista Humana"}]  # Cambio 28: catálogo estricto
     assert client.put(f"/procesos/vacantes/{VA}", json={"pasos": PASOS_AUTO, "etapas": AUTO}).status_code == 200
     PA = nueva("Ana Automática", VA)
     asyncio.run(motor_ruta.procesar(db, post(PA)))
@@ -249,7 +249,7 @@ with TestClient(app) as client:
     GER = client.post("/evaluaciones/pruebas", json={"nombre": "Batería Operativa", "tipo": "bateria", "id_proveedor": "1,7",
                                                      "activa": True, "modo": "integrada", "proveedor": "Psicométricas.mx"}).json()["id"]
     PASOS_PSI = [{"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
-                 {"id": "psico", "tipo": "psicometrica", "etapa": "Prefiltro", "pruebas": [GER]}]
+                 {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista IA", "pruebas": [GER]}]  # Cambio 28: catálogo estricto
     VP = vacs[0].codigo
     assert client.put(f"/procesos/vacantes/{VP}", json={"pasos": PASOS_PSI, "etapas": AUTO}).status_code == 200
     settings.psicometricas_token, settings.psicometricas_password = "T" * 20, "P" * 20
@@ -264,7 +264,9 @@ with TestClient(app) as client:
         x = paso(s, "psico")
         check(x["estadoUnificado"] == "falta_correo" and x["estadoUnificadoTexto"] == "Falta correo para enviar la prueba" and not x["error"],
               "estado «Falta correo para enviar la prueba» (NO «Error de envío»)")
-        check(s["siguienteAccion"]["accion"]["clave"] == "agregar_correo" and s["siguienteAccion"]["texto"] == "Agregar correo",
+        # Cambio 28: la psicometría ya no va en Prefiltro (catálogo estricto): es la acción de su actividad en Filtro Red Human
+        principal = s["siguienteAccion"].get("accion") or x.get("accion") or {}
+        check(principal.get("clave") == "agregar_correo" and principal.get("texto") == "Agregar correo",
               "la acción principal es «Agregar correo»")
         tarjeta = next(y for y in client.get("/candidatos").json() if y["id"] == PS)
         check(tarjeta.get("psychometric_alert") in (None, "falta_correo"), "el tablero no lo reporta como error de envío")

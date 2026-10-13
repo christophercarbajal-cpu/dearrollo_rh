@@ -63,6 +63,8 @@ rcap.enviar_correo = _fake_correo
 
 PDF_MIN = b"%PDF-1.4\n" + b"%" * 600 + b"\n%%EOF\n"
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     db = SessionLocal()
     admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()
@@ -109,7 +111,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["estado"] == "Publicado", "publicar")
 
     print("\n--- Asignación universal ---")
-    r = client.post("/vacantes", json={"titulo": "Cajero RF3", "descripcion": "x", "generar_si_falta": False, "publicar": True})
+    r = client.post("/vacantes", json={"titulo": "Cajero RF3", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True})
     VAC = r.json()["id"]
     r = client.post("/candidatos", json={"nombre": "Ana Cand", "telefono": "5522220002", "correo": "ana@rf3.mx", "vacante": VAC, "consentimiento": True, "fuente": "RH"})
     P = r.json()["id"]

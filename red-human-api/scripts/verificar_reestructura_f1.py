@@ -40,6 +40,8 @@ def check(cond, msg):
     print(f"✅ {msg}")
 
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     db = SessionLocal()
     admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()
@@ -51,7 +53,7 @@ with TestClient(app) as client:
     app.dependency_overrides[usuario_actual] = lambda: admin
     app.dependency_overrides[usuario_decisor] = lambda: admin
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
-    r = client.post("/vacantes", json={"titulo": "Cajero RF1", "descripcion": "x", "generar_si_falta": False, "publicar": True})
+    r = client.post("/vacantes", json={"titulo": "Cajero RF1", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["WhatsApp", "Portal"]})
     r = client.post("/vacantes", json={"titulo": "Vendedor RF1", "descripcion": "x", "generar_si_falta": False})

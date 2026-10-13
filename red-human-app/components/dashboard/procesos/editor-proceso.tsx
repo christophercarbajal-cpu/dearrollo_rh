@@ -15,7 +15,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Trash2, Zap } from
 import { Badge } from "@/components/ui";
 import { inputRH } from "@/components/dashboard/modulos-rh";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
-import { fetchPruebasPsicometricas, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica } from "@/lib/api";
+import { fetchCursos, fetchPruebasPsicometricas, type Curso, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica } from "@/lib/api";
 import type { EtapaCandidato, EtapasProceso, PasoProceso } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +23,8 @@ const selectRH = cn(inputRH, "h-10 pr-8");
 /** Tipos con algo propio que configurar (el resto se usa tal cual lo define el catálogo). */
 // 2026-10-09: las tres actividades de IA (avatar, WhatsApp, llamada) son independientes y cada una lleva su enfoque
 const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "llamada_agente"]);
-const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "psicometrica", ...ENTREVISTAS_IA]);
+// Cambio 28: «Otra actividad» (nombre + mensaje) y «Capacitación» (curso) también se configuran aquí
+const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
 
 function nuevoId(pasos: PasoProceso[], tipo: string): string {
   const base = tipo.replace(/_/g, "-");
@@ -50,7 +51,7 @@ export function pasoNuevo(t: OpcionTipoPaso, etapa: EtapaCandidato, pasos: PasoP
   return delCatalogo({
     id: nuevoId(pasos, t.valor),
     tipo: t.valor,
-    nombre: t.texto,
+    nombre: t.valor === "otra" ? "" : t.texto, // Cambio 28: «Otra actividad» exige que RH le ponga nombre
     etapa,
     obligatorio: true,
     depende_de: [],
@@ -69,9 +70,11 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   soloLectura?: boolean;
 }) {
   const [catalogo, setCatalogo] = useState<PruebaPsicometrica[]>([]);
+  const [cursos, setCursos] = useState<Curso[]>([]);
   const [abierto, setAbierto] = useState<string | null>(null);
   useEffect(() => {
     fetchPruebasPsicometricas().then((l) => setCatalogo((l ?? []).filter((x) => x.modo === "integrada" && x.activa)));
+    fetchCursos().then((l) => setCursos((l ?? []).filter((x) => x.estado === "Publicado")));
   }, []);
   const tipos = useMemo(() => Object.fromEntries(opciones.tiposPaso.map((t) => [t.valor, t])), [opciones]);
 
@@ -138,7 +141,9 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                         value={p.nombre}
                         disabled={soloLectura}
                         onChange={(ev) => cambiarPaso(p.id, { nombre: ev.target.value })}
-                        className="h-9 min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 text-sm font-medium outline-none hover:border-border-soft focus:border-brand"
+                        placeholder={p.tipo === "otra" ? "Nombre de la actividad *" : undefined}
+                        className={cn("h-9 min-w-0 flex-1 rounded-lg border bg-transparent px-2 text-sm font-medium outline-none hover:border-border-soft focus:border-brand",
+                          p.tipo === "otra" && !p.nombre.trim() ? "border-bad/60" : "border-transparent")}
                         aria-label="Nombre de la actividad"
                       />
                       <span className="text-[11px] text-ink-3">{p.modalidad === "fisica" ? "Psicometría física" : t?.texto ?? p.tipo}</span>
@@ -151,7 +156,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                       )}
                     </div>
                     {expandido && (
-                      <DetalleActividad catalogo={catalogo} p={p} opciones={opciones} soloLectura={soloLectura} onCambio={(c) => cambiarPaso(p.id, c)} />
+                      <DetalleActividad catalogo={catalogo} cursos={cursos} p={p} opciones={opciones} soloLectura={soloLectura} onCambio={(c) => cambiarPaso(p.id, c)} />
                     )}
                   </li>
                 );
@@ -181,9 +186,10 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
 }
 
 /** Solo lo PROPIO de cada actividad del catálogo. */
-function DetalleActividad({ p, catalogo = [], opciones, soloLectura, onCambio }: {
+function DetalleActividad({ p, catalogo = [], cursos = [], opciones, soloLectura, onCambio }: {
   p: PasoProceso;
   catalogo?: PruebaPsicometrica[];
+  cursos?: Curso[];
   opciones: OpcionesProceso;
   soloLectura: boolean;
   onCambio: (c: Partial<PasoProceso>) => void;
@@ -216,6 +222,24 @@ function DetalleActividad({ p, catalogo = [], opciones, soloLectura, onCambio }:
           </span>
           {!soloLectura && <SelectorPruebas catalogo={catalogo} seleccion={p.pruebas ?? []} onChange={(ids) => onCambio({ pruebas: ids })} />}
         </div>
+      )}
+      {p.tipo === "otra" && (
+        <label className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
+          Mensaje al candidato por WhatsApp (opcional)
+          <textarea className={cn(inputRH, "min-h-[72px] py-2")} value={p.mensaje ?? ""} disabled={soloLectura} maxLength={1000}
+            onChange={(ev) => onCambio({ mensaje: ev.target.value })} placeholder="Se envía al habilitarse la actividad." />
+          <span className="text-[11px] text-ink-3">La actividad queda pendiente hasta que RH presione «Marcar como realizada».</span>
+        </label>
+      )}
+      {p.tipo === "induccion" && (
+        <label className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
+          Curso
+          <select className={selectRH} value={p.curso ?? ""} disabled={soloLectura} onChange={(ev) => onCambio({ curso: ev.target.value || undefined })}>
+            <option value="">Elige un curso publicado…</option>
+            {cursos.map((c) => <option key={c.id} value={c.id}>{c.titulo}</option>)}
+          </select>
+          <span className="text-[11px] text-ink-3">El bot manda la liga al habilitarse. Si aprueba el examen avanza sola; si reprueba queda «No aprobó el curso» y RH decide.</span>
+        </label>
       )}
       {p.tipo === "solicitud_web" && (
         <label className="flex items-center gap-2 text-xs text-ink-2 sm:col-span-2">

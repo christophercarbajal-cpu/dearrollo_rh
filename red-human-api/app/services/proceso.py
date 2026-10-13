@@ -201,9 +201,20 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             if crudo.get("modalidad") == "fisica":
                 paso["modalidad"] = "fisica"  # se aplica en persona y se captura; nunca va al proveedor
                 paso["pruebas"] = []
+        if tipo == "otra":
+            # Cambio 28: nombre obligatorio y mensaje opcional (el agente lo manda por WhatsApp al habilitarse)
+            if crudo.get("mensaje") and str(crudo["mensaje"]).strip():
+                paso["mensaje"] = str(crudo["mensaje"]).strip()[:1000]
+            if estrictos is not None and not crudo.get("adhoc") and not str(crudo.get("nombre") or "").strip():
+                raise ErrorProceso(400, "Escribe el nombre de «Otra actividad».")
+        if tipo == "induccion":
+            # Cambio 28: el curso que RH eligió; el agente lo asigna y manda la liga al habilitarse
+            curso = str(crudo.get("curso") or "").strip()[:40]
+            if curso:
+                paso["curso"] = curso  # código del curso (CUR-####); se valida al asignarlo
         if tipo == "documentos" and crudo.get("documentos"):
             paso["documentos"] = [str(d).strip()[:120] for d in crudo["documentos"] if str(d).strip()]
-        for bandera in ("adhoc", "heredado"):  # actividad agregada solo a ESTA postulación / fuera del proceso vigente
+        for bandera in ("adhoc", "heredado", "documentos_vacante"):  # ad hoc / fuera del proceso vigente / docs de la vacante (C25)
             if crudo.get(bandera):
                 paso[bandera] = True
         if isinstance(crudo.get("config"), dict) and crudo["config"]:
@@ -1301,9 +1312,14 @@ def _paso_induccion(base: dict, p: Postulacion) -> dict:
     a = asignaciones[-1]
     titulo = a.curso.titulo if a.curso is not None else "inducción"
     if a.estado == "completado":
-        resultado = "no_favorable" if a.aprobado is False else "favorable"
-        return {**base, "estado": "completada", "resultado": resultado, "cumple": True,
-                "detalle": f"«{titulo}» completado" + (f" · {a.calificacion}%" if a.calificacion is not None else ""),
+        califica = f" · {a.calificacion}%" if a.calificacion is not None else ""
+        if a.aprobado is False:
+            # Cambio 28: reprobó el examen → «No aprobó el curso». Nunca descarta: la ruta se detiene y RH decide.
+            return {**base, "estado": "completada", "resultado": "no_favorable", "cumple": False, "no_aprobo_curso": True,
+                    "texto_no_aprobada": "No aprobó el curso", "detalle": f"No aprobó el curso «{titulo}»{califica}",
+                    "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(a.completado_en)}
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True,
+                "detalle": f"«{titulo}» aprobado{califica}",
                 "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(a.completado_en)}
     return {**base, "estado": "en_curso", "espera": f"Falta que termine el curso «{titulo}»"}
 
@@ -1373,9 +1389,14 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
         filas_env = senv.filas_de(db, p) if (db is not None and not solo_evaluables) else None
     legado_env = precarga.get("eventos_envio")
     calculados: Dict[str, dict] = {}
+    from . import actividades_rh
+
     for paso in pasos:
         tipo = paso["tipo"]
-        if tipo in TIPOS_PASO_EVALUACION:
+        otra_simple = actividades_rh.es_otra_simple(paso, por_paso.get(paso["id"]))
+        if otra_simple:
+            r = actividades_rh.estado_otra(paso, decisiones.get(paso["id"]) or {})
+        elif tipo in TIPOS_PASO_EVALUACION:
             r = _paso_evaluacion(paso, por_paso.get(paso["id"]))
             if es_psicometria_digital(paso):
                 r["psicometria"] = bloque_psicometria(paso, por_paso.get(paso["id"]))
@@ -1425,10 +1446,11 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             except Exception:  # noqa: BLE001 — una liga nunca tumba el seguimiento
                 r["liga"] = None
         r = _con_cuello(paso, r, ev_paso, env)
-        if tipo in TIPOS_PASO_EVALUACION and paso.get("config") and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada"):
+        if (tipo in TIPOS_PASO_EVALUACION and not otra_simple and paso.get("config") and r["estado"] == "pendiente"
+                and (ev_paso is None or ev_paso.estado == "cancelada")):
             r = {**r, "cuello": {"clave": "lista_para_iniciar", "texto": "Lista para iniciar", "quien": None},
                  "espera": r.get("espera") or "Configurada: «Iniciar» la ejecuta tal cual"}
-        if (tipo in TIPOS_PASO_EVALUACION and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada")
+        if (tipo in TIPOS_PASO_EVALUACION and not otra_simple and r["estado"] == "pendiente" and (ev_paso is None or ev_paso.estado == "cancelada")
                 and scitas.requiere_cita(paso) and not scitas.tiene_cita(paso.get("config"))):
             # 2026-10-10 (Cambio 2): sin cita no se inicia ni se avisa — «Programar cita» es su acción
             r = {**r, "pendiente_agendar": True, "espera": "Falta programar la cita",
@@ -1517,6 +1539,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "faltaCorreo": bool(r.get("falta_correo")),
             "sinSolicitar": bool(r.get("sin_solicitar")),
             "documentosVacante": bool(paso.get("documentos_vacante")),  # Cambio 25
+            # Cambio 28: «Otra actividad» (nombre + mensaje, «Marcar como realizada») y el curso de «Capacitación»
+            "otraSimple": bool(r.get("otra_simple")), "mensaje": paso.get("mensaje") or "",
+            "curso": paso.get("curso") or "", "noAproboCurso": bool(r.get("no_aprobo_curso")),
             "modalidad": paso.get("modalidad"),
             "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
@@ -1700,6 +1725,8 @@ def _reenvios(paso: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
         salida.append({"a": a, "motivo": motivo, "texto": f"{'Reenviar' if ya else 'Enviar'} {TEXTO_DESTINATARIO.get(a, '')}".strip()})
 
     tipo = paso["tipo"]
+    if r.get("otra_simple"):
+        return []
     if tipo in TIPOS_PASO_EVALUACION:
         if ev is None or ev.estado == "cancelada":
             return []
@@ -1750,7 +1777,7 @@ def _menu(paso: dict, x: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
         poner("copiar_liga")
     for rv in x.get("reenvios") or []:
         poner(f"reenviar_{rv['a']}", rv["texto"], a=rv["a"])
-    if puede_registrar_resultado_paso(paso, estado, ev) and (x.get("accion") or {}).get("clave") != "registrar_resultado":
+    if not r.get("otra_simple") and puede_registrar_resultado_paso(paso, estado, ev) and (x.get("accion") or {}).get("clave") != "registrar_resultado":
         poner("registrar_resultado")
     if x.get("sincronizable"):
         poner("reintentar_sincronizacion")
@@ -1823,7 +1850,7 @@ def _estado_unificado(r: dict, regla: Optional[dict] = None) -> dict:
     elif r.get("error"):
         clave = "error"
     elif resultado == "no_favorable":
-        clave = "no_aprobada"
+        clave, texto = "no_aprobada", r.get("texto_no_aprobada")
     elif estado == "completada":
         if not r.get("cumple"):
             clave, pendiente_aprobacion = "pendiente_revision", True
@@ -2006,6 +2033,9 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
     tipo, estado = paso["tipo"], r["estado"]
     if estado in ("omitida", "cancelada"):
         return None
+    if r.get("otra_simple"):
+        # Cambio 28: se queda ahí hasta que RH la marque como realizada
+        return {"clave": "marcar_realizada", "texto": "Marcar como realizada"} if disponible and estado != "completada" else None
     if tipo in TIPOS_PASO_EVALUACION:
         if r.get("falta_correo"):
             return {"clave": "agregar_correo", "texto": "Agregar correo"}
@@ -2535,6 +2565,10 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
         from . import documentos_vacante
 
         await documentos_vacante.revisar(db, p)
+        # Cambio 28: mensaje de «Otra actividad» y curso de «Capacitación» al habilitarse (una vez)
+        from . import actividades_rh
+
+        await actividades_rh.revisar(db, p)
         # 2026-10-10 (Cambio 3): UN aviso de estado al candidato si se completó una actividad o terminó la selección
         from . import avisos_estado
 

@@ -59,6 +59,8 @@ def webhook(client, tel, texto):
     }}]}]})
 
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     db = SessionLocal()
     admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()
@@ -79,7 +81,7 @@ with TestClient(app) as client:
 
     # ================= 1. Editar vacante =================
     print("\n--- 1. PATCH /vacantes/{codigo} (edición completa) ---")
-    r = client.post("/vacantes", json={"titulo": "Cajero Original", "descripcion": "x", "generar_si_falta": False, "publicar": True,
+    r = client.post("/vacantes", json={"titulo": "Cajero Original", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True,
                                        "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan", "sueldo_desde": 9000, "sueldo_hasta": 11000, "sueldo_periodicidad": "mensual"})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["WhatsApp"]})
@@ -149,7 +151,7 @@ with TestClient(app) as client:
     r = client.post(f"/vacantes/{VAC}/restaurar")
     check(r.status_code == 200 and r.json()["estado"] == "Borrador" and r.json()["eliminadaEn"] is None, "restaurar → vuelve como Borrador")
     # el menú de WhatsApp no ofrece eliminadas (solo Publicadas)
-    r = client.post("/vacantes", json={"titulo": "Para Borrar", "descripcion": "x", "generar_si_falta": False, "publicar": True})
+    r = client.post("/vacantes", json={"titulo": "Para Borrar", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True})
     VAC2 = r.json()["id"]
     client.post(f"/vacantes/{VAC2}/publicar", json={"plataformas": ["WhatsApp"]})
     client.delete(f"/vacantes/{VAC2}")
@@ -158,7 +160,7 @@ with TestClient(app) as client:
 
     # ================= 3. Eliminar candidato (soft) =================
     print("\n--- 3. DELETE /candidatos/{codigo} (baja lógica de la persona) ---")
-    r = client.post("/vacantes", json={"titulo": "Vendedor", "descripcion": "x", "generar_si_falta": False, "publicar": True})
+    r = client.post("/vacantes", json={"titulo": "Vendedor", "descripcion": "x", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True})
     VAC3 = r.json()["id"]
     client.post(f"/vacantes/{VAC3}/publicar", json={"plataformas": ["WhatsApp"]})
     r = client.post("/candidatos", json={"nombre": "Carla Tres", "telefono": "5533334444", "correo": "carla@x.mx", "vacante": VAC3, "consentimiento": True, "fuente": "RH"})

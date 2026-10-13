@@ -714,7 +714,7 @@ class ResponderIn(BaseModel):
 
 
 @router.post("/publica/{token}/responder")
-def responder(token: str, datos: ResponderIn, db: Session = Depends(get_db)):
+async def responder(token: str, datos: ResponderIn, db: Session = Depends(get_db)):
     """Una pregunta a la vez. Se califica automáticamente; al contestar la última se calcula el resultado
     (Aprobado / No aprobado + %) y se guarda donde corresponde según el tipo de persona."""
     a = _asignacion_por_token(db, token)
@@ -753,6 +753,12 @@ def responder(token: str, datos: ResponderIn, db: Session = Depends(get_db)):
             p.analisis = analisis
         registrar(db, a.nombre_persona or "persona", "curso_completado", "asignacion_curso", a.codigo, {"curso": curso.codigo, "tipo": a.tipo, "calificacion": calificacion, "aprobado": a.aprobado})
     db.commit()
+    if terminado and a.tipo == "candidato" and a.postulacion is not None:
+        # Cambio 28: «Capacitación» de la ruta — aprobado → la ruta sigue sola; reprobado → «No aprobó el curso» (RH decide)
+        from ..services import proceso as sproc
+
+        await sproc.avanzar_seguro(db, a.postulacion)
+        db.commit()
     return {
         "terminado": terminado,
         "correcta": correcta,

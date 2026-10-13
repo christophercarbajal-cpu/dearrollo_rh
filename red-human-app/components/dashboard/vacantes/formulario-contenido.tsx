@@ -33,9 +33,11 @@ import { AlertTriangle, ChevronDown, ChevronUp, MessageSquareText, Sparkles, X }
 import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
-import type { Vacante } from "@/lib/data";
+import type { EtapaCandidato, PasoProceso, Vacante } from "@/lib/data";
 import { PerfilOperativoCampo, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
 import {
+  ETAPAS_PIPELINE,
+  nombreEtapa,
   generarVacanteIA,
   ENFOQUES_ENTREVISTA,
   ORDEN_GUIONES,
@@ -694,6 +696,9 @@ export function FormularioContenidoVacante({
   useEffect(() => {
     if (enfoquePorRuta && value.enfoque_entrevista !== "operativo") onChange({ ...value, enfoque_entrevista: "operativo" });
   }, [enfoquePorRuta, value, onChange]);
+  // Cambio 28: lo que la ruta exige a la vacante (documentos, 3 indispensables, CV); sin esto «Publicar» queda desactivado
+  const reqRuta = requisitosDeRuta(rutaGeneracion && "pasos" in rutaGeneracion ? rutaGeneracion.pasos ?? [] : []);
+  const avisosRuta = avisosPublicacion(value, reqRuta);
   const desactualizado = conGuiones && generado && (firmaGen !== null ? firmaGen !== firmaGeneracion(value, rutaGeneracion) : value.guiones.desactualizado);
 
   async function generar(decision?: "conservar" | "sobrescribir") {
@@ -806,10 +811,18 @@ export function FormularioContenidoVacante({
           rows={generado ? 4 : 3}
           placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
         />
-        <ListaEditable label="Requisitos indispensables" items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida" />
+        <ListaEditable label={reqRuta.minIndispensables ? `Requisitos indispensables * (mínimo ${reqRuta.minIndispensables})` : "Requisitos indispensables"}
+          items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida" />
         <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
         <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
-        <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")} />
+        <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
+          obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
+        {avisosRuta.length > 0 && (
+          <div className="rounded-xl border border-warn/40 bg-warn-soft px-3.5 py-2.5 text-xs text-ink-2" role="alert">
+            <p className="font-semibold text-ink">Falta para publicar (lo pide la ruta):</p>
+            <ul className="mt-1 list-disc pl-4">{avisosRuta.map((a) => <li key={a}>{a}</li>)}</ul>
+          </div>
+        )}
         {enfoquePorRuta ? (
           <div className="rounded-xl border border-border-soft bg-surface-2/50 px-3.5 py-2.5">
             <p className="text-sm font-semibold text-ink">Enfoque de entrevista: Operativo</p>
@@ -934,7 +947,31 @@ export function FormularioContenidoVacante({
  *  y campo libre. Si la lista tiene elementos, la ruta del candidato suma la actividad «Documentos» después del
  *  prefiltro de WhatsApp y el agente le manda la liga para subirlos. Vacía al generar → Red Human la llena con lo que
  *  mencione la descripción. */
-function CampoDocumentos({ valor, onChange }: { valor: DocumentoSolicitado[]; onChange: (v: DocumentoSolicitado[]) => void }) {
+/** Cambio 28: lo que la ruta exige a la vacante. «Documentos» antes de Contratación = el campo es obligatorio; con
+ *  «Documentos» en varias etapas cada documento elige «Se pide en:»; con prefiltro, mínimo 3 indispensables. */
+export function requisitosDeRuta(pasos: PasoProceso[]) {
+  const orden = (e: string) => ETAPAS_PIPELINE.indexOf(e as EtapaCandidato);
+  const docs = pasos.filter((x) => x.tipo === "documentos" && !x.heredado);
+  const etapasDocumentos = [...new Set(docs.map((x) => x.etapa))].sort((a, b) => orden(a) - orden(b));
+  return {
+    documentosObligatorios: docs.some((x) => x.id !== "documentos-vacante" && orden(x.etapa) < orden("Contratación")),
+    etapasDocumentos,
+    minIndispensables: pasos.some((x) => x.tipo === "prefiltro_web" || x.tipo === "prefiltro_whatsapp") ? 3 : 0,
+    exigeCv: pasos.some((x) => x.tipo === "analisis_cv"),
+  };
+}
+
+export function avisosPublicacion(c: Pick<ContenidoVacante, "requisitos" | "documentos_solicitados">, r: ReturnType<typeof requisitosDeRuta>): string[] {
+  const avisos: string[] = [];
+  const n = c.requisitos.filter((x) => x.trim()).length;
+  if (r.minIndispensables && n < r.minIndispensables) avisos.push(`Captura al menos ${r.minIndispensables} requisitos indispensables (hoy ${n}): la ruta incluye prefiltro.`);
+  if (r.documentosObligatorios && !c.documentos_solicitados.length) avisos.push("Indica qué documentos se piden: la ruta incluye «Documentos».");
+  return avisos;
+}
+
+function CampoDocumentos({ valor, onChange, obligatorio = false, etapas = [] }: {
+  valor: DocumentoSolicitado[]; onChange: (v: DocumentoSolicitado[]) => void; obligatorio?: boolean; etapas?: string[];
+}) {
   const [otro, setOtro] = useState("");
   const tiene = (n: string) => valor.some((d) => clave(d.nombre) === clave(n));
   const alternar = (d: DocumentoSolicitado) => onChange(tiene(d.nombre) ? valor.filter((x) => clave(x.nombre) !== clave(d.nombre)) : [...valor, d]);
@@ -946,9 +983,10 @@ function CampoDocumentos({ valor, onChange }: { valor: DocumentoSolicitado[]; on
   const otros = valor.filter((d) => !DOCUMENTOS_SUGERIDOS_VACANTE.some((x) => clave(x.nombre) === clave(d.nombre)));
   return (
     <div>
-      <p className="text-sm font-semibold text-ink">Documentos y fotos que se piden</p>
+      <p className="text-sm font-semibold text-ink">Documentos y fotos que se piden{obligatorio ? " *" : ""}</p>
       <p className="mt-0.5 text-xs text-ink-3">
-        Opcional. Si eliges alguno, al pasar el prefiltro de WhatsApp el candidato recibe una liga para subirlos (foto o PDF).
+        {obligatorio ? "Obligatorio: la ruta incluye «Documentos»." : "Opcional."} Si eliges alguno, al pasar el prefiltro de WhatsApp el
+        candidato recibe una liga para subirlos (foto o PDF); si la ruta no trae «Documentos», se agrega sola después del prefiltro.
       </p>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {DOCUMENTOS_SUGERIDOS_VACANTE.map((d) => (
@@ -973,6 +1011,22 @@ function CampoDocumentos({ valor, onChange }: { valor: DocumentoSolicitado[]; on
           Agregar
         </button>
       </div>
+      {etapas.length > 1 && valor.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {valor.map((d) => (
+            <li key={d.nombre} className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
+              <span className="min-w-[8rem] font-medium text-ink">{d.nombre}</span>
+              <label className="flex items-center gap-1.5">
+                Se pide en:
+                <select value={d.etapa ?? etapas[0]} className="h-8 rounded-lg border border-border-soft bg-surface px-2"
+                  onChange={(e) => onChange(valor.map((x) => (x.nombre === d.nombre ? { ...x, etapa: e.target.value as EtapaCandidato } : x)))}>
+                  {etapas.map((e) => <option key={e} value={e}>{nombreEtapa(e)}</option>)}
+                </select>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

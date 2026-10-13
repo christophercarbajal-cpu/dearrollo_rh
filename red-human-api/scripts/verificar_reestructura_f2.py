@@ -104,7 +104,7 @@ with TestClient(app) as client:
     check(not {q["pregunta"] for q in r.json()["preguntas_filtro"]} & {w["pregunta"] for w in wa} and wa[0]["pregunta"].startswith("Para confirmar"),
           "las de WhatsApp piden el dato concreto, no copian la lista web")
     # 2026-10-11 (tarde): con la ubicación el prefiltro web llega a las 3 preguntas clave mínimas
-    r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana"], "publicar": True, "generar_si_falta": True,
+    r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana", "Mayor de edad"], "publicar": True, "generar_si_falta": True,
                                        "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan",
                                        "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     VAC = r.json()["id"]
@@ -121,7 +121,9 @@ with TestClient(app) as client:
     print("\n--- Respuestas web guardadas y comparación Web vs WhatsApp ---")
     preg_web = v["criterios"][0]["pregunta"]
     r = client.post("/candidatos/postular", data={"vacante": slug, "nombre": "Ana Dual", "telefono": "5511110001", "consentimiento": "true",
-                                                  "respuestas": json.dumps([{"pregunta": preg_web, "respuesta": "Sí"}, {"pregunta": "¿Cuántos años de experiencia tienes?", "respuesta": "2-3 años"}])})
+                                                  "respuestas": json.dumps([{"pregunta": preg_web, "respuesta": "Sí"}, {"pregunta": "¿Cuántos años de experiencia tienes?", "respuesta": "2-3 años"},
+                                                                           # Cambio 28: el 3er indispensable (publicar exige 3) ya viene contestado en el formulario
+                                                                           {"pregunta": v["criterios"][2]["pregunta"], "respuesta": "Sí"}])})
     check(r.status_code in (200, 201), "postulación web con respuestas")
     P = r.json()["postulacion"]
     p = db.query(Postulacion).filter_by(codigo=P).one()

@@ -70,6 +70,10 @@ export interface PasoProceso {
   pruebas?: number[];
   /** 2026-10-10: «Psicometría física» = psicometría que se aplica en persona y se captura (sin proveedor). */
   modalidad?: "fisica";
+  /** Cambio 28: «Otra actividad» — mensaje opcional que el agente manda por WhatsApp al habilitarse. */
+  mensaje?: string;
+  /** Cambio 28: «Capacitación» — curso que el agente asigna (y cuya liga manda) al habilitarse. */
+  curso?: string;
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {
@@ -88,7 +92,7 @@ export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
 /** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
 export interface AccionPaso {
   clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos"
-    | "agregar_correo" | "registrar_resultado" | "reenviar";
+    | "agregar_correo" | "registrar_resultado" | "reenviar" | "marcar_realizada";
   texto: string;
   /** «reenviar»: a quién (p. ej. «Solicitar referencias» = la liga del candidato). */
   a?: string;
@@ -98,6 +102,9 @@ export interface AccionPaso {
   pestana?: "whatsapp" | "documentos" | "evaluaciones" | "contratacion" | "resumen";
 }
 export interface PasoSeguimiento {
+  /** Cambio 28: «Otra actividad» de RH (se cumple con «Marcar como realizada») y curso reprobado de «Capacitación». */
+  otraSimple?: boolean;
+  noAproboCurso?: boolean;
   id: string;
   tipo: string;
   nombre: string;
@@ -609,7 +616,13 @@ export interface Vacante {
   /** Fase 4: prefiltro por WhatsApp independiente (vacío = usa `criterios`) y ubicación estructurada. */
   criteriosWhatsapp?: { pregunta: string; tipo: string; valida: string; respuesta_esperada: string; descarta: boolean; opciones?: string[] }[];
   /** Cambio 25: «Documentos y fotos que se piden». */
-  documentosSolicitados?: { nombre: string; cantidad: number; foto: boolean }[];
+  documentosSolicitados?: { nombre: string; cantidad: number; foto: boolean; etapa?: EtapaCandidato }[];
+  /** Cambio 28: lo que la ruta exige y falta (vacío = se puede publicar) y etapas de «Se pide en:». */
+  faltantesPublicacion?: string[];
+  etapasDocumentos?: EtapaCandidato[];
+  exigeCv?: boolean;
+  documentosObligatorios?: boolean;
+  minIndispensables?: number;
   /** 2026-10-09: ¿la ruta de la vacante pide CV? (false = el formulario público lo deja opcional). */
   pideCv?: boolean;
   /** 2026-10-09: plantillas de conversación por actividad de la ruta (solo en el detalle para RH). */

@@ -471,6 +471,27 @@ async def excepcion_rh(codigo: str, paso_id: str, datos: MotivoIn, db: Session =
     return _salida(p)
 
 
+class RealizadaIn(BaseModel):
+    comentario: str = ""
+
+
+@router.post("/postulaciones/{codigo}/pasos/{paso_id}/realizada")
+async def marcar_realizada(codigo: str, paso_id: str, datos: RealizadaIn, db: Session = Depends(get_db),
+                           u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Cambio 28: «Marcar como realizada» de una «Otra actividad» (solo RH la cumple); la ruta se recalcula en el acto."""
+    from ..services import actividades_rh
+
+    p = _postulacion(db, codigo, cuenta.id)
+    try:
+        actividades_rh.marcar_realizada(db, p, paso_id, u, datos.comentario)
+    except sproc.ErrorProceso as e:
+        raise _error(e)
+    db.commit()
+    await sproc.avanzar_seguro(db, p)
+    db.refresh(p)
+    return _salida(p)
+
+
 @router.post("/postulaciones/{codigo}/pasos/{paso_id}/resultado")
 async def registrar_resultado_actividad(
     codigo: str, paso_id: str,

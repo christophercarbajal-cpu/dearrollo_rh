@@ -64,6 +64,25 @@ def nombre_empresa_candidato(v: Vacante) -> str:
     return v.empresa or ""
 
 
+def _sincronizacion(v) -> dict:
+    """Cambio 28: lo que le falta a la vacante para publicarse según su ruta y las etapas de «Se pide en:»."""
+    try:
+        from sqlalchemy.orm import object_session
+
+        from .services import documentos_vacante as sdv
+        from .services import guiones as sgui
+        from .services import sincronizacion_vacante as ssv
+
+        pasos = sgui.pasos_de_vacante(object_session(v), v)
+        return {"faltantesPublicacion": ssv.faltantes_publicacion(object_session(v), v, pasos),
+                "etapasDocumentos": sdv.etapas_documentos(pasos), "exigeCv": ssv.exige_cv(pasos),
+                "documentosObligatorios": ssv.tiene_documentos_previos([x for x in pasos if not x.get("documentos_vacante")]),
+                "minIndispensables": ssv.MIN_INDISPENSABLES if ssv.tiene_prefiltro(pasos) else 0}
+    except Exception:  # noqa: BLE001 — nunca tumba el detalle de la vacante
+        return {"faltantesPublicacion": [], "etapasDocumentos": [], "exigeCv": False, "documentosObligatorios": False,
+                "minIndispensables": 0}
+
+
 def _pide_cv(v) -> bool:
     from sqlalchemy.orm import object_session
 
@@ -135,6 +154,7 @@ def vacante_dict(
                                               beneficios=v.beneficios or []),
         # ¿la ruta de la vacante pide CV? El formulario público y los textos de publicación lo respetan.
         "pideCv": _pide_cv(v),
+        **_sincronizacion(v),
         # publicaciones por plataforma: {occ|linkedin|portal|whatsapp: {titulo, copy, page, etiquetas}}
         "publicaciones": v.publicaciones or {},
         "textoWhatsapp": v.texto_whatsapp or "",

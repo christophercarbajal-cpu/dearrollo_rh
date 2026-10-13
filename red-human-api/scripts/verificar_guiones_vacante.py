@@ -370,6 +370,8 @@ with TestClient(app) as client:
     r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"plantilla_id": corp["id"]}})
     check("CV" in r.json()["occ"]["page"], "ruta Corporativos (con Análisis de CV): la publicación sí lo pide")
     r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Ayudante masivo", "generar_si_falta": False,
+                                                 # Cambio 28: con prefiltro en la ruta, publicar exige 3 indispensables
+                                                 "requisitos_indispensables": FICHA["requisitos_indispensables"] + ["Mayor de edad"],
                                                  "proceso": {"plantilla_id": masivos["id"]},
                                                  "avisos_cumplimiento": ["Sueldo no capturado («A convenir»): RH debe confirmarlo antes de publicar.",
                                                                          "Falta confirmar el sueldo del puesto.",

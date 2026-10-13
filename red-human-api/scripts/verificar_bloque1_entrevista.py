@@ -96,6 +96,7 @@ with TestClient(app) as client:
     print("\n--- 1. Vacante publicada (HTML al Cliente y responsable) ---")
     CORREOS.clear()
     r = client.post("/vacantes", json={"titulo": "Abogado Fiscalista", "descripcion": "Especialista en auditorías del SAT.", "generar_si_falta": False, "publicar": False,
+                                       "requisitos_indispensables": ["Título en Derecho", "Experiencia en auditorías del SAT", "Cédula profesional"],
                                        "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan", "sueldo_desde": 25000, "sueldo_hasta": 30000, "sueldo_periodicidad": "mensual", "cliente_id": cliente.id, "responsable_id": admin.id})
     VAC = r.json()["id"]
     r = client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["Portal"]})

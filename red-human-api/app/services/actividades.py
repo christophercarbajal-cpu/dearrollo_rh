@@ -368,6 +368,13 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
     if tipo not in sproc.TIPOS_PASO:
         raise HTTPException(400, "Elige el tipo de actividad.")
     es_eval = tipo in sproc.TIPOS_PASO_EVALUACION
+    # Cambio 28: «Otra actividad» sin forma de evaluación = nombre (obligatorio) + mensaje opcional por WhatsApp; se
+    # cumple cuando RH la marca como realizada. Con forma (evaluador, otro sistema, registro) sigue siendo evaluación.
+    otra_simple = tipo == "otra" and not config.get("forma") and not ya
+    if otra_simple:
+        if not nombre:
+            raise HTTPException(400, "Con «Otra» escribe el nombre de la actividad.")
+        es_eval = False
     if es_eval:
         validar_config(tipo, config, ya, resultado, nombre)
         if tipo != "entrevista_humana" and not p.consentimiento:
@@ -375,6 +382,8 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
     # C12 (prueba del 11 de octubre): toda actividad agregada es OBLIGATORIA (ya no hay casilla) y regresa al candidato a
     # la columna de esa actividad si es anterior a la actual
     crudo = {"tipo": tipo, "obligatorio": True, **({"nombre": nombre} if nombre else {}), **extra_alias}
+    if otra_simple and str(datos.get("mensaje") or "").strip():
+        crudo["mensaje"] = str(datos["mensaje"]).strip()[:1000]
     config.pop("cita_adjuntos", None)  # nunca metadata de archivos enviada por el cliente (solo lo que se sube aquí)
     if adjuntos_cita and es_eval and not ya:
         # 2026-10-10: adjuntos de la cita (imágenes/PDF, máx. 5) — se guardan tal cual y salen con el aviso al candidato
@@ -409,6 +418,13 @@ async def agregar(db: Session, p: Postulacion, u: Usuario, cuenta, datos: dict, 
         salida.update({"evaluacion": r["evaluacion"], "mensaje": f"«{paso['nombre']}» registrada como ya realizada."})
         return salida
     if not es_eval:
+        if otra_simple:
+            from . import actividades_rh
+
+            await actividades_rh.revisar(db, p)  # habilitada → el mensaje sale en este momento
+            enviado = ((p.proceso_estado or {}).get(paso["id"]) or {}).get("mensaje_enviado")
+            salida["mensaje"] = (f"«{paso['nombre']}» agregada" + (" y se envió el mensaje al candidato." if enviado else ".")
+                                 + " Márcala como realizada cuando se cumpla.")
         return salida
     x = next((y for y in sproc.estado_pasos(p) if y["id"] == paso["id"]), None)
     if config.get("iniciar_al_guardar") is not False and x is not None and x["disponible"]:

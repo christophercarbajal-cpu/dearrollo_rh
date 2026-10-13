@@ -778,8 +778,12 @@ def normalizar_documentos_vacante(lista) -> List[dict]:
         except (TypeError, ValueError):
             cantidad = 1
         foto = x.get("foto")
-        salida.append({"nombre": nombre, "cantidad": max(1, min(cantidad, MAX_ARCHIVOS_DOCUMENTO)),
-                       "foto": bool(base.get("foto", False) if foto is None else foto)})
+        item = {"nombre": nombre, "cantidad": max(1, min(cantidad, MAX_ARCHIVOS_DOCUMENTO)),
+                "foto": bool(base.get("foto", False) if foto is None else foto)}
+        # Cambio 28: «Se pide en:» — etapa de la actividad «Documentos» que lo pide (vacío = la primera de la ruta)
+        if x.get("etapa") in ETAPAS_CANDIDATO:
+            item["etapa"] = x["etapa"]
+        salida.append(item)
     return salida[:MAX_DOCUMENTOS_VACANTE]
 
 

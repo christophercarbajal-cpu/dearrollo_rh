@@ -135,8 +135,11 @@ with TestClient(app) as client:
     correos = {c[0]: c for c in CORREOS}
     check(admin.correo in correos and "carlos@correo.mx" in correos, "salen los dos correos: entrevistador y candidato")
     asunto_e, html_e = correos[admin.correo][1], correos[admin.correo][2]
-    check(asunto_e.startswith("Nueva entrevista asignada: Carlos Hernández") and "Ver expediente del candidato" in html_e and params[5] in html_e, "correo del entrevistador: plantilla corporativa con CTA al expediente")
-    check("Validar experiencia" in html_e and "Red</span>" in html_e and "<!doctype html>" in html_e.lower(), "…con nota de RH y logo Red Human")
+    # Cambio 21: el aviso al entrevistador con cita es el texto FIJO («Nueva cita: …») con la liga de SU evaluación
+    check(asunto_e.startswith("Nueva cita: Carlos Hernández") and params[5] in html_e,
+          f"correo del entrevistador: texto fijo de la cita con la liga a su evaluación ({asunto_e!r})")
+    # Cambio 21: el texto fijo no repite las indicaciones del candidato (solo «Indicaciones para ti»)
+    check("Red</span>" in html_e and "<!doctype html>" in html_e.lower(), "…con el layout corporativo y logo Red Human")
     asunto_c, html_c = correos["carlos@correo.mx"][1], correos["carlos@correo.mx"][2]
     check("quedó agendada" in asunto_c and "https://teams.microsoft.com/l/meetup-join/abc" in html_c and "10:30 h" in html_c and "septiembre" in html_c, "correo del candidato: fecha, hora y liga de conexión (Teams)")
     check("Grupo CARBE" in html_c and "Unirme a la entrevista" in html_c, "…con la empresa visible y botón de unirse")
@@ -148,7 +151,9 @@ with TestClient(app) as client:
                                                   "notificar": {"candidato_correo": True, "entrevistador_correo": True, **SIN_CLIENTE}})
     check(r.status_code == 200, f"reprogramar entrevista ({r.status_code})")
     cm = {c[0]: c for c in CORREOS}
-    check("modificada" in cm[admin.correo][1].lower() and "<!doctype html>" in cm[admin.correo][2].lower() and "Ver expediente del candidato" in cm[admin.correo][2] and "25 de septiembre" in cm[admin.correo][2], "entrevistador · modificada: HTML corporativo con la nueva fecha y CTA")
+    # Cambio 21: «Hola X, tu cita cambió…» con los datos nuevos y la MISMA liga de su evaluación
+    check("<!doctype html>" in cm[admin.correo][2].lower() and "tu cita cambió" in cm[admin.correo][2] and "25 de septiembre" in cm[admin.correo][2]
+          and "/evaluacion/" in cm[admin.correo][2], f"entrevistador · modificada: HTML corporativo «Tu cita cambió» con la nueva fecha y su liga ({cm[admin.correo][1]!r})")
     check("modificada" in cm["carlos@correo.mx"][1].lower() and "12:00 h" in cm["carlos@correo.mx"][2] and "Unirme a la entrevista" in cm["carlos@correo.mx"][2], "candidato · modificada: HTML con nueva hora y liga")
     CORREOS.clear()
     r = client.post(f"/evaluaciones/{COD}/recordatorio", json={"a": "ambos", "notificar": {"candidato_correo": True, "entrevistador_correo": True, **SIN_CLIENTE}})

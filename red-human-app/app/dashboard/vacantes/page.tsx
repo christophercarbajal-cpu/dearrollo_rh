@@ -43,6 +43,8 @@ import {
   requisitosLista,
   tieneContenidoManual,
   type ContenidoVacante,
+  avisosPublicacion,
+  requisitosDeRuta,
 } from "@/components/dashboard/vacantes/formulario-contenido";
 import { PageHeader } from "@/components/dashboard/parts";
 import {
@@ -191,6 +193,7 @@ export default function Vacantes() {
         ? await cerrarVacante(v.id)
         : await publicarVacante(v.id, v.plataformas.length ? v.plataformas : ["WhatsApp", "Portal"]);
     setCambiandoEstatus("");
+    if (!r.ok) window.alert(r.error); // Cambio 28: la API explica qué le falta (según la ruta) para publicarse
     if (r.ok) recargar(sel?.id === v.id ? v.id : undefined);
   }
 
@@ -853,6 +856,12 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
       if (faltaCliente) faltan.splice(3, 0, "Cliente (o «La Cuenta recluta directo»)");
       if (faltan.length) {
         setError(`Para publicar, completa los datos principales: ${faltan.join(", ")}.`);
+        return;
+      }
+      // Cambio 28: lo que la ruta exige a la vacante (3 indispensables con prefiltro, documentos con «Documentos»)
+      const avisos = avisosPublicacion(contenido, requisitosDeRuta(proceso.pasos));
+      if (avisos.length) {
+        setError(`Para publicar: ${avisos.join(" ")}`);
         return;
       }
     }
@@ -1758,7 +1767,12 @@ function DetalleVacante({
                 );
               })}
             </div>
-            <Button className="w-full" onClick={publicar} disabled={Boolean(ocupado) || !destinos.length || !tieneContenido}>
+            {Boolean(v.faltantesPublicacion?.length) && (
+              <Aviso tono="warn">
+                No se puede publicar todavía (lo pide la ruta): {v.faltantesPublicacion!.join(" ")} Usa «Editar vacante» para completarlo.
+              </Aviso>
+            )}
+            <Button className="w-full" onClick={publicar} disabled={Boolean(ocupado) || !destinos.length || !tieneContenido || Boolean(v.faltantesPublicacion?.length)}>
               <Send className="h-4 w-4" />
               {ocupado === "publicar" ? "Publicando…" : "Publicar"}
             </Button>

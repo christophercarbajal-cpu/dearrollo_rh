@@ -49,6 +49,8 @@ export interface FormActividad {
   refCantidad: number;
   refDatos: string[];
   iniciarAlGuardar: boolean;
+  /** «Otra actividad»: mensaje al candidato. */
+  mensaje: string;
   // resultado (ya realizada)
   conclusion: string;
   score: string;
@@ -58,8 +60,10 @@ export interface FormActividad {
 }
 
 // 2026-10-10: «Psicometría física» se aplica en persona y se captura (la API la guarda como psicometría física)
-const EVALUACIONES = ["entrevista_humana", "medica", "psicometrica", "psicometria_fisica", "socioeconomica", "tecnica", "referencias", "otra"];
-const CON_FORMA = ["tecnica", "socioeconomica", "otra"];
+// Cambio 28: «Otra actividad» ya no es evaluación: nombre (obligatorio) + mensaje opcional por WhatsApp, y queda pendiente
+// hasta que RH la marca como realizada.
+const EVALUACIONES = ["entrevista_humana", "medica", "psicometrica", "psicometria_fisica", "socioeconomica", "tecnica", "referencias"];
+const CON_FORMA = ["tecnica", "socioeconomica"];
 const QUIEN: Record<string, string> = {
   entrevista_humana: "Entrevistador", medica: "Médico o proveedor", referencias: "Responsable de verificar", tecnica: "Evaluador",
   socioeconomica: "Evaluador o empresa", otra: "Evaluador", psicometria_fisica: "Quién la aplica",
@@ -74,7 +78,7 @@ const FORMAS_GENERALES: { valor: Forma; texto: string }[] = [
 const vacio = (tipo = ""): FormActividad => ({
   tipo, nombre: "", obligatorio: false, yaRealizada: false, forma: "", evaluador: evaluadorVacio, conCita: false, cita: citaVacia,
   instrucciones: "", examen: "", pruebaIds: [], ligaExterna: "", proveedor: "", refCantidad: 2, refDatos: ["empresa"],
-  iniciarAlGuardar: true, conclusion: "", score: "", realizadaPor: "", comentarios: "", contactos: [],
+  iniciarAlGuardar: true, mensaje: "", conclusion: "", score: "", realizadaPor: "", comentarios: "", contactos: [],
 });
 
 const esUrl = (v: string) => /^https?:\/\/\S+$/i.test(v.trim());
@@ -244,6 +248,7 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
     setError("");
     const r = await agregarActividadConfigurada(c.id, {
       tipo: f.tipo, nombre: f.nombre.trim() || undefined, obligatorio: true,
+      ...(f.tipo === "otra" && f.mensaje.trim() ? { mensaje: f.mensaje.trim() } : {}),
       ...(f.yaRealizada
         ? { ya_realizada: true, resultado: {
             conclusion: f.conclusion, score: f.score.trim() ? Number(f.score) : null, realizada_por: f.realizadaPor.trim(), comentarios: f.comentarios.trim(),
@@ -281,6 +286,14 @@ export function ModalAgregarActividad({ c, onClose, onAgregada, tipoInicial = ""
             <Fila etiqueta={f.tipo === "otra" ? "Nombre de la actividad *" : "Nombre (opcional)"} error={ver("nombre")}>
               <input className={inputRH} value={f.nombre} onChange={(e) => set("nombre", e.target.value)} placeholder={precarga?.nombre ?? ""} />
             </Fila>
+
+            {f.tipo === "otra" && (
+              <Fila etiqueta="Mensaje al candidato por WhatsApp (opcional)">
+                <textarea className={cn(inputRH, "min-h-[72px] py-2")} value={f.mensaje} maxLength={1000} onChange={(e) => set("mensaje", e.target.value)}
+                  placeholder="Se envía al guardar si la actividad ya está habilitada." />
+                <span className="text-[11px] text-ink-3">Queda pendiente hasta que RH presione «Marcar como realizada».</span>
+              </Fila>
+            )}
 
             {evaluacion && (
               <label className={cn("flex items-center gap-2 rounded-xl border px-3 py-2 text-sm", f.yaRealizada ? "border-brand/40 bg-brand-soft/40" : "border-border-soft")}>

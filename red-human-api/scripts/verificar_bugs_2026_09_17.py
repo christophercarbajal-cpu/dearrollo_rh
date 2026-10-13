@@ -62,7 +62,7 @@ re_.enviar_mensaje = _fake
 
 def nueva_vacante(client, titulo, publicar=True):
     r = client.post("/vacantes", json={
-        "titulo": titulo, "descripcion": "Descripción", "generar_si_falta": False, "publicar": publicar,
+        "titulo": titulo, "descripcion": "Descripción", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": publicar,
         "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan",
         "sueldo_desde": 9000, "sueldo_hasta": 11000, "sueldo_periodicidad": "mensual",
     })
@@ -70,6 +70,8 @@ def nueva_vacante(client, titulo, publicar=True):
     return r.json()
 
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     db = SessionLocal()
     admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()

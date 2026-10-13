@@ -36,8 +36,48 @@ def _plano(t: str) -> str:
 
 # ============================================================ vacante
 
-def de_vacante(v) -> List[dict]:
-    return normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []) if v is not None else []
+def de_vacante(v, pasos: Optional[list] = None, tempranos: Optional[bool] = None) -> List[dict]:
+    """Documentos que pide la vacante. Cambio 28 («Se pide en:»): con `tempranos=True` solo los que se piden ANTES de
+    Contratación (la actividad «Documentos» de la vacante); con `False`, los de Contratación/Onboarding."""
+    docs = normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []) if v is not None else []
+    if tempranos is None:
+        return docs
+    from .proceso import _indice
+
+    if pasos is None:
+        pasos = list(((getattr(v, "proceso", None) or {}).get("pasos")) or [])
+    return [d for d in docs if (_indice(etapa_doc(d, pasos)) < _indice("Contratación")) == tempranos]
+
+
+def etapas_documentos(pasos: Optional[list]) -> List[str]:
+    """Etapas de la ruta con actividad «Documentos» (opciones de «Se pide en:»)."""
+    from .proceso import _indice
+
+    etapas = {x.get("etapa") for x in pasos or [] if isinstance(x, dict) and x.get("tipo") == "documentos" and not x.get("heredado")}
+    return sorted((e for e in etapas if e), key=_indice)
+
+
+def etapa_doc(d: dict, pasos: Optional[list]) -> str:
+    """«Se pide en:» de un documento: la elegida; si no, la primera actividad «Documentos» antes de Contratación (o el
+    Prefiltro, donde se agrega sola después del prefiltro). «Documentos de ingreso» de Contratación es aparte."""
+    from .proceso import _indice
+
+    etapas = etapas_documentos(pasos)
+    if d.get("etapa") in etapas:
+        return d["etapa"]
+    previas = [e for e in etapas if _indice(e) < _indice("Contratación")]
+    if d.get("etapa") and not previas and _indice(d["etapa"]) >= _indice("Contratación"):
+        return d["etapa"]
+    return previas[0] if previas else "Prefiltro"
+
+
+def asegurar_finales(db: Session, p: Postulacion) -> List[Documento]:
+    """Al llegar a Contratación/Onboarding: los documentos de la vacante con «Se pide en: Contratación» (u Onboarding)
+    entran al expediente como obligatorios. Idempotente."""
+    if p.expediente is None or p.vacante is None:
+        return []
+    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=False)
+    return asegurar_documentos(db, p.expediente, docs) if docs else []
 
 
 def detectar(*textos) -> List[dict]:
@@ -67,7 +107,7 @@ def con_documentos_vacante(proc: dict, v) -> dict:
     documentos antes de Contratación (Masivos con documentos), ESA actividad valida los de la vacante (no se duplica)."""
     from .proceso import _indice, _regla, _responsable
 
-    docs = de_vacante(v)
+    docs = de_vacante(v, (proc or {}).get("pasos") or [], tempranos=True)
     if not docs or not proc or not proc.get("pasos"):
         return proc
     nombres = [d["nombre"] for d in docs]
@@ -284,7 +324,7 @@ async def revisar(db: Session, p: Optional[Postulacion]) -> Optional[str]:
     if p is None or not p.activa or not p.consentimiento or _pausado(p) or p.etapa in ("Contratación", "Onboarding"):
         return None
     paso = paso_de(p)
-    docs = de_vacante(p.vacante)
+    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
     analisis = dict(p.analisis or {})
     if paso is None or not docs or (analisis.get("documentos_vacante") or {}).get("solicitado_en"):
         return None
@@ -309,7 +349,7 @@ async def enviar_solicitud(db: Session, p: Postulacion, actor: str) -> dict:
     from .motor_ruta import _avisar
 
     paso = paso_de(p)
-    docs = de_vacante(p.vacante)
+    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
     if p.expediente is None:
         exp = _abrir_expediente(db, p, SimpleNamespace(nombre=actor, correo="", id=None))
         registrar(db, actor, "expediente_anticipado", "postulacion", p.codigo, {"expediente": exp.id, "etapa": p.etapa, "motivo": "documentos_vacante"})

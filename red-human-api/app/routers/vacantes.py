@@ -97,6 +97,18 @@ def _guardar_guiones(v: Vacante, entrada: Optional[dict], por: str, web=None, wh
         raise HTTPException(e.status, e.mensaje)
 
 
+def _sincronizar_ruta(db: Session, v: Vacante, publicar: bool = False) -> None:
+    """Cambio 28: la ruta guardada se ajusta a la vacante (documentos tras el prefiltro, CV con Análisis de CV). Lo que
+    falte según la ruta no impide guardar, pero impide PUBLICAR (409 con la lista)."""
+    from ..services import sincronizacion_vacante as ssv
+
+    ssv.sincronizar(v)
+    if publicar:
+        faltan = ssv.faltantes_publicacion(db, v)
+        if faltan:
+            raise HTTPException(409, "No se puede publicar: " + " ".join(faltan))
+
+
 def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
     """2026-10-11 (tarde): con prefiltro web en la ruta se exigen al menos 3 preguntas clave (si no, no se guarda)."""
     from ..services import guiones as sgui
@@ -546,6 +558,7 @@ def crear(
 
         sgui.generar_para_vacante(db, v, u.nombre)  # conserva lo que RH ya escribió; genera lo que falte de la ruta
     _validar_minimo_prefiltro(db, v, explicito=datos.guiones is not None)
+    _sincronizar_ruta(db, v, publicar=datos.publicar)
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -849,6 +862,7 @@ def actualizar(
                                              ("preguntas_filtro_whatsapp", whatsapp_nuevo)) if x is not None})
     if web_nuevo is not None or "proceso" in cambios:
         _validar_minimo_prefiltro(db, v, explicito=web_nuevo is not None)
+    _sincronizar_ruta(db, v, publicar=v.estado == "Publicada" and cambios.get("estado") == "Publicada")
     # Fase 4: si tocó Estado/Municipio, el texto de ubicación se deriva
     if any(k in cambios for k in ("ubicacion_estado", "ubicacion_municipio")):
         v.ubicacion = texto_ubicacion(v.ubicacion_estado, v.ubicacion_municipio, v.ubicacion)
@@ -965,6 +979,7 @@ async def publicar(
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
     v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    _sincronizar_ruta(db, v, publicar=True)
     if not any(p in PLATAFORMAS for p in datos.plataformas):
         raise HTTPException(400, f"Elige al menos una plataforma válida: {', '.join(PLATAFORMAS)}")
     if not (v.publicaciones or v.descripcion):

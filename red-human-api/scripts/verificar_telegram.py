@@ -97,6 +97,8 @@ def boton(chat, dato, texto="Opción"):
                                                              "reply_markup": {"inline_keyboard": [[{"text": texto, "callback_data": dato}]]}}}}
 
 
+# Cambio 28: con prefiltro en la ruta, publicar exige al menos 3 indispensables
+REQ3 = ["Mayor de edad", "Disponibilidad de horario", "Saber leer y escribir"]
 with TestClient(app) as client:
     def tg(cuerpo, secreto=SECRETO):
         return client.post("/api/webhooks/telegram", json=cuerpo, headers={"X-Telegram-Bot-Api-Secret-Token": secreto})
@@ -129,7 +131,7 @@ with TestClient(app) as client:
     check(ficha["canalMensajeria"] == "telegram" and ficha["telegramDisponible"] is True, "la ficha expone canal y disponibilidad del bot")
     pl = client.post("/procesos/plantillas/ejemplo/paralelo_medica_socioeconomica").json()
     r = client.post("/vacantes", json={
-        "titulo": "Operador de almacén", "descripcion": "Descripción", "generar_si_falta": False, "publicar": True,
+        "titulo": "Operador de almacén", "descripcion": "Descripción", "generar_si_falta": False, "requisitos_indispensables": REQ3, "publicar": True,
         "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan", "sueldo_desde": 9000, "sueldo_hasta": 11000,
         "sueldo_periodicidad": "mensual", "proceso": {"plantilla_id": pl["id"]},
     })

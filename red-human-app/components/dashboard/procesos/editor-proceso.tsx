@@ -17,6 +17,7 @@ import { inputRH } from "@/components/dashboard/modulos-rh";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import { fetchCursos, fetchPruebasPsicometricas, type Curso, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica } from "@/lib/api";
 import type { EtapaCandidato, EtapasProceso, PasoProceso } from "@/lib/data";
+import { aplicarOrdenFijo, claveCatalogo, conFlechas, insertarSugerido } from "@/lib/orden-proceso";
 import { cn } from "@/lib/utils";
 
 const selectRH = cn(inputRH, "h-10 pr-8");
@@ -26,14 +27,6 @@ const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "lla
 // Cambio 28: «Otra actividad» (nombre + mensaje) y «Capacitación» (curso) también se configuran aquí
 // Cambio 30: la solicitud ya no tiene casilla «exige CV»: se elige «Solicitud web sin CV» o «con CV» del catálogo
 const CON_DETALLE = new Set(["entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
-
-/** Entrada del catálogo de un paso guardado (Cambio 30: la solicitud web es «sin CV» o «con CV»; la psicometría física
- *  es su propia entrada). */
-export function claveCatalogo(p: Pick<PasoProceso, "tipo" | "con_cv" | "modalidad">): string {
-  if (p.tipo === "solicitud_web") return p.con_cv ? "solicitud_con_cv" : "solicitud_sin_cv";
-  if (p.tipo === "psicometrica" && p.modalidad === "fisica") return "psicometria_fisica";
-  return p.tipo;
-}
 
 function nuevoId(pasos: PasoProceso[], tipo: string): string {
   const base = tipo.replace(/_/g, "-");
@@ -86,8 +79,10 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
     fetchCursos().then((l) => setCursos((l ?? []).filter((x) => x.estado === "Publicado")));
   }, []);
   const tipos = useMemo(() => Object.fromEntries(opciones.tiposPaso.map((t) => [t.valor, t])), [opciones]);
+  const orden = useMemo(() => opciones.tiposPaso.map((t) => t.valor), [opciones]);
 
-  const emitir = (lista: PasoProceso[]) => onChange(lista.map((p) => delCatalogo(p, tipos[claveCatalogo(p)])), etapas);
+  const emitir = (lista: PasoProceso[]) =>
+    onChange(aplicarOrdenFijo(lista, orden).map((p) => delCatalogo(p, tipos[claveCatalogo(p)])), etapas);
   const cambiarPaso = (id: string, cambios: Partial<PasoProceso>) => emitir(pasos.map((p) => (p.id === id ? { ...p, ...cambios } : p)));
   const quitarPaso = (id: string) => emitir(pasos.filter((p) => p.id !== id));
   function mover(id: string, delta: number) {
@@ -95,7 +90,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
     const mismos = pasos.map((p, k) => ({ p, k })).filter((x) => x.p.etapa === pasos[i].etapa);
     const pos = mismos.findIndex((x) => x.k === i);
     const destino = mismos[pos + delta];
-    if (!destino) return;
+    if (!destino || !conFlechas(pasos[i]) || !conFlechas(destino.p)) return; // Prefiltro y «Contrato y firma» son fijos
     const copia = [...pasos];
     [copia[i], copia[destino.k]] = [copia[destino.k], copia[i]];
     emitir(copia);
@@ -110,7 +105,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
       emitir(pasos.map((x) => (esSolicitud(x) ? { ...p, id: x.id } : x)));
       return;
     }
-    emitir([...pasos, p]);
+    emitir(insertarSugerido(pasos, p, orden)); // Cambio 30: se acomoda sola en su posición sugerida
     if (CON_DETALLE.has(tipo)) setAbierto(p.id);
   }
 
@@ -164,8 +159,12 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                       <span className="text-[11px] text-ink-3">{t?.texto ?? p.tipo}</span>
                       {!soloLectura && (
                         <span className="ml-auto flex items-center">
-                          <button type="button" onClick={() => mover(p.id, -1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>
-                          <button type="button" onClick={() => mover(p.id, 1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Bajar"><ArrowDown className="h-3.5 w-3.5" /></button>
+                          {conFlechas(p) && (
+                            <>
+                              <button type="button" onClick={() => mover(p.id, -1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>
+                              <button type="button" onClick={() => mover(p.id, 1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Bajar"><ArrowDown className="h-3.5 w-3.5" /></button>
+                            </>
+                          )}
                           <button type="button" onClick={() => quitarPaso(p.id)} className="grid h-8 w-8 place-items-center rounded-lg text-bad hover:bg-bad-soft" aria-label="Quitar actividad"><Trash2 className="h-3.5 w-3.5" /></button>
                         </span>
                       )}

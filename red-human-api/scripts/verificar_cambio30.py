@@ -10,6 +10,8 @@ actividad (no bloquea, registra la respuesta con su fecha).
 Bloque 3: Capacitación «En plataforma» (Filtro RH) / «Presencial» (Filtro humano) / a elegir (Contratación y Onboarding);
 presencial = citas de la entrevista humana con «Instructor» y textos propios; en plataforma = curso por WhatsApp
 (reprueba → «No aprobó el curso»); «Otra actividad» bloquea la ruta hasta «Marcar como realizada».
+Bloque 4: motor de ordenamiento del editor (lib/orden-proceso.ts): posición sugerida al agregar, Prefiltro fijo y sin
+flechas, «Contrato y firma» siempre al final de Contratación y sin flechas, flechas libres en las demás etapas.
 """
 
 import asyncio
@@ -359,6 +361,46 @@ with TestClient(app) as client:
     r = client.post(f"/procesos/postulaciones/{pr.codigo}/pasos/otra/realizada", json={})
     db.refresh(pr)
     check(r.status_code == 200 and pr.etapa == "Entrevista Humana", "«Marcar como realizada» → la ruta sigue sola")
+
+    # ================= Bloque 4 · motor de ordenamiento del editor =================
+    print("\n--- Bloque 4 · auto-acomodo y flechas por etapa ---")
+    import shutil
+    import subprocess
+
+    orden = [t["valor"] for t in client.get("/procesos/opciones").json()["tiposPaso"]]
+    nodo = shutil.which("node")
+    programa = r"""
+const ts = require(process.argv[1] + '/node_modules/typescript');
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1] + '/lib/orden-proceso.ts', 'utf8');
+const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+const m = { exports: {} }; new Function('module', 'exports', js)(m, m.exports); const o = m.exports;
+const orden = JSON.parse(process.argv[2]);
+const P = (id, tipo, etapa, extra) => Object.assign({ id, tipo, etapa }, extra || {});
+let pasos = [P('pw', 'prefiltro_whatsapp', 'Prefiltro'), P('cc', 'carta_contrato', 'Contratación'), P('eh', 'entrevista_humana', 'Entrevista Humana')];
+const r = {};
+r.solicitud = o.insertarSugerido(pasos, P('sol', 'solicitud_web', 'Prefiltro'), orden).filter(x => x.etapa === 'Prefiltro').map(x => x.id);
+r.docs = o.insertarSugerido(pasos, P('doc', 'documentos', 'Prefiltro'), orden).filter(x => x.etapa === 'Prefiltro').map(x => x.id);
+r.oferta = o.insertarSugerido(pasos, P('of', 'oferta', 'Contratación'), orden).filter(x => x.etapa === 'Contratación').map(x => x.id);
+r.otraContratacion = o.insertarSugerido(pasos, P('ot', 'otra', 'Contratación'), orden).filter(x => x.etapa === 'Contratación').map(x => x.id);
+r.medica = o.insertarSugerido(pasos, P('med', 'medica', 'Entrevista Humana'), orden).filter(x => x.etapa === 'Entrevista Humana').map(x => x.id);
+const desordenado = [P('pw', 'prefiltro_whatsapp', 'Prefiltro'), P('sol', 'solicitud_web', 'Prefiltro'), P('cc', 'carta_contrato', 'Contratación'), P('of', 'oferta', 'Contratación')];
+r.fijo = o.aplicarOrdenFijo(desordenado, orden).map(x => x.id);
+r.flechas = [o.conFlechas(P('pw', 'prefiltro_whatsapp', 'Prefiltro')), o.conFlechas(P('cc', 'carta_contrato', 'Contratación')),
+             o.conFlechas(P('of', 'oferta', 'Contratación')), o.conFlechas(P('eh', 'entrevista_humana', 'Entrevista Humana'))];
+console.log(JSON.stringify(r));
+"""
+    salida = subprocess.run([nodo, "-e", programa, str(APP_DIR), json.dumps(orden)], capture_output=True, text=True, encoding="utf-8")
+    check(salida.returncode == 0, f"el motor de orden corre en Node ({salida.stderr[:200]})")
+    r = json.loads(salida.stdout.strip().splitlines()[-1])
+    check(r["solicitud"] == ["sol", "pw"] and r["docs"] == ["pw", "doc"], "al agregar, cada actividad cae en su posición sugerida (Prefiltro)")
+    check(r["oferta"] == ["of", "cc"] and r["otraContratacion"] == ["ot", "cc"], "en Contratación todo queda ANTES de «Contrato y firma»")
+    check(r["medica"] == ["eh", "med"], "en las demás etapas también se acomoda sola en su lugar sugerido")
+    check(r["fijo"] == ["sol", "pw", "of", "cc"], "Prefiltro fijo en orden de catálogo y «Contrato y firma» siempre al final")
+    check(r["flechas"] == [False, False, True, True], "sin flechas en Prefiltro ni en «Contrato y firma»; flechas libres en lo demás")
+    ed = leer("components/dashboard/procesos/editor-proceso.tsx")
+    check("{conFlechas(p) && (" in ed and "insertarSugerido(pasos, p, orden)" in ed and "aplicarOrdenFijo(lista, orden)" in ed,
+          "el editor usa el motor: inserta en la posición sugerida, oculta las flechas y respeta lo fijo")
 
     app.dependency_overrides.clear()
     db.close()

@@ -275,7 +275,7 @@ with TestClient(app) as client:
           "«No entiendo» → reformula la MISMA pregunta (no la toma como «No»)")
     check(recargar(pt.codigo).activa, "…y no cierra la postulación")
     salida = tg(text="Solo puedo en la mañana")
-    check(len(salida) == 1 and salida[0].startswith("Para no equivocarme") and "rolar turnos" in salida[0],
+    check(len(salida) == 1 and salida[0].startswith("Claro. Solo para tenerlo en cuenta,") and "rolar turnos" in salida[0],
           "respuesta ambigua → pide aclaración antes de decidir")
     check(recargar(pt.codigo).activa, "…y todavía no decide")
     salida = tg(text="/start")

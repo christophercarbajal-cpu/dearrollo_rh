@@ -71,7 +71,7 @@ check(not any(q.get("dato") == "escolaridad" for q in wa2) and not any(q.get("da
       "sin escolaridad en la vacante no se pregunta; sin sueldo capturado tampoco (nada inventado)")
 nivel = ia.FichaGuion(titulo="Ayudante", requisitos_indispensables=["Secundaria terminada"])
 _, wa3 = ia.asegurar_prefiltros([], [], nivel, hay_web=False, hay_whatsapp=True)
-check(wa3[0].get("dato") == "escolaridad" and wa3[0]["descarta"], "escolaridad INDISPENSABLE → «¿Hasta qué año estudiaste?» que descarta")
+check(wa3[0].get("dato") == "escolaridad" and wa3[0]["descarta"], "escolaridad INDISPENSABLE → «¿Cuál es tu último grado de estudios?» que descarta")
 check(any("Falta la pregunta del indispensable" in x for x in ia.revisar_prefiltro_whatsapp(wa[1:], FICHA.requisitos_indispensables)),
       "la validación detecta un indispensable sin pregunta")
 check(any("une dos ideas" in x for x in ia.revisar_prefiltro_whatsapp([{"pregunta": "¿Dónde vives y cuánto tardas?"}], [])),
@@ -282,7 +282,7 @@ with TestClient(app) as client:
     r = turno(C, "Hola")
     check(r["respuesta"].endswith("¿Puedes cargar cajas de 25 kg?"), "la primera pregunta es el indispensable")
     r = turno(C, "Sí, sin problema")
-    check("¿Hasta qué año estudiaste?" in r["respuesta"], "después la escolaridad de la descripción")
+    check("¿Cuál es tu último grado de estudios?" in r["respuesta"], "después la escolaridad de la descripción")
     turno(C, "Llegué hasta 1ro de secundaria")
     turno(C, "No")
     pc_ = db.query(Postulacion).filter_by(codigo=C).one()

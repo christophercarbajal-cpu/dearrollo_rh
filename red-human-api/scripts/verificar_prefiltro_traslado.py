@@ -170,7 +170,7 @@ with TestClient(app) as client:
 
     p = nueva("Ana Torres")
     r = turno(p, "Hola")
-    check(r["respuesta"].endswith("¿Hasta qué año estudiaste?") and "Parcial" not in r["respuesta"], "1) primero la escolaridad exacta")
+    check(r["respuesta"].endswith("¿Cuál es tu último grado de estudios?") and "Parcial" not in r["respuesta"], "1) primero la escolaridad exacta")
     r = turno(p, "pues normal")
     check(r["respuesta"] == pconv.REPREGUNTA_DATO["escolaridad"], "respuesta vaga → repregunta por un dato concreto")
     r = turno(p, "Terminé la secundaria")
@@ -255,7 +255,7 @@ with TestClient(app) as client:
     w.analisis = {"respuestas_web": [{"pregunta": web[0]["pregunta"], "respuesta": "Sí"}]}
     db.commit()
     r = turno(w, "Hola")
-    check("¿Hasta qué año estudiaste?" in r["respuesta"], "con «Sí» en el formulario también pide la escolaridad exacta")
+    check("¿Cuál es tu último grado de estudios?" in r["respuesta"], "con «Sí» en el formulario también pide la escolaridad exacta")
     r = turno(w, "primero de secundaria")
     w = fresca(w)
     check(not w.activa and w.motivo_cierre == "descartado" and (w.analisis.get("inconsistencias") or [{}])[-1].get("fuente") == "reconfirmacion",

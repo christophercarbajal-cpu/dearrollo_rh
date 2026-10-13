@@ -1401,9 +1401,10 @@ def prompt_entrevistador(
     ) or "sin datos adicionales"
     empresa_txt = empresa or "la empresa"
     return (
-        "Eres Red Human, la entrevistadora de Red Human (México). Te presentas SOLO como «Red Human»: nunca "
-        "como 'asistente virtual', 'agente de inteligencia artificial', 'asistente de reclutamiento' ni con un "
-        "nombre de persona. Si te preguntan directamente si eres una IA, respóndelo con naturalidad y sigue. "
+        f"Eres Red Human, la entrevistadora de RH (México). Si te presentas, usa EXACTAMENTE «{presentacion_bot(empresa)}» "
+        "(Cambio 31): nunca otro título — nunca como 'asistente virtual', 'agente de inteligencia artificial', 'asistente de "
+        "reclutamiento' ni con un nombre de persona. Si te preguntan directamente si eres una IA, respóndelo "
+        "con naturalidad y sigue. "
         f"Entrevistas a {candidato_nombre} para el puesto de {titulo} en {empresa_txt}. "
         f"Cuando hables de la empresa, llámala siempre «{empresa_txt}», nunca de otra forma.\n"
         f"Requisitos indispensables: {requisitos or 'no especificados'}.\n"
@@ -1442,6 +1443,7 @@ def prompt_entrevistador(
         "(7) no evalúes en voz alta, no prometas nada sobre el resultado: PROHIBIDO decir «tu perfil es "
         "compatible», «vas muy bien», «seguro pasas» o que avanzará en el proceso — la decisión la toma una persona "
         "de RH; (8) cuando ya tengas suficiente de un tema, cambia de tema sin anunciarlo.\n\n"
+        + TONO_CORPORATIVO.format(nombre=candidato_nombre) + "\n\n"
         f"CUMPLIMIENTO (NO NEGOCIABLE): nunca preguntes, insinúes ni registres datos sobre {DATOS_SENSIBLES_PROHIBIDOS}. "
         "Si la persona los menciona por su cuenta, no repreguntes, no comentes y sigue con el tema laboral.\n\n"
         "CIERRE: cuando hayas cubierto los temas (o la persona no tenga más que aportar), despídete en un "
@@ -1523,7 +1525,7 @@ def entrevista_turno(system_prompt: str, historial: List[dict], preguntas: Optio
         text_format=TurnoEntrevista,
     )
     turno = resp.output_parsed
-    turno.respuesta = sin_promesas(turno.respuesta)  # retro 2026-10-09: garantizado en código, no solo en el prompt
+    turno.respuesta = sin_elogios(sin_promesas(turno.respuesta))  # retro 2026-10-09 / Cambio 31: en código, no solo en el prompt
     turno.respuesta = dosificar_agradecimiento(sin_conteo(turno.respuesta), historial)  # Cambio 19
     # 2026-10-11: la marca de una condicional del guion («[Solo si responde sí]») nunca llega al candidato
     turno.respuesta = re.sub(r"\[\s*solo si (?:responde|contesta|dice)[^\]]*\]\s*", "", turno.respuesta, flags=re.IGNORECASE).strip()
@@ -1546,7 +1548,31 @@ _RE_CONTEO = re.compile(
     re.IGNORECASE)
 _RE_GRACIAS_INICIAL = re.compile(r"^\s*[¡!]?\s*(perfecto|muy bien|excelente|genial|de acuerdo|ok|vale|claro)?[,!]?\s*(muchas )?gracias"
                                  r"( por [^.!?\n]*)?\s*[.!,]*\s*(🙌|🙂|😊|👍)?\s*", re.IGNORECASE)
-VARIANTES_GRACIAS = ("Gracias.", "Perfecto, gracias.", "Muy bien, gracias.", "Gracias por contarme.")
+# Cambio 31: agradecimientos BREVES y VARIADOS, nunca elogios ni calificaciones («¡Excelente!», «Muy bien»)
+VARIANTES_GRACIAS = ("Gracias, {nombre}.", "Entendido.", "Gracias.", "Anotado.")
+TONO_CORPORATIVO = (
+    "TONO (experto de RH, corporativo): (a) agradece BREVE y con variedad — «Gracias, {nombre}.», «Entendido.», «Anotado.» — "
+    "y no en cada mensaje; (b) PROHIBIDO elogiar o calificar respuestas («¡Excelente!», «¡Muy bien!», «¡Perfecto!», «Buena "
+    "respuesta», «Qué interesante»); (c) PROHIBIDO frases de formulario («Para confirmar:», «Primero confírmame:», «Para no "
+    "equivocarme») y ejemplos de formato («Por ejemplo, «15 mil al mes»»): pregunta directo; (d) la escolaridad se pregunta "
+    "EXACTAMENTE «" + "¿Cuál es tu último grado de estudios?" + "»; (e) EVASIVAS («lo que ofrezcan», «depende», «lo que sea»): "
+    "repregunta UNA SOLA VEZ con suavidad («Claro. Solo para tenerlo en cuenta, ¿con qué cantidad…?»); si vuelve a evadir, "
+    "registra lo que dijo (p. ej. «Flexible») y AVANZA sin insistir."
+)
+_RE_ELOGIO = re.compile(r"^\s*[¡!]?\s*(excelente|muy bien|perfecto|genial|fant[aá]stico|maravilloso|qu[eé] bien|qu[eé] interesante|"
+                        r"buen[ií]simo|incre[ií]ble|s[uú]per|estupendo|buena respuesta|muy buena respuesta|me encanta)\b"
+                        r"( respuesta)?\s*[!.,]*\s*(🙌|🙂|😊|👍|👏)?\s*", re.IGNORECASE)
+
+
+def sin_elogios(texto: str) -> str:
+    """Cambio 31: quita el elogio o la calificación con que arranca un mensaje («¡Excelente! ¿Y…?» → «¿Y…?»)."""
+    t = texto or ""
+    m = _RE_ELOGIO.match(t)
+    if not m or not t[m.end():].strip():
+        return t
+    resto = t[m.end():].strip()
+    i = 1 if resto.startswith("¿") else 0
+    return resto[:i] + resto[i:i + 1].upper() + resto[i + 1:]
 CADA_CUANTOS_GRACIAS = 3
 
 
@@ -2727,7 +2753,8 @@ def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[st
     req = (criterio or pregunta).strip().rstrip(".?¿")
     req = req[:1].lower() + req[1:]
     if tipo == "numero":
-        base = (f"Te lo pregunto de otra forma: ¿cuánto tiempo llevas con esto: {req}? Puedes decirme, por ejemplo, «2 años» o «6 meses»."
+        # Cambio 31: sin ejemplos de formato
+        base = (f"Te lo pregunto de otra forma: ¿cuánto tiempo llevas con esto: {req}?"
                 if intento <= 1 else f"En pocas palabras: ¿cuántos años o meses de experiencia tienes en {req}?")
     elif tipo == "opcion":
         base = (f"Te lo pregunto de otra forma: para esta vacante se necesita {req}. ¿Me cuentas con tus palabras si lo cumples?"
@@ -2743,7 +2770,7 @@ def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[st
             model=MODEL,
             instructions=("Reformula la pregunta de prefiltro para un candidato que dijo que no la entendió: UNA sola pregunta "
                           "cerrada que se conteste con Sí o No, palabras sencillas, español mexicano, máximo 25 palabras, sin "
-                          "autopercepciones. Termina con «Respóndeme Sí o No.»"),
+                          "autopercepciones, sin «Para confirmar», sin elogios y sin ejemplos de formato. Termina con «Respóndeme Sí o No.»"),
             input=f"Pregunta original: {pregunta}\nRequisito: {criterio}",
         )
         texto = (getattr(resp, "output_text", "") or "").strip()
@@ -3069,8 +3096,9 @@ def condiciones_descripcion(ficha: FichaGuion) -> List[str]:
 
 
 def pregunta_escolaridad(nivel: str, descarta: bool) -> dict:
-    """«¿Hasta qué año estudiaste?»: descarta si el nivel es INDISPENSABLE; si viene de la descripción, se registra."""
-    return {"pregunta": "¿Hasta qué año estudiaste?", "tipo": "dato", "dato": "escolaridad", "valida": nivel,
+    """«¿Cuál es tu último grado de estudios?» (Cambio 31): descarta si el nivel es INDISPENSABLE; si viene de la
+    descripción, se registra."""
+    return {"pregunta": PREGUNTA_ESCOLARIDAD, "tipo": "dato", "dato": "escolaridad", "valida": nivel,
             "respuesta_esperada": nivel, "descarta": descarta, "regla": regla_descarta(nivel) if descarta else REGLA_REGISTRA,
             "opciones": []}
 
@@ -3196,7 +3224,7 @@ def asegurar_prefiltros(web: List[dict], whatsapp: List[dict], ficha: FichaGuion
                       and not _RE_CUAL_OPCION.search(q.get("pregunta") or "") and not _une_dos_ideas(q.get("pregunta") or "")}
             for q in [x for x in salida_web if x.get("descarta")]:
                 if nivel and _norm_req(q["valida"]) == _norm_req(nivel):
-                    continue  # la escolaridad exacta («¿Hasta qué año estudiaste?») ya reconfirma el nivel de estudios
+                    continue  # la escolaridad exacta («¿Cuál es tu último grado de estudios?») ya reconfirma el nivel de estudios
                 det = pregunta_reconfirmacion(q["valida"])
                 propia = reconf.get(_norm_req(q["valida"]))
                 if propia and propia["tipo"] == det["tipo"] and propia.get("opciones") == det["opciones"]:

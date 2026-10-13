@@ -311,7 +311,7 @@ with TestClient(app) as client:
     r = chat(q1, "Terminé la secundaria")
     check("llevas en almacén" in r, f"siguiente indispensable con dato concreto (pregunta natural, Cambio 31) → «{r}»")
     r = chat(q1, "sí")
-    check("tiempo exacto" in r, "un «sí» a secas no es un dato: se pide el dato concreto")
+    check(r.startswith("Claro. Solo para tenerlo en cuenta,") and "cuánto tiempo" in r, "un «sí» a secas no es un dato: se pide el dato concreto")
     r = chat(q1, "2 años")
     check("rolar turnos" in r, f"→ «{r}»")
     r = chat(q1, "Puedo mañana y tarde")

@@ -172,6 +172,8 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
              "pregunta": str(pw["pregunta"]).strip(), "chat": str(pw["pregunta"]).strip(), "indispensable": False,
              "esperada": "si", "tipo": "dato"}
         if pw["dato"] == "escolaridad":
+            d["pregunta"] = d["chat"] = ia.PREGUNTA_ESCOLARIDAD  # Cambio 31: siempre «¿Cuál es tu último grado de estudios?»
+        if pw["dato"] == "escolaridad":
             # Cambio 19: el nivel sale de la vacante — indispensable («Descarta si…») o de la descripción («Se registra»)
             nivel = nivel_estudios(str(pw.get("respuesta_esperada") or pw.get("valida") or ""))[0]
             if nivel is not None and ia.RE_NIVEL_ESTUDIOS.search(str(pw.get("respuesta_esperada") or pw.get("valida") or "")):
@@ -235,7 +237,9 @@ def dato_expectativa(v) -> dict:
     return {"id": "dato-sueldo", "clave": "sueldo", "dato": "sueldo", "expectativa": True, "tope": tope_sueldo(v),
             "criterio": f"Sueldo: {(getattr(v, 'sueldo', '') or '').strip()}".rstrip(": ") or "Expectativa de sueldo",
             "pregunta": q, "chat": q, "indispensable": False, "esperada": "si", "tipo": "dato",
-            "repregunta": "¿Qué cantidad tienes en mente? Por ejemplo, «15 mil al mes»."}
+            # Cambio 31: evasiva («lo que ofrezcan») → UNA repregunta suave, sin ejemplos de formato
+            "repregunta": "Claro. Solo para tenerlo en cuenta, ¿con qué cantidad " + {"semanal": "a la semana", "quincenal": "a la quincena",
+                                                                                     "anual": "al año"}.get(periodo, "al mes") + " te sentirías cómodo?"}
 
 
 _RE_MONTO = re.compile(r"(\d+(?:\.\d+)?)\s*(mil|k)?\b")
@@ -446,9 +450,10 @@ def medio_de(texto: str) -> Optional[str]:
 
 
 REPREGUNTA_DATO = {
-    "escolaridad": "Para tenerlo claro: ¿cuál fue el último año que terminaste? Por ejemplo, «3.º de secundaria» o «2.º de prepa».",
+    # Cambio 31: repreguntas SUAVES y sin ejemplos de formato
+    "escolaridad": "Claro. Solo para tenerlo en cuenta, ¿hasta qué grado llegaste en la escuela?",
     "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
-    "traslado": "¿Cuántos minutos más o menos? Por ejemplo, «40 minutos» o «1 hora y media».",
+    "traslado": "Claro. Solo para tenerlo en cuenta, ¿cuántos minutos te tomaría llegar?",
     "transporte": "¿Qué transporte usarías, por ejemplo camión, metro o auto?",
     "sueldo": "Solo para confirmar: ¿el sueldo te parece bien?",
 }
@@ -499,6 +504,9 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
         d["traslado_min"] = extra.get("minutos")
     elif c["dato"] == "transporte":
         d["transporte_medio"] = extra.get("medio") or texto.strip()[:60]
+    elif c["dato"] == "sueldo" and c.get("expectativa") and extra.get("flexible"):
+        d["sueldo"] = "Flexible"  # Cambio 31: evadió dos veces la cifra — se registra y se avanza
+        d["sueldo_expectativa"] = None
     elif c["dato"] == "sueldo" and c.get("expectativa"):
         # Cambio 24: expectativa del candidato; más de 20 % arriba del sueldo de la vacante → Puntos por validar
         d["sueldo_expectativa"] = extra.get("monto")
@@ -1092,7 +1100,7 @@ def saludo(p: Postulacion, pregunta: str, presentar: bool = True) -> str:
     return f"Hola{', ' + nombre if nombre else ''}. {presentacion_bot(empresa_de(p))} {q}"
 
 
-def con_acuse(e: dict, pregunta: str) -> str:
+def con_acuse(e: dict, pregunta: str, nombre: str = "") -> str:
     """«Gracias» como mucho una vez cada 3 mensajes, con variantes (Cambio 19); los demás van directo a la pregunta."""
     from .ia import CADA_CUANTOS_GRACIAS, VARIANTES_GRACIAS
 
@@ -1103,7 +1111,8 @@ def con_acuse(e: dict, pregunta: str) -> str:
     e["sin_gracias"] = 0
     i = int(e.get("variante_gracias") or 0)
     e["variante_gracias"] = i + 1
-    return f"{VARIANTES_GRACIAS[i % len(VARIANTES_GRACIAS)]} {pregunta}"
+    variantes = [x for x in VARIANTES_GRACIAS if nombre or "{nombre}" not in x]  # sin nombre: sin repetir «Gracias.»
+    return f"{variantes[i % len(variantes)].format(nombre=nombre)} {pregunta}"
 
 
 def _limite_minutos(texto: str) -> Optional[int]:
@@ -1214,6 +1223,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                       {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": 1})
             return await responder(pendiente.get("repregunta") or REPREGUNTA_DATO[pendiente["dato"]], aclaracion=True)
         fuente = canal_registro(canal)
+        if valor is None and pendiente.get("expectativa") and not pendiente.get("indispensable"):
+            # Cambio 31: segunda evasiva sobre la expectativa de sueldo → se registra «Flexible» y se avanza, sin insistir ni
+            # mandarlo a Puntos por validar (los demás datos vagos siguen yendo a Puntos por validar, y también se avanza)
+            valor, extra = "si", {"flexible": True, "evasiva": texto.strip()[:200]}
         if valor is None:
             _no_concluyente(db, p, e, pendiente, texto.strip(), fuente)
         else:
@@ -1247,7 +1260,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         n_txt = numero_sin_unidad(pendiente, texto)
         unidad[pendiente["id"]] = n_txt
         e["unidad_pendiente"] = unidad
-        return await responder(f"Para no equivocarme: ¿son {n_txt} años o {n_txt} meses?", aclaracion=True)
+        return await responder(f"Claro. Solo para tenerlo en cuenta, ¿son {n_txt} años o {n_txt} meses?", aclaracion=True)
     if pendiente is not None:
         valor = clasificar_dato(pendiente, texto) if pendiente.get("reconfirma") else clasificar(pendiente, texto)
         if valor is None and (pendiente["indispensable"] or pendiente.get("reconfirma")):
@@ -1261,9 +1274,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                 e["aclaraciones"] = aclaraciones
                 registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                           {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
-                pide = ("Dime el tiempo exacto, por ejemplo «3 años» o «8 meses»." if pendiente.get("tipo") == "numero"
-                        else "Cuéntame con tus palabras." if pendiente.get("opciones") else "Respóndeme *Sí* o *No*, por favor.")
-                return await responder(f"Para no equivocarme: {pendiente['chat']}\n\n{pide} 🙂", aclaracion=True)
+                # Cambio 31: repregunta SUAVE, sin frases de formulario ni ejemplos de formato
+                q = pendiente["chat"].strip()
+                q = q[0] + q[1].lower() + q[2:] if q.startswith("¿") and len(q) > 2 else q[:1].lower() + q[1:]
+                return await responder(f"Claro. Solo para tenerlo en cuenta, {q}", aclaracion=True)
         if pendiente["id"] not in (e.get("respuestas") or {}):
             e["respuestas"] = {**(e.get("respuestas") or {}),
                                pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
@@ -1288,7 +1302,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             # Cambio 19: saludo EXACTO; la primera pregunta es un indispensable (orden de `criterios_de`) y nunca se
             # anuncia cuántas preguntas faltan
             return await responder(saludo(p, siguiente["chat"], presentar=not post_plantilla))
-        return await responder(con_acuse(e, siguiente["chat"]))
+        _n = nombre_ficha(p) or ""
+        return await responder(con_acuse(e, siguiente["chat"], "" if _n.startswith("Candidato") else _n.split(" ")[0]))
 
     # Cumple: se aprueba al instante y la ruta sigue sola (la liga de la entrevista sale por el canal conectado)
     _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables de la vacante")

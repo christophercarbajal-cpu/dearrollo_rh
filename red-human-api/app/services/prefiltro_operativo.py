@@ -19,17 +19,18 @@ import unicodedata
 from typing import List, Optional, Tuple
 
 EDAD_MINIMA = 18
+# Cambio 31: repregunta SUAVE y sin ejemplos de formato («Claro. Solo para tenerlo en cuenta, …»), una sola vez
 REPREGUNTAS = {
-    "experiencia": "Dime el tiempo exacto, por ejemplo «3 años» o «8 meses».",
-    "licencia": "¿De qué tipo es tu licencia? Por ejemplo, «tipo B».",
-    "disponibilidad": "Cuéntame en concreto qué días o turnos puedes trabajar.",
-    "requisito": "Dame un dato concreto: dónde, cuánto tiempo o de qué forma lo cumples.",
-    "edad": "Dime tu edad en número, por ejemplo «25».",
-    "interes": "Solo para confirmar: ¿te interesa el puesto?",
-    "puede_trasladarse": "Solo para confirmar: ¿puedes trasladarte hasta allá?",
-    "traslado": "¿Cuántos minutos más o menos? Por ejemplo, «40 minutos» o «1 hora y media».",
-    "sueldo": "Solo para confirmar: ¿te interesa el sueldo?",
-    "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
+    "experiencia": "Claro. Solo para tenerlo en cuenta, ¿cuánto tiempo llevas en total?",
+    "licencia": "Claro. Solo para tenerlo en cuenta, ¿de qué tipo es tu licencia?",
+    "disponibilidad": "Claro. Solo para tenerlo en cuenta, ¿qué días o turnos puedes trabajar?",
+    "requisito": "Claro. Solo para tenerlo en cuenta, ¿dónde o de qué forma lo has hecho?",
+    "edad": "Claro. Solo para tenerlo en cuenta, ¿qué edad tienes?",
+    "interes": "Claro. Solo para tenerlo en cuenta, ¿te interesa el puesto?",
+    "puede_trasladarse": "Claro. Solo para tenerlo en cuenta, ¿puedes trasladarte hasta allá?",
+    "traslado": "Claro. Solo para tenerlo en cuenta, ¿cuántos minutos te tomaría llegar?",
+    "sueldo": "Claro. Solo para tenerlo en cuenta, ¿te interesa el sueldo?",
+    "zona": "Claro. Solo para tenerlo en cuenta, ¿en qué colonia y municipio vives?",
 }
 DATOS_OPERATIVOS = ("experiencia", "licencia", "disponibilidad", "requisito", "edad", "interes", "puede_trasladarse")
 
@@ -135,7 +136,7 @@ def _pregunta_indispensable_base(i: int, req: str) -> dict:
     cid = f"ind{i + 1}"
     if ia.RE_NIVEL_ESTUDIOS.search(r):
         nivel = nivel_estudios(r)[0]
-        return {**_criterio(cid, "escolaridad", r, "¿Hasta qué año estudiaste?", True), "nivel_requerido": nivel,
+        return {**_criterio(cid, "escolaridad", r, ia.PREGUNTA_ESCOLARIDAD, True), "nivel_requerido": nivel,
                 "repregunta": None, "operativo": False}
     m = ia._RE_ANOS.search(r)
     if m or "experiencia" in t:

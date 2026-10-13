@@ -7,6 +7,8 @@ Bloque 1: Open Graph de las ligas del candidato («[Tipo de liga] · [puesto]» 
 una pregunta NATURAL por requisito indispensable (el generador la redacta; el bot la usa tal cual).
 Bloque 2: presentación «Soy Red Human, el agente virtual de RH de [empresa].» (Cliente visible o Cuenta) en todas las
 rutas; tras responder a la plantilla de WhatsApp, directo a la primera pregunta; el cierre usa la misma empresa.
+Bloque 3: tono corporativo (sin ejemplos de formato, sin «Para confirmar», agradecimientos breves y variados, sin
+elogios, escolaridad «¿Cuál es tu último grado de estudios?») y evasivas (una repregunta suave; la segunda se registra).
 """
 
 import asyncio
@@ -213,6 +215,66 @@ with TestClient(app) as client:
     check(f"El equipo de {emp_cli} revisará" in ewf.cierre(pa), "cierre de la entrevista fija con la misma empresa")
     src = (RAIZ / "app/services/prefiltro_conversacional.py").read_text(encoding="utf-8")
     check("una persona del equipo de RH{' de ' + _emp if _emp else ''}" in src, "cierre del prefiltro aprobado con la misma empresa")
+
+    # ================= Bloque 3 · tono corporativo, agradecimientos variados y evasivas =================
+    print("\n--- Bloque 3 · textos: sin ejemplos de formato, sin «Para confirmar», escolaridad exacta ---")
+    from app.services import prefiltro_operativo as pop
+
+    check(ia.PREGUNTA_ESCOLARIDAD == "¿Cuál es tu último grado de estudios?", "escolaridad = «¿Cuál es tu último grado de estudios?»")
+    check(ia.pregunta_escolaridad("Secundaria", True)["pregunta"] == ia.PREGUNTA_ESCOLARIDAD, "la pregunta de escolaridad sale de la constante")
+    fuentes = {r: (RAIZ / r).read_text(encoding="utf-8") for r in ("app/services/ia.py", "app/services/prefiltro_conversacional.py",
+                                                                  "app/services/prefiltro_operativo.py")}
+    check(not any("¿Hasta qué año estudiaste?" in s for s in fuentes.values()), "ya no existe «¿Hasta qué año estudiaste?»")
+    chats = [c["chat"] for c in pconv.criterios_de(vm)] + [c.get("repregunta") or "" for c in pconv.criterios_de(vm)]
+    chats += list(pconv.REPREGUNTA_DATO.values()) + list(pop.REPREGUNTAS.values())
+    check(not any(x in t for t in chats for x in ("Para confirmar", "Primero confírmame", "Por ejemplo", "15 mil")),
+          "ninguna pregunta ni repregunta dice «Para confirmar», «Primero confírmame» ni «Por ejemplo»")
+    check(all(t.startswith("Claro. Solo para tenerlo en cuenta,") for t in pop.REPREGUNTAS.values()), "las repreguntas son suaves")
+    dv = pconv.dato_expectativa(vm)
+    check(dv["repregunta"] == "Claro. Solo para tenerlo en cuenta, ¿con qué cantidad al mes te sentirías cómodo?", f"repregunta de sueldo → «{dv['repregunta']}»")
+
+    print("\n--- Bloque 3 · agradecimientos breves y variados, sin elogios ---")
+    check(set(ia.VARIANTES_GRACIAS) == {"Gracias, {nombre}.", "Entendido.", "Gracias.", "Anotado."}, "variantes: «Gracias, [Nombre].», «Entendido.»…")
+    e = {}
+    salidas = [pconv.con_acuse(e, "¿Q?", "Ana") for _ in range(3 * ia.CADA_CUANTOS_GRACIAS)]
+    acuses = [s[:-3].strip() for s in salidas if s != "¿Q?"]
+    check(acuses and acuses[0] == "Gracias, Ana." and len(set(acuses)) == len(acuses), f"se alternan y usan el nombre → {acuses}")
+    check(not any(x in " ".join(salidas) for x in ("Perfecto", "Muy bien", "Excelente")), "nunca «Perfecto», «Muy bien» ni «Excelente»")
+    check(ia.sin_elogios("¡Excelente! ¿Y qué hacías ahí?") == "¿Y qué hacías ahí?", "«¡Excelente!» se quita del turno de la IA")
+    check(ia.sin_elogios("Muy bien, ¿cuánto tiempo estuviste?") == "¿Cuánto tiempo estuviste?", "«Muy bien,» también")
+    check(ia.sin_elogios("Entendido. ¿Qué más hacías?") == "Entendido. ¿Qué más hacías?", "un acuse neutro se conserva")
+    check("TONO_CORPORATIVO" in fuentes["app/services/ia.py"] and "PROHIBIDO elogiar" in ia.TONO_CORPORATIVO and "Para confirmar" in ia.TONO_CORPORATIVO,
+          "el prompt del entrevistador lleva el tono corporativo (sin elogios ni frases de formulario)")
+
+    print("\n--- Bloque 3 · evasivas: UNA repregunta suave; la segunda se registra («Flexible») y se avanza ---")
+    vcorp = Vacante(codigo="VAC-C31E", titulo="Analista de compras", estado="Publicada", cuenta_id=cuenta.id,
+                    requisitos="3 años en compras · Inglés intermedio · Manejo de SAP", sueldo_desde=20000, sueldo_hasta=25000,
+                    sueldo_periodicidad="mensual")
+    db.add(vcorp)
+    db.flush()
+    vcorp.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("corporativo")["pasos"]})
+    db.commit()
+    pe2 = nuevo("Elsa Evasiva", "5531310009", vcorp)
+    r = chat(pe2, "Hola")
+    sueldo_visto = False
+    for _ in range(12):
+        if "esperas ganar" in r:
+            sueldo_visto = True
+            break
+        r = chat(pe2, "Sí")
+    check(sueldo_visto, f"el prefiltro llega a la expectativa de sueldo → «{r}»")
+    r1 = chat(pe2, "Lo que ustedes ofrezcan")
+    check(r1 == "Claro. Solo para tenerlo en cuenta, ¿con qué cantidad al mes te sentirías cómodo?", f"1.ª evasiva → repregunta suave → «{r1}»")
+    r2 = chat(pe2, "La verdad lo que sea, soy flexible")
+    db.expire_all()
+    pe2 = db.get(type(pe2), pe2.id)
+    est = (pe2.analisis or {}).get("prefiltro_conversacional") or {}
+    resp = (est.get("respuestas") or {}).get("dato-sueldo") or {}
+    datos = (pe2.analisis or {}).get("prefiltro_datos") or {}
+    check(resp.get("flexible") and datos.get("sueldo") == "Flexible", f"2.ª evasiva → se registra «Flexible» → {datos.get('sueldo')}")
+    check("cantidad" not in r2 and "esperas ganar" not in r2, f"…y se avanza sin volver a preguntar → «{r2[:80]}»")
+    pts = " ".join(str(x) for x in ((pe2.analisis or {}).get("puntos_validar_prefiltro") or []))
+    check("sueldo" not in pts.lower(), "la evasiva no se manda a Puntos por validar")
 
     app.dependency_overrides.clear()
     db.close()

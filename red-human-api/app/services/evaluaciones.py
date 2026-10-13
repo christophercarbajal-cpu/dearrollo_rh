@@ -701,7 +701,10 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
         "liga_evaluador": liga_evaluador(ev) if ev.forma == "asignada" else "",
         "liga_externa": ev.liga_externa_candidato if ev.forma == "liga_otro_sistema" else "",
         # 2026-10-10 (Cambio 2): datos de la cita presencial para el aviso fijo al candidato
-        "presencial": ev.tipo in citas.TIPOS_CITA_PRESENCIAL or (ev.tipo == "psicometrica" and ev.forma == "registro_directo"),
+        "presencial": (ev.tipo in citas.TIPOS_CITA_PRESENCIAL or (ev.tipo == "psicometrica" and ev.forma == "registro_directo")
+                       or bool((ev.guion or {}).get("capacitacion"))),
+        # Cambio 30: capacitación presencial (textos propios para candidato e instructor)
+        "capacitacion": bool((ev.guion or {}).get("capacitacion")),
         "fecha_texto": citas.texto_fecha(ev.cita_fecha_hora), "horario_texto": citas.texto_horario(ev.cita_fecha_hora, ev.cita_hasta),
         "hora_hasta": citas._hora(ev.cita_hasta) if ev.cita_hasta else "", "mapa": ev.cita_mapa or "",
         "adjuntos": len(ev.cita_adjuntos or []),

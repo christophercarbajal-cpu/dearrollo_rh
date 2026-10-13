@@ -247,6 +247,24 @@ function DetalleActividad({ p, catalogo = [], cursos = [], opciones, soloLectura
         </label>
       )}
       {p.tipo === "induccion" && (
+        <div className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
+          Modalidad
+          {p.etapa === "Contratación" || p.etapa === "Onboarding" ? (
+            <select className={selectRH} value={p.modalidad_capacitacion ?? "plataforma"} disabled={soloLectura}
+              onChange={(ev) => onCambio({ modalidad_capacitacion: ev.target.value as "plataforma" | "presencial" })}>
+              <option value="plataforma">En plataforma</option>
+              <option value="presencial">Presencial</option>
+            </select>
+          ) : (
+            // Cambio 30: Filtro RH = solo «En plataforma»; Filtro humano = solo «Presencial» (sin selector)
+            <span className="text-sm font-medium text-ink">{p.etapa === "Entrevista Humana" ? "Presencial" : "En plataforma"}</span>
+          )}
+          {(p.etapa === "Entrevista Humana" || (p.etapa !== "Entrevista IA" && p.modalidad_capacitacion === "presencial")) && (
+            <span className="text-[11px] text-ink-3">Se programa con fecha, hora e instructor (como la entrevista humana); el candidato y el instructor reciben su aviso.</span>
+          )}
+        </div>
+      )}
+      {p.tipo === "induccion" && (p.etapa === "Entrevista IA" || (p.etapa !== "Entrevista Humana" && p.modalidad_capacitacion !== "presencial")) && (
         <label className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">
           Curso
           <select className={selectRH} value={p.curso ?? ""} disabled={soloLectura} onChange={(ev) => onCambio({ curso: ev.target.value || undefined })}>

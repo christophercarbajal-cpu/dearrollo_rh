@@ -2689,8 +2689,10 @@ TIPOS_PASO = {
                "etapas": ("Contratación",)},
     "carta_contrato": {"nombre": "Contrato y firma", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                        "etapas": ("Contratación", "Onboarding")},
+    # Cambio 30: Capacitación en Filtro RH (solo «En plataforma»), Filtro humano (solo «Presencial») y Contratación /
+    # Onboarding (RH elige). `modalidad_capacitacion` la fija `proceso.normalizar_pasos`.
     "induccion": {"nombre": "Capacitación / Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
-                  "etapas": ("Onboarding",)},
+                  "etapas": ("Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding")},
     "onboarding": {"nombre": "Tareas de onboarding", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
                    "etapas": ("Onboarding",)},
     "alta": {"nombre": "Confirmación de ingreso", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
@@ -2720,10 +2722,10 @@ CATALOGO_ACTIVIDADES = (
 # estaban guardadas en otra etapa (rutas previas, copias congeladas, ad hoc) se siguen aceptando y derivando.
 ACTIVIDADES_POR_ETAPA = {
     "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_web", "prefiltro_whatsapp", "documentos", "otra"),
-    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "otra"),
+    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion", "otra"),
     "Entrevista Humana": ("entrevista_humana", "psicometrica", "psicometria_fisica", "medica", "tecnica",
-                          "socioeconomica", "referencias", "documentos", "otra"),
-    "Contratación": ("oferta", "documentos", "carta_contrato", "medica", "socioeconomica", "otra"),
+                          "socioeconomica", "referencias", "documentos", "induccion", "otra"),
+    "Contratación": ("oferta", "documentos", "carta_contrato", "medica", "socioeconomica", "induccion", "otra"),
     "Onboarding": ("induccion", "onboarding", "documentos", "alta", "otra"),
 }
 # Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
@@ -2734,6 +2736,17 @@ DESCRIPCION_ETAPA = {
     "Contratación": "Oferta, documentos y contrato.",
     "Onboarding": "Primeros días del nuevo empleado.",
 }
+
+
+MODALIDADES_CAPACITACION = {"plataforma": "En plataforma", "presencial": "Presencial"}
+# Cambio 30: la etapa decide la modalidad de la Capacitación (sin entrada = RH elige: Contratación y Onboarding)
+MODALIDAD_CAPACITACION_FIJA = {"Entrevista IA": "plataforma", "Entrevista Humana": "presencial"}
+
+
+def modalidad_capacitacion_de(etapa: str, valor: str = "") -> str:
+    """Modalidad de la Capacitación según su etapa: Filtro RH → «En plataforma»; Filtro humano → «Presencial»;
+    Contratación / Onboarding → la que eligió RH (por defecto «En plataforma»)."""
+    return MODALIDAD_CAPACITACION_FIJA.get(etapa) or (valor if valor in MODALIDADES_CAPACITACION else "plataforma")
 
 
 def etapas_de_catalogo(valor: str) -> tuple:

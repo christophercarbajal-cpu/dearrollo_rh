@@ -7,6 +7,9 @@ ni «Carta de intención») y migración de plantillas y vacantes (las postulaci
 Bloque 2: una sola solicitud (sin CV o con CV); con CV el archivo es obligatorio; «Oferta laboral»: carta con los datos de
 la vacante, «Enviar oferta» por WhatsApp, vista del candidato con «Acepto» / «No acepto»; «Generar carta oferta» sin la
 actividad (no bloquea, registra la respuesta con su fecha).
+Bloque 3: Capacitación «En plataforma» (Filtro RH) / «Presencial» (Filtro humano) / a elegir (Contratación y Onboarding);
+presencial = citas de la entrevista humana con «Instructor» y textos propios; en plataforma = curso por WhatsApp
+(reprueba → «No aprobó el curso»); «Otra actividad» bloquea la ruta hasta «Marcar como realizada».
 """
 
 import asyncio
@@ -248,6 +251,114 @@ with TestClient(app) as client:
     check(pb.etapa == "Contratación" and not any(x["tipo"] == "oferta" for x in sproc.estado_pasos(pb)), "la ruta no cambia")
     seg_tsx = leer("components/dashboard/procesos/seguimiento-proceso.tsx")
     check("BotonCartaOferta" in seg_tsx and 'x.tipo === "oferta"' in seg_tsx, "la ficha muestra «Generar carta oferta» si la ruta no la trae")
+
+    # ================= Bloque 3 · capacitación y otra actividad =================
+    print("\n--- Bloque 3 · modalidades de Capacitación ---")
+    op = client.get("/procesos/opciones").json()
+    etapas = {e["valor"]: e["actividades"] for e in op["etapas"]}
+    check(all("induccion" in etapas[e] for e in ("Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding"))
+          and "induccion" not in etapas["Prefiltro"], "Capacitación en Filtro RH, Filtro humano, Contratación y Onboarding")
+    caps = sproc.normalizar_pasos([
+        {"id": "c-ia", "tipo": "induccion", "etapa": "Entrevista IA", "modalidad_capacitacion": "presencial"},
+        {"id": "c-eh", "tipo": "induccion", "etapa": "Entrevista Humana", "modalidad_capacitacion": "plataforma"},
+        {"id": "c-co", "tipo": "induccion", "etapa": "Contratación", "modalidad_capacitacion": "presencial"},
+        {"id": "c-on", "tipo": "induccion", "etapa": "Onboarding"}], previos=[])
+    mods = {x["id"]: x["modalidad_capacitacion"] for x in caps}
+    check(mods == {"c-ia": "plataforma", "c-eh": "presencial", "c-co": "presencial", "c-on": "plataforma"},
+          "Filtro RH = solo «En plataforma»; Filtro humano = solo «Presencial»; Contratación/Onboarding = la que elija RH")
+    ed = leer("components/dashboard/procesos/editor-proceso.tsx")
+    check("En plataforma" in ed and "Presencial" in ed and 'p.etapa === "Contratación" || p.etapa === "Onboarding"' in ed,
+          "el editor muestra el selector solo en Contratación y Onboarding")
+
+    print("\n--- Bloque 3 · capacitación presencial (citas de la entrevista humana) ---")
+    admin.telefono = "3311112222"
+    db.commit()
+    vp = Vacante(codigo="VAC-C30CP", titulo="Operador de montacargas", estado="Publicada", cuenta_id=cuenta.id,
+                 requisitos="Secundaria · Montacargas · Turnos")
+    db.add(vp)
+    db.flush()
+    vp.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
+        {"id": "sol", "tipo": "solicitud_sin_cv"}, {"id": "cap", "tipo": "induccion", "etapa": "Entrevista Humana", "nombre": "Capacitación"},
+        {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
+    db.commit()
+    cpp = _crear_candidato(db, cuenta.id, "Carla Curso", "Portal", False, telefono="5530300006")
+    pp = crear_postulacion(db, cpp, vp, cuenta.id, "web", consentimiento=True)
+    pp.etapa = "Entrevista Humana"
+    db.commit()
+
+    def paso_cap(pp):
+        db.refresh(pp)
+        return next(x for x in sproc.estado_pasos(pp) if x["id"] == "cap")
+
+    x = paso_cap(pp)
+    check(x["modalidadCapacitacion"] == "presencial" and x["estadoUnificado"] == "pendiente_agendar"
+          and x["accion"]["clave"] == "programar_capacitacion", "sin cita → «Pendiente de agendar» y «Programar capacitación»")
+    desde = len(ENVIADOS)
+    r = client.post(f"/evaluaciones/postulaciones/{pp.codigo}", json={
+        "tipo": "otra", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id}, "paso_id": "cap",
+        "cita": {"fecha": "2030-02-11", "hora": "09:00", "modalidad": "Presencial", "direccion": "CEDIS Norte, Zapopan"}})
+    textos = [c.get("text", {}).get("body", "") for c in ENVIADOS[desde:] if c.get("type") == "text"]
+    check(r.status_code == 201 and any(t.startswith("Hola Carla, tienes una capacitación programada para Operador de montacargas") for t in textos),
+          f"candidato: «Tienes una capacitación programada para [puesto]» ({r.status_code})")
+    check(any(t.startswith("Aviso para el instructor. Vas a capacitar a Carla Curso") for t in textos),
+          "instructor: «Aviso para el instructor. Vas a capacitar a…»")
+    x = paso_cap(pp)
+    check(x["estado"] == "en_curso" and x["evaluacion"], "programada: la actividad queda en curso")
+    ev_cod = r.json()["evaluacion"]["codigo"]
+    r = client.post(f"/evaluaciones/{ev_cod}/resultado", data={"conclusion": "desfavorable", "comentarios": "No completó la práctica", "version": "0"})
+    x = paso_cap(pp)
+    check(r.status_code == 200 and x["estadoUnificadoTexto"] == "No aprobó el curso" and pp.activa,
+          "dictamen desfavorable → «No aprobó el curso» (no descarta)")
+    modal = leer("components/dashboard/procesos/capacitacion-presencial.tsx")
+    citas_tsx = leer("components/dashboard/evaluaciones/campos-evaluacion.tsx")
+    check('rotulo="Instructor"' in modal and 'rol="instructor"' in modal and "Indicaciones para el ${rol}" in citas_tsx,
+          "el campo «Entrevistador» se llama «Instructor» en la capacitación")
+
+    print("\n--- Bloque 3 · capacitación en plataforma ---")
+    from app.models import AsignacionCurso, Curso
+
+    curso = Curso(codigo="CUR-C30", titulo="Seguridad", estado="Publicado", cuenta_id=cuenta.id, calificacion_minima=70)
+    db.add(curso)
+    vq = Vacante(codigo="VAC-C30PL", titulo="Auxiliar", estado="Publicada", cuenta_id=cuenta.id, requisitos="A · B · C")
+    db.add(vq)
+    db.flush()
+    vq.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
+        {"id": "sol", "tipo": "solicitud_sin_cv"}, {"id": "cap", "tipo": "induccion", "etapa": "Entrevista IA", "curso": "CUR-C30"}]})
+    db.commit()
+    cq = _crear_candidato(db, cuenta.id, "Pedro Plataforma", "Portal", False, telefono="5530300007")
+    pq = crear_postulacion(db, cq, vq, cuenta.id, "web", consentimiento=True)
+    pq.etapa = "Entrevista IA"
+    db.commit()
+    desde = len(ENVIADOS)
+    asyncio.run(sproc.avanzar_seguro(db, pq))
+    a = db.query(AsignacionCurso).filter(AsignacionCurso.postulacion_id == pq.id).first()
+    check(a is not None and any("capacitacion" in str(c) for c in ENVIADOS[desde:]), "asigna el curso y manda la liga por WhatsApp")
+    a.estado, a.aprobado = "completado", False
+    db.commit()
+    check(paso_cap(pq)["estadoUnificadoTexto"] == "No aprobó el curso", "reprueba → «No aprobó el curso»")
+    a.aprobado = True
+    db.commit()
+    check(paso_cap(pq)["cumpleRegla"], "aprueba → se completa sola")
+
+    print("\n--- Bloque 3 · «Otra actividad» bloquea la ruta hasta «Marcar como realizada» ---")
+    vr = Vacante(codigo="VAC-C30OT", titulo="Chofer", estado="Publicada", cuenta_id=cuenta.id, requisitos="A · B · C")
+    db.add(vr)
+    db.flush()
+    vr.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
+        {"id": "sol", "tipo": "solicitud_sin_cv"}, {"id": "otra", "tipo": "otra", "etapa": "Prefiltro", "nombre": "Revisar licencia",
+                                                    "mensaje": "Trae tu licencia original."},
+        {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
+    db.commit()
+    cr = _crear_candidato(db, cuenta.id, "Raúl Ruta", "Portal", False, telefono="5530300008")
+    pr = crear_postulacion(db, cr, vr, cuenta.id, "web", consentimiento=True)
+    db.commit()
+    asyncio.run(sproc.avanzar_seguro(db, pr))
+    db.refresh(pr)
+    check(pr.etapa == "Prefiltro" and ((pr.proceso_estado or {}).get("otra") or {}).get("mensaje_enviado"),
+          "el mensaje sale y la ruta se queda en Prefiltro mientras RH no la marque")
+    r = client.post(f"/procesos/postulaciones/{pr.codigo}/pasos/otra/realizada", json={})
+    db.refresh(pr)
+    check(r.status_code == 200 and pr.etapa == "Entrevista Humana", "«Marcar como realizada» → la ruta sigue sola")
 
     app.dependency_overrides.clear()
     db.close()

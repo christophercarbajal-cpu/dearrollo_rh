@@ -378,6 +378,10 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
                     "paso_id": paso["id"] if paso else ""}
     if tipo == "entrevista_humana":
         campos["guion"] = _guion_entrevista_humana(p, paso)
+    if paso is not None and paso.get("tipo") == "induccion":
+        # Cambio 30: Capacitación PRESENCIAL — cita con instructor; los avisos usan sus textos propios
+        campos["guion"] = {"capacitacion": True}
+        campos["nombre"] = paso["nombre"][:200] or "Capacitación"
     if tipo == "referencias":
         # 2026-10-08: cantidad y datos que se le piden al candidato (configurados al agregar la actividad)
         from ..services.actividades import solicitud_pendiente, solicitud_referencias

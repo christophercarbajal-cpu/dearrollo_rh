@@ -106,7 +106,9 @@ export function useCatalogoEvaluadores(clienteId: number | null) {
   return { internos, contactos };
 }
 
-export function SelectorEvaluador({ valor, onChange, internos, contactos, clienteNombre }: {
+export function SelectorEvaluador({ valor, onChange, internos, contactos, clienteNombre, rotulo = "Evaluador" }: {
+  /** Cambio 30: en la capacitación presencial el campo se llama «Instructor». */
+  rotulo?: string;
   valor: EstadoEvaluador;
   onChange: (v: EstadoEvaluador) => void;
   internos: Entrevistador[];
@@ -137,7 +139,7 @@ export function SelectorEvaluador({ valor, onChange, internos, contactos, client
       : valor.contacto === "nuevo" ? "Quedará guardado como contacto del Cliente para reutilizarlo." : undefined;
   return (
     <div className="flex flex-col gap-3">
-      <Campo etiqueta="Evaluador" ayuda={ayuda}>
+      <Campo etiqueta={rotulo} ayuda={ayuda}>
         <select value={actual} onChange={(e) => elegir(e.target.value)} className={inputEv}>
           <option value="">{contactos === null ? "Cargando evaluadores…" : "Elige al evaluador…"}</option>
           {contactos && contactos.length > 0 && (
@@ -255,7 +257,9 @@ export function resumenMasDetalles(c: EstadoCita, archivos: File[] = [], conInst
 /** Formulario de la cita. `adjuntos` (opcional) agrega los archivos para el candidato dentro de «Más detalles»;
  * `conInstrucciones=false` cuando la pantalla ya tiene su propio campo de instrucciones. `contextoMapa` = ubicación de
  * la vacante para la liga de mapa (el campo de dirección no cambia). */
-export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones = true, contextoMapa = "" }: {
+export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones = true, contextoMapa = "", rol = "entrevistador" }: {
+  /** Cambio 30: «instructor» en la capacitación presencial (renombra «Indicaciones para el entrevistador»). */
+  rol?: "entrevistador" | "instructor";
   valor: EstadoCita; onChange: (v: EstadoCita) => void; teams: boolean;
   adjuntos?: { valor: File[]; onChange: (v: File[]) => void }; conInstrucciones?: boolean; contextoMapa?: string;
 }) {
@@ -325,7 +329,7 @@ export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones 
                   className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
               </Campo>
             )}
-            <Campo etiqueta="Indicaciones para el entrevistador (opcional)" ayuda="Solo le llegan al entrevistador (en su aviso y en su liga); el candidato no las ve.">
+            <Campo etiqueta={`Indicaciones para el ${rol} (opcional)`} ayuda={`Solo le llegan al ${rol} (en su aviso y en su liga); el candidato no las ve.`}>
               <textarea value={valor.indicacionesEntrevistador} onChange={(e) => onChange({ ...valor, indicacionesEntrevistador: e.target.value })} rows={2}
                 placeholder="Revisa su experiencia en montacargas, confirma disponibilidad de turnos…"
                 className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />

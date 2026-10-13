@@ -123,7 +123,7 @@ async def revisar(db: Session, p: Optional[Postulacion]) -> None:
     from . import proceso as sproc
 
     pasos = {x["id"]: x for x in (p.proceso or {}).get("pasos") or []}
-    candidatos = [x for x in pasos.values() if (x.get("tipo") == "otra" and x.get("mensaje")) or (x.get("tipo") == "induccion" and x.get("curso"))]
+    candidatos = [x for x in pasos.values() if (x.get("tipo") == "otra" and x.get("mensaje")) or (x.get("tipo") == "induccion" and x.get("curso") and x.get("modalidad_capacitacion", "plataforma") == "plataforma")]
     if not candidatos:
         return
     if sproc.detenido_por_no_aprobada(p):

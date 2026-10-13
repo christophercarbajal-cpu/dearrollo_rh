@@ -120,6 +120,12 @@ def texto_candidato(evento: str, nombre: str, actividad: str, puesto: str, empre
     inicio = {"evaluacion_asignada": f"Hola {nombre}, tu {actividad} para {puesto}{f' en {empresa}' if empresa else ''} quedó programada.",
               "evaluacion_reprogramada": f"Hola {nombre}, tu cita cambió. Estos son los nuevos datos de tu {actividad} para {puesto}{f' en {empresa}' if empresa else ''}:",
               "recordatorio_evaluacion": f"Hola {nombre}, te recordamos tu {actividad} para {puesto}{f' en {empresa}' if empresa else ''}."}[evento]
+    if d.get("capacitacion"):
+        # Cambio 30: capacitación presencial — «Tienes una capacitación programada para [puesto]»
+        en = f" en {empresa}" if empresa else ""
+        inicio = {"evaluacion_asignada": f"Hola {nombre}, tienes una capacitación programada para {puesto}{en}.",
+                  "evaluacion_reprogramada": f"Hola {nombre}, tu capacitación cambió. Estos son los nuevos datos para {puesto}:",
+                  "recordatorio_evaluacion": f"Hola {nombre}, te recordamos tu capacitación programada para {puesto}."}[evento]
     lineas = [inicio, f"📅 Fecha: {d.get('fecha_texto')}", f"🕘 Hora: {d.get('horario_texto')} ({fechas.ETIQUETA_ZONA})"]
     if d.get("modalidad") == "Presencial":
         if d.get("direccion"):
@@ -150,6 +156,11 @@ def texto_entrevistador(evento: str, nombre: str, actividad: str, candidato: str
     inicio = {"evaluacion_asignada": f"{hola}, tienes una {actividad} con {candidato} para {donde}.",
               "evaluacion_reprogramada": f"{hola}, tu cita cambió. Estos son los nuevos datos de la {actividad} con {candidato} para {donde}:",
               "recordatorio_evaluacion": f"{hola}, te recordamos la {actividad} con {candidato} para {donde}."}[evento]
+    if d.get("capacitacion"):
+        # Cambio 30: capacitación presencial — «Aviso para el instructor. Vas a capacitar a…»
+        inicio = {"evaluacion_asignada": f"Aviso para el instructor. Vas a capacitar a {candidato} para {donde}.",
+                  "evaluacion_reprogramada": f"Aviso para el instructor. Tu cita cambió: vas a capacitar a {candidato} para {donde}.",
+                  "recordatorio_evaluacion": f"Aviso para el instructor. Te recordamos que vas a capacitar a {candidato} para {donde}."}[evento]
     lineas = [inicio, f"📅 Fecha: {d.get('fecha_texto')}", f"🕘 Hora: {d.get('horario_texto')} ({fechas.ETIQUETA_ZONA})"]
     if d.get("modalidad") == "Presencial":
         if d.get("direccion"):

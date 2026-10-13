@@ -40,7 +40,7 @@ from ..models import (
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     ALIAS_CATALOGO, CATALOGO_ACTIVIDADES, TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
     PlantillaProceso, Postulacion, Usuario,
-    conclusiones_de, etapas_de_catalogo, nombre_etapa, opcion_catalogo, registrar, ruta_automatica, score_de_entrevista,
+    conclusiones_de, etapas_de_catalogo, modalidad_capacitacion_de, nombre_etapa, opcion_catalogo, registrar, ruta_automatica, score_de_entrevista,
 )
 from . import citas as scitas
 
@@ -214,6 +214,10 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             if estrictos is not None and not crudo.get("adhoc") and not str(crudo.get("nombre") or "").strip():
                 raise ErrorProceso(400, "Escribe el nombre de «Otra actividad».")
         if tipo == "induccion":
+            # Cambio 30: «En plataforma» (curso + liga) o «Presencial» (cita con instructor); la etapa la fija en Filtro RH
+            # y Filtro humano
+            paso["modalidad_capacitacion"] = modalidad_capacitacion_de(
+                etapa, str(crudo.get("modalidad_capacitacion") or crudo.get("modalidadCapacitacion") or ""))
             # Cambio 28: el curso que RH eligió; el agente lo asigna y manda la liga al habilitarse
             curso = str(crudo.get("curso") or "").strip()[:40]
             if curso:
@@ -1215,6 +1219,8 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
 
         return soferta.estado_paso(base, p)
     if tipo == "induccion":
+        if paso.get("modalidad_capacitacion") == "presencial":
+            return _paso_capacitacion_presencial(base, paso, p)
         return _paso_induccion(base, p)
     if tipo == "documentos":
         if exp is None:
@@ -1398,6 +1404,34 @@ def _paso_carta_intencion(base: dict, p: Postulacion, exp) -> dict:
         return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Carta enviada al candidato",
                 "revisadoPor": f"Revisado por: {enviada[-1].actor or 'RH'}", "terminado_en": _aware(enviada[-1].ts)}
     return {**base, "espera": "Falta generar y enviar la carta de intención"}
+
+
+def _paso_capacitacion_presencial(base: dict, paso: dict, p: Postulacion) -> dict:
+    """Cambio 30: Capacitación PRESENCIAL = cita con un instructor (el sistema de citas de la entrevista humana). Sin cita →
+    «Pendiente de agendar»; programada → en curso; con resultado → realizada, o «No aprobó el curso» si el dictamen es
+    desfavorable (nunca descarta: RH decide)."""
+    db = object_session(p)
+    evs = []
+    if db is not None:
+        evs = [e for e in db.query(Evaluacion).filter(Evaluacion.postulacion_id == p.id, Evaluacion.paso_id == paso["id"])
+               .order_by(Evaluacion.id).all() if e.estado != "cancelada"]
+    if not evs:
+        return {**base, "espera": "Falta programar la capacitación (fecha, hora e instructor)", "pendiente_agendar": True,
+                "cuello": {"clave": "pendiente_agendar", "texto": "Pendiente de agendar", "quien": None}}
+    ev = evs[-1]
+    concl = getattr(ev, "conclusion_vigente", None) or ev.conclusion or ""
+    quien = ev.realizada_por or ev.evaluador_nombre or "Instructor"
+    if ev.estado == "con_resultado":
+        if concl in CONCLUSION_NEGATIVA:
+            return {**base, "estado": "completada", "resultado": "no_favorable", "cumple": False, "no_aprobo_curso": True,
+                    "texto_no_aprobada": "No aprobó el curso", "detalle": "No aprobó la capacitación presencial",
+                    "evaluacion": ev.codigo, "revisadoPor": f"Revisado por: {quien}"}
+        return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": "Capacitación presencial realizada",
+                "evaluacion": ev.codigo, "revisadoPor": f"Revisado por: {quien}"}
+    cuando = scitas.texto_fecha(ev.cita_fecha_hora) if ev.cita_fecha_hora else ""
+    sufijo = f" · {cuando}" if cuando else ""
+    return {**base, "estado": "en_curso", "evaluacion": ev.codigo, "espera": f"Capacitación programada{sufijo}",
+            "cuello": {"clave": "pendiente_resultado", "texto": f"Programada{sufijo}", "quien": None}}
 
 
 def _paso_induccion(base: dict, p: Postulacion) -> dict:
@@ -1648,6 +1682,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             # Cambio 28: «Otra actividad» (nombre + mensaje, «Marcar como realizada») y el curso de «Capacitación»
             "otraSimple": bool(r.get("otra_simple")), "mensaje": paso.get("mensaje") or "",
             "curso": paso.get("curso") or "", "noAproboCurso": bool(r.get("no_aprobo_curso")),
+            "modalidadCapacitacion": paso.get("modalidad_capacitacion"),
             "modalidad": paso.get("modalidad"),
             "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
@@ -2178,6 +2213,9 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
+    if tipo == "induccion" and paso.get("modalidad_capacitacion") == "presencial":  # Cambio 30: cita con instructor
+        return {"clave": "programar_capacitacion", "texto": "Programar capacitación" if estado == "pendiente" else "Ver capacitación",
+                "pestana": "resumen"}
     if tipo == "oferta":  # Cambio 30: la carta oferta se genera con los datos de la vacante y se manda por WhatsApp
         return {"clave": "enviar_oferta", "texto": "Reenviar oferta" if estado == "en_curso" else "Enviar oferta", "pestana": destino}
     if tipo == "condiciones":  # 2026-10-10: propuesta por WhatsApp
@@ -2565,7 +2603,8 @@ def paso_para_evaluacion(p: Postulacion, tipo: str, paso_id: str = "", evaluacio
     pasos = p.proceso["pasos"]
     if paso_id:
         paso = _paso(p, paso_id)
-        if paso["tipo"] != tipo:
+        presencial = tipo == "otra" and paso["tipo"] == "induccion" and paso.get("modalidad_capacitacion") == "presencial"
+        if paso["tipo"] != tipo and not presencial:
             raise ErrorProceso(400, f"El paso «{paso['nombre']}» es de otro tipo.")
         return paso
     asignadas = asignar_evaluaciones(pasos, _evaluaciones_de(p, evaluaciones))

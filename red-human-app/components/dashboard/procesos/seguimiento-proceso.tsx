@@ -22,6 +22,7 @@
 
 import { useEffect, useState } from "react";
 import { BotonCartaOferta, ModalOferta } from "@/components/dashboard/candidatos/oferta-laboral";
+import { ModalCapacitacionPresencial } from "@/components/dashboard/procesos/capacitacion-presencial";
 import {
   AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ClipboardCheck, Clock, Copy, ExternalLink, FileText, Play, RefreshCw, RotateCcw, Send,
   SkipForward, Sparkles, ThumbsDown, XCircle,
@@ -107,6 +108,8 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   const [versionTareas, setVersionTareas] = useState(0);
   // Cambio 30: «Enviar oferta» (actividad «Oferta laboral»)
   const [ofertaAbierta, setOfertaAbierta] = useState(false);
+  // Cambio 30: «Programar capacitación» (capacitación presencial)
+  const [capacitacion, setCapacitacion] = useState<PasoSeguimiento | null>(null);
 
   function setSeg(s: Seg) {
     setSegLocal(s);
@@ -131,6 +134,10 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     if (accion.clave === "reenviar" && paso) return void reenviar(paso, accion.a ?? "candidato");
     if (accion.clave === "marcar_realizada" && paso) return void marcarRealizada(paso);
     if (accion.clave === "enviar_oferta") return setOfertaAbierta(true);
+    if (accion.clave === "programar_capacitacion" && paso) {
+      if (paso.evaluacion) return onAbrir("evaluaciones");
+      return setCapacitacion(paso);
+    }
     if (accion.clave === "consultar_evaluacion") return onAbrir("evaluaciones");
     if (accion.clave === "solicitar_documentos") return onSolicitarDocumentos();
     if (accion.clave === "validar_documentos") return onAbrir("documentos");
@@ -478,6 +485,10 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
       {/* Cambio 30: sin «Oferta laboral» en la ruta, en Contratación se puede generar la carta oferta (no bloquea) */}
       {c.etapa === "Contratación" && live && !(seg.etapas ?? []).some((e) => e.pasos.some((x) => x.tipo === "oferta")) && (
         <BotonCartaOferta codigo={c.id} oferta={c.oferta} onCambio={(m) => void refrescarTodo(m)} />
+      )}
+      {capacitacion && (
+        <ModalCapacitacionPresencial c={c} paso={capacitacion} onClose={() => setCapacitacion(null)}
+          onProgramada={(m) => { setCapacitacion(null); void refrescarTodo(m); }} />
       )}
       {ofertaAbierta && (
         <ModalOferta codigo={c.id} onClose={() => setOfertaAbierta(false)}

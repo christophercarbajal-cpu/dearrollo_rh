@@ -74,6 +74,8 @@ export interface PasoProceso {
   mensaje?: string;
   /** Cambio 28: «Capacitación» — curso que el agente asigna (y cuya liga manda) al habilitarse. */
   curso?: string;
+  /** Cambio 30: «En plataforma» (curso) o «Presencial» (cita con instructor); fija en Filtro RH y Filtro humano. */
+  modalidad_capacitacion?: "plataforma" | "presencial";
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {
@@ -92,7 +94,7 @@ export type ResultadoPaso = "favorable" | "con_observaciones" | "no_favorable";
 /** Acción de un paso: reutiliza lo que ya existe («Agregar evaluación», la tarjeta de la evaluación o una pestaña). */
 export interface AccionPaso {
   clave: "iniciar_evaluacion" | "consultar_evaluacion" | "consultar" | "abrir" | "solicitar_documentos" | "validar_documentos"
-    | "agregar_correo" | "registrar_resultado" | "reenviar" | "marcar_realizada" | "enviar_oferta";
+    | "agregar_correo" | "registrar_resultado" | "reenviar" | "marcar_realizada" | "enviar_oferta" | "programar_capacitacion";
   texto: string;
   /** «reenviar»: a quién (p. ej. «Solicitar referencias» = la liga del candidato). */
   a?: string;
@@ -105,6 +107,7 @@ export interface PasoSeguimiento {
   /** Cambio 28: «Otra actividad» de RH (se cumple con «Marcar como realizada») y curso reprobado de «Capacitación». */
   otraSimple?: boolean;
   noAproboCurso?: boolean;
+  modalidadCapacitacion?: "plataforma" | "presencial" | null;
   id: string;
   tipo: string;
   nombre: string;

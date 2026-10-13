@@ -93,8 +93,10 @@ with TestClient(app) as client:
           and "condiciones" not in etapas["Entrevista IA"]["actividades"]
           and "alta" in etapas["Onboarding"]["actividades"] and "alta" not in etapas["Contratación"]["actividades"],
           "cada etapa ofrece solo su catálogo")
-    check(etapas["Prefiltro"]["descripcion"] == "Solicitud y primeras preguntas."
-          and all(e["descripcion"] for e in op["etapas"]), "cada etapa trae su descripción fija")
+    check([e["descripcion"] for e in op["etapas"]] == ["Solicitud y primeras preguntas.", "Lo hace la IA de Red Human.",
+                                                       "Lo hace tu equipo.", "Oferta, documentos y contrato.",
+                                                       "Primeros días del nuevo empleado."],
+          "cada etapa trae su descripción fija (textos exactos del requerimiento)")
     nombres = {t["valor"]: t["texto"] for t in op["tiposPaso"]}
     check(nombres["documentos"] == "Documentos" and nombres["carta_intencion"] == "Carta de intención"
           and not any("(opcional)" in t for t in nombres.values()), "«Documentos» y sin «(opcional)» en el catálogo")

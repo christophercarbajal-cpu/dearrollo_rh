@@ -2719,10 +2719,10 @@ ACTIVIDADES_POR_ETAPA = {
 # Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
 DESCRIPCION_ETAPA = {
     "Prefiltro": "Solicitud y primeras preguntas.",
-    "Entrevista IA": "Entrevista con Red Human.",
-    "Entrevista Humana": "Entrevistas y evaluaciones con personas.",
-    "Contratación": "Propuesta, documentos y contrato.",
-    "Onboarding": "Capacitación, tareas e ingreso.",
+    "Entrevista IA": "Lo hace la IA de Red Human.",
+    "Entrevista Humana": "Lo hace tu equipo.",
+    "Contratación": "Oferta, documentos y contrato.",
+    "Onboarding": "Primeros días del nuevo empleado.",
 }
 
 

@@ -3787,12 +3787,13 @@ export interface OpcionTipoPaso {
   etapas: EtapaCandidato[];
   regla: ReglaPaso["tipo"];
   responsable: ResponsablePaso["tipo"];
-  /** 2026-10-10: obligatoria por defecto (la «Carta de intención (opcional)» nace opcional). */
+  /** Cambio 28: toda actividad del editor es obligatoria (ya no hay casilla «Obligatoria» ni «(opcional)»). */
   obligatorio?: boolean;
   dictamenes: { valor: string; texto: string }[];
 }
 export interface OpcionesProceso {
-  etapas: { valor: EtapaCandidato; texto: string; permiteAvanceAutomatico: boolean }[];
+  /** Cambio 28: `descripcion` fija debajo del nombre y `actividades` = catálogo ESTRICTO de la etapa. */
+  etapas: { valor: EtapaCandidato; texto: string; descripcion?: string; actividades?: string[]; permiteAvanceAutomatico: boolean }[];
   tiposPaso: OpcionTipoPaso[];
   reglas: { valor: ReglaPaso["tipo"]; texto: string }[];
   responsables: { valor: ResponsablePaso["tipo"]; texto: string }[];
@@ -3803,6 +3804,8 @@ export interface OpcionesProceso {
   ejemplos: { clave: string; nombre: string; descripcion: string }[];
   /** 2026-10-06: rutas base precargadas (Masivos / Corporativos sin y con psicometría). */
   rutasBase?: { clave: string; nombre: string; descripcion: string; pasos: number; respaldo: boolean }[];
+  /** Cambio 28: «Partir de:» al crear un proceso (Masivos sin/con documentos, Corporativos, En blanco). */
+  partirDe?: { clave: string; nombre: string; pasos: PasoProceso[] }[];
 }
 export interface PlantillaProceso {
   id: number;

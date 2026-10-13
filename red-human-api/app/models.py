@@ -2670,13 +2670,13 @@ TIPOS_PASO = {
     "socioeconomica": _evaluacion("Estudio socioeconómico"),
     "referencias": _evaluacion("Referencias laborales"),
     # Documentos: en Prefiltro manda la liga y valida lo solicitado; en Contratación/Onboarding valida los obligatorios
-    "documentos": {"nombre": "Solicitud y revisión de documentos", "etapa": "Contratación", "regla": "validacion",
+    "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion",
                    "responsable": "rh", "etapas": _TODAS},
     "condiciones": {"nombre": "Propuesta y aceptación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                     "etapas": ("Contratación",)},
     # 2026-10-10: la carta de intención como actividad propia y OPCIONAL por defecto (se cumple enviada o firmada)
-    "carta_intencion": {"nombre": "Carta de intención (opcional)", "etapa": "Contratación", "regla": "ninguna",
-                        "responsable": "rh", "etapas": ("Contratación",), "obligatorio": False},
+    "carta_intencion": {"nombre": "Carta de intención", "etapa": "Contratación", "regla": "ninguna",
+                        "responsable": "rh", "etapas": ("Contratación",)},
     "carta_contrato": {"nombre": "Contrato y firma", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                        "etapas": ("Contratación", "Onboarding")},
     "induccion": {"nombre": "Capacitación / Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
@@ -2699,6 +2699,32 @@ CATALOGO_ACTIVIDADES = (
     "referencias", "documentos", "condiciones", "carta_intencion", "carta_contrato", "induccion", "onboarding", "alta",
     "otra",
 )
+
+
+# Cambio 28 (2026-10-12): catálogo ESTRICTO por etapa — lo que el editor ofrece y lo único que acepta al guardar una
+# actividad NUEVA en una plantilla o en la ruta de una vacante («Otra actividad» va en todas). Las actividades que ya
+# estaban guardadas en otra etapa (rutas previas, copias congeladas, ad hoc) se siguen aceptando y derivando.
+ACTIVIDADES_POR_ETAPA = {
+    "Prefiltro": ("solicitud_web", "analisis_cv", "prefiltro_web", "prefiltro_whatsapp", "documentos", "otra"),
+    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "otra"),
+    "Entrevista Humana": ("entrevista_humana", "psicometrica", "psicometria_fisica", "medica", "tecnica",
+                          "socioeconomica", "referencias", "documentos", "otra"),
+    "Contratación": ("condiciones", "documentos", "carta_intencion", "carta_contrato", "medica", "socioeconomica", "otra"),
+    "Onboarding": ("induccion", "onboarding", "documentos", "alta", "otra"),
+}
+# Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
+DESCRIPCION_ETAPA = {
+    "Prefiltro": "Solicitud y primeras preguntas.",
+    "Entrevista IA": "Entrevista con Red Human.",
+    "Entrevista Humana": "Entrevistas y evaluaciones con personas.",
+    "Contratación": "Propuesta, documentos y contrato.",
+    "Onboarding": "Capacitación, tareas e ingreso.",
+}
+
+
+def etapas_de_catalogo(valor: str) -> tuple:
+    """Etapas en las que el catálogo estricto permite una entrada (alias incluidos)."""
+    return tuple(e for e, tipos in ACTIVIDADES_POR_ETAPA.items() if valor in tipos)
 
 
 def opcion_catalogo(valor: str) -> dict:

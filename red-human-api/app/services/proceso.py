@@ -40,7 +40,7 @@ from ..models import (
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     ALIAS_CATALOGO, CATALOGO_ACTIVIDADES, TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
     PlantillaProceso, Postulacion, Usuario,
-    conclusiones_de, nombre_etapa, registrar, ruta_automatica, score_de_entrevista,
+    conclusiones_de, etapas_de_catalogo, nombre_etapa, opcion_catalogo, registrar, ruta_automatica, score_de_entrevista,
 )
 from . import citas as scitas
 
@@ -118,15 +118,37 @@ def _responsable(crudo, tipo: str) -> dict:
     return salida
 
 
-def normalizar_pasos(pasos: Iterable[dict]) -> List[dict]:
+def clave_catalogo(paso: dict) -> str:
+    """Entrada del catálogo de un paso guardado (la psicometría física es su propia entrada)."""
+    if paso.get("tipo") == "psicometrica" and paso.get("modalidad") == "fisica":
+        return "psicometria_fisica"
+    return str(paso.get("tipo") or "")
+
+
+def _firma_catalogo(paso: dict) -> tuple:
+    return (clave_catalogo(paso), paso.get("etapa") or "")
+
+
+def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = None) -> List[dict]:
     """Valida y completa los pasos (tipo, etapa permitida, dependencias que existen, sin ciclos ni hacia una etapa
-    posterior, responsable, regla, plazo). Regresa la lista en orden de etapa conservando el orden capturado."""
+    posterior, responsable, regla, plazo). Regresa la lista en orden de etapa conservando el orden capturado.
+    Cambio 28: con `previos` (lo que la plantilla/vacante ya tenía guardado) se aplica el catálogo ESTRICTO por etapa
+    (`models.ACTIVIDADES_POR_ETAPA`) a toda actividad NUEVA; las que ya estaban se aceptan como venían."""
+    estrictos = None if previos is None else {_firma_catalogo(x) for x in previos or [] if isinstance(x, dict)}
     salida: List[dict] = []
     usados: set = set()
     for i, crudo in enumerate(pasos or []):
         if not isinstance(crudo, dict):
             raise ErrorProceso(400, "Cada paso debe ser un objeto.")
         tipo = str(crudo.get("tipo") or "").strip()
+        clave = "psicometria_fisica" if tipo == "psicometria_fisica" else clave_catalogo(crudo)
+        etapa_c = crudo.get("etapa") or (TIPOS_PASO[ALIAS_CATALOGO[tipo][0]]["etapa"] if tipo in ALIAS_CATALOGO
+                                          else TIPOS_PASO.get(tipo, {}).get("etapa"))
+        if (estrictos is not None and not crudo.get("adhoc") and not crudo.get("heredado") and clave in CATALOGO_ACTIVIDADES
+                and (clave, etapa_c) not in estrictos and etapa_c not in etapas_de_catalogo(clave)):
+            permitidas = etapas_de_catalogo(clave)
+            raise ErrorProceso(400, f"«{opcion_catalogo(clave)['nombre']}» no puede ir en {nombre_etapa(etapa_c)}. "
+                                    f"Etapas permitidas: {', '.join(nombre_etapa(e) for e in permitidas)}.")
         if tipo in ALIAS_CATALOGO:
             # 2026-10-10: «Psicometría física» se guarda como psicometría con modalidad física
             real, extra = ALIAS_CATALOGO[tipo]
@@ -397,6 +419,9 @@ RUTAS_BASE = {
         ],
     },
 }
+# Cambio 28: nombres de las opciones «Partir de:» del editor al crear un proceso (+ «En blanco»).
+NOMBRE_PARTIR_DE = {"masivos_sin_documentos": "Masivos sin documentos", "masivos_con_documentos": "Masivos con documentos",
+                    "corporativo": "Corporativos"}
 # Firma (tipo, etapa) de las rutas base ANTERIORES a la retro: `corregir_rutas_base` solo reemplaza una plantilla de la
 # Cuenta si sigue exactamente así (RH no la editó).
 _COLA_PREVIA = (("condiciones", "Contratación"), ("carta_contrato", "Contratación"), ("documentos", "Onboarding"),
@@ -592,7 +617,7 @@ def proceso_para_vacante(db: Session, cuenta_id: int, actual: Optional[dict], da
         base = proceso_desde_plantilla(pl)
     nuevo = dict(base)
     if "pasos" in datos and datos["pasos"] is not None:
-        pasos = normalizar_pasos(datos["pasos"])
+        pasos = normalizar_pasos(datos["pasos"], previos=[*(base.get("pasos") or []), *(actual.get("pasos") or [])])
         if pasos != base.get("pasos"):
             nuevo["personalizado"] = bool(base.get("plantilla_id")) or bool(actual.get("personalizado"))
         nuevo["pasos"] = pasos

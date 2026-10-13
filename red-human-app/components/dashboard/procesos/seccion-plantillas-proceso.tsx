@@ -72,7 +72,7 @@ export function SeccionPlantillasProceso() {
           <div>
             <h2 className="font-display text-base font-bold">Procesos de selección</h2>
             <p className="mt-0.5 text-sm text-ink-2">
-              Pasos del catálogo por etapa, con responsables, condiciones de avance, plazos y ejecución (en paralelo o «Esperar a…»). Cada candidato recibe una copia de su ruta: la de su vacante, la predeterminada de la Cuenta o «Corporativos sin psicometría».
+              Actividades del catálogo por etapa. Cada candidato recibe una copia de su ruta: la de su vacante, la predeterminada de la Cuenta o «Masivos sin documentos».
             </p>
           </div>
         </div>
@@ -171,6 +171,15 @@ function EditorPlantilla({ plantilla, opciones, onClose, onGuardada }: {
   const [etapas, setEtapas] = useState<EtapasProceso>(plantilla?.etapas ?? {});
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+  // Cambio 28: un proceso NUEVO primero elige de qué partir (rutas base o «En blanco») y carga sus actividades
+  const [partirDe, setPartirDe] = useState<string>(plantilla ? "editar" : "");
+
+  function elegirPartida(clave: string) {
+    const o = (opciones.partirDe ?? []).find((x) => x.clave === clave);
+    setPartirDe(clave);
+    setPasos(o ? o.pasos.map((x) => ({ ...x })) : []);
+    if (!nombre.trim() && o && clave !== "blanco") setNombre(`${o.nombre} (propio)`);
+  }
 
   async function guardar() {
     if (!nombre.trim()) return setError("Escribe el nombre del proceso.");
@@ -188,6 +197,23 @@ function EditorPlantilla({ plantilla, opciones, onClose, onGuardada }: {
     <ModalMarco titulo={plantilla ? `Editar proceso: ${plantilla.nombre}` : "Nuevo proceso de selección"}
       subtitulo="Las cinco etapas son fijas. Una etapa sin pasos obligatorios nunca bloquea el avance." onClose={onClose} ancho="sm:max-w-3xl">
       <div className="flex flex-col gap-4">
+        {!plantilla && (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-xs font-semibold text-ink-2">Partir de:</legend>
+            <div className="grid gap-2 sm:grid-cols-4">
+              {(opciones.partirDe ?? []).map((o) => (
+                <label key={o.clave} className={`flex cursor-pointer flex-col gap-0.5 rounded-xl border p-3 text-left transition ${partirDe === o.clave ? "border-brand bg-brand-soft/40" : "border-border-soft hover:border-brand"}`}>
+                  <span className="flex items-center gap-2 text-sm font-semibold">
+                    <input type="radio" name="partir-de" className="accent-brand" checked={partirDe === o.clave} onChange={() => elegirPartida(o.clave)} />
+                    {o.nombre}
+                  </span>
+                  <span className="text-[11px] text-ink-3">{o.pasos.length ? `${o.pasos.length} actividades` : "Sin actividades"}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
+        {partirDe && (<>
         <div className="grid gap-3 sm:grid-cols-2">
           <CampoRH label="Nombre"><input className={inputRH} value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej. Operativo mínimo" /></CampoRH>
           <CampoRH label="Descripción (opcional)"><input className={inputRH} value={descripcion} onChange={(e) => setDescripcion(e.target.value)} /></CampoRH>
@@ -197,10 +223,11 @@ function EditorPlantilla({ plantilla, opciones, onClose, onGuardada }: {
           Usar como predeterminado (vacantes nuevas y candidatos de vacantes sin proceso propio)
         </label>
         <EditorProceso pasos={pasos} etapas={etapas} opciones={opciones} onChange={(p, e) => { setPasos(p); setEtapas(e); }} />
+        </>)}
         {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}
         <div className="flex justify-end gap-2 border-t border-border-faint pt-4">
           <Button variant="outline" size="sm" onClick={onClose} disabled={guardando}><X className="h-4 w-4" /> Cancelar</Button>
-          <Button size="sm" onClick={guardar} disabled={guardando}><Save className="h-4 w-4" /> {guardando ? "Guardando…" : "Guardar proceso"}</Button>
+          <Button size="sm" onClick={guardar} disabled={guardando || !partirDe}><Save className="h-4 w-4" /> {guardando ? "Guardando…" : "Guardar proceso"}</Button>
         </div>
       </div>
     </ModalMarco>

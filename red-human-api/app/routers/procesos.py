@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
-    ENFOQUES_ENTREVISTA, TEXTO_ENFOQUE, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
+    ACTIVIDADES_POR_ETAPA, DESCRIPCION_ETAPA, ENFOQUES_ENTREVISTA, TEXTO_ENFOQUE, etapas_de_catalogo, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO,
     RESULTADOS_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, CATALOGO_ACTIVIDADES, opcion_catalogo, Cuenta, PlantillaProceso, Usuario, Vacante, conclusiones_de,
     es_cuenta_demo, nombre_etapa, registrar,
 )
@@ -36,10 +36,13 @@ def _error(e: sproc.ErrorProceso):
 def opciones(_: Usuario = Depends(usuario_actual)):
     """Todo lo que necesita el editor ÚNICO de pasos (Configuración y formulario de vacante)."""
     return {
-        "etapas": [{"valor": e, "texto": nombre_etapa(e), "permiteAvanceAutomatico": e not in ETAPAS_SIN_AVANCE_AUTOMATICO}
+        # Cambio 28: descripción fija de cada etapa y su catálogo ESTRICTO de actividades («Otra actividad» en todas)
+        "etapas": [{"valor": e, "texto": nombre_etapa(e), "descripcion": DESCRIPCION_ETAPA.get(e, ""),
+                    "actividades": list(ACTIVIDADES_POR_ETAPA.get(e, ())),
+                    "permiteAvanceAutomatico": e not in ETAPAS_SIN_AVANCE_AUTOMATICO}
                    for e in ETAPAS_CANDIDATO],
         # 2026-10-10: las 22 actividades del catálogo, en el orden de la especificación (sin las de legado)
-        "tiposPaso": [{"valor": k, "texto": d["nombre"], "etapa": d["etapa"], "etapas": list(d["etapas"]), "regla": d["regla"],
+        "tiposPaso": [{"valor": k, "texto": d["nombre"], "etapa": d["etapa"], "etapas": list(etapas_de_catalogo(k)), "regla": d["regla"],
                        "responsable": d["responsable"], "obligatorio": d.get("obligatorio", True),
                        "dictamenes": [{"valor": c, "texto": t} for c, t in conclusiones_de(d["tipo_real"]).items()]
                        if d["tipo_real"] in sproc.TIPOS_PASO_EVALUACION else []}
@@ -54,6 +57,9 @@ def opciones(_: Usuario = Depends(usuario_actual)):
         # 2026-10-06: rutas base precargadas (sembradas como plantillas editables en cada Cuenta)
         "rutasBase": [{"clave": k, "nombre": e["nombre"], "descripcion": e["descripcion"], "pasos": len(e["pasos"]),
                        "respaldo": k == sproc.RUTA_RESPALDO} for k, e in sproc.RUTAS_BASE.items()],
+        # Cambio 28: «Partir de:» al crear un proceso — las tres rutas base con sus actividades, o «En blanco»
+        "partirDe": [*({"clave": k, "nombre": sproc.NOMBRE_PARTIR_DE.get(k, e["nombre"]), "pasos": sproc.ruta_base(k)["pasos"]}
+                       for k, e in sproc.RUTAS_BASE.items()), {"clave": "blanco", "nombre": "En blanco", "pasos": []}],
     }
 
 
@@ -113,7 +119,7 @@ def crear_plantilla(datos: PlantillaIn, db: Session = Depends(get_db), u: Usuari
     if not nombre:
         raise HTTPException(400, "El nombre del proceso es obligatorio.")
     try:
-        pasos = sproc.normalizar_pasos(datos.pasos)
+        pasos = sproc.normalizar_pasos(datos.pasos, previos=[])
     except sproc.ErrorProceso as e:
         raise _error(e)
     if not pasos:
@@ -186,7 +192,7 @@ def editar_plantilla(pid: int, datos: EditarPlantillaIn, db: Session = Depends(g
     contenido = False
     if datos.pasos is not None:
         try:
-            pasos = sproc.normalizar_pasos(datos.pasos)
+            pasos = sproc.normalizar_pasos(datos.pasos, previos=pl.pasos or [])
         except sproc.ErrorProceso as e:
             raise _error(e)
         if not pasos:

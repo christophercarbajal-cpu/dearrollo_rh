@@ -224,7 +224,7 @@ with TestClient(app) as client:
     check(docs["espera"].startswith("Falta ") and "comprobante de domicilio" in docs["espera"],
           f"documentos en espera dicen exactamente qué falta → «{docs['espera'][:70]}…»")
     cond = paso(s, "condiciones")
-    check(cond["disponible"] is False and "Falta completar: Solicitud y revisión de documentos" in cond["espera"], "condiciones depende de documentos (dependencia explícita)")
+    check(cond["disponible"] is False and "Falta completar: Documentos" in cond["espera"], "condiciones depende de documentos (dependencia explícita)")
     r = client.patch(f"/candidatos/{P1}/condiciones-contratacion", json={"puesto": "Operador", "sueldo": "$12,000 mensuales",
                                                                           "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-02"})
     check(r.status_code == 200, "una dependencia no bloquea capturar las condiciones (no frena actividades en paralelo)")
@@ -234,7 +234,7 @@ with TestClient(app) as client:
     client.post(f"/candidatos/{P1}/propuesta/respuesta", json={"acepta": True})
     exp_id = post(P1).expediente.id
     r = client.post(f"/onboarding/expedientes/{exp_id}/iniciar", json={"documentos": [{"tipo": "CURP", "obligatorio": True}]})
-    check(r.status_code == 409 and "documentos" in r.json()["detail"], "«Iniciar Onboarding» respeta los obligatorios de Contratación")
+    check(r.status_code == 409 and "documentos" in r.json()["detail"].lower(), "«Iniciar Onboarding» respeta los obligatorios de Contratación")
     for d in post(P1).expediente.documentos:
         rr = client.post(f"/contratacion/expedientes/{exp_id}/documentos/estado", json={"tipo": d.tipo, "estado": "recibido", "recibido_fisico": True})
         assert rr.status_code == 200, rr.text

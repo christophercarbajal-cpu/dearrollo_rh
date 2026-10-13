@@ -6,7 +6,9 @@
    ajusta SOLO lo propio de cada actividad (CV en la solicitud, guion de la entrevista, batería psicométrica).
    2026-10-09: ya no hay responsable, condición de avance, plazo, «En paralelo / Esperar a…» ni «Avance automático»:
    cada actividad define sola cuándo se cumple y a qué espera, y el candidato avanza solo cuando no quedan
-   obligatorias pendientes. Al guardar se mandan los valores del catálogo (la API recalcula las dependencias). */
+   obligatorias pendientes. Al guardar se mandan los valores del catálogo (la API recalcula las dependencias).
+   Cambio 28 (2026-10-12): cada etapa ofrece SOLO su catálogo estricto (`opciones.etapas[].actividades`; «Otra actividad»
+   en todas), muestra su descripción fija y ya no hay casilla «Obligatoria»: toda actividad de la ruta es obligatoria. */
 
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Trash2, Zap } from "lucide-react";
@@ -33,9 +35,10 @@ function nuevoId(pasos: PasoProceso[], tipo: string): string {
 
 /** Valores del catálogo: responsable y condición los define la actividad; sin plazo ni dependencias capturadas. */
 function delCatalogo(p: PasoProceso, t?: OpcionTipoPaso): PasoProceso {
-  if (!t) return { ...p, depende_de: [], plazo_dias: null };
+  if (!t) return { ...p, obligatorio: true, depende_de: [], plazo_dias: null };
   return {
     ...p,
+    obligatorio: true,
     depende_de: [],
     plazo_dias: null,
     responsable: { tipo: t.responsable },
@@ -49,7 +52,7 @@ export function pasoNuevo(t: OpcionTipoPaso, etapa: EtapaCandidato, pasos: PasoP
     tipo: t.valor,
     nombre: t.texto,
     etapa,
-    obligatorio: t.obligatorio ?? true,
+    obligatorio: true,
     depende_de: [],
     responsable: { tipo: t.responsable },
     regla: { tipo: t.regla },
@@ -102,15 +105,20 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
       </p>
       {opciones.etapas.map((e) => {
         const deEtapa = pasos.filter((p) => p.etapa === e.valor);
-        const disponibles = opciones.tiposPaso.filter((t) => t.etapas.includes(e.valor));
+        const disponibles = e.actividades
+          ? e.actividades.map((v) => tipos[v]).filter((t): t is OpcionTipoPaso => Boolean(t))
+          : opciones.tiposPaso.filter((t) => t.etapas.includes(e.valor));
         return (
           <section key={e.valor} className="rounded-2xl border border-border-soft">
-            <header className="flex flex-wrap items-center gap-2 border-b border-border-faint bg-surface-2/60 px-4 py-2.5">
-              <h4 className="text-sm font-bold">{e.texto}</h4>
+            <header className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border-faint bg-surface-2/60 px-4 py-2.5">
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold">{e.texto}</h4>
+                {e.descripcion && <p className="text-[11px] text-ink-3">{e.descripcion}</p>}
+              </div>
               {deEtapa.length === 0 ? (
                 <Badge tone="neutral">Sin actividades · no bloquea</Badge>
               ) : (
-                <span className="text-[11px] text-ink-3">{deEtapa.length} actividad{deEtapa.length === 1 ? "" : "es"} · {deEtapa.filter((p) => p.obligatorio).length} obligatoria(s)</span>
+                <span className="ml-auto text-[11px] text-ink-3">{deEtapa.length} actividad{deEtapa.length === 1 ? "" : "es"}</span>
               )}
             </header>
             <ul className="divide-y divide-border-faint">
@@ -133,12 +141,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                         className="h-9 min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 text-sm font-medium outline-none hover:border-border-soft focus:border-brand"
                         aria-label="Nombre de la actividad"
                       />
-                      <span className="text-[11px] text-ink-3">{t?.texto ?? p.tipo}</span>
-                      <label className="flex items-center gap-1.5 text-xs text-ink-2">
-                        <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={p.obligatorio} disabled={soloLectura}
-                          onChange={(ev) => cambiarPaso(p.id, { obligatorio: ev.target.checked })} />
-                        Obligatoria
-                      </label>
+                      <span className="text-[11px] text-ink-3">{p.modalidad === "fisica" ? "Psicometría física" : t?.texto ?? p.tipo}</span>
                       {!soloLectura && (
                         <span className="ml-auto flex items-center">
                           <button type="button" onClick={() => mover(p.id, -1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>

@@ -1044,7 +1044,7 @@ function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsAct
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
   const etapa = etapaActual; // 2026-10-08: la actividad adicional va en la etapa ACTUAL; nunca regresa al candidato
-  const [obligatorio, setObligatorio] = useState(false);
+  const obligatorio = true; // Cambio 28: toda actividad agregada es obligatoria (sin casilla)
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   useEffect(() => {
@@ -1086,10 +1086,6 @@ function ModalActividadClasica({ c, etapaActual, onClose, onAgregada }: PropsAct
               <input className={inputRH} value={nombre} onChange={(e) => setNombre(e.target.value)} />
             </label>
             <p className="text-[12px] text-ink-3">Se agrega en la etapa actual: <b className="text-ink-2">{nombreEtapa(etapa)}</b>.</p>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" className="h-4 w-4 rounded accent-brand" checked={obligatorio} onChange={(e) => setObligatorio(e.target.checked)} />
-              Obligatoria (el candidato no avanza de etapa sin cumplirla)
-            </label>
           </>
         )}
         {error && <p className="rounded-xl border border-bad/40 bg-bad-soft px-3 py-2 text-sm font-semibold text-bad">{error}</p>}

@@ -666,3 +666,10 @@ Reemplaza lo anterior en: `Expediente.progreso` (Fases 1-3 post-demo), «Solicit
   - Formularios web: sin «Parcial» (los criterios que sirve `serial.vacante_dict` lo quitan de lo guardado antes, `_sin_parcial`; la demo ya no lo siembra) y sin «más de 90 min = alerta»: el traslado solo se registra y su límite sale ÚNICAMENTE del indispensable de la vacante.
   - La plantilla de ruta define el enfoque de la entrevista: Masivos (ruta base `masivos_*`, o Entrevista Red Human por WhatsApp sin Análisis de CV ni entrevista con avatar: `proceso.ruta_es_masiva` / `rutaMasiva`) = Operativo, sin importar el seniority ni el «profesional» por defecto del paso (`proceso.enfoque_de_ruta`, primero en `enfoque_entrevista_agente`; al crear/editar/generar la vacante, `vacantes._enfoque_por_ruta`). Corporativos conserva el que eligió RH. El formulario lo muestra fijo («Lo define la ruta Masivos, sin importar el seniority»).
   - Tablero de Candidatos: el selector de vacantes abre con «Todas las vacantes» y cada opción es «[folio] · [puesto] · [ubicación]» (`textoOpcionVacante`).
+
+## Cambios 28-29 (2026-10-12) — REEMPLAZA lo anterior donde choque
+
+- Bloque 1 (Cambio 28) — editor de procesos.
+  - Catálogo ESTRICTO por etapa (`models.ACTIVIDADES_POR_ETAPA`; «Otra actividad» en todas): `/procesos/opciones` lo sirve en `etapas[].actividades` y `tiposPaso[].etapas`. `normalizar_pasos(pasos, previos=…)` lo aplica SOLO a actividades nuevas al guardar plantillas y rutas de vacante; lo ya guardado (rutas previas, copias congeladas, ad hoc) se acepta como venía.
+  - Nombres: «Documentos» (antes «Solicitud y revisión de documentos») y «Carta de intención» (sin «(opcional)»). El editor ya no tiene casilla «Obligatoria»: toda actividad de la ruta es obligatoria. Cada etapa muestra su descripción fija (`models.DESCRIPCION_ETAPA`, p. ej. Prefiltro: «Solicitud y primeras preguntas.»).
+  - Nuevo proceso: primero «Partir de:» (`opciones.partirDe`: Masivos sin documentos · Masivos con documentos · Corporativos · En blanco) y se cargan sus actividades. Regresión: `scripts/verificar_cambios28_29.py`.

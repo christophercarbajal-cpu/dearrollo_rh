@@ -48,7 +48,7 @@ OK = 0
 CATALOGO = ["Solicitud web", "Análisis de CV", "Prefiltro web", "Prefiltro WhatsApp", "Llamada Red Human",
             "Entrevista Red Human por WhatsApp", "Entrevista Red Human con avatar", "Psicometría digital", "Psicometría física",
             "Entrevista humana", "Evaluación médica", "Evaluación técnica o práctica", "Estudio socioeconómico",
-            "Referencias laborales", "Solicitud y revisión de documentos", "Propuesta y aceptación", "Carta de intención (opcional)",
+            "Referencias laborales", "Documentos", "Propuesta y aceptación", "Carta de intención",
             "Contrato y firma", "Capacitación / Inducción", "Tareas de onboarding", "Confirmación de ingreso", "Otra actividad"]
 
 
@@ -80,15 +80,16 @@ with TestClient(app) as client:
     tipos = client.get("/procesos/opciones", headers=H).json()["tiposPaso"]
     check([t["texto"] for t in tipos] == CATALOGO, "el catálogo tiene EXACTAMENTE las 22 actividades, con sus nombres y en orden")
     check(not any(t["valor"] == "solicitud_documentos" for t in tipos),
-          "«Solicitud y revisión de documentos» unifica las de documentos (la vieja ya no se ofrece)")
-    check(next(t for t in tipos if t["valor"] == "carta_intencion")["obligatorio"] is False, "«Carta de intención (opcional)» nace opcional")
+          "«Documentos» unifica las de documentos (la vieja ya no se ofrece)")
+    check(next(t for t in tipos if t["valor"] == "carta_intencion")["obligatorio"] is True,
+          "Cambio 28: «Carta de intención» ya no lleva «(opcional)»: toda actividad es obligatoria")
     pasos = sproc.normalizar_pasos([{"tipo": "psicometria_fisica", "etapa": "Entrevista Humana"},
                                     {"tipo": "carta_intencion", "etapa": "Contratación"},
                                     {"tipo": "solicitud_documentos", "etapa": "Prefiltro"}])
     fis = next(x for x in pasos if x["tipo"] == "psicometrica")
     check(fis["tipo"] == "psicometrica" and fis.get("modalidad") == "fisica" and fis["nombre"] == "Psicometría física" and not fis["pruebas"],
           "«Psicometría física» se guarda como psicometría con modalidad física (sin batería del proveedor)")
-    check(next(x for x in pasos if x["tipo"] == "carta_intencion")["obligatorio"] is False, "la carta de intención es opcional en la ruta")
+    check(next(x for x in pasos if x["tipo"] == "carta_intencion")["obligatorio"] is True, "la carta de intención es obligatoria en la ruta (Cambio 28)")
     check(any(x["tipo"] == "solicitud_documentos" for x in pasos), "las rutas ya guardadas con la actividad vieja siguen siendo válidas")
 
     # ================= 2. Decisión del prefiltro =================

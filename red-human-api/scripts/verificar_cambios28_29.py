@@ -13,6 +13,11 @@ en:» por documento).
 Bloque 3 (Cambio 29): en rutas Masivos el prefiltro de WhatsApp es una BASE FIJA sin IA — saludo exacto, indispensables
 con datos concretos (descartan), edad (menor de 18 → Puntos por validar), puesto, sueldo, colonia, «¿Puedes
 trasladarte?» y tiempo de traslado (descarta solo con límite en la vacante); sin transporte ni habilidades blandas.
+
+Bloque 4 (Cambio 29): entrevista por WhatsApp FIJA en Masivos — transición exacta, A situación actual, B historial (hasta 3
+trabajos, repregunta de despido/renuncia), C preguntas propias de RH, D confirmación (contradicción con el prefiltro →
+Puntos por validar) y cierre exacto; configuración «Base» en la vacante (quitar, agregar, restaurar); tabla «Historial
+laboral» en la ficha y recomendación calculada sobre él; un solo nombre de empresa.
 """
 
 import asyncio
@@ -347,6 +352,109 @@ with TestClient(app) as client:
     r = chat(q3, "hora y media")
     db.refresh(q3)
     check(not q3.activa and "60 minutos" in r, "traslado mayor al límite de la vacante → descarta")
+
+    # ================= Bloque 4 · Cambio 29: entrevista operativa fija y ficha =================
+    print("\n--- Bloque 4 · configuración «Entrevista por WhatsApp» en la vacante ---")
+    from app.services import entrevista_whatsapp_fija as ewf
+    from app.serial import nombre_empresa_candidato, postulacion_dict
+
+    vo.requisitos = REQS
+    db.commit()
+    r = client.get(f"/vacantes/{vo.codigo}")
+    base = r.json()["guiones"]["entrevistaWhatsappBase"]
+    check(base["esBase"] and [b["id"] for b in base["base"]] == ewf.IDS_BASE, "la vacante muestra la entrevista «Base»")
+    r = client.patch(f"/vacantes/{vo.codigo}", json={"guiones": {"entrevista_whatsapp_base": {
+        "quitadas": ["conf_traslado", "empresa"], "propias": ["¿Has manejado montacargas?"]}}})
+    eb = r.json()["guiones"]["entrevistaWhatsappBase"]
+    check(r.status_code == 200 and not eb["esBase"] and eb["quitadas"] == ["conf_traslado"] and eb["propias"] == ["¿Has manejado montacargas?"],
+          "RH quita preguntas base (la de empresa es fija) y agrega propias (bloque C)")
+    r = client.patch(f"/vacantes/{vo.codigo}", json={"guiones": {"entrevista_whatsapp_base": {"restaurar": True}}})
+    check(r.json()["guiones"]["entrevistaWhatsappBase"]["esBase"], "«Restaurar base»")
+    client.patch(f"/vacantes/{vo.codigo}", json={"guiones": {"entrevista_whatsapp_base": {"quitadas": [], "propias": ["¿Has manejado montacargas?"]}}})
+    db.expire_all()
+    vo = db.get(Vacante, vo.id)
+    g = ia.generar_guiones(ia.FichaGuion(titulo="Almacenista", enfoque_entrevista="operativo", ruta_masiva=True), ["entrevista_whatsapp"])[0]
+    check(g["entrevista_whatsapp"].get("fija") and g["entrevista_whatsapp"]["preguntas"][0] == "¿Trabajas actualmente?",
+          "Masivos no genera el guion de la entrevista con IA: es la base fija")
+
+    print("\n--- Bloque 4 · entrevista fija por WhatsApp ---")
+    from _respuestas_prefiltro import respuesta_pendiente
+
+    q4 = postular_op("Mario Fijo", "5512990004")
+    chat(q4, "Hola")
+    for _ in range(15):
+        db.refresh(q4)
+        if pconv.estado(q4).get("resultado"):
+            break
+        chat(q4, respuesta_pendiente(q4))
+    db.refresh(q4)
+    e4 = next(x for x in q4.entrevistas if x.tipo == "whatsapp")
+    transicion = (e4.transcript or [{}])[0].get("texto", "")
+    check(q4.etapa == "Entrevista IA" and transicion == "Listo, Mario. Ahora unas preguntas sobre tu experiencia. ¿Trabajas actualmente?",
+          f"transición exacta + A. situación actual → «{transicion[:90]}»")
+    pasos = [("No", "¿Cuánto tiempo llevas sin trabajar?"), ("2 meses", "¿Cuál fue tu último trabajo?"),
+             ("Bodega del Centro", "¿Qué puesto tenías?"), ("Almacenista", "¿Qué hacías ahí?"),
+             ("Surtía pedidos y acomodaba mercancía", "¿Cuánto tiempo trabajaste ahí?"), ("2 años", "¿Por qué saliste?"),
+             ("Me despidieron", "¿Por qué te despidieron?"), ("Por faltas", "¿Tuviste otro trabajo antes de ese?"),
+             ("Sí", "¿En qué empresa fue?"), ("Tiendas Oxxo", "¿Qué puesto tenías?"), ("Cajero", "¿Qué hacías ahí?"),
+             ("Cobraba", "¿Cuánto tiempo trabajaste ahí?"), ("1 año", "¿Por qué saliste?"), ("Renuncié", "¿Por qué renunciaste?"),
+             ("Me cambié de ciudad", "¿Tuviste otro trabajo antes de ese?"), ("No", "¿Has manejado montacargas?")]
+    ok = True
+    for resp, esperada in pasos:
+        r = chat(q4, resp)
+        if r != esperada:
+            ok = False
+            print(f"   respuesta «{resp}» → «{r}» (se esperaba «{esperada}»)")
+            break
+    check(ok, "A → B (hasta 3 trabajos, repregunta de despido y renuncia) → C (pregunta propia de RH), una por mensaje")
+    empresa = nombre_empresa_candidato(vo)
+    r = chat(q4, "Un poco")
+    check(r == f"Para confirmar, el puesto es Almacenista en {empresa}. ¿Te interesa?", f"D. confirmación del puesto → «{r}»")
+    r = chat(q4, "Sí")
+    check(r == "El sueldo es desde $9,500 MXN mensuales. ¿Estás de acuerdo?", f"→ sueldo «{r}»")
+    r = chat(q4, "No, es poco")
+    check(r == "El trabajo es en Zapopan, Jalisco. ¿Puedes trasladarte?", "→ traslado")
+    r = chat(q4, "Sí")
+    check(r == "¿Cuándo podrías empezar?", "→ inicio")
+    r = chat(q4, "El lunes")
+    check(r == f"Con esto terminamos la entrevista. Gracias por tu tiempo, Mario. El equipo de {empresa} revisará tus respuestas y te "
+              "escribirá por este medio.", f"cierre exacto → «{r}»")
+    db.refresh(q4)
+    textos = [m["texto"] for m in (next(x for x in q4.entrevistas if x.tipo == "whatsapp").transcript or []) if m.get("rol") == "assistant"]
+    check(all(cuenta.nombre not in t for t in textos) and sum(empresa in t for t in textos) >= 2,
+          "un solo nombre de empresa en toda la conversación (nunca el nombre interno de la Cuenta)")
+    e = next(x for x in q4.entrevistas if x.tipo == "whatsapp")
+    op = (e.evaluacion or {}).get("operativa") or {}
+    check(e.estado == "evaluada" and op.get("fija"), "la entrevista se cierra y se evalúa")
+    puntos = " ".join(op.get("puntos") or [])
+    check("Inconsistencia" in puntos and "sueldo" in puntos and "despid" in puntos.lower(),
+          f"contradicción con el prefiltro (sueldo) y salida por despido → Puntos por validar: {op.get('puntos')}")
+    check(op["requisitos"]["experiencia"]["estado"] == "cumple" and op["recomendacion"] == "con_reservas",
+          "recomendación calculada sobre el historial (experiencia similar + puntos → «Con reservas»)")
+    d = postulacion_dict(q4, detalle=True)
+    hist = d["historialLaboral"]
+    check(len(hist) == 2 and hist[0]["empresa"] == "Bodega del Centro" and hist[0]["puesto"] == "Almacenista"
+          and hist[0]["duracion"] == "2 años" and "Por faltas" in hist[0]["motivo"] and hist[1]["empresa"] == "Tiendas Oxxo",
+          "la ficha trae la tabla «Historial laboral» (empresa, puesto, tareas, duración, motivo)")
+
+    q5 = postular_op("Sofía Actual", "5512990005")
+    chat(q5, "Hola")
+    for _ in range(15):
+        db.refresh(q5)
+        if pconv.estado(q5).get("resultado"):
+            break
+        chat(q5, respuesta_pendiente(q5))
+    r = chat(q5, "Sí, trabajo")
+    check(r == "¿En qué empresa trabajas?", "si trabaja actualmente, el historial arranca en presente")
+    for t in ("Soriana", "Almacenista", "Recibo mercancía", "6 meses"):
+        r = chat(q5, t)
+    check(r == "¿Por qué quieres cambiar de trabajo?", "motivo en presente para el trabajo actual")
+
+    seg = leer("components/dashboard/procesos/seguimiento-proceso.tsx")
+    form = leer("components/dashboard/vacantes/entrevista-whatsapp-base.tsx")
+    check("Historial laboral" in seg and all(h in seg for h in ("Empresa", "Puesto", "Tareas", "Duración", "Motivo")),
+          "la ficha muestra la tabla «Historial laboral»")
+    check("Base" in form and "Agregar pregunta" in form and "Restaurar base" in form, "la vacante muestra «Base», «+ Agregar pregunta» y «Restaurar base»")
 
     app.dependency_overrides.clear()
     db.close()

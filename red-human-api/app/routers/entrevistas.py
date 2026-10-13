@@ -544,7 +544,14 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
     if faltante and not ev.faltante:
         ev.faltante = faltante
     operativa = None
-    if (e.guion or {}).get("operativo"):
+    if (e.guion or {}).get("fija"):
+        # Cambio 29: entrevista FIJA por WhatsApp (Masivos) — la recomendación sale del historial laboral (nunca descarta)
+        from ..services import entrevista_operativa as eop
+        from ..services import entrevista_whatsapp_fija as ewf
+
+        operativa = ewf.evaluar(e, p, v)
+        ev = eop.aplicar(ev, operativa)
+    elif (e.guion or {}).get("operativo"):
         # 2026-10-10 (Cambio 1): entrevista OPERATIVA — criterios A-D + alertas; la recomendación sale de la regla estricta
         # (falla en indispensables o logística → «No recomendable»), nunca descarta.
         from ..services import entrevista_operativa as eop

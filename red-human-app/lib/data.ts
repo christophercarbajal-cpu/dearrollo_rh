@@ -328,6 +328,8 @@ export interface Candidato {
   score: number; // 0-100 match con el perfil
   /** 2026-10-11: ¿la ruta pide CV? false = la ficha no muestra score de CV. */
   /** Zona, traslado y transporte del prefiltro de WhatsApp (solo se registran; el límite de traslado sale del indispensable). */
+  /** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos). */
+  historialLaboral?: { empresa: string; puesto: string; tareas: string; duracion: string; motivo: string; actual: boolean }[];
   prefiltroDatos?: {
     escolaridad: string;
     nivel: string;

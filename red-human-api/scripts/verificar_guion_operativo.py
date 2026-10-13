@@ -227,7 +227,9 @@ with TestClient(app) as client:
         app.dependency_overrides[dep] = lambda: admin
     v = db.query(Vacante).filter(Vacante.estado == "Publicada").order_by(Vacante.id).first()
     v.cuenta_id, v.titulo, v.enfoque_entrevista, v.requisitos, v.guiones = cuenta.id, "Montacarguista", "operativo", " · ".join(REQS), {}
-    v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
+    v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]
+                                                                  # Cambio 29: con avatar opcional la ruta NO es Masivos (en Masivos la entrevista es fija)
+                                                                  + [{"id": "avatar", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": False}]})
     db.commit()
     H = {"X-Cuenta-Id": str(cuenta.id)}
     falsa = FalsaIA([True, True, True])

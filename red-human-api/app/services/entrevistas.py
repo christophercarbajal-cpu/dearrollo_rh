@@ -256,7 +256,10 @@ async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str
     ahora = datetime.now(timezone.utc)
     if p.consentimiento and e.estado == "programada":
         refrescar_guion(e)
-        texto = mensaje_inicial(p, primera_pregunta(e))
+        from . import entrevista_whatsapp_fija as ewf
+
+        # Cambio 29: rutas Masivos — entrevista FIJA (situación actual → historial → preguntas de RH → confirmación)
+        texto = ewf.transicion(p, ewf.primera(e)) if ewf.aplica(e) else mensaje_inicial(p, primera_pregunta(e))
         e.consentimiento = True
         e.consentimiento_fecha = ahora
         e.estado = "en_curso"
@@ -305,10 +308,25 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
         # la primera pregunta se inyecta fija (el LLM empieza con la respuesta del candidato a ella)
+        from . import entrevista_whatsapp_fija as ewf
+
+        primera = ewf.primera(e) if ewf.aplica(e) else PRIMERA_PREGUNTA_FIJA
         e.transcript = [{"rol": "assistant", "texto": intro}, {"rol": "user", "texto": texto[:2000]},
-                        {"rol": "assistant", "texto": PRIMERA_PREGUNTA_FIJA}]
-        return await responder(PRIMERA_PREGUNTA_FIJA, ia_entrevista=False)
+                        {"rol": "assistant", "texto": primera}]
+        return await responder(primera, ia_entrevista=False)
     historial = list(e.transcript or []) + [{"rol": "user", "texto": texto[:2000]}]
+    from . import entrevista_whatsapp_fija as ewf
+
+    if ewf.aplica(e):
+        # Cambio 29: rutas Masivos — entrevista FIJA, sin IA generativa
+        mensaje, terminada = ewf.turno(e, texto)
+        e.transcript = historial + [{"rol": "assistant", "texto": mensaje}]
+        salida = await responder(mensaje, ia_entrevista=False)
+        if terminada:
+            db.refresh(e)
+            await finalizar_entrevista(db, e, None, "texto")
+            salida["terminada"] = True
+        return salida
     turno, con_ia = ia.entrevista_turno(system_prompt(e, historial), historial, preguntas=preguntas_de(e, historial),
                                         operativo=bool((e.guion or {}).get("operativo")))
     e.transcript = historial + [{"rol": "assistant", "texto": turno.respuesta}]

@@ -3191,6 +3191,12 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
     # ≤ 15 palabras, condicionales) y pasa por la REVISIÓN automática (regenera hasta 2 veces); UNA generación para todas
     # las secciones. Sin IA: el guion determinista (Biblioteca de Perfiles + piezas fijas).
     armados: dict = {}
+    if ficha.ruta_masiva and "entrevista_whatsapp" in guion_claves:
+        # Cambio 29: en Masivos la entrevista por WhatsApp es FIJA (services/entrevista_whatsapp_fija) — sin IA generativa
+        from . import entrevista_whatsapp_fija as ewf
+
+        armados["entrevista_whatsapp"] = ewf.guion_visible()
+        guion_claves = [c for c in guion_claves if c != "entrevista_whatsapp"]
     if enfoque == "operativo" and guion_claves:
         import copy as _copy
 

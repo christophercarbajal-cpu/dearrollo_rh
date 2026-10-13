@@ -645,7 +645,26 @@ export interface VistaGuiones {
   /** Enfoque operativo: el perfil del oficio (copia propia de la vacante o el detectado en la biblioteca). */
   perfilOperativo?: PerfilOperativo | null;
   perfilOperativoPropio?: boolean;
+  /** Cambio 29: «Entrevista por WhatsApp» base de Masivos (quitadas y propias de RH). */
+  entrevistaWhatsappBase?: { quitadas: string[]; propias: string[]; esBase: boolean };
 }
+/** Cambio 29: ajuste de la entrevista base por WhatsApp SOLO para esta vacante (vacío = «Base»). */
+export interface EntrevistaBaseConfig { quitadas: string[]; propias: string[] }
+/** Preguntas base de la entrevista fija por WhatsApp (mismo orden y ids que `services/entrevista_whatsapp_fija.BASE`). */
+export const PREGUNTAS_BASE_ENTREVISTA: { id: string; bloque: "A" | "B" | "D"; texto: string; fija?: boolean }[] = [
+  { id: "trabaja", bloque: "A", texto: "¿Trabajas actualmente?" },
+  { id: "sin_trabajo", bloque: "A", texto: "¿Cuánto tiempo llevas sin trabajar?" },
+  { id: "empresa", bloque: "B", texto: "¿Cuál fue tu último trabajo? (empresa)", fija: true },
+  { id: "puesto", bloque: "B", texto: "¿Qué puesto tenías?" },
+  { id: "tareas", bloque: "B", texto: "¿Qué hacías ahí?" },
+  { id: "duracion", bloque: "B", texto: "¿Cuánto tiempo trabajaste ahí?" },
+  { id: "motivo", bloque: "B", texto: "¿Por qué saliste? (despido o renuncia se repregunta)" },
+  { id: "otro", bloque: "B", texto: "¿Tuviste otro trabajo antes de ese? (hasta 3 trabajos)" },
+  { id: "conf_puesto", bloque: "D", texto: "Para confirmar, el puesto es [puesto] en [empresa]. ¿Te interesa?" },
+  { id: "conf_sueldo", bloque: "D", texto: "El sueldo es [sueldo]. ¿Estás de acuerdo?" },
+  { id: "conf_traslado", bloque: "D", texto: "El trabajo es en [ubicación]. ¿Puedes trasladarte?" },
+  { id: "inicio", bloque: "D", texto: "¿Cuándo podrías empezar?" },
+];
 /** Lo que regresa «Generar»: solo las secciones de la ruta (los prefiltros viajan en preguntas_filtro*). */
 export interface GuionesGenerados {
   secciones: Partial<Record<ClaveGuion, GuionConversacion>>;

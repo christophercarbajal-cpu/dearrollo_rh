@@ -238,6 +238,9 @@ with TestClient(app) as client:
     ruta_wa = [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"},
                {"id": "entrevista-wa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"},
                {"id": "llamada", "tipo": "llamada_agente", "etapa": "Entrevista IA", "obligatorio": False},
+               # Cambio 29: con la entrevista con avatar (opcional) la ruta NO es Masivos — aquí se prueba el guion de la
+               # vacante editado por RH; la entrevista FIJA de Masivos se prueba en verificar_cambios28_29.py
+               {"id": "avatar", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": False},
                {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]
     r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Montacarguista WA", "generar_si_falta": False,
                                                  "proceso": {"pasos": ruta_wa}, "preguntas_filtro": web,

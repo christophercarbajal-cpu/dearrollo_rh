@@ -223,6 +223,17 @@ def prefiltro_datos(p) -> Optional[dict]:
             "alerta": None}
 
 
+def historial_laboral(p) -> List[dict]:
+    """Cambio 29: Empresa · Puesto · Tareas · Duración · Motivo de la entrevista fija por WhatsApp más reciente."""
+    try:
+        from .services import entrevista_whatsapp_fija as ewf
+
+        e = next((x for x in reversed(list(p.entrevistas or [])) if x.tipo == "whatsapp" and (x.guion or {}).get("fija")), None)
+        return ewf.historial(e) if e is not None else []
+    except Exception:  # noqa: BLE001 — la ficha nunca se cae por el historial
+        return []
+
+
 def _comparativo(p) -> List[dict]:
     try:
         from .services.prefiltro_conversacional import comparativo_indispensables
@@ -704,6 +715,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "score": p.score,
         # 2026-10-11: ¿la ruta de esta postulación pide CV? Sin CV, la ficha no muestra score de CV
         "pideCv": _pide_cv(p),
+        # Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos)
+        "historialLaboral": historial_laboral(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)
         "prefiltroDatos": prefiltro_datos(p),
         # Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato («Inconsistencia» si difieren)

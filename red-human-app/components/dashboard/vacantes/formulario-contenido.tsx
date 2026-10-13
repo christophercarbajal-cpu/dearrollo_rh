@@ -35,6 +35,7 @@ import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
 import type { EtapaCandidato, PasoProceso, Vacante } from "@/lib/data";
 import { PerfilOperativoCampo, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
+import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import {
   ETAPAS_PIPELINE,
   nombreEtapa,
@@ -46,6 +47,7 @@ import {
   type GuionConversacion,
   type MetaGuion,
   type ProcesoEntrada,
+  type EntrevistaBaseConfig,
   MONEDAS_SUELDO,
   PERIODICIDADES_SUELDO,
   SENIORITIES,
@@ -117,6 +119,8 @@ export interface GuionesForm {
   perfil_operativo?: PerfilOperativo | null;
   /** Nombre del oficio que detectó la API (cuando no hay perfil propio). */
   perfil_detectado?: string;
+  /** Cambio 29: entrevista fija por WhatsApp de Masivos — preguntas base quitadas y propias de RH (vacío = «Base»). */
+  entrevista_base?: EntrevistaBaseConfig;
 }
 
 export const GUIONES_VACIOS: GuionesForm = { secciones: {}, meta: {}, aplican: [], editadas: [], desactualizado: false, perfil_operativo: null };
@@ -245,6 +249,7 @@ export function guionesDesdeVacante(v: Vacante): GuionesForm {
     desactualizado: Boolean(g.desactualizado),
     perfil_operativo: g.perfilOperativoPropio && g.perfilOperativo ? perfilForm(g.perfilOperativo) : null,
     perfil_detectado: g.perfilOperativo?.nombre ?? "",
+    entrevista_base: { quitadas: g.entrevistaWhatsappBase?.quitadas ?? [], propias: g.entrevistaWhatsappBase?.propias ?? [] },
   };
 }
 
@@ -334,6 +339,7 @@ export function aplicarGuionesGenerados(base: ContenidoVacante, g: VacanteGenera
       desactualizado: false,
       perfil_operativo: base.guiones.perfil_operativo ?? null,
       perfil_detectado: base.guiones.perfil_detectado,
+      entrevista_base: base.guiones.entrevista_base,
     },
   };
 }
@@ -419,6 +425,7 @@ export function contenidoComoPayload(c: ContenidoVacante) {
       secciones: c.guiones.secciones,
       meta: c.guiones.meta,
       ...(c.enfoque_entrevista === "operativo" ? { perfil_operativo: c.guiones.perfil_operativo ?? null } : {}),
+      ...(c.guiones.entrevista_base ? { entrevista_whatsapp_base: c.guiones.entrevista_base } : {}),
     },
   };
 }
@@ -841,7 +848,13 @@ export function FormularioContenidoVacante({
             </p>
           </div>
         )}
-        {conGuiones && value.enfoque_entrevista === "operativo" && (
+        {conGuiones && enfoquePorRuta && (
+          <EntrevistaWhatsappBase
+            value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
+            onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
+          />
+        )}
+        {conGuiones && value.enfoque_entrevista === "operativo" && !enfoquePorRuta && (
           <PerfilOperativoCampo
             value={value.guiones.perfil_operativo ?? null}
             detectado={value.guiones.perfil_detectado ?? ""}

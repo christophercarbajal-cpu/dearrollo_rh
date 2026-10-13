@@ -473,6 +473,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {/* 2. Resultados clave */}
       <ResultadosClave c={c} />
+      <HistorialLaboral c={c} />
       <ComparativoIndispensables c={c} />
 
       {/* 2026-10-08: tareas de Onboarding en la ficha, cada una con su acción directa */}
@@ -946,6 +947,37 @@ function ResultadosClave({ c }: { c: Candidato }) {
 }
 
 /** Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato; «Inconsistencia» si difieren. */
+/** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos); la recomendación se calcula sobre él. */
+function HistorialLaboral({ c }: { c: Candidato }) {
+  const filas = c.historialLaboral ?? [];
+  if (!filas.length) return null;
+  return (
+    <Card className="p-3.5">
+      <Eyebrow>Historial laboral</Eyebrow>
+      <div className="scroll-x mt-1.5">
+        <table className="w-full text-left text-[12px]">
+          <thead className="text-ink-3">
+            <tr>
+              {["Empresa", "Puesto", "Tareas", "Duración", "Motivo"].map((h) => <th key={h} className="py-1 pr-3 font-medium">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f, i) => (
+              <tr key={i} className="border-t border-border-faint align-top text-ink-2">
+                <td className="py-1.5 pr-3 font-semibold text-ink">{f.empresa || "—"}{f.actual ? <span className="ml-1 text-[11px] font-normal text-ink-3">(actual)</span> : null}</td>
+                <td className="py-1.5 pr-3">{f.puesto || "—"}</td>
+                <td className="py-1.5 pr-3">{f.tareas || "—"}</td>
+                <td className="py-1.5 pr-3">{f.duracion || "—"}</td>
+                <td className="py-1.5">{f.motivo || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 function ComparativoIndispensables({ c }: { c: Candidato }) {
   const filas = c.comparativoIndispensables ?? [];
   if (!filas.length || !filas.some((f) => f.cv != null)) return null;
@@ -1027,6 +1059,7 @@ function ResumenSinRuta({ c }: { c: Candidato }) {
   return (
     <div className="flex flex-col gap-3">
       <ResultadosClave c={c} />
+      <HistorialLaboral c={c} />
       <ComparativoIndispensables c={c} />
       <FortalezasYPuntos c={c} />
     </div>

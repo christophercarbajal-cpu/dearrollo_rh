@@ -269,7 +269,15 @@ def vista(v, pasos: Optional[list] = None, db: Optional[Session] = None) -> dict
     return {"secciones": salida, "aplican": aplican, "meta": meta, "huella": huella,
             "desactualizado": any(x["desactualizado"] for x in salida if x["aplica"]),
             # 2026-10-10: perfil del oficio de la entrevista operativa (copia de la vacante o el detectado en la biblioteca)
-            "perfilOperativo": perfil, "perfilOperativoPropio": bool((v.guiones or {}).get("perfil_operativo"))}
+            "perfilOperativo": perfil, "perfilOperativoPropio": bool((v.guiones or {}).get("perfil_operativo")),
+            # Cambio 29: «Entrevista por WhatsApp» base de Masivos (preguntas quitadas y propias de RH, bloque C)
+            "entrevistaWhatsappBase": _entrevista_base(v)}
+
+
+def _entrevista_base(v) -> dict:
+    from . import entrevista_whatsapp_fija as ewf
+
+    return ewf.vista(v)
 
 
 def _marcar(v) -> None:
@@ -328,6 +336,14 @@ def guardar_desde_formulario(v, entrada: Optional[dict], por: str, preguntas_web
     g.setdefault("meta", {})
     if "perfil_operativo" in entrada:  # 2026-10-10: copia del perfil del oficio SOLO para esta vacante
         g = guardar_perfil_operativo(v, entrada.get("perfil_operativo"), g)
+    if "entrevista_whatsapp_base" in entrada:  # Cambio 29: ajuste de la entrevista base de Masivos SOLO para esta vacante
+        from . import entrevista_whatsapp_fija as ewf
+
+        cfg = ewf.normalizar_config(entrada.get("entrevista_whatsapp_base"))
+        if cfg["quitadas"] or cfg["propias"]:
+            g[ewf.CLAVE_CONFIG] = cfg
+        else:
+            g.pop(ewf.CLAVE_CONFIG, None)  # «Restaurar base»
     for clave, m in meta_in.items():
         # solo la meta de GENERACIÓN (de la respuesta de /generar); `editado` lo recalcula el servidor
         if clave in SECCIONES and isinstance(m, dict) and m.get("generado_hash"):

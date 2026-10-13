@@ -19,7 +19,7 @@ from ..services import bolsas, conteos, notificaciones
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
     ENFOQUES_ENTREVISTA, MONEDAS_SUELDO, PERIODICIDADES_SUELDO, PLATAFORMAS, Cliente, Cuenta, Curso, Plantilla, PlantillaProceso, Postulacion,
-    Usuario, UsuarioCuenta, Vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
+    Usuario, UsuarioCuenta, Vacante, normalizar_documentos_vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
 )
 from ..services.mensajeria import canales_publicos
 from ..serial import nombre_empresa, nombre_empresa_candidato, vacante_dict
@@ -258,6 +258,9 @@ class GenerarIn(BaseModel):
     proceso: Optional[dict] = None
     guiones_actuales: Optional[dict] = None  # {preguntas_filtro, preguntas_filtro_whatsapp, secciones: {clave: guion}}
     conservar: List[str] = []
+    # Cambio 25: «Documentos y fotos que se piden» [{nombre, cantidad, foto}]; vacío al generar → la IA los toma de la
+    # descripción si los menciona
+    documentos_solicitados: List[dict] = []
     perfil_operativo: Optional[dict] = None  # 2026-10-10: oficio de la Biblioteca (ajustado para esta vacante), enfoque operativo
 
     def ubicacion_texto(self) -> str:
@@ -337,6 +340,10 @@ def generar(
     pasos_ruta = _pasos_de_formulario(db, cuenta.id, datos.proceso)
     resultado, con_ia = _generar(datos, empresa, pide_cv=sgui.pide_cv(pasos_ruta) if pasos_ruta else None)
     salida = {"ia": con_ia, "empresa": empresa, "sueldo_texto": datos.sueldo_texto() or "A convenir", **resultado.model_dump(by_alias=True)}
+    # Cambio 25: lo capturado se respeta literal; si RH no capturó nada, los documentos que MENCIONA la vacante
+    salida["documentos_solicitados"] = normalizar_documentos_vacante(datos.documentos_solicitados) or ia.documentos_de_descripcion(
+        datos.descripcion, " ".join(datos.indispensables()), " ".join(datos.requisitos_deseables),
+        " ".join(datos.responsabilidades), resultado.descripcion if hasattr(resultado, "descripcion") else "")
     # 2026-10-09: prefiltros y guiones SOLO de las actividades de la ruta elegida, con las reglas de generación por tipo
     actuales = dict(datos.guiones_actuales or {})
     vigentes = {"prefiltro_web": actuales.get("preguntas_filtro") or [], "prefiltro_whatsapp": actuales.get("preguntas_filtro_whatsapp") or [],
@@ -500,6 +507,7 @@ def crear(
         texto_bolsa=datos.texto_bolsa,
         preguntas_filtro=datos.preguntas_filtro,
         preguntas_filtro_whatsapp=datos.preguntas_filtro_whatsapp,
+        documentos_solicitados=normalizar_documentos_vacante(datos.documentos_solicitados),  # Cambio 25
         plataformas=plataformas,
         resumen=datos.resumen,
         perfil_ideal=datos.perfil_ideal,
@@ -735,6 +743,7 @@ class ActualizarIn(BaseModel):
     avisos_cumplimiento: Optional[List[str]] = None
     preguntas_filtro: Optional[List[dict]] = None
     preguntas_filtro_whatsapp: Optional[List[dict]] = None  # Fase 4
+    documentos_solicitados: Optional[List[dict]] = None  # Cambio 25
     ubicacion_estado: Optional[str] = None  # Fase 4
     ubicacion_municipio: Optional[str] = None
     curso_filtro: Optional[str] = None  # Capacitación universal: código CUR-#### ("" = quitar)
@@ -811,6 +820,8 @@ def actualizar(
     if datos.seniority is not None and datos.seniority and datos.seniority not in ia.SENIORITY.__args__:
         raise HTTPException(400, f"Seniority inválido. Usa uno de: {', '.join(ia.SENIORITY.__args__)}")
 
+    if "documentos_solicitados" in cambios:
+        cambios["documentos_solicitados"] = normalizar_documentos_vacante(cambios["documentos_solicitados"])
     for campo, valor in cambios.items():
         setattr(v, campo, valor)
     if entrada_guiones is not None or web_nuevo is not None or whatsapp_nuevo is not None:

@@ -684,7 +684,27 @@ export interface VacanteGenerada {
   preguntas_filtro_whatsapp?: CriterioFiltro[];
   /** 2026-10-09: guiones de las actividades de la ruta (solo las que están en ella). */
   guiones?: GuionesGenerados;
+  /** Cambio 25: lo capturado tal cual o, si no hubo, los documentos que MENCIONA la vacante. */
+  documentos_solicitados?: DocumentoSolicitado[];
 }
+
+/** Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. `cantidad` = archivos que exige (las fotos
+ *  del auto son 4); `foto` = la revisa RH a ojo (no se valida como documento oficial). */
+export interface DocumentoSolicitado { nombre: string; cantidad: number; foto: boolean }
+export const DOCUMENTOS_SUGERIDOS_VACANTE: DocumentoSolicitado[] = [
+  { nombre: "INE", cantidad: 1, foto: false },
+  { nombre: "Licencia de conducir", cantidad: 1, foto: false },
+  { nombre: "Fotos del auto", cantidad: 4, foto: true },
+  { nombre: "Tarjeta de circulación", cantidad: 1, foto: false },
+  { nombre: "Comprobante de domicilio", cantidad: 1, foto: false },
+  { nombre: "CURP", cantidad: 1, foto: false },
+  { nombre: "Constancia de situación fiscal", cantidad: 1, foto: false },
+  { nombre: "Número de Seguridad Social", cantidad: 1, foto: false },
+  { nombre: "Acta de nacimiento", cantidad: 1, foto: false },
+  { nombre: "Comprobante de estudios", cantidad: 1, foto: false },
+  { nombre: "Carta de antecedentes no penales", cantidad: 1, foto: false },
+  { nombre: "Foto de frente", cantidad: 1, foto: true },
+];
 
 /** Parte 3 (2026-09-12): sueldo estructurado. "a_convenir" = sin montos. El texto que se muestra
  * (`Vacante.sueldo`) lo DERIVA el servidor; nunca se captura ni se inventa. */
@@ -742,6 +762,8 @@ export interface DatosVacante extends SueldoEstructurado {
   guiones_actuales?: { preguntas_filtro?: CriterioFiltro[]; preguntas_filtro_whatsapp?: CriterioFiltro[]; secciones?: Partial<Record<ClaveGuion, GuionConversacion>> };
   /** Secciones con ediciones de RH que NO se regeneran. */
   conservar?: ClaveGuion[];
+  /** Cambio 25: «Documentos y fotos que se piden». */
+  documentos_solicitados?: DocumentoSolicitado[];
 }
 
 export function fetchVacantes(filtros?: {
@@ -1028,6 +1050,7 @@ export interface Plantilla {
   preguntasFiltro: CriterioFiltro[];
   /** Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada. */
   preguntasFiltroWhatsapp?: CriterioFiltro[];
+  documentosSolicitados?: DocumentoSolicitado[];  // Cambio 25
   ubicacionEstado?: string;
   ubicacionMunicipio?: string;
   textoWhatsapp: string;
@@ -1058,6 +1081,7 @@ export interface DatosPlantilla {
   seniority?: string;
   avisos_cumplimiento?: string[];
   preguntas_filtro?: CriterioFiltro[];
+  documentos_solicitados?: DocumentoSolicitado[];  // Cambio 25
   texto_whatsapp?: string;
   texto_bolsa?: string;
   enfoque_entrevista?: EnfoqueEntrevista;
@@ -1924,6 +1948,21 @@ export function urlDocumento(expedienteId: number, tipo: string) {
   return urlArchivo(`/contratacion/expedientes/${expedienteId}/documentos/${encodeURIComponent(tipo)}/archivo`);
 }
 
+/* Cambio 25 (2026-10-12): revisión de documentos por RH — Aprobar · Pedir corrección · Marcar excepción */
+export function aprobarDocumentos(expedienteId: number, tipos: string[] = []) {
+  return post<{ aprobados: string[]; expediente: NuevoIngreso }>(`/contratacion/expedientes/${expedienteId}/documentos/aprobar`, { tipos });
+}
+export function pedirCorreccionDocumentos(expedienteId: number, tipos: string[], motivo: string) {
+  return post<{ correccion: string[]; envio: { enviado: boolean; detalle: string; texto?: string }; expediente: NuevoIngreso }>(
+    `/contratacion/expedientes/${expedienteId}/documentos/correccion`, { tipos, motivo });
+}
+export function excepcionDocumentos(expedienteId: number, motivo: string, quitar = false) {
+  return post<{ expediente: NuevoIngreso }>(`/contratacion/expedientes/${expedienteId}/documentos/excepcion`, { motivo, quitar });
+}
+export function urlArchivoDocumento(expedienteId: number, archivoId: number) {
+  return urlArchivo(`/contratacion/expedientes/${expedienteId}/archivos/${archivoId}`);
+}
+
 export function marcarDocumento(
   expedienteId: number,
   datos: { tipo: string; estado: string; notas?: string; recibidoFisico?: boolean; motivo?: string },
@@ -1991,6 +2030,12 @@ export interface DocumentoExpedientePublico {
   tipo: string;
   estado: "pendiente" | "revision" | "recibido" | "rechazado";
   obligatorio: boolean;
+  /** Cambio 25: cuántos archivos exige (fotos del auto = 4), cuántos lleva y la corrección que pidió RH. */
+  cantidad?: number;
+  esFoto?: boolean;
+  recibidos?: number;
+  estadoRevision?: string;
+  correccion?: string;
 }
 
 export interface ExpedientePublico {

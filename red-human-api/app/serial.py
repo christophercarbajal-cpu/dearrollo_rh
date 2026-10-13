@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from . import fechas
 from .config import settings
-from .models import CONCLUSIONES_ENTREVISTA, TIPO_CONTRATO_FIRMADO, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
+from .models import CONCLUSIONES_ENTREVISTA, normalizar_documentos_vacante, TIPO_CONTRATO_FIRMADO, NIVELES_RECORDATORIO, estado_documento_onboarding, psicometria_simple, score_de_entrevista, AsignacionCurso, Archivo, Candidato, Colaborador, Curso, Documento, Entrevista, Expediente, Postulacion, Vacante
 from .services.avatar import avatar_activo
 from .services.ia import avisos_vigentes, texto_preguntas, texto_util_candidato
 
@@ -136,6 +136,7 @@ def vacante_dict(
         "criterios": [p for p in (v.preguntas_filtro or []) if isinstance(p, dict)],
         # Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada
         "criteriosWhatsapp": [p for p in (v.preguntas_filtro_whatsapp or []) if isinstance(p, dict)],
+        "documentosSolicitados": normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []),  # Cambio 25
         "ubicacionEstado": v.ubicacion_estado or "",
         "ubicacionMunicipio": v.ubicacion_municipio or "",
         # Capacitación universal (2026-09-16): curso que se asigna como filtro al quedar apto
@@ -992,10 +993,61 @@ def asignacion_publica_dict(a: AsignacionCurso) -> dict:
 # ------------------------------------------------------------
 
 
-def documento_dict(d: Documento) -> dict:
+def _archivos_por_documento(e: Expediente) -> dict:
+    """Cambio 25: los archivos VIGENTES de todo el expediente en UNA consulta → {documento_id: [ArchivoDocumento]}."""
+    from sqlalchemy.orm import object_session
+
+    from .models import ArchivoDocumento
+    from .services.modulos_rh import disponible
+
+    db = object_session(e)
+    if db is None or not disponible() or e.id is None:
+        return {}
+    try:
+        filas = (db.query(ArchivoDocumento).filter(ArchivoDocumento.expediente_id == e.id, ArchivoDocumento.vigente.is_(True))
+                 .order_by(ArchivoDocumento.id).all())
+    except Exception:  # noqa: BLE001
+        return {}
+    salida: dict = {}
+    for a in filas:
+        salida.setdefault(a.documento_id, []).append(a)
+    return salida
+
+
+def estado_revision_documento(d: Documento) -> str:
+    """Cambio 25 — lo que ve RH por documento: Pendiente · Por revisar · Aprobado · Corrección pedida · No aplica."""
+    if d.estado == "no_aplica":
+        return "No aplica"
+    if d.aprobado:
+        return "Aprobado"
+    if d.estado == "rechazado":
+        return "Corrección pedida" if d.correccion_en else "Rechazado"
+    if d.entregado:
+        return "Por revisar"
+    return "Pendiente"
+
+
+def documento_dict(d: Documento, archivos: Optional[list] = None) -> dict:
     v = d.validacion or {}
+    if archivos is None:
+        from sqlalchemy.orm import object_session
+
+        from .services.documentos_vacante import archivos as _archivos
+
+        db = object_session(d)
+        archivos = _archivos(db, d) if db is not None else []
     return {
+        "id": d.id,
         "nombre": d.tipo,
+        # Cambio 25: cada archivo es su propio registro; las fotos del auto exigen `cantidad`
+        "cantidad": int(d.cantidad or 1),
+        "esFoto": bool(d.es_foto),
+        "archivos": [{"id": a.id, "nombre": a.nombre_archivo, "mime": a.mime, "canal": a.canal, "subidoEn": iso(a.subido_en),
+                      "convertidoDe": a.convertido_de or ""} for a in archivos],
+        "recibidos": len(archivos) if archivos or d.estado in ("rechazado", "pendiente") else (1 if d.archivo else 0),
+        "estadoRevision": estado_revision_documento(d),
+        "correccion": {"motivo": d.correccion_motivo or "", "por": d.correccion_por or "", "en": iso(d.correccion_en)}
+        if d.correccion_en else None,
         "estado": d.estado,  # pendiente | revision | recibido | rechazado | no_aplica
         # Onboarding v2 (2026-09-28): Pendiente | Por revisar | Aprobado | Rechazado | No aplica
         "estadoOnboarding": estado_documento_onboarding(d),
@@ -1045,6 +1097,9 @@ def expediente_dict(e: Expediente) -> dict:
     estado = "alta" if e.estado == "alta" else ("completo" if e.progreso == 100 else "integracion")
     # documentos que la IA aprobó pero que nadie de RH ha confirmado todavía (bloquean el alta)
     sin_confirmar = e.sin_confirmar  # 2026-09-15: incluye digitales en revisión (cuentan para el %)
+    por_doc = _archivos_por_documento(e)
+    from .services.documentos_vacante import estado_expediente as estado_expediente_documentos
+
     return {
         "id": f"N-{500 + e.id}",
         "expedienteId": e.id,
@@ -1066,7 +1121,10 @@ def expediente_dict(e: Expediente) -> dict:
         "progreso": e.progreso,
         "tono": (e.id or 0) % 4,
         "estado": estado,
-        "documentos": [documento_dict(d) for d in e.documentos],
+        "documentos": [documento_dict(d, por_doc.get(d.id, [])) for d in e.documentos],
+        # Cambio 25: Pendiente · Por revisar · Corrección pedida · Documentos aprobados · Excepción
+        "estadoDocumentos": estado_expediente_documentos(e),
+        "excepcionDocumentos": dict(e.documentos_excepcion or {}) or None,
         "pendientes": e.pendientes,
         "noAprobados": e.no_aprobados,  # Onboarding v2: lo que falta APROBAR para el 100 %
         "porRevisar": e.por_revisar,

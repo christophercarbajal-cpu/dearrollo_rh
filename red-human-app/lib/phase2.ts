@@ -45,7 +45,19 @@ export interface DocExpediente {
   /** Fase 2: documento interno de RH (contrato firmado) — fuera del porcentaje y de lo que se pide al candidato. */
   interno?: boolean;
   aprobado?: boolean;
+  /** Cambio 25: cada archivo es su propio registro (fotos del auto = 4) y la corrección que pidió RH. */
+  id?: number;
+  cantidad?: number;
+  esFoto?: boolean;
+  archivos?: { id: number; nombre: string; mime: string; canal: string; subidoEn: string | null; convertidoDe: string }[];
+  recibidos?: number;
+  /** Pendiente · Por revisar · Aprobado · Corrección pedida · Rechazado · No aplica */
+  estadoRevision?: string;
+  correccion?: { motivo: string; por: string; en: string | null } | null;
 }
+
+/** Cambio 25: estado del expediente de documentos. */
+export type ClaveEstadoDocumentos = "pendiente" | "por_revisar" | "correccion" | "aprobados" | "excepcion";
 
 /** Onboarding v2 (Fase 3): resumen del tablero. «No aplica» y «Cancelada» NO cuentan en el total (se muestran aparte). */
 export interface ResumenTableroOnboarding {
@@ -83,6 +95,9 @@ export interface NuevoIngreso {
   progreso: number;
   tono: number;
   documentos: DocExpediente[];
+  /** Cambio 25: Pendiente · Por revisar · Corrección pedida · Documentos aprobados · Excepción */
+  estadoDocumentos?: { clave: ClaveEstadoDocumentos; texto: string };
+  excepcionDocumentos?: { por: string; motivo: string; en: string } | null;
   /* --- presentes cuando vienen de la API --- */
   expedienteId?: number;
   estado?: "integracion" | "completo" | "alta" | string;

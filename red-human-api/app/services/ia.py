@@ -3292,3 +3292,11 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
         salida[c] = {"enfoque": g.enfoque, "temas": list(g.temas or []), "preguntas": abrir_preguntas(list(g.preguntas))}
     salida.update(armados)
     return salida, con_ia
+
+
+def documentos_de_descripcion(*textos) -> list:
+    """Cambio 25 (2026-10-12): «Documentos y fotos que se piden» que MENCIONA la vacante (descripción, requisitos,
+    responsabilidades). Garantizado en código: solo los del catálogo y solo si el texto los nombra — nunca inventa."""
+    from .documentos_vacante import detectar
+
+    return detectar(*textos)

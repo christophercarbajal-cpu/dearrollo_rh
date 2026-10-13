@@ -55,6 +55,8 @@ import {
   type Plantilla,
   type VacanteGenerada,
   type PerfilOperativo,
+  type DocumentoSolicitado,
+  DOCUMENTOS_SUGERIDOS_VACANTE,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +81,8 @@ export interface ContenidoVacante {
   requisitos: string[]; // indispensables (lista); viaja al servidor unida por « · »
   requisitos_deseables: string[];
   beneficios: string[];
+  /** Cambio 25: «Documentos y fotos que se piden». Con elementos, la ruta suma «Documentos» después del prefiltro. */
+  documentos_solicitados: DocumentoSolicitado[];
   /* --- 5. selección --- */
   /** Preguntas del prefiltro de la POSTULACIÓN WEB (/aplicar). */
   preguntas_filtro: CriterioFiltro[];
@@ -132,6 +136,7 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   requisitos: [],
   requisitos_deseables: [],
   beneficios: [],
+  documentos_solicitados: [],
   preguntas_filtro: [],
   preguntas_filtro_whatsapp: [],
   enfoque_entrevista: "profesional",
@@ -208,6 +213,7 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     requisitos: requisitosLista(p.requisitos),
     requisitos_deseables: [...(p.requisitosDeseables ?? [])],
     beneficios: [...(p.beneficios ?? [])],
+    documentos_solicitados: [...(p.documentosSolicitados ?? [])],
     preguntas_filtro: [...(p.preguntasFiltro ?? [])],
     preguntas_filtro_whatsapp: [...(p.preguntasFiltroWhatsapp ?? [])],
     enfoque_entrevista: p.enfoqueEntrevista ?? "profesional",
@@ -264,6 +270,7 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     requisitos: requisitosLista(v.requisitos),
     requisitos_deseables: [...(v.requisitosDeseables ?? [])],
     beneficios: [...(v.beneficios ?? [])],
+    documentos_solicitados: [...(v.documentosSolicitados ?? [])],
     preguntas_filtro: [...((v.criterios ?? []) as CriterioFiltro[])],
     preguntas_filtro_whatsapp: [...((v.criteriosWhatsapp ?? []) as CriterioFiltro[])],
     enfoque_entrevista: v.enfoqueEntrevista ?? "profesional",
@@ -288,6 +295,8 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     requisitos: unirCapturado(base.requisitos, g.requisitos_indispensables, base.requisitos_deseables),
     requisitos_deseables: unirCapturado(base.requisitos_deseables, g.requisitos_deseables, base.requisitos),
     beneficios: base.beneficios, // regla 4: solo lo capturado por RH
+    // Cambio 25: lo capturado manda; si no hay, los documentos que menciona la descripción
+    documentos_solicitados: base.documentos_solicitados.length ? base.documentos_solicitados : g.documentos_solicitados ?? [],
     preguntas_filtro: base.preguntas_filtro.length ? base.preguntas_filtro : g.preguntas_filtro ?? [],
     preguntas_filtro_whatsapp: base.preguntas_filtro_whatsapp.length ? base.preguntas_filtro_whatsapp : g.preguntas_filtro_whatsapp ?? [],
     resumen: base.resumen || g.resumen,
@@ -394,6 +403,7 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     responsabilidades: c.responsabilidades,
     requisitos_deseables: c.requisitos_deseables,
     beneficios: c.beneficios,
+    documentos_solicitados: c.documentos_solicitados,
     preguntas_filtro: c.preguntas_filtro,
     preguntas_filtro_whatsapp: c.preguntas_filtro_whatsapp,
     enfoque_entrevista: c.enfoque_entrevista,
@@ -712,6 +722,7 @@ export function FormularioContenidoVacante({
       requisitos_indispensables: p.requisitos_indispensables,
       requisitos_deseables: p.requisitos_deseables,
       beneficios: p.beneficios,
+      documentos_solicitados: p.documentos_solicitados,
       cliente_id: clienteId ?? null,
       mostrar_cliente_candidato: mostrarCliente,
       responsabilidades: p.responsabilidades,
@@ -793,6 +804,7 @@ export function FormularioContenidoVacante({
         <ListaEditable label="Requisitos indispensables" items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida" />
         <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
         <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
+        <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")} />
         <div className="grid gap-4 sm:grid-cols-2">
           <Selector
             label="Enfoque de entrevista"
@@ -910,6 +922,53 @@ export function FormularioContenidoVacante({
           </Seccion>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** Cambio 25 (2026-10-12): «Documentos y fotos que se piden». Sugeridos en chips (INE, licencia, fotos del auto —4—…)
+ *  y campo libre. Si la lista tiene elementos, la ruta del candidato suma la actividad «Documentos» después del
+ *  prefiltro de WhatsApp y el agente le manda la liga para subirlos. Vacía al generar → Red Human la llena con lo que
+ *  mencione la descripción. */
+function CampoDocumentos({ valor, onChange }: { valor: DocumentoSolicitado[]; onChange: (v: DocumentoSolicitado[]) => void }) {
+  const [otro, setOtro] = useState("");
+  const tiene = (n: string) => valor.some((d) => clave(d.nombre) === clave(n));
+  const alternar = (d: DocumentoSolicitado) => onChange(tiene(d.nombre) ? valor.filter((x) => clave(x.nombre) !== clave(d.nombre)) : [...valor, d]);
+  const agregar = () => {
+    const nombre = otro.trim();
+    if (nombre && !tiene(nombre)) onChange([...valor, { nombre, cantidad: 1, foto: false }]);
+    setOtro("");
+  };
+  const otros = valor.filter((d) => !DOCUMENTOS_SUGERIDOS_VACANTE.some((x) => clave(x.nombre) === clave(d.nombre)));
+  return (
+    <div>
+      <p className="text-sm font-semibold text-ink">Documentos y fotos que se piden</p>
+      <p className="mt-0.5 text-xs text-ink-3">
+        Opcional. Si eliges alguno, al pasar el prefiltro de WhatsApp el candidato recibe una liga para subirlos (foto o PDF).
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {DOCUMENTOS_SUGERIDOS_VACANTE.map((d) => (
+          <button key={d.nombre} type="button" onClick={() => alternar(d)}
+            className={cn("rounded-full border px-3 py-1 text-[12px] font-medium transition",
+              tiene(d.nombre) ? "border-brand bg-brand-soft text-brand" : "border-border-soft text-ink-2 hover:text-ink")}>
+            {d.nombre}{d.cantidad > 1 ? ` (${d.cantidad})` : ""}
+          </button>
+        ))}
+        {otros.map((d) => (
+          <span key={d.nombre} className="inline-flex items-center gap-1 rounded-full border border-brand bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand">
+            {d.nombre}
+            <button type="button" onClick={() => alternar(d)} aria-label={`Quitar ${d.nombre}`}><X className="h-3 w-3" /></button>
+          </span>
+        ))}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input value={otro} onChange={(e) => setOtro(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregar(); } }}
+          placeholder="Otro documento (p. ej. Carta de recomendación)"
+          className="min-h-10 flex-1 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
+        <button type="button" onClick={agregar} disabled={!otro.trim()} className="rounded-xl border border-border-soft px-3 text-sm font-semibold text-ink-2 disabled:opacity-50">
+          Agregar
+        </button>
+      </div>
     </div>
   );
 }

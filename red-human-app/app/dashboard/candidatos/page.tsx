@@ -112,6 +112,7 @@ import {
   type AlertaTablero, type OrdenTablero,
 } from "@/components/dashboard/candidatos/tablero-kanban";
 import { ContactoCandidato } from "@/components/dashboard/candidatos/contacto-candidato";
+import { RevisionDocumentos } from "@/components/dashboard/candidatos/revision-documentos";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
 import { ConfirmacionAccion } from "@/components/dashboard/confirmacion-accion";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
@@ -2326,15 +2327,16 @@ function PestanaDocumentos({
         </div>
       )}
 
-      {/* 2026-10-06 (ruta Masivos): documentos pedidos ANTES de Contratación — RH los valida aquí mismo (misma fila
-          y mismas acciones del expediente); el paso «Validar documentos» del seguimiento se actualiza solo. */}
-      {c.expedienteId != null && c.etapa !== "Contratación" && c.etapa !== "Onboarding" && expediente && (
+      {/* Cambio 25 (2026-10-12): revisión de documentos en cualquier etapa con expediente — un renglón por documento
+          pedido (con cada archivo) y «Aprobar» · «Pedir corrección» · «Marcar excepción»; la actividad de la ruta se
+          actualiza sola. */}
+      {c.expedienteId != null && expediente && (
         <div>
-          <Eyebrow>Validar documentos</Eyebrow>
-          <div className="mt-2 flex flex-col gap-2">
-            {(expediente.documentos ?? []).filter((d) => !d.interno).map((d) => (
-              <FilaDocumentoSimple key={d.nombre} d={d} expedienteId={c.expedienteId ?? undefined} live={live && puedeDecidir} onActualizado={setExpediente} />
-            ))}
+          <Eyebrow>Documentos</Eyebrow>
+          <div className="mt-2">
+            <RevisionDocumentos expedienteId={c.expedienteId} expediente={expediente} live={live && puedeDecidir}
+              onActualizado={(e) => { setExpediente(e); if (live) void fetchCandidato(c.id).then((x) => x && onCambio(x)); }}
+              onAviso={setAviso} />
           </div>
         </div>
       )}

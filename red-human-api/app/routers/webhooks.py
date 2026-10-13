@@ -835,6 +835,19 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     # ── 1.1 Documento o imagen adjunta (2026-09-15): si la postulación ya está en Contratación u
     # Onboarding, el archivo ES el documento del expediente — se descarga de Meta y se adjunta.
     # En cualquier otra etapa se sigue tratando el pie de foto como texto (comportamiento previo).
+    if msg.get("tipo") in ("image", "document") and msg.get("media") and p.etapa not in ETAPAS_DOCUMENTOS:
+        # Cambio 25: con documentos de la vacante por subir, una foto por el chat se ataja con la liga (un renglón por
+        # documento ahí); nunca se adivina a qué documento corresponde.
+        from ..services import documentos_vacante as _sdv
+
+        liga_docs = _sdv.liga_si_intercepta(p)
+        if liga_docs:
+            aviso_docs = f"Súbela aquí, por favor: {liga_docs}"
+            envio_docs = await enviar_mensaje(telefono, aviso_docs)
+            guardar_mensaje(db, p, "user", f"[📎 {msg.get('tipo')}: {(msg.get('media') or {}).get('filename') or 'archivo'}]", "whatsapp", wa_id=msg.get("wa_id", ""))
+            guardar_mensaje(db, p, "assistant", aviso_docs, "whatsapp", envio_docs)
+            db.commit()
+            return {"ok": True, "accion": "documento_a_liga", "candidato": c.codigo, "postulacion": p.codigo, "respuesta": aviso_docs}
     if msg.get("tipo") in ("image", "document") and msg.get("media") and p.etapa in ETAPAS_DOCUMENTOS and p.expediente:
         resultado = await _recibir_documento_whatsapp(db, p, msg, telefono)
         return {"ok": True, "accion": "documento_whatsapp", "candidato": c.codigo, "postulacion": p.codigo, **resultado}

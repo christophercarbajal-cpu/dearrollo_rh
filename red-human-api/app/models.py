@@ -106,6 +106,9 @@ class Vacante(Base):
     # Fase 4 (2026-09-15): preguntas del prefiltro por WhatsApp, INDEPENDIENTES de las de la postulación web
     # (`preguntas_filtro`). Vacía = el agente usa las de la web (compatibilidad con vacantes previas).
     preguntas_filtro_whatsapp: Mapped[list] = mapped_column(JSON, default=list)
+    # Cambio 25 (2026-10-12): «Documentos y fotos que se piden» [{nombre, cantidad, foto}] (`normalizar_documentos_vacante`).
+    # Con elementos, la ruta de cada postulación suma la actividad «Documentos» después del prefiltro de WhatsApp.
+    documentos_solicitados: Mapped[list] = mapped_column(JSON, default=list)
     # Fase 4: ubicación estructurada (Estado / Municipio-Alcaldía de México); `ubicacion` (texto) se deriva.
     ubicacion_estado: Mapped[str] = mapped_column(String(60), default="")
     ubicacion_municipio: Mapped[str] = mapped_column(String(100), default="")
@@ -727,6 +730,63 @@ DOCUMENTOS_BASE = [
     "Cuenta bancaria / CLABE",
 ]
 
+# Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. Sugeridos (RH puede escribir otros);
+# `cantidad` = cuántos archivos exige (las fotos del auto son 4) y `foto` = se valida a ojo de RH, no como documento
+# oficial. `palabras` = cómo los menciona una descripción (la IA los detecta con `ia.documentos_de_descripcion`).
+DOCUMENTOS_SUGERIDOS_VACANTE = [
+    {"nombre": "INE", "cantidad": 1, "foto": False, "palabras": ("ine", "ife", "credencial de elector", "identificacion oficial")},
+    {"nombre": "Licencia de conducir", "cantidad": 1, "foto": False, "palabras": ("licencia de conducir", "licencia de manejo", "licencia vigente", "licencia tipo", "licencia federal")},
+    {"nombre": "Fotos del auto", "cantidad": 4, "foto": True, "palabras": ("fotos del auto", "fotos del vehiculo", "fotos de tu auto", "fotos del carro", "auto propio", "vehiculo propio", "carro propio", "coche propio")},
+    {"nombre": "Tarjeta de circulación", "cantidad": 1, "foto": False, "palabras": ("tarjeta de circulacion",)},
+    {"nombre": "Comprobante de domicilio", "cantidad": 1, "foto": False, "palabras": ("comprobante de domicilio",)},
+    {"nombre": "CURP", "cantidad": 1, "foto": False, "palabras": ("curp",)},
+    {"nombre": "Constancia de situación fiscal", "cantidad": 1, "foto": False, "palabras": ("constancia de situacion fiscal", "rfc")},
+    {"nombre": "Número de Seguridad Social", "cantidad": 1, "foto": False, "palabras": ("nss", "numero de seguridad social", "numero del imss")},
+    {"nombre": "Acta de nacimiento", "cantidad": 1, "foto": False, "palabras": ("acta de nacimiento",)},
+    {"nombre": "Comprobante de estudios", "cantidad": 1, "foto": False, "palabras": ("comprobante de estudios", "certificado de estudios")},
+    {"nombre": "Carta de antecedentes no penales", "cantidad": 1, "foto": False, "palabras": ("antecedentes no penales", "carta de no antecedentes")},
+    {"nombre": "Foto de frente", "cantidad": 1, "foto": True, "palabras": ("fotografia reciente", "foto reciente", "foto de frente")},
+]
+MAX_DOCUMENTOS_VACANTE = 15
+MAX_ARCHIVOS_DOCUMENTO = 10
+
+
+def normalizar_documentos_vacante(lista) -> List[dict]:
+    """[{nombre, cantidad, foto}] sin duplicados (por nombre, sin acentos). Acepta textos sueltos («INE») y completa
+    cantidad/foto con el sugerido del mismo nombre."""
+    import unicodedata as _ud
+
+    def clave(t: str) -> str:
+        return _ud.normalize("NFKD", t or "").encode("ascii", "ignore").decode().lower().strip()
+
+    sugeridos = {clave(x["nombre"]): x for x in DOCUMENTOS_SUGERIDOS_VACANTE}
+    salida: List[dict] = []
+    vistos: set = set()
+    for x in lista or []:
+        if isinstance(x, str):
+            x = {"nombre": x}
+        if not isinstance(x, dict):
+            continue
+        nombre = " ".join(str(x.get("nombre") or "").split())[:80]
+        k = clave(nombre)
+        if not nombre or k in vistos:
+            continue
+        vistos.add(k)
+        base = sugeridos.get(k, {})
+        try:
+            cantidad = int(x.get("cantidad") or base.get("cantidad") or 1)
+        except (TypeError, ValueError):
+            cantidad = 1
+        foto = x.get("foto")
+        salida.append({"nombre": nombre, "cantidad": max(1, min(cantidad, MAX_ARCHIVOS_DOCUMENTO)),
+                       "foto": bool(base.get("foto", False) if foto is None else foto)})
+    return salida[:MAX_DOCUMENTOS_VACANTE]
+
+
+# Cambio 25: estado del EXPEDIENTE de documentos (lo que ve RH en la pestaña «Documentos»).
+ESTADOS_DOCUMENTOS_EXPEDIENTE = {"pendiente": "Pendiente", "por_revisar": "Por revisar", "correccion": "Corrección pedida",
+                                 "aprobados": "Documentos aprobados", "excepcion": "Excepción"}
+
 
 # Onboarding v2 (2026-09-28): vocabulario visible de los documentos. NO se migran datos: los valores
 # guardados (pendiente | revision | recibido | rechazado) se LEEN así. «Aprobado» exige que una persona de
@@ -830,6 +890,8 @@ class Expediente(Base):
     fecha_ingreso_real: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     ingreso_confirmado_por: Mapped[str] = mapped_column(String(150), default="")
     ingreso_confirmado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # Cambio 25 (2026-10-12): «Marcar excepción» de RH sobre los documentos ({por, motivo, en}; vacío = sin excepción).
+    documentos_excepcion: Mapped[dict] = mapped_column(JSON, default=dict)
     # «Cerrar Onboarding» (manual, nunca automático) y «No ingresó» (solo antes del alta).
     onboarding_cerrado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     onboarding_cerrado_por: Mapped[str] = mapped_column(String(150), default="")
@@ -924,6 +986,13 @@ class Documento(Base):
     # Onboarding v2 (Fase 2): documento INTERNO de RH (el contrato firmado). Nunca se le pide al candidato,
     # no entra al porcentaje ni a recordatorios y solo se carga por su acción propia.
     interno: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Cambio 25 (2026-10-12): cuántos archivos exige (fotos del auto = 4; cada archivo es su propio `ArchivoDocumento`),
+    # si es FOTO (sin validación de documento oficial: la revisa RH) y la corrección que pidió RH (estado «rechazado»).
+    cantidad: Mapped[int] = mapped_column(Integer, default=1)
+    es_foto: Mapped[bool] = mapped_column(Boolean, default=False)
+    correccion_motivo: Mapped[str] = mapped_column(Text, default="")
+    correccion_por: Mapped[str] = mapped_column(String(150), default="")
+    correccion_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
 
     @property
     def aplica(self) -> bool:
@@ -940,6 +1009,27 @@ class Documento(Base):
         return self.estado == "recibido" or (self.estado == "revision" and bool(self.archivo))
 
     expediente: Mapped[Expediente] = relationship(back_populates="documentos")
+
+
+class ArchivoDocumento(Base):
+    """Cambio 25 (2026-10-12): cada archivo subido es su PROPIO registro, ligado al documento solicitado (las 4 fotos del
+    auto son 4 filas). `vigente=False` = reemplazado por una corrección (se conserva). Enteros sin llave foránea (tabla
+    del paso NO fatal); `Documento.archivo` sigue apuntando al último archivo vigente (compatibilidad)."""
+
+    __tablename__ = "archivos_documento"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    documento_id: Mapped[int] = mapped_column(Integer, index=True)
+    expediente_id: Mapped[int] = mapped_column(Integer, index=True)
+    archivo: Mapped[str] = mapped_column(String(300), default="")
+    nombre_archivo: Mapped[str] = mapped_column(String(255), default="")
+    mime: Mapped[str] = mapped_column(String(80), default="")
+    tamano: Mapped[int] = mapped_column(Integer, default=0)
+    canal: Mapped[str] = mapped_column(String(20), default="")  # liga | whatsapp | rh
+    subido_por: Mapped[str] = mapped_column(String(150), default="")
+    convertido_de: Mapped[str] = mapped_column(String(20), default="")  # «heic» si se convirtió a JPG
+    vigente: Mapped[bool] = mapped_column(Boolean, default=True)
+    subido_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 
 
 class Colaborador(Base):
@@ -1124,6 +1214,7 @@ class Plantilla(Base):
     avisos_cumplimiento: Mapped[list] = mapped_column(JSON, default=list)
     preguntas_filtro: Mapped[list] = mapped_column(JSON, default=list)  # = "evaluaciones" (ver spec Fase B)
     preguntas_filtro_whatsapp: Mapped[list] = mapped_column(JSON, default=list)  # Fase 4
+    documentos_solicitados: Mapped[list] = mapped_column(JSON, default=list)  # Cambio 25
     ubicacion_estado: Mapped[str] = mapped_column(String(60), default="")  # Fase 4
     ubicacion_municipio: Mapped[str] = mapped_column(String(100), default="")
     texto_whatsapp: Mapped[str] = mapped_column(Text, default="")
@@ -1148,6 +1239,7 @@ CAMPOS_PLANTILLA = [
     "enfoque_entrevista",
     "sueldo_desde", "sueldo_hasta", "sueldo_moneda", "sueldo_periodicidad",  # Parte 3
     "preguntas_filtro_whatsapp", "ubicacion_estado", "ubicacion_municipio",  # Fase 4
+    "documentos_solicitados",  # Cambio 25
 ]
 
 
@@ -1691,6 +1783,7 @@ TABLAS_MODULOS_RH = (
     "envios_actividad",  # Trazabilidad de envíos por destinatario (2026-10-08)
     "plantillas_proceso",  # Proceso configurable (2026-10-06)
     "chats_telegram", "updates_telegram",  # Canal Telegram (2026-10-06)
+    "archivos_documento",  # Módulo de documentos (Cambio 25, 2026-10-12)
 )
 
 # --- Desempeño ---

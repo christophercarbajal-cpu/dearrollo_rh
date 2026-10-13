@@ -13,6 +13,12 @@ Bloque 2 (Cambios 21 y 26): «Indicaciones para el entrevistador» en la cita (p
 el aviso al entrevistador tiene texto fijo, sus indicaciones y la liga de su evaluación (una por cita, la misma al
 editar: «Tu cita cambió»), nunca las indicaciones ni los adjuntos del candidato; su página no muestra las instrucciones
 del candidato, deduplica requisitos, muestra «Lo que ya respondió en el prefiltro» y el guion no repite el prefiltro.
+
+Bloque 3 (Cambio 25): «Documentos y fotos que se piden» en la vacante (la IA los toma de la descripción); con elementos la
+ruta suma «Documentos» después del prefiltro de WhatsApp; el agente manda la liga una vez y ataja las fotos del chat con
+«Súbela aquí, por favor: [liga]»; cada archivo es su propio registro (fotos del auto = 4; HEIC → JPG); RH aprueba, pide
+corrección (reemplazo por WhatsApp) o marca excepción; estados Pendiente / Por revisar / Corrección pedida / Documentos
+aprobados / Excepción.
 """
 
 import asyncio
@@ -369,6 +375,169 @@ with TestClient(app) as client:
           "el guion sugerido ya no pregunta lo del prefiltro (sueldo, licencia ya respondida, escolaridad, traslado)")
     check(not any(sev.guion_sin_prefiltro([x], q) != [x] for x in (pub["evaluacion"].get("guion") or {}).get("preguntas") or []),
           "el guion que ve el entrevistador ya viene filtrado")
+    app.dependency_overrides.clear()
+
+    # ================= Bloque 3 (Cambio 25) · módulo de documentos =================
+    print("\n--- Cambio 25 · documentos de la vacante ---")
+    import io
+
+    from PIL import Image
+
+    from app.models import ArchivoDocumento, Documento
+    from app.routers import webhooks as wh
+    from app.services import documentos_vacante as sdv
+    from app.services.mensajeria import en_conversacion
+
+    wh.enviar_mensaje = _wa
+    for dep in (usuario_actual, usuario_decisor):
+        app.dependency_overrides[dep] = lambda: admin
+    det = ia.documentos_de_descripcion("Chofer con auto propio. Requisitos: licencia de conducir vigente e INE.")
+    check([d["nombre"] for d in det] == ["INE", "Licencia de conducir", "Fotos del auto"] and det[2] == {"nombre": "Fotos del auto", "cantidad": 4, "foto": True},
+          f"la IA llena «Documentos y fotos que se piden» con lo que menciona la descripción: {det}")
+    check(ia.documentos_de_descripcion("Ayudante general para almacén, turno matutino.") == [], "sin menciones no inventa documentos")
+    check(sdv.de_vacante(type("V", (), {"documentos_solicitados": ["INE", {"nombre": "ine"}, {"nombre": "Fotos del auto"}]})())
+          == [{"nombre": "INE", "cantidad": 1, "foto": False}, {"nombre": "Fotos del auto", "cantidad": 4, "foto": True}],
+          "sin duplicados; las fotos del auto exigen 4")
+
+    cuenta3 = Cuenta(nombre="C25 docs", nombre_comercial="Docs MX", estado="Activa", slug="c25-docs")
+    db.add(cuenta3)
+    db.flush()
+    db.add(UsuarioCuenta(usuario_id=admin.id, cuenta_id=cuenta3.id))
+    app.dependency_overrides[cuenta_actual] = lambda: cuenta3
+    v3 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id])).order_by(Vacante.id).first()
+    v3.cuenta_id, v3.cliente_id, v3.titulo, v3.responsable_id = cuenta3.id, None, "Repartidor con auto", admin.id
+    v3.preguntas_filtro, v3.preguntas_filtro_whatsapp = [], []
+    RUTA_DOCS = {"pasos": [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
+                           {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
+                           {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"}]}
+    v3.proceso = sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS)
+    db.commit()
+    r = client.patch(f"/vacantes/{v3.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}, {"nombre": "Fotos del auto"}]})
+    check(r.status_code == 200 and [d["nombre"] for d in r.json()["documentosSolicitados"]] == ["INE", "Fotos del auto"],
+          f"la vacante guarda «Documentos y fotos que se piden» ({r.status_code} {r.text[:160]})")
+    db.expire_all()
+
+    def nueva_postulacion(nombre, tel, vac):
+        c = _crear_candidato(db, cuenta3.id, nombre, "Portal", False, telefono=tel)
+        p = crear_postulacion(db, c, vac, cuenta3.id, "web", consentimiento=True)
+        db.commit()
+        return p
+
+    q3 = nueva_postulacion("Pedro Ramos", "5512350001", v3)
+    pasos = [x["id"] for x in q3.proceso["pasos"]]
+    paso_docs = next(x for x in q3.proceso["pasos"] if x["id"] == sdv.ID_PASO)
+    check(pasos[:3] == ["sw", "pwa", sdv.ID_PASO] and paso_docs["etapa"] == "Prefiltro" and paso_docs["depende_de"] == ["pwa"]
+          and paso_docs["documentos"] == ["INE", "Fotos del auto"], f"la ruta suma «Documentos» DESPUÉS del prefiltro de WhatsApp: {pasos}")
+    v4 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id, v3.id])).order_by(Vacante.id).first()
+    v4.cuenta_id, v4.proceso, v4.documentos_solicitados = cuenta3.id, sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS), []
+    db.commit()
+    q4 = nueva_postulacion("Sin Docs", "5512350002", v4)
+    check(not any(x["tipo"] == "documentos" for x in q4.proceso["pasos"]), "sin documentos en la vacante la ruta no cambia")
+
+    n = len(ENV)
+    check(asyncio.run(sdv.revisar(db, q3)) is None and len(ENV) == n, "antes de terminar el prefiltro no se pide nada")
+    q3.prefiltro_completo, q3.estado = True, "cumple"
+    db.commit()
+    asyncio.run(sproc.avanzar_seguro(db, q3))
+    db.expire_all()
+    q3 = db.get(Postulacion, q3.id)
+    msgs = [x for x in ENV[n:] if x[0] == "whatsapp" and x[1].endswith("5512350001")]
+    check(len(msgs) == 1 and "• INE" in msgs[0][2] and "• Fotos del auto (4 fotos)" in msgs[0][2] and "/expediente/" in msgs[0][2],
+          f"al pasar el prefiltro el agente manda la liga con los documentos: {msgs[0][2] if msgs else None!r}")
+    check(q3.etapa == "Prefiltro" and q3.expediente is not None, "la actividad obligatoria detiene la ruta hasta revisar los documentos")
+    e3 = q3.expediente
+    docs3 = {d.tipo: d for d in e3.documentos}
+    check(docs3["Fotos del auto"].cantidad == 4 and docs3["Fotos del auto"].es_foto and docs3["INE"].solicitado_en is not None,
+          "cada documento solicitado queda ligado al expediente (fotos del auto: 4)")
+    asyncio.run(sproc.avanzar_seguro(db, q3))
+    check(len([x for x in ENV[n:] if x[1].endswith("5512350001")]) == 1, "la liga sale una sola vez")
+    pub = client.get(f"/expedientes/publica/{e3.token}").json()
+    check([d["tipo"] for d in pub["documentos"]] == ["INE", "Fotos del auto"] and pub["documentos"][1]["cantidad"] == 4,
+          f"la liga muestra un renglón por documento pedido: {[d['tipo'] for d in pub['documentos']]}")
+
+    print("\n--- Cambio 25 · foto por el chat → liga ---")
+    with en_conversacion("whatsapp", "52" + q3.telefono):
+        res = asyncio.run(wh.procesar_entrante(db, {"telefono": "521" + q3.telefono, "texto": "mi ine", "nombre": "Pedro", "wa_id": "wamid.foto1",
+                                                     "tipo": "image", "media": {"id": "m1"}, "id_seleccionado": "", "numero_receptor": "",
+                                                     "canal": "whatsapp"}))
+    check(res.get("accion") == "documento_a_liga" and res["respuesta"] == f"Súbela aquí, por favor: {sdv.liga(q3)}",
+          f"una foto por el chat se ataja con la liga: {res.get('respuesta')!r} ({res.get('accion')})")
+
+    print("\n--- Cambio 25 · subida: un registro por archivo, HEIC → JPG ---")
+
+    def imagen(fmt="JPEG", color=(200, 30, 30)):
+        b = io.BytesIO()
+        Image.effect_noise((96, 96), 60).convert("RGB").save(b, format=fmt, quality=95) if fmt != "HEIF" else \
+            Image.effect_noise((96, 96), 60).convert("RGB").save(b, format=fmt)
+        return b.getvalue()
+
+    for i in range(4):
+        r = client.post(f"/expedientes/publica/{e3.token}/documentos", data={"tipo": "Fotos del auto"},
+                        files={"archivo": (f"auto{i}.jpg", imagen(), "image/jpeg")})
+        check(r.status_code == 200, f"foto {i + 1} del auto ({r.status_code} {r.text[:160]})")
+    db.expire_all()
+    fotos = db.query(ArchivoDocumento).filter(ArchivoDocumento.documento_id == docs3["Fotos del auto"].id).all()
+    d_auto = db.get(Documento, docs3["Fotos del auto"].id)
+    check(len(fotos) == 4 and all(f.vigente for f in fotos) and len({f.archivo for f in fotos}) == 4 and d_auto.estado == "revision",
+          "las 4 fotos son 4 registros propios y el documento queda «Por revisar»")
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+        heic = imagen("HEIF")
+    except Exception:  # noqa: BLE001
+        heic = None
+    if heic:
+        r = client.post(f"/expedientes/publica/{e3.token}/documentos", data={"tipo": "INE"}, files={"archivo": ("ine.heic", heic, "image/heic")})
+        db.expire_all()
+        a_ine = db.query(ArchivoDocumento).filter(ArchivoDocumento.documento_id == docs3["INE"].id).first()
+        check(r.status_code == 200 and a_ine and a_ine.mime == "image/jpeg" and a_ine.convertido_de == "heic" and a_ine.nombre_archivo.endswith(".jpg"),
+              f"una foto HEIC se convierte a JPG en el servidor ({r.status_code} {r.text[:160]})")
+    else:
+        r = client.post(f"/expedientes/publica/{e3.token}/documentos", data={"tipo": "INE"}, files={"archivo": ("ine.jpg", imagen(), "image/jpeg")})
+        check(r.status_code == 200, "INE subida (sin codificador HEIF en este equipo)")
+    db.expire_all()
+    exp = client.get(f"/contratacion/expedientes/{e3.id}").json()
+    est = exp.get("estadoDocumentos") or (exp.get("expediente") or {}).get("estadoDocumentos")
+    check(est and est["clave"] == "por_revisar" and est["texto"] == "Por revisar", f"expediente «Por revisar»: {est}")
+
+    print("\n--- Cambio 25 · RH: pedir corrección, aprobar, excepción ---")
+    n = len(ENV)
+    r = client.post(f"/contratacion/expedientes/{e3.id}/documentos/correccion", json={"tipos": ["Fotos del auto"], "motivo": "Se ven borrosas"})
+    check(r.status_code == 200 and r.json()["expediente"]["estadoDocumentos"]["texto"] == "Corrección pedida", f"«Corrección pedida» ({r.status_code} {r.text[:160]})")
+    m = [x for x in ENV[n:] if x[0] == "whatsapp" and x[1].endswith("5512350001")]
+    check(m and "• Fotos del auto" in m[0][2] and "• INE" not in m[0][2] and "Se ven borrosas" in m[0][2] and sdv.liga(q3) in m[0][2],
+          "el candidato recibe por WhatsApp solo lo que debe reemplazar, el motivo y la liga")
+    db.expire_all()
+    check(not any(f.vigente for f in db.query(ArchivoDocumento).filter(ArchivoDocumento.documento_id == docs3["Fotos del auto"].id)),
+          "las fotos anteriores se conservan como no vigentes")
+    pub = client.get(f"/expedientes/publica/{e3.token}").json()
+    fila = next(d for d in pub["documentos"] if d["tipo"] == "Fotos del auto")
+    check(fila["correccion"] == "Se ven borrosas" and fila["recibidos"] == 0 and fila["estadoRevision"] == "Corrección pedida",
+          "la liga muestra la corrección pedida")
+    for i in range(4):
+        client.post(f"/expedientes/publica/{e3.token}/documentos", data={"tipo": "Fotos del auto"},
+                    files={"archivo": (f"nueva{i}.png", imagen("PNG"), "image/png")})
+    r = client.post(f"/contratacion/expedientes/{e3.id}/documentos/aprobar", json={"tipos": []})
+    check(r.status_code == 200 and r.json()["expediente"]["estadoDocumentos"]["texto"] == "Documentos aprobados", f"«Documentos aprobados» ({r.status_code} {r.text[:160]})")
+    db.expire_all()
+    q3 = db.get(Postulacion, q3.id)
+    paso = next(x for x in sproc.estado_pasos(q3) if x["id"] == sdv.ID_PASO)
+    check(paso["estado"] == "completada" and q3.etapa == "Entrevista IA", f"documentos aprobados → la ruta sigue ({paso['estado']}, {q3.etapa})")
+
+    q5 = nueva_postulacion("Lalo Excepción", "5512350003", v3)
+    q5.prefiltro_completo, q5.estado = True, "cumple"
+    db.commit()
+    asyncio.run(sproc.avanzar_seguro(db, q5))
+    db.expire_all()
+    q5 = db.get(Postulacion, q5.id)
+    r = client.post(f"/contratacion/expedientes/{q5.expediente.id}/documentos/excepcion", json={"motivo": "corto"})
+    check(r.status_code == 400, "la excepción exige motivo")
+    r = client.post(f"/contratacion/expedientes/{q5.expediente.id}/documentos/excepcion", json={"motivo": "Entrega las fotos el primer día"})
+    db.expire_all()
+    q5 = db.get(Postulacion, q5.id)
+    check(r.status_code == 200 and r.json()["expediente"]["estadoDocumentos"]["texto"] == "Excepción" and q5.etapa == "Entrevista IA",
+          f"«Marcar excepción» deja la actividad cumplida con quién y por qué y la ruta sigue ({q5.etapa})")
     app.dependency_overrides.clear()
 
 print(f"\n🎉 {OK} comprobaciones OK — Cambios 21-27")

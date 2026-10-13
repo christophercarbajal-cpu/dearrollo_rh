@@ -2718,6 +2718,15 @@ async def solicitar_documentos(
     """Botón 'Solicitar documentos' — rompe el hielo por WhatsApp al entrar a Onboarding, con
     la liga pública para que el candidato suba sus documentos él mismo."""
     p = _por_codigo(db, codigo, cuenta.id)
+    from ..services import documentos_vacante as sdv
+
+    if p.etapa not in ("Contratación", "Onboarding") and sdv.paso_de(p) is not None and sdv.de_vacante(p.vacante):
+        # Cambio 25: la actividad «Documentos» de la vacante pide SUS documentos (no el checklist de ingreso)
+        if not p.consentimiento:
+            raise HTTPException(409, "El candidato no tiene consentimiento registrado (LFPDPPP): no se le pueden pedir documentos.")
+        r = await sdv.enviar_solicitud(db, p, u.nombre)
+        await sproc.avanzar_seguro(db, p)
+        return {**r, "candidato": postulacion_dict(p, detalle=True)}
     liga = _liga_documentos(p, db, u)
     return await _disparar_mensaje_onboarding(db, p, "solicitud_documentos", "documentos_solicitados", liga, u, notificar)
 

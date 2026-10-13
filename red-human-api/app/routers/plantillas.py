@@ -11,7 +11,7 @@ from ..database import get_db
 from ..services import masivo
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
-    CAMPOS_PLANTILLA, ENFOQUES_ENTREVISTA, PERIODICIDADES_SUELDO, Cliente, Cuenta, Plantilla, Usuario, Vacante, registrar,
+    CAMPOS_PLANTILLA, ENFOQUES_ENTREVISTA, normalizar_documentos_vacante, PERIODICIDADES_SUELDO, Cliente, Cuenta, Plantilla, Usuario, Vacante, registrar,
     texto_sueldo, texto_ubicacion,
 )
 
@@ -46,6 +46,7 @@ def _plantilla_dict(p: Plantilla) -> dict:
         "avisosCumplimiento": p.avisos_cumplimiento or [],
         "preguntasFiltro": p.preguntas_filtro or [],  # = "evaluaciones" (ver spec Fase B)
         "preguntasFiltroWhatsapp": p.preguntas_filtro_whatsapp or [],  # Fase 4
+        "documentosSolicitados": normalizar_documentos_vacante(p.documentos_solicitados or []),  # Cambio 25
         "ubicacionEstado": p.ubicacion_estado or "",
         "ubicacionMunicipio": p.ubicacion_municipio or "",
         "textoWhatsapp": p.texto_whatsapp,
@@ -121,6 +122,7 @@ class PlantillaIn(BaseModel):
     avisos_cumplimiento: List[str] = []
     preguntas_filtro: List[dict] = []
     preguntas_filtro_whatsapp: List[dict] = []  # Fase 4
+    documentos_solicitados: List[dict] = []  # Cambio 25
     ubicacion_estado: str = ""  # Fase 4
     ubicacion_municipio: str = ""
     texto_whatsapp: str = ""
@@ -143,6 +145,7 @@ def _crear_plantilla(db: Session, cuenta: Cuenta, u: Usuario, datos: PlantillaIn
     if datos.sueldo_periodicidad or datos.sueldo_desde or datos.sueldo_hasta:
         campos["sueldo"] = texto_sueldo(datos.sueldo_desde, datos.sueldo_hasta, datos.sueldo_moneda, datos.sueldo_periodicidad)
     campos["ubicacion"] = texto_ubicacion(datos.ubicacion_estado, datos.ubicacion_municipio, datos.ubicacion)
+    campos["documentos_solicitados"] = normalizar_documentos_vacante(campos.get("documentos_solicitados"))
     p = Plantilla(cuenta_id=cuenta.id, creado_por=u.nombre, **campos)
     db.add(p)
     db.flush()
@@ -258,6 +261,7 @@ class ActualizarIn(BaseModel):
     avisos_cumplimiento: Optional[List[str]] = None
     preguntas_filtro: Optional[List[dict]] = None
     preguntas_filtro_whatsapp: Optional[List[dict]] = None  # Fase 4
+    documentos_solicitados: Optional[List[dict]] = None  # Cambio 25
     ubicacion_estado: Optional[str] = None  # Fase 4
     ubicacion_municipio: Optional[str] = None
     texto_whatsapp: Optional[str] = None
@@ -282,6 +286,8 @@ def actualizar(
     if datos.sueldo_periodicidad is not None and datos.sueldo_periodicidad not in PERIODICIDADES_SUELDO:
         raise HTTPException(400, f"Periodicidad de sueldo inválida. Usa una de: {', '.join(PERIODICIDADES_SUELDO)}")
     cambios = datos.model_dump(exclude_none=True)
+    if "documentos_solicitados" in cambios:
+        cambios["documentos_solicitados"] = normalizar_documentos_vacante(cambios["documentos_solicitados"])
     for campo, valor in cambios.items():
         setattr(p, campo, valor.strip() if campo == "nombre" and isinstance(valor, str) else valor)
     if any(k in cambios for k in ("sueldo_desde", "sueldo_hasta", "sueldo_moneda", "sueldo_periodicidad")):

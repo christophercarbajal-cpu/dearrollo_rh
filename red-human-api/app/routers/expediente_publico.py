@@ -31,18 +31,31 @@ def _por_token(db: Session, token: str) -> Expediente:
 
 @router.get("/publica/{token}")
 def publica(token: str, db: Session = Depends(get_db)):
+    from ..services import documentos_vacante as sdv
+
     e = _por_token(db, token)
+    # Cambio 25: un renglón por documento PEDIDO (antes de Contratación solo los de la vacante), con cuántos archivos exige
+    # (fotos del auto = 4), cuántos lleva y, si RH pidió corrección, el motivo. Nunca «No aplica» ni internos de RH.
+    docs = sdv.docs_en_juego(e)
     return {
         "candidato": e.candidato.nombre if e.candidato else "",
         "puesto": e.puesto,
         "estado": e.estado,
         "documentos": [
-            {"tipo": d.tipo, "estado": d.estado, "obligatorio": d.obligatorio} for d in e.documentos
-            if d.estado != "no_aplica" and not d.interno  # Onboarding v2: ni «No aplica» ni documentos internos de RH
+            {"tipo": d.tipo, "estado": d.estado, "obligatorio": d.obligatorio, "cantidad": int(d.cantidad or 1), "esFoto": bool(d.es_foto),
+             "recibidos": sdv.conteo(db, d), "estadoRevision": _estado_publico(d),
+             "correccion": d.correccion_motivo if d.estado == "rechazado" and d.correccion_en else ""}
+            for d in docs
         ],
         # 2026-09-19: la carta de intención se descarga desde la misma liga (la comparte RH por WhatsApp)
         "cartaDisponible": bool(e.puesto and e.sueldo),
     }
+
+
+def _estado_publico(d) -> str:
+    from ..serial import estado_revision_documento
+
+    return estado_revision_documento(d)
 
 
 @router.get("/publica/{token}/carta-intencion")

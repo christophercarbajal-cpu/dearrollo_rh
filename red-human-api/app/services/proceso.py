@@ -637,10 +637,12 @@ def ruta_para(db: Optional[Session], cuenta_id: Optional[int], v=None) -> dict:
     """Cascada de asignación (documento de reglas): 1) proceso de la vacante, 2) proceso predeterminado de la Cuenta,
     3) «Masivos sin documentos iniciales» (la plantilla de la Cuenta si sigue activa; si no, la ruta en código). Regresa una
     COPIA lista para guardarse en la postulación, con `origen` = vacante | cuenta | base."""
+    from .documentos_vacante import con_documentos_vacante
+
     if v is not None and tiene_proceso(v):
         proc = copy.deepcopy(v.proceso)
         proc.update({"origen": "vacante", "vacante_version": int(proc.get("version") or 1), "vacante_id": v.id})
-        return proc
+        return con_documentos_vacante(proc, v)  # Cambio 25: «Documentos» después del prefiltro si la vacante los pide
     pl = predeterminada(db, cuenta_id) if db is not None and cuenta_id and _tablas_proceso() else None
     origen = "cuenta"
     if pl is None:
@@ -654,6 +656,7 @@ def ruta_para(db: Optional[Session], cuenta_id: Optional[int], v=None) -> dict:
     proc.update({"origen": origen, "ruta_base": getattr(pl, "ruta_base", "") or (RUTA_RESPALDO if origen == "base" else "")})
     if v is not None:
         proc["vacante_id"] = v.id
+        proc = con_documentos_vacante(proc, v)
     return proc
 
 
@@ -1164,10 +1167,25 @@ def _paso_solicitud_documentos(base: dict, p: Postulacion, exp) -> dict:
 
 def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
     """«Validar documentos» antes de Contratación: valida lo SOLICITADO (o la lista del paso, si RH la definió)."""
+    from .documentos_vacante import _plano
+
     docs = _docs_candidato(exp)
     lista = paso.get("documentos") or []
-    revisar = [d for d in docs if d.tipo in lista] if lista else [d for d in docs if d.solicitado_en or d.entregado]
+    excepcion = (getattr(exp, "documentos_excepcion", None) or {}) if exp is not None else {}
+    if excepcion.get("en"):
+        # Cambio 25: «Marcar excepción» de RH — la actividad se da por cumplida con quién y por qué
+        return {**base, "estado": "completada", "resultado": "con_observaciones", "cumple": True,
+                "detalle": f"Excepción: {excepcion.get('motivo') or 'sin motivo'}", "revisadoPor": f"Revisado por: {excepcion.get('por') or 'RH'}"}
+    nombres = {_plano(t) for t in lista}
+    revisar = [d for d in docs if _plano(d.tipo) in nombres] if lista else [d for d in docs if d.solicitado_en or d.entregado]
     revisar = [d for d in revisar if d.estado != "no_aplica"]
+    if paso.get("documentos_vacante") and revisar and not any(d.solicitado_en or d.entregado or d.archivo for d in revisar):
+        revisar = []  # la liga de los documentos de la vacante todavía no sale
+    if revisar and any(d.estado == "rechazado" and getattr(d, "correccion_en", None) for d in revisar):
+        corr = [d.tipo for d in revisar if d.estado == "rechazado" and getattr(d, "correccion_en", None)]
+        return {**base, "estado": "en_curso", "espera": "Corrección pedida: " + ", ".join(corr),
+                "detalle": f"{sum(1 for d in revisar if d.aprobado)}/{len(revisar)} aprobados",
+                "cuello": {"clave": "esperando_candidato", "texto": "Esperando corrección del candidato", "quien": None}}
     if not revisar:
         # retro 2026-10-09: «Documentos iniciales» manda la liga Y valida (una sola actividad)
         return {**base, "espera": "Falta enviar la liga de documentos al candidato", "sin_solicitar": True}
@@ -1473,6 +1491,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "excepcionRH": r.get("excepcion"),
             "faltaCorreo": bool(r.get("falta_correo")),
             "sinSolicitar": bool(r.get("sin_solicitar")),
+            "documentosVacante": bool(paso.get("documentos_vacante")),  # Cambio 25
             "modalidad": paso.get("modalidad"),
             "referenciasCapturadas": bool(r.get("referencias_capturadas")),
             # 2026-10-08: condición de avance legible («Requiere completarse» / «Requiere aprobación» / «Opcional»),
@@ -2465,6 +2484,10 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
             salida = await motor_ruta.procesar(db, p)
         else:
             salida = await avanzar_si_corresponde(db, p)
+        # Cambio 25: la actividad «Documentos» de la vacante se habilitó → el agente manda la liga (una vez)
+        from . import documentos_vacante
+
+        await documentos_vacante.revisar(db, p)
         # 2026-10-10 (Cambio 3): UN aviso de estado al candidato si se completó una actividad o terminó la selección
         from . import avisos_estado
 

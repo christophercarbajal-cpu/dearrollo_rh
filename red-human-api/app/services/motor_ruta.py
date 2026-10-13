@@ -287,6 +287,8 @@ async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
             continue
         if x["tipo"] == "documentos" and not x.get("sinSolicitar"):
             continue  # documentos ya pedidos (o sin expediente todavía): RH valida
+        if x["tipo"] == "documentos" and x.get("documentosVacante"):
+            continue  # Cambio 25: la liga de los documentos de la vacante la manda `documentos_vacante.revisar`
         if x["tipo"] == "psicometrica" and x.get("modalidad") == "fisica":
             continue  # psicometría física: se aplica en persona, nunca se dispara al proveedor
         _marcar(p, x["id"], {"en": datetime.now(timezone.utc).isoformat(), "ok": None})

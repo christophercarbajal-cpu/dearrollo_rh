@@ -2,16 +2,15 @@
 
 /* Liga pública para que el candidato suba sus documentos de contratación (Lote 4). Contraparte
    liviana de app/entrevista/[token] y app/entrevista-humana/[token]: sin sesión, sin avatar —
-   aquí es una lista de documentos con un Dropzone por cada uno. A diferencia de la liga de
+   aquí es una lista de documentos, un renglón por cada uno (Cambio 25: «Tomar foto» o «Galería o archivo»). A diferencia de la liga de
    Entrevista Humana, esta NO es de un solo uso: el candidato puede volver varias veces hasta
    completar todo. */
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { CheckCircle2, Clock, FileWarning, Loader2 } from "lucide-react";
+import { Camera, CheckCircle2, Clock, FileWarning, Images, Loader2 } from "lucide-react";
 import { Logo, Card, Badge } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Dropzone } from "@/components/dashboard/subida";
 import { cn } from "@/lib/utils";
 import {
   fetchExpedientePublico,
@@ -112,15 +111,18 @@ export default function ExpedientePublico() {
   }, [cargar]);
 
   async function subir(tipo: string, archivos: File[]) {
-    if (!archivos[0]) return;
+    if (!archivos.length) return;
     setSubiendo(tipo);
     setError("");
-    const r = await subirDocumentoPublico(token, tipo, archivos[0]);
-    setSubiendo(null);
-    if (!r.ok) {
-      setError(mensajeLimpio(r.error));
-      return;
+    // Cambio 25: cada archivo es su propio registro (las 4 fotos del auto se suben una por una); HEIC → JPG en el servidor
+    for (const archivo of archivos) {
+      const r = await subirDocumentoPublico(token, tipo, archivo);
+      if (!r.ok) {
+        setError(mensajeLimpio(r.error));
+        break;
+      }
     }
+    setSubiendo(null);
     cargar(); // re-sincroniza la lista completa desde el servidor en vez de mezclar formas de respuesta distintas
   }
 
@@ -153,14 +155,14 @@ export default function ExpedientePublico() {
           <>
             <div className="text-center">
               <Badge tone="brand" dot>
-                Documentos de contratación
+                Tus documentos
               </Badge>
               <h1 className="font-display mt-3 text-2xl font-bold sm:text-3xl">
                 {info.candidato ? `Hola, ${info.candidato.split(" ")[0]}` : "Sube tus documentos"}
               </h1>
               <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-2">
-                {info.puesto && `Para tu contratación como ${info.puesto}. `}Sube foto o PDF de cada documento —
-                puedes volver a esta liga cuantas veces necesites.
+                {info.puesto && `Para tu proceso como ${info.puesto}. `}Toma la foto con tu celular o elígela de tu galería
+                (también PDF) — puedes volver a esta liga cuantas veces necesites.
               </p>
               {info.cartaDisponible && (
                 <a href={urlCartaIntencionPublica(token)} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-brand/40 bg-brand-soft px-4 py-2 text-sm font-semibold text-brand transition hover:brightness-105">
@@ -235,33 +237,10 @@ export default function ExpedientePublico() {
                     {error}
                   </div>
                 )}
-                {info.documentos.map((d) => {
-                  const estado = ESTADO_INFO[d.estado];
-                  const Icono = estado.icon;
-                  return (
-                    <Card key={d.tipo} className="p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-ink">
-                            {d.tipo}
-                            {d.obligatorio && <span className="ml-1 text-bad">*</span>}
-                          </span>
-                        </div>
-                        <Badge tone={estado.tone} dot>
-                          <Icono className="h-3 w-3" /> {estado.label}
-                        </Badge>
-                      </div>
-                      <div className={cn("mt-3", d.estado === "recibido" && "opacity-70")}>
-                        <Dropzone
-                          compacto
-                          cargando={subiendo === d.tipo}
-                          onArchivos={(archivos) => subir(d.tipo, archivos)}
-                          titulo={d.estado === "recibido" ? "Subir otra vez / reemplazar" : "Subir foto o PDF"}
-                        />
-                      </div>
-                    </Card>
-                  );
-                })}
+                {info.documentos.map((d) => (
+                  <FilaDocumento key={d.tipo} d={d} cargando={subiendo === d.tipo} bloqueado={subiendo !== null}
+                    onArchivos={(archivos) => void subir(d.tipo, archivos)} />
+                ))}
                 <p className="text-center text-[11px] text-ink-3">* obligatorio</p>
               </div>
             )}
@@ -269,5 +248,56 @@ export default function ExpedientePublico() {
         )}
       </div>
     </main>
+  );
+}
+
+/** Cambio 25: un renglón por documento con dos botones — «Tomar foto» (abre la cámara del celular) y «Galería o
+ *  archivo». Si el documento exige varias fotos (las del auto son 4) muestra cuántas lleva y acepta varias a la vez. */
+function FilaDocumento({ d, cargando, bloqueado, onArchivos }: {
+  d: DocumentoExpedientePublico; cargando: boolean; bloqueado: boolean; onArchivos: (archivos: File[]) => void;
+}) {
+  const cantidad = d.cantidad ?? 1;
+  const recibidos = d.recibidos ?? 0;
+  const correccion = d.estado === "rechazado" && Boolean(d.correccion);
+  const estado = correccion
+    ? { label: "Corrección pedida", tone: "bad" as const, icon: FileWarning }
+    : d.estado === "pendiente" && cantidad > 1 && recibidos > 0
+      ? { label: `${recibidos} de ${cantidad}`, tone: "warn" as const, icon: Clock }
+      : ESTADO_INFO[d.estado];
+  const Icono = estado.icon;
+  const elegir = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const archivos = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (archivos.length) onArchivos(archivos);
+  };
+  const boton = "inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl border px-3 text-sm font-semibold transition totem:min-h-16 totem:text-xl";
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink">
+            {d.tipo}
+            {d.obligatorio && <span className="ml-1 text-bad">*</span>}
+          </p>
+          {cantidad > 1 && (
+            <p className="text-[12px] text-ink-3">{d.esFoto ? `${cantidad} fotos` : `${cantidad} archivos`} · llevas {Math.min(recibidos, cantidad)}</p>
+          )}
+        </div>
+        <Badge tone={estado.tone} dot>
+          <Icono className="h-3 w-3" /> {estado.label}
+        </Badge>
+      </div>
+      {correccion && <p className="mt-2 rounded-lg bg-bad-soft px-3 py-2 text-[13px] text-bad">Vuelve a subirlo: {d.correccion}</p>}
+      <div className={cn("mt-3 flex gap-2", d.estado === "recibido" && "opacity-70", bloqueado && "pointer-events-none opacity-60")}>
+        <label className={cn(boton, "border-brand/40 bg-brand-soft text-brand hover:brightness-105")}>
+          {cargando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />} Tomar foto
+          <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={elegir} disabled={bloqueado} />
+        </label>
+        <label className={cn(boton, "border-border-soft bg-surface text-ink-2 hover:text-ink")}>
+          <Images className="h-4 w-4" /> Galería o archivo
+          <input type="file" accept="image/*,application/pdf,.heic,.heif" multiple={cantidad > 1} className="sr-only" onChange={elegir} disabled={bloqueado} />
+        </label>
+      </div>
+    </Card>
   );
 }

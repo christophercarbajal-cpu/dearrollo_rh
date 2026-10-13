@@ -87,11 +87,43 @@ async def validar(archivo: UploadFile, etiqueta: str = "archivo") -> ArchivoVali
     return validar_bytes(await archivo.read(), archivo.filename or "archivo", etiqueta)
 
 
+def es_heic(contenido: bytes, extension: str = "") -> bool:
+    """Foto HEIC/HEIF (iPhone): por extensión o por su caja «ftyp» (heic, heix, hevc, mif1, msf1…)."""
+    if extension in ("heic", "heif"):
+        return True
+    return contenido[4:8] == b"ftyp" and contenido[8:12] in (b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1")
+
+
+def heic_a_jpg(contenido: bytes) -> Optional[bytes]:
+    """Cambio 25 (2026-10-12): convierte una foto HEIC/HEIF a JPG en el servidor (pillow-heif). None si la biblioteca no
+    está instalada o la imagen no se puede leer (entonces se rechaza con la pista de siempre)."""
+    try:
+        import io
+
+        import pillow_heif
+        from PIL import Image
+
+        pillow_heif.register_heif_opener()
+        with Image.open(io.BytesIO(contenido)) as img:
+            salida = io.BytesIO()
+            img.convert("RGB").save(salida, format="JPEG", quality=88)
+            return salida.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def validar_bytes(contenido: bytes, nombre_original: str, etiqueta: str = "archivo", formatos: Optional[dict] = None) -> ArchivoValidado:
     """Misma validación que `validar` para un binario ya en memoria (2026-09-15: documentos que
-    llegan por WhatsApp y se descargan de Meta) — extensión admitida, tamaño y firma binaria."""
+    llegan por WhatsApp y se descargan de Meta) — extensión admitida, tamaño y firma binaria.
+    Cambio 25: una foto HEIC/HEIF se convierte a JPG antes de validar (si se puede) y sigue como .jpg."""
     nombre = _sanear(nombre_original or "archivo")
     extension = nombre.rsplit(".", 1)[-1].lower() if "." in nombre else ""
+    if es_heic(contenido, extension) and "jpg" in (formatos or FORMATOS):
+        jpg = heic_a_jpg(contenido)
+        if jpg is not None:
+            contenido = jpg
+            nombre = f"{nombre.rsplit('.', 1)[0] if '.' in nombre else nombre}.jpg"
+            extension = "jpg"
 
     formatos = formatos or FORMATOS
     if extension not in formatos:

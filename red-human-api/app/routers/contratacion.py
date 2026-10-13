@@ -296,7 +296,7 @@ async def subir_documento_interno(db: Session, e: Expediente, tipo: str, archivo
     if doc.estado == "no_aplica" and subido_por == "candidato":
         raise HTTPException(409, f"«{doc.tipo}» no se requiere en tu expediente.")
     validado = await fs.validar(archivo, f"documento «{doc.tipo}»")
-    return _registrar_documento(db, e, doc, validado, subido_por)
+    return _registrar_documento(db, e, doc, validado, subido_por, original=archivo.filename or "")
 
 
 async def adjuntar_documento_bytes(
@@ -307,7 +307,7 @@ async def adjuntar_documento_bytes(
     if e.estado == "alta":
         raise HTTPException(409, "El expediente ya fue dado de alta; no admite cambios.")
     validado = fs.validar_bytes(contenido, nombre, f"documento «{doc.tipo}»")
-    return _registrar_documento(db, e, doc, validado, subido_por)
+    return _registrar_documento(db, e, doc, validado, subido_por, original=nombre or "")
 
 
 def _norm(s: str) -> str:
@@ -365,9 +365,42 @@ def _canal_recepcion(subido_por: str) -> str:
     return "rh"
 
 
-def _registrar_documento(db: Session, e: Expediente, doc: Documento, validado, subido_por: str) -> dict:
+def _registrar_multiple(db: Session, e: Expediente, doc: Documento, validado, subido_por: str, convertido: str) -> dict:
+    """Cambio 25: fotos y documentos de varios archivos (las 4 fotos del auto). Cada archivo es su propio registro; no pasan
+    por el validador de documentos oficiales (una foto del auto no es una identificación): al juntar los N archivos el
+    documento queda «Por revisar» para RH (en Modo Prueba, aprobado)."""
+    from ..services import documentos_vacante as sdv
+
+    ruta = fs.guardar(validado, f"expedientes/{e.id}", f"{doc.tipo.replace(' ', '_')}_{secrets.token_hex(4)}")
+    sdv.registrar_archivo(db, e, doc, ruta, validado, _canal_recepcion(subido_por), subido_por, convertido)
+    n, tope = sdv.conteo(db, doc), max(1, int(doc.cantidad or 1))
+    doc.archivo, doc.nombre_archivo, doc.mime, doc.tamano = ruta, validado.nombre, validado.mime, validado.tamano
+    doc.subido_en = datetime.now(timezone.utc)
+    doc.validacion = {}
+    completo = n >= tope
+    prueba = modo_prueba_activo(db)
+    doc.estado = ("recibido" if prueba else "revision") if completo else "pendiente"
+    doc.revisado_por = "Modo Prueba" if (prueba and completo) else ""
+    doc.notas_ia = f"{min(n, tope)}/{tope} {'fotos' if doc.es_foto else 'archivos'} recibidos" + ("" if completo else " — faltan más")
+    if completo:
+        doc.recibido_en, doc.recibido_canal = doc.subido_en, _canal_recepcion(subido_por)
+    _sincronizar_estado(e)
+    registrar(db, "agente-ia", "documento_recibido", "documento", f"{e.id}:{doc.tipo}",
+              {"archivos": n, "cantidad": tope, "subido_por": subido_por, "convertido": convertido})
+    db.commit()
+    return {"ia": False, "documento": {"tipo": doc.tipo, "estado": doc.estado, "notas": doc.notas_ia, "recibidos": min(n, tope),
+                                       "cantidad": tope}, "expediente": expediente_dict(e)}
+
+
+def _registrar_documento(db: Session, e: Expediente, doc: Documento, validado, subido_por: str, original: str = "") -> dict:
     """Registra el archivo recibido (validación IA/Modo Prueba) y su trazabilidad (B3: `recibido_en`, `recibido_canal`).
-    B5: NUNCA toca `postulacion.etapa` — el candidato sigue en Contratación/Onboarding hasta que RH lo mueva."""
+    B5: NUNCA toca `postulacion.etapa` — el candidato sigue en Contratación/Onboarding hasta que RH lo mueva.
+    Cambio 25: cada archivo queda además como su propio `ArchivoDocumento`; una foto HEIC ya llega convertida a JPG."""
+    from ..services import documentos_vacante as sdv
+
+    convertido = "heic" if fs.es_heic(b"", (original.rsplit(".", 1)[-1].lower() if "." in original else "")) and validado.extension == "jpg" else ""
+    if sdv.multiple(doc):
+        return _registrar_multiple(db, e, doc, validado, subido_por, convertido)
     titular = e.candidato.nombre if e.candidato else ""
     if modo_prueba_activo(db):
         # 2026-09-18 (Modo Prueba TOTAL): se salta el OCR/IA y cualquier PDF o imagen queda válido de inmediato.
@@ -380,7 +413,8 @@ def _registrar_documento(db: Session, e: Expediente, doc: Documento, validado, s
     else:
         v, con_ia = ia.validar_documento(validado.b64, validado.extension, doc.tipo, titular)
 
-    doc.archivo = fs.guardar(validado, f"expedientes/{e.id}", doc.tipo.replace(" ", "_"))
+    doc.archivo = fs.guardar(validado, f"expedientes/{e.id}", f"{doc.tipo.replace(' ', '_')}_{secrets.token_hex(4)}")
+    sdv.registrar_archivo(db, e, doc, doc.archivo, validado, _canal_recepcion(subido_por), subido_por, convertido)
     doc.nombre_archivo = validado.nombre
     doc.mime = validado.mime
     doc.tamano = validado.tamano
@@ -982,3 +1016,121 @@ def cancelar(
     db.delete(e)
     db.commit()
     return {"ok": True, "candidato": codigo}
+
+
+# ------------------------------------------------------------
+# Cambio 25 (2026-10-12): revisión de documentos por RH — Aprobar · Pedir corrección · Marcar excepción
+# ------------------------------------------------------------
+
+
+class AprobarDocsIn(BaseModel):
+    tipos: List[str] = []  # vacío = todos los entregados
+
+
+class CorreccionDocsIn(BaseModel):
+    tipos: List[str]
+    motivo: str = ""
+
+
+class ExcepcionDocsIn(BaseModel):
+    motivo: str = ""
+    quitar: bool = False
+
+
+async def _tras_revision(db: Session, e: Expediente) -> dict:
+    from ..services import proceso as sproc
+
+    _sincronizar_estado(e)
+    db.commit()
+    await sproc.avanzar_seguro(db, e.postulacion)
+    db.commit()
+    return expediente_dict(e)
+
+
+@router.post("/expedientes/{exp_id}/documentos/aprobar")
+async def aprobar_documentos(
+    exp_id: int, datos: AprobarDocsIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """«Aprobar»: los documentos elegidos (o todos los entregados) quedan Aprobados por esta persona de RH."""
+    from ..services import documentos_vacante as sdv
+
+    e = _expediente(db, exp_id, cuenta.id)
+    hechos = sdv.aprobar(db, e, datos.tipos, u.nombre)
+    if not hechos:
+        raise HTTPException(409, "No hay documentos entregados para aprobar.")
+    registrar(db, u.nombre, "documentos_aprobados", "expediente", str(e.id), {"documentos": hechos, "correo_rh": u.correo})
+    return {"aprobados": hechos, "expediente": await _tras_revision(db, e)}
+
+
+@router.post("/expedientes/{exp_id}/documentos/correccion")
+async def pedir_correccion(
+    exp_id: int, datos: CorreccionDocsIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """«Pedir corrección»: RH elige cuáles; quedan «Corrección pedida» y el candidato recibe por WhatsApp (o su canal
+    activo) la lista y la MISMA liga para reemplazarlos. Un envío fallido nunca deshace la marca: se informa a RH."""
+    from ..services import documentos_vacante as sdv
+    from ..services.motor_ruta import _avisar
+
+    e = _expediente(db, exp_id, cuenta.id)
+    if e.estado == "alta":
+        raise HTTPException(409, "El expediente ya fue dado de alta; no admite cambios.")
+    if not datos.tipos:
+        raise HTTPException(400, "Elige al menos un documento para pedir la corrección.")
+    docs = sdv.pedir_correccion(db, e, datos.tipos, datos.motivo, u.nombre)
+    if not docs:
+        raise HTTPException(404, "Ninguno de esos documentos está en el expediente.")
+    p = e.postulacion
+    envio = {"enviado": False, "detalle": "Sin postulación ligada"}
+    if p is not None:
+        url = sdv.liga(p)
+        texto = sdv.texto_correccion(p, docs, datos.motivo, url)
+        db.flush()
+        enviado, detalle = await _avisar(db, p, texto, f"Corrección de documentos — {p.vacante.titulo if p.vacante else 'vacante'}", url,
+                                         motivo="documentos", paso_id=(sdv.paso_de(p) or {}).get("id", ""), actor=u.nombre)
+        envio = {"enviado": enviado, "detalle": detalle, "texto": texto}
+    registrar(db, u.nombre, "documentos_correccion_pedida", "expediente", str(e.id),
+              {"documentos": [d.tipo for d in docs], "motivo": datos.motivo[:300], "enviado": envio["enviado"], "correo_rh": u.correo})
+    return {"correccion": [d.tipo for d in docs], "envio": envio, "expediente": await _tras_revision(db, e)}
+
+
+@router.post("/expedientes/{exp_id}/documentos/excepcion")
+async def excepcion_documentos(
+    exp_id: int, datos: ExcepcionDocsIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """«Marcar excepción»: RH da por resueltos los documentos sin tenerlos todos (motivo obligatorio, queda quién y
+    cuándo). `quitar` la retira."""
+    from ..services import documentos_vacante as sdv
+
+    e = _expediente(db, exp_id, cuenta.id)
+    if datos.quitar:
+        e.documentos_excepcion = {}
+        registrar(db, u.nombre, "documentos_excepcion_retirada", "expediente", str(e.id), {"correo_rh": u.correo})
+    else:
+        motivo = (datos.motivo or "").strip()
+        if len(motivo) < sdv.MIN_MOTIVO_EXCEPCION:
+            raise HTTPException(400, f"Explica el motivo de la excepción (mínimo {sdv.MIN_MOTIVO_EXCEPCION} caracteres).")
+        sdv.marcar_excepcion(e, motivo, u.nombre)
+        registrar(db, u.nombre, "documentos_excepcion", "expediente", str(e.id), {"motivo": motivo[:300], "correo_rh": u.correo})
+    return {"expediente": await _tras_revision(db, e)}
+
+
+@router.get("/expedientes/{exp_id}/archivos/{archivo_id}")
+def descargar_archivo_documento(
+    exp_id: int, archivo_id: int, descargar: bool = False, db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual),
+    cuenta: Cuenta = Depends(cuenta_actual),
+):
+    """Un archivo concreto de un documento (cada foto del auto por separado)."""
+    from ..models import ArchivoDocumento
+
+    e = _expediente(db, exp_id, cuenta.id)
+    a = db.query(ArchivoDocumento).filter(ArchivoDocumento.id == archivo_id, ArchivoDocumento.expediente_id == e.id).first()
+    if a is None or not a.archivo:
+        raise HTTPException(404, "Archivo no encontrado.")
+    if not fs.existe(a.archivo):
+        raise HTTPException(404, "El archivo ya no está disponible.")
+    disposicion = "attachment" if descargar else "inline"
+    return FileResponse(a.archivo, media_type=a.mime or "application/octet-stream", filename=a.nombre_archivo or "archivo",
+                        content_disposition_type=disposicion)

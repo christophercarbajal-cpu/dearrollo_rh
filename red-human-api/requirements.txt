@@ -13,3 +13,5 @@ fpdf2>=2.8
 openpyxl>=3.1
 cryptography>=43  # Fase 7B: tokens de Microsoft 365 cifrados en la base
 dropbox-sign==1.13.0  # 2026-09-29: SDK oficial de firma electrónica incrustada
+Pillow>=10.0
+pillow-heif>=0.18  # Cambio 25: fotos HEIC del iPhone → JPG en el servidor

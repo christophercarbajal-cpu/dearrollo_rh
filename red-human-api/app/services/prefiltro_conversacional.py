@@ -185,6 +185,11 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
         # Cambio 24: ruta corporativa — sin colonia ni transporte; el sueldo pregunta la EXPECTATIVA del candidato
         datos = [d for d in datos if d["dato"] not in ("zona", "transporte", "sueldo")]
         datos.append(dato_expectativa(v))
+        # Cambio 31 (Bloque 4): el tiempo de traslado solo se pregunta si la vacante lo tiene como INDISPENSABLE
+        from ..routers.vacantes import requisitos_lista
+
+        if not ia.pregunta_traslado_aplica(True, requisitos_lista(v.requisitos) if v is not None else []):
+            datos = [d for d in datos if d["dato"] != "traslado"]
     brechas = criterios_brecha(salida, p) if p is not None else []
     if not datos:
         return _con_brechas(salida + registro, brechas)

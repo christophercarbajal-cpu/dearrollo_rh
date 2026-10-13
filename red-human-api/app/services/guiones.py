@@ -423,10 +423,11 @@ def generar(datos: dict, pasos: list, actuales: Optional[dict] = None, conservar
     claves = [c for c in objetivo if c not in conservadas]
     huella = huella_datos(datos)
     web_actual = actuales.get("prefiltro_web") if "prefiltro_web" not in claves else None
-    from .proceso import ruta_es_masiva
+    from .proceso import es_corporativa, ruta_es_masiva
 
     ficha = ficha_guion(datos, empresa)
     ficha.ruta_masiva = ruta_es_masiva(pasos)  # Cambio 29: Masivos → prefiltro de WhatsApp FIJO (sin IA)
+    ficha.ruta_corporativa = es_corporativa(pasos or [])  # Cambio 31: traslado solo si es indispensable
     crudo, con_ia = ia.generar_guiones(ficha, claves, web_actual=web_actual,
                                        hay_web="prefiltro_web" in aplican, hay_whatsapp="prefiltro_whatsapp" in aplican)
     secciones, meta = {}, {}

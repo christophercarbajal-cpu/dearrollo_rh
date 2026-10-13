@@ -170,8 +170,8 @@ with TestClient(app) as client:
     reglas = [("descarta" if q.get("descarta") else "registra") for q in wa_g]
     check(reglas == sorted(reglas) and wa_g[0]["regla"].startswith("Descarta si") and all(q.get("regla") for q in wa_g),
           "WhatsApp (Cambio 19): primero los indispensables con «Descarta si…», después lo que «Se registra»")
-    check([q.get("dato") for q in wa_g if q.get("dato") in ("zona", "traslado", "transporte")] == ["zona", "traslado", "transporte"]
-          and wa_g[-1].get("dato") in ("transporte", "sueldo"), "siempre: colonia → traslado → transporte (→ sueldo) al final")
+    check([q.get("dato") for q in wa_g if q.get("dato") in ("zona", "traslado", "transporte")] == ["zona", "transporte"]
+          and wa_g[-1].get("dato") in ("transporte", "sueldo"), "corporativo sin indispensable de traslado (Cambio 31): colonia → transporte (→ sueldo), sin traslado")
     check(any("inventarios" in q["valida"].lower() and q["regla"] == "Se registra" for q in wa_g),
           "el deseable («Manejo de inventarios») se pregunta y solo se registra")
     wa_r = [q for q in wa_g if q.get("reconfirma")]

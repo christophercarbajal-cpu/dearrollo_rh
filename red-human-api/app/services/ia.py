@@ -2851,6 +2851,8 @@ class FichaGuion(BaseModel):
     perfil_operativo: Optional[dict] = None
     # Cambio 29: la ruta es Masivos (operativos) → el prefiltro de WhatsApp es la base FIJA (`prefiltro_operativo`)
     ruta_masiva: bool = False
+    # Cambio 31 (Bloque 4): la ruta es corporativa (trae Análisis de CV) → el traslado solo se pregunta si es indispensable
+    ruta_corporativa: bool = False
     # Cambio 19 (2026-10-12): la descripción de la vacante — sus condiciones (p. ej. escolaridad) se REGISTRAN en el prefiltro
     descripcion: str = ""
 
@@ -3103,9 +3105,23 @@ def pregunta_escolaridad(nivel: str, descarta: bool) -> dict:
             "opciones": []}
 
 
+def requisito_traslado(indispensables: List[str]) -> str:
+    """El indispensable de traslado de la vacante («Vivir a máximo 40 minutos de la planta»), o "" si no hay."""
+    from .prefiltro_operativo import _RE_TRASLADO, _n
+
+    return next((r for r in indispensables or [] if str(r or "").strip() and _RE_TRASLADO.search(_n(r))), "")
+
+
+def pregunta_traslado_aplica(corporativa: bool, indispensables: List[str]) -> bool:
+    """Cambio 31 (Bloque 4): en una ruta corporativa la pregunta «¿Cuánto tiempo haces de tu casa a…?» SOLO existe si la
+    vacante tiene capturado un requisito INDISPENSABLE de traslado. Las demás rutas conservan su regla."""
+    return not corporativa or bool(requisito_traslado(indispensables))
+
+
 def preguntas_datos_siempre(ficha: FichaGuion) -> List[dict]:
     """Los datos que el prefiltro de WhatsApp pregunta SIEMPRE (solo se registran): colonia, traslado, transporte y
-    aceptación del sueldo (este último solo con sueldo capturado: Red Human nunca inventa condiciones)."""
+    aceptación del sueldo (este último solo con sueldo capturado: Red Human nunca inventa condiciones). En una ruta
+    corporativa el traslado solo va si la vacante lo pide como indispensable (Cambio 31)."""
     lugar = (ficha.ubicacion or "").strip()
     traslado = f"¿Cuánto tiempo haces de tu casa a {lugar}?" if lugar and len(lugar.split()) <= 8 else "¿Cuánto tiempo harías de tu casa al trabajo?"
     salida = [
@@ -3113,6 +3129,8 @@ def preguntas_datos_siempre(ficha: FichaGuion) -> List[dict]:
         {"pregunta": traslado, "tipo": "dato", "dato": "traslado", "valida": "Tiempo de traslado"},
         {"pregunta": "¿En qué transporte llegarías?", "tipo": "dato", "dato": "transporte", "valida": "Medio de transporte"},
     ]
+    if not pregunta_traslado_aplica(ficha.ruta_corporativa, ficha.requisitos_indispensables):
+        salida = [q for q in salida if q["dato"] != "traslado"]
     if pregunta_sueldo(ficha.sueldo):
         salida.append({"pregunta": pregunta_sueldo(ficha.sueldo), "tipo": "dato", "dato": "sueldo", "valida": f"Sueldo: {ficha.sueldo.strip()}",
                        "respuesta_esperada": "Sí"})

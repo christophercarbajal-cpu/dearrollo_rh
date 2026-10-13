@@ -9,6 +9,7 @@ Bloque 2: presentación «Soy Red Human, el agente virtual de RH de [empresa].»
 rutas; tras responder a la plantilla de WhatsApp, directo a la primera pregunta; el cierre usa la misma empresa.
 Bloque 3: tono corporativo (sin ejemplos de formato, sin «Para confirmar», agradecimientos breves y variados, sin
 elogios, escolaridad «¿Cuál es tu último grado de estudios?») y evasivas (una repregunta suave; la segunda se registra).
+Bloque 4: en rutas corporativas la pregunta de tiempo de traslado solo existe si la vacante tiene un indispensable de traslado.
 """
 
 import asyncio
@@ -275,6 +276,49 @@ with TestClient(app) as client:
     check("cantidad" not in r2 and "esperas ganar" not in r2, f"…y se avanza sin volver a preguntar → «{r2[:80]}»")
     pts = " ".join(str(x) for x in ((pe2.analisis or {}).get("puntos_validar_prefiltro") or []))
     check("sueldo" not in pts.lower(), "la evasiva no se manda a Puntos por validar")
+
+    # ================= Bloque 4 · traslado en corporativos solo con indispensable de traslado =================
+    print("\n--- Bloque 4 · generación: «¿Cuánto tiempo haces de tu casa a…?» solo si es indispensable ---")
+
+    def ficha(corp, reqs):
+        return ia.FichaGuion(titulo="Analista de compras", requisitos_indispensables=reqs, ubicacion="Monterrey",
+                             sueldo="$20,000 a $25,000 MXN mensuales", ruta_corporativa=corp)
+
+    def datos_de(f):
+        return [q["dato"] for q in ia.preguntas_datos_siempre(f)]
+
+    sin_tr = ["3 años en compras", "Inglés intermedio", "Manejo de SAP"]
+    con_tr = sin_tr + ["Vivir a máximo 40 minutos de la oficina"]
+    check("traslado" not in datos_de(ficha(True, sin_tr)), "corporativo SIN indispensable de traslado → no se genera la pregunta")
+    check("traslado" in datos_de(ficha(True, con_tr)), "corporativo CON indispensable de traslado → sí se genera")
+    check("traslado" in datos_de(ficha(False, sin_tr)), "otras rutas conservan su regla")
+    _, wa = ia.asegurar_prefiltros([], [], ficha(True, sin_tr), hay_web=True, hay_whatsapp=True)
+    check(not any("de tu casa" in q["pregunta"] for q in wa), "el prefiltro de WhatsApp generado (corporativo) no la trae")
+    check(ia.requisito_traslado(con_tr) == "Vivir a máximo 40 minutos de la oficina" and not ia.requisito_traslado(sin_tr),
+          "se detecta el indispensable de traslado")
+    from app.services import guiones as sguiones
+
+    src_g = (RAIZ / "app/services/guiones.py").read_text(encoding="utf-8")
+    check("ficha.ruta_corporativa = es_corporativa(" in src_g and hasattr(sguiones, "ficha_guion"), "la generación de la vacante marca la ruta corporativa")
+
+    print("\n--- Bloque 4 · conversación: el agente solo pregunta el traslado si es indispensable ---")
+    vcorp.preguntas_filtro_whatsapp = ia.preguntas_datos_siempre(ficha(False, sin_tr))  # guardado viejo CON traslado
+    db.commit()
+    pt_sin = nuevo("Tere Traslado", "5531310010", vcorp)
+    check(not any(c.get("dato") == "traslado" for c in pconv.criterios_de(vcorp, pt_sin)),
+          "corporativo sin indispensable: aunque el prefiltro guardado la traiga, no se pregunta")
+    vtr = Vacante(codigo="VAC-C31T", titulo="Analista de compras", estado="Publicada", cuenta_id=cuenta.id,
+                  requisitos="3 años en compras · Vivir a máximo 40 minutos de la oficina", sueldo_desde=20000, sueldo_hasta=25000,
+                  sueldo_periodicidad="mensual")
+    db.add(vtr)
+    db.flush()
+    vtr.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("corporativo")["pasos"]})
+    vtr.preguntas_filtro_whatsapp = ia.preguntas_datos_siempre(ficha(True, ["3 años en compras", "Vivir a máximo 40 minutos de la oficina"]))
+    db.commit()
+    pt_con = nuevo("Toño Traslado", "5531310011", vtr)
+    check(any(c.get("dato") == "traslado" for c in pconv.criterios_de(vtr, pt_con)), "corporativo con indispensable de traslado: sí se pregunta")
+    pt_m = nuevo("Mario Masivo", "5531310012", vm)
+    check(any("de tu casa" in (c.get("chat") or "") for c in pconv.criterios_de(vm, pt_m)), "Masivos conserva su pregunta de traslado")
 
     app.dependency_overrides.clear()
     db.close()

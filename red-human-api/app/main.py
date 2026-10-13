@@ -115,6 +115,17 @@ async def lifespan(app: FastAPI):
             print(f"[proceso] ⚠️ rutas base no sembradas: {ex}", flush=True)
         rutas = sproc.asignar_rutas_faltantes(db)
         db.commit()
+        # Cambio 30 (2026-10-13): plantillas y vacantes al catálogo nuevo (solicitud con CV, oferta laboral). Idempotente,
+        # NO fatal; las postulaciones conservan su copia congelada.
+        try:
+            with db.begin_nested():
+                c30 = sproc.migrar_procesos_cambio30(db)
+            db.commit()
+            if c30["plantillas"] or c30["vacantes"]:
+                print(f"[proceso] Cambio 30: {len(c30['plantillas'])} plantilla(s) y {len(c30['vacantes'])} vacante(s) migradas", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[proceso] ⚠️ migración del Cambio 30 no aplicada: {ex}", flush=True)
         # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato; quien YA tenía
         # condiciones guardadas la conserva cumplida («aceptada · legado»). Una sola vez, NO fatal.
         try:

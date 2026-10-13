@@ -119,9 +119,14 @@ def _responsable(crudo, tipo: str) -> dict:
 
 
 def clave_catalogo(paso: dict) -> str:
-    """Entrada del catálogo de un paso guardado (la psicometría física es su propia entrada)."""
+    """Entrada del catálogo de un paso guardado (la psicometría física y la solicitud sin / con CV son sus propias
+    entradas)."""
+    if paso.get("tipo") in ALIAS_CATALOGO:
+        return str(paso["tipo"])
     if paso.get("tipo") == "psicometrica" and paso.get("modalidad") == "fisica":
         return "psicometria_fisica"
+    if paso.get("tipo") == "solicitud_web":
+        return "solicitud_con_cv" if paso.get("con_cv", paso.get("conCv")) else "solicitud_sin_cv"
     return str(paso.get("tipo") or "")
 
 
@@ -141,7 +146,7 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
         if not isinstance(crudo, dict):
             raise ErrorProceso(400, "Cada paso debe ser un objeto.")
         tipo = str(crudo.get("tipo") or "").strip()
-        clave = "psicometria_fisica" if tipo == "psicometria_fisica" else clave_catalogo(crudo)
+        clave = clave_catalogo(crudo)
         etapa_c = crudo.get("etapa") or (TIPOS_PASO[ALIAS_CATALOGO[tipo][0]]["etapa"] if tipo in ALIAS_CATALOGO
                                           else TIPOS_PASO.get(tipo, {}).get("etapa"))
         if (estrictos is not None and not crudo.get("adhoc") and not crudo.get("heredado") and clave in CATALOGO_ACTIVIDADES
@@ -150,9 +155,10 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             raise ErrorProceso(400, f"«{opcion_catalogo(clave)['nombre']}» no puede ir en {nombre_etapa(etapa_c)}. "
                                     f"Etapas permitidas: {', '.join(nombre_etapa(e) for e in permitidas)}.")
         if tipo in ALIAS_CATALOGO:
-            # 2026-10-10: «Psicometría física» se guarda como psicometría con modalidad física
+            # 2026-10-10: «Psicometría física» se guarda como psicometría con modalidad física; Cambio 30: «Solicitud web
+            # sin / con CV» se guardan como solicitud web con `con_cv`
             real, extra = ALIAS_CATALOGO[tipo]
-            crudo = {**crudo, "tipo": real, "modalidad": extra.get("modalidad"),
+            crudo = {**crudo, "tipo": real, **{k: v for k, v in extra.items() if k != "nombre"},
                      "nombre": crudo.get("nombre") or extra["nombre"]}
             tipo = real
         if tipo not in TIPOS_PASO:
@@ -376,7 +382,7 @@ def _cola_contratacion_onboarding() -> List[dict]:
     ingreso (solo pide lo que falte; lo aprobado antes se reutiliza) → Contrato y firma (al completarse pasa a
     Onboarding) → Tareas de onboarding → Confirmación de ingreso."""
     return [
-        {"id": "condiciones", "tipo": "condiciones", "nombre": "Propuesta y aceptación", "etapa": "Contratación"},
+        {"id": "oferta", "tipo": "oferta", "nombre": "Oferta laboral", "etapa": "Contratación"},
         {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Contratación"},
         {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Contrato y firma", "etapa": "Contratación"},
         {"id": "tareas-onboarding", "tipo": "onboarding", "nombre": "Tareas de onboarding", "etapa": "Onboarding"},
@@ -422,7 +428,6 @@ RUTAS_BASE = {
                        "entrevista humana → propuesta, documentos de ingreso y contrato → onboarding.",
         "pasos": [
             {"id": "solicitud-web", "tipo": "solicitud_web", "nombre": "Solicitud web con CV", "con_cv": True},
-            {"id": "analisis_cv", "tipo": "analisis_cv", "nombre": "Análisis de CV", "etapa": "Prefiltro"},
             {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp"},
             {"id": "entrevista_red_human", "tipo": "entrevista_agente", "nombre": "Entrevista Red Human con avatar"},
             {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana"},
@@ -489,6 +494,95 @@ def asegurar_rutas_base(db: Session, cuenta_id: int, por: str = "sistema") -> in
 
 def _firma_pasos(pasos) -> tuple:
     return tuple((x.get("tipo"), x.get("etapa")) for x in (pasos or []) if not x.get("adhoc") and not x.get("heredado"))
+
+
+# ============================================================ Cambio 30: migración de actividades (2026-10-13)
+
+TIPOS_CAMBIO30 = ("analisis_cv", "condiciones", "carta_intencion")
+
+
+def pasos_cambio30(pasos: list) -> Tuple[list, bool]:
+    """Ruta al catálogo del Cambio 30 (sin guardar): «Análisis de CV» → la solicitud pasa a «Solicitud web con CV» y la
+    actividad se quita; «Propuesta y aceptación» y «Carta de intención» → UNA «Oferta laboral» en el lugar de la primera.
+    Las dependencias que apuntaban a lo quitado se re-apuntan (CV → solicitud; propuesta/carta → oferta). Regresa
+    (pasos, cambió). Idempotente: una ruta ya migrada no cambia."""
+    pasos = [dict(x) for x in pasos or [] if isinstance(x, dict)]
+    if not any(x.get("tipo") in TIPOS_CAMBIO30 and not x.get("heredado") for x in pasos):
+        return pasos, False
+    remapeo: Dict[str, str] = {}
+    salida: list = []
+    if any(x.get("tipo") == "analisis_cv" and not x.get("heredado") for x in pasos):
+        sol = next((x for x in pasos if x.get("tipo") == "solicitud_web"), None)
+        if sol is None:
+            sol = {"id": "solicitud-web", "tipo": "solicitud_web", "etapa": "Prefiltro", "obligatorio": True}
+            pasos.insert(0, sol)
+        sol["con_cv"] = True
+        if (sol.get("nombre") or "").strip() in ("", "Solicitud web", "Solicitud web sin CV"):
+            sol["nombre"] = "Solicitud web con CV"
+        for x in pasos:
+            if x.get("tipo") == "analisis_cv" and not x.get("heredado"):
+                remapeo[x["id"]] = sol["id"]
+    oferta_id = None
+    for x in pasos:
+        if x.get("tipo") == "analisis_cv" and not x.get("heredado"):
+            continue
+        if x.get("tipo") in ("condiciones", "carta_intencion") and not x.get("heredado"):
+            if oferta_id is None:
+                oferta_id = "oferta"
+                salida.append({"id": oferta_id, "tipo": "oferta", "nombre": "Oferta laboral", "etapa": "Contratación",
+                               "obligatorio": True, "orden": x.get("orden", 0)})
+            remapeo[x["id"]] = oferta_id
+            continue
+        salida.append(x)
+    for x in salida:
+        x["depende_de"] = list(dict.fromkeys(remapeo.get(d, d) for d in x.get("depende_de") or [] if remapeo.get(d, d) != x["id"]))
+    return normalizar_pasos(salida), True
+
+
+def migrar_procesos_cambio30(db: Session, aplicar: bool = True) -> dict:
+    """Migra al Cambio 30 las rutas de las PLANTILLAS de cada Cuenta y de las VACANTES (sube su versión). Las postulaciones
+    conservan su copia congelada (sus actividades anteriores se siguen derivando). Idempotente y no fatal."""
+    from ..models import Vacante
+
+    plantillas, vacantes, errores = [], [], []
+    try:
+        filas = db.query(PlantillaProceso).all() if _tablas_proceso() else []
+    except Exception:  # noqa: BLE001
+        filas = []
+    for pl in filas:
+        try:
+            nuevos, cambio = pasos_cambio30(pl.pasos or [])
+        except ErrorProceso as e:
+            errores.append({"plantilla": pl.id, "error": e.mensaje})
+            continue
+        if cambio:
+            plantillas.append(pl.id)
+            if aplicar:
+                pl.pasos = nuevos
+                pl.version = (pl.version or 1) + 1
+                pl.actualizada_por = "Migración Cambio 30"
+    try:
+        lista_vacantes = db.query(Vacante).filter(Vacante.proceso.isnot(None)).all()
+    except Exception as ex:  # noqa: BLE001 — base sin esquema (p. ej. una SQLite vacía): nada que migrar
+        db.rollback()
+        return {"plantillas": [], "vacantes": [], "errores": [f"sin tablas: {str(ex)[:120]}"], "aplicada": False}
+    for v in lista_vacantes:
+        proc = dict(v.proceso or {})
+        if not proc.get("pasos"):
+            continue
+        try:
+            nuevos, cambio = pasos_cambio30(proc["pasos"])
+        except ErrorProceso as e:
+            errores.append({"vacante": v.codigo, "error": e.mensaje})
+            continue
+        if cambio:
+            vacantes.append(v.codigo)
+            if aplicar:
+                v.proceso = {**proc, "pasos": nuevos, "version": int(proc.get("version") or 0) + 1, "migrado_cambio30": True}
+    if aplicar and (plantillas or vacantes):
+        registrar(db, "sistema", "migracion_cambio30", "plantilla_proceso", "",
+                  {"plantillas": plantillas, "vacantes": vacantes, "errores": errores})
+    return {"plantillas": plantillas, "vacantes": vacantes, "errores": errores, "aplicada": aplicar}
 
 
 def corregir_rutas_base(db: Session) -> dict:
@@ -1076,7 +1170,10 @@ def _paso_solicitud(paso: dict, p: Postulacion) -> dict:
 def es_corporativa(p_o_pasos) -> bool:
     """Cambio 24 (2026-10-12): ruta corporativa = la ruta trae «Análisis de CV» (Corporativos o una propia con CV)."""
     pasos = p_o_pasos if isinstance(p_o_pasos, list) else ((getattr(p_o_pasos, "proceso", None) or {}).get("pasos") or [])
-    return any(isinstance(x, dict) and x.get("tipo") == "analisis_cv" and not x.get("heredado") for x in pasos)
+    # Cambio 30: la «Solicitud web con CV» es la que trae el Análisis de CV (la actividad aparte quedó como legado)
+    return any(isinstance(x, dict) and not x.get("heredado") and (x.get("tipo") == "analisis_cv"
+                                                                  or (x.get("tipo") == "solicitud_web" and x.get("con_cv")))
+               for x in pasos)
 
 
 def analisis_cv_en_proceso(p: Postulacion) -> bool:
@@ -1110,6 +1207,10 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
         return _paso_carta_contrato(base, p, exp)
     if tipo == "carta_intencion":
         return _paso_carta_intencion(base, p, exp)
+    if tipo == "oferta":
+        from . import oferta as soferta  # Cambio 30
+
+        return soferta.estado_paso(base, p)
     if tipo == "induccion":
         return _paso_induccion(base, p)
     if tipo == "documentos":
@@ -2058,7 +2159,7 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return None
     destino = {"prefiltro_whatsapp": "whatsapp", "prefiltro_web": "documentos", "analisis_cv": "documentos",
                "entrevista_agente": "evaluaciones", "entrevista_whatsapp": "evaluaciones", "llamada_agente": "evaluaciones",
-               "documentos": "contratacion", "condiciones": "contratacion",
+               "documentos": "contratacion", "condiciones": "contratacion", "oferta": "contratacion",
                "onboarding": "contratacion", "alta": "contratacion", "solicitud_web": "resumen",
                "solicitud_documentos": "contratacion", "carta_contrato": "contratacion", "induccion": "contratacion",
                "carta_intencion": "contratacion"}.get(tipo, "resumen")
@@ -2076,7 +2177,7 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
     if tipo == "condiciones":  # 2026-10-10: propuesta por WhatsApp
         return {"clave": "abrir", "texto": "Reenviar propuesta" if estado == "en_curso" else "Enviar propuesta", "pestana": destino}
-    texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "alta": "Dar de alta",
+    texto = {"documentos": "Solicitar documentos", "condiciones": "Capturar condiciones", "oferta": "Enviar oferta", "alta": "Dar de alta",
              "onboarding": "Ver tareas", "carta_contrato": "Firmar documentos", "induccion": "Ver inducción",
              "carta_intencion": "Generar carta de intención"}.get(tipo, "Consultar")
     return {"clave": "abrir", "texto": texto, "pestana": destino}
@@ -2425,7 +2526,8 @@ def ruta_es_masiva(ruta) -> bool:
     else:
         pasos = ruta or []
     tipos = {x.get("tipo") for x in pasos if isinstance(x, dict)}
-    return "entrevista_whatsapp" in tipos and not tipos & {"analisis_cv", "entrevista_agente"}
+    con_cv = any(isinstance(x, dict) and x.get("tipo") == "solicitud_web" and x.get("con_cv") for x in pasos)
+    return "entrevista_whatsapp" in tipos and not tipos & {"analisis_cv", "entrevista_agente"} and not con_cv
 
 
 def enfoque_de_ruta(ruta) -> Optional[str]:

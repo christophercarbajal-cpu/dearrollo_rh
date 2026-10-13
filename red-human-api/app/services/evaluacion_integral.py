@@ -205,6 +205,15 @@ def _validaciones_de_proceso(p: Postulacion, evaluaciones: List[Evaluacion], viv
     asignadas = sproc.asignar_evaluaciones(config, evaluaciones)
     validaciones: List[dict] = []
     ligadas: set = set()
+    sol_cv = next((x for x in p.proceso["pasos"] if x.get("tipo") == "solicitud_web" and x.get("con_cv") and not x.get("heredado")), None)
+    if sol_cv is not None and not any(x["tipo"] == "analisis_cv" for x in pasos):
+        # Cambio 30: la «Solicitud web con CV» trae el Análisis de CV (antes era una actividad aparte): aporta el score
+        a = p.analisis or {}
+        hay_cv = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"))
+        score_cv = p.score if (hay_cv and p.score) else None
+        v = _validacion_red_human("analisis_cv", "Análisis de CV", score_cv, "" if score_cv is not None else "Aún no hay CV analizado.")
+        v["obligatoria"] = bool(sol_cv.get("obligatorio", True))
+        validaciones.append(v)
     for x in pasos:
         if x["estado"] in ("omitida", "cancelada"):
             continue

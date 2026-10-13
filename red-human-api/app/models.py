@@ -2648,11 +2648,14 @@ def _evaluacion(nombre: str, responsable: str = "rh") -> dict:
 
 
 TIPOS_PASO = {
+    # Cambio 30: en el catálogo es «Solicitud web sin CV» o «Solicitud web con CV» (`con_cv`); con CV el archivo es
+    # obligatorio y el análisis corre solo al recibirlo
     "solicitud_web": {"nombre": "Solicitud web", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "candidato",
                       "etapas": ("Prefiltro",)},
-    # Cambio 22: sin calificación mínima — el Análisis de CV nunca detiene la ruta
+    # Cambio 22: sin calificación mínima — el Análisis de CV nunca detiene la ruta. Cambio 30: LEGADO (lo hace la
+    # «Solicitud web con CV»); solo se deriva en rutas ya congeladas
     "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "red_human",
-                    "etapas": ("Prefiltro", "Entrevista IA")},
+                    "etapas": ("Prefiltro", "Entrevista IA"), "legado": True},
     "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
                       "etapas": ("Prefiltro",)},
     "prefiltro_whatsapp": {"nombre": "Prefiltro WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
@@ -2676,11 +2679,14 @@ TIPOS_PASO = {
     # Documentos: en Prefiltro manda la liga y valida lo solicitado; en Contratación/Onboarding valida los obligatorios
     "documentos": {"nombre": "Documentos", "etapa": "Contratación", "regla": "validacion",
                    "responsable": "rh", "etapas": _TODAS},
+    # Cambio 30: «Propuesta y aceptación» y «Carta de intención» se unen en «Oferta laboral» (las dos quedan como LEGADO
+    # de rutas ya congeladas)
     "condiciones": {"nombre": "Propuesta y aceptación", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
-                    "etapas": ("Contratación",)},
-    # 2026-10-10: la carta de intención como actividad propia y OPCIONAL por defecto (se cumple enviada o firmada)
+                    "etapas": ("Contratación",), "legado": True},
     "carta_intencion": {"nombre": "Carta de intención", "etapa": "Contratación", "regla": "ninguna",
-                        "responsable": "rh", "etapas": ("Contratación",)},
+                        "responsable": "rh", "etapas": ("Contratación",), "legado": True},
+    "oferta": {"nombre": "Oferta laboral", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
+               "etapas": ("Contratación",)},
     "carta_contrato": {"nombre": "Contrato y firma", "etapa": "Contratación", "regla": "ninguna", "responsable": "rh",
                        "etapas": ("Contratación", "Onboarding")},
     "induccion": {"nombre": "Capacitación / Inducción", "etapa": "Onboarding", "regla": "ninguna", "responsable": "rh",
@@ -2695,13 +2701,17 @@ TIPOS_PASO = {
                              "responsable": "rh", "etapas": _TODAS, "legado": True},
 }
 # Entradas del catálogo que se GUARDAN como otro tipo (alias → tipo real + campos propios)
-ALIAS_CATALOGO = {"psicometria_fisica": ("psicometrica", {"modalidad": "fisica", "nombre": "Psicometría física"})}
+ALIAS_CATALOGO = {"psicometria_fisica": ("psicometrica", {"modalidad": "fisica", "nombre": "Psicometría física"}),
+                  # Cambio 30: la solicitud web se elige SIN o CON CV (se reemplazan entre sí en el proceso)
+                  "solicitud_sin_cv": ("solicitud_web", {"con_cv": False, "nombre": "Solicitud web sin CV"}),
+                  "solicitud_con_cv": ("solicitud_web", {"con_cv": True, "nombre": "Solicitud web con CV"})}
 # Las 22 actividades del catálogo, en el orden de la especificación (sección 4)
+# Cambio 30 (2026-10-13): «Solicitud web» y «Análisis de CV» → «Solicitud web sin CV» / «Solicitud web con CV»;
+# «Propuesta y aceptación» y «Carta de intención» → «Oferta laboral».
 CATALOGO_ACTIVIDADES = (
-    "solicitud_web", "analisis_cv", "prefiltro_web", "prefiltro_whatsapp", "llamada_agente", "entrevista_whatsapp",
+    "solicitud_sin_cv", "solicitud_con_cv", "prefiltro_web", "prefiltro_whatsapp", "llamada_agente", "entrevista_whatsapp",
     "entrevista_agente", "psicometrica", "psicometria_fisica", "entrevista_humana", "medica", "tecnica", "socioeconomica",
-    "referencias", "documentos", "condiciones", "carta_intencion", "carta_contrato", "induccion", "onboarding", "alta",
-    "otra",
+    "referencias", "documentos", "oferta", "carta_contrato", "induccion", "onboarding", "alta", "otra",
 )
 
 
@@ -2709,11 +2719,11 @@ CATALOGO_ACTIVIDADES = (
 # actividad NUEVA en una plantilla o en la ruta de una vacante («Otra actividad» va en todas). Las actividades que ya
 # estaban guardadas en otra etapa (rutas previas, copias congeladas, ad hoc) se siguen aceptando y derivando.
 ACTIVIDADES_POR_ETAPA = {
-    "Prefiltro": ("solicitud_web", "analisis_cv", "prefiltro_web", "prefiltro_whatsapp", "documentos", "otra"),
+    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_web", "prefiltro_whatsapp", "documentos", "otra"),
     "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "otra"),
     "Entrevista Humana": ("entrevista_humana", "psicometrica", "psicometria_fisica", "medica", "tecnica",
                           "socioeconomica", "referencias", "documentos", "otra"),
-    "Contratación": ("condiciones", "documentos", "carta_intencion", "carta_contrato", "medica", "socioeconomica", "otra"),
+    "Contratación": ("oferta", "documentos", "carta_contrato", "medica", "socioeconomica", "otra"),
     "Onboarding": ("induccion", "onboarding", "documentos", "alta", "otra"),
 }
 # Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
@@ -2748,7 +2758,7 @@ ESPERA_DEL_CATALOGO = {
     "solicitud_documentos": ("prefiltro_whatsapp", "prefiltro_web"),
     "documentos": ("solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web"),  # retro 2026-10-09: Documentos iniciales tras el prefiltro
     "carta_intencion": ("condiciones",),
-    "carta_contrato": ("condiciones", "documentos"),  # retro 2026-10-09: el contrato se firma con el expediente completo
+    "carta_contrato": ("condiciones", "oferta", "documentos"),  # retro 2026-10-09: el contrato se firma con el expediente completo
     "alta": ("documentos", "induccion", "onboarding"),
 }
 TIPOS_PASO_EVALUACION = tuple(TIPOS_EVALUACION_U)

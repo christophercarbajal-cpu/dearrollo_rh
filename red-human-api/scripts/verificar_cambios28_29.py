@@ -98,7 +98,7 @@ with TestClient(app) as client:
                                                        "Primeros días del nuevo empleado."],
           "cada etapa trae su descripción fija (textos exactos del requerimiento)")
     nombres = {t["valor"]: t["texto"] for t in op["tiposPaso"]}
-    check(nombres["documentos"] == "Documentos" and nombres["carta_intencion"] == "Carta de intención"
+    check(nombres["documentos"] == "Documentos" and nombres["oferta"] == "Oferta laboral"
           and not any("(opcional)" in t for t in nombres.values()), "«Documentos» y sin «(opcional)» en el catálogo")
     check(all(t.get("obligatorio", True) for t in op["tiposPaso"]), "toda actividad nace obligatoria")
 
@@ -117,7 +117,7 @@ with TestClient(app) as client:
     partir = {o["clave"]: o for o in op["partirDe"]}
     check([o["nombre"] for o in op["partirDe"]] == ["Masivos sin documentos", "Masivos con documentos", "Corporativos", "En blanco"],
           "«Partir de:» ofrece Masivos sin documentos, Masivos con documentos, Corporativos y En blanco")
-    check(not partir["blanco"]["pasos"] and any(p["tipo"] == "analisis_cv" for p in partir["corporativo"]["pasos"])
+    check(not partir["blanco"]["pasos"] and any(p["tipo"] == "solicitud_web" and p.get("con_cv") for p in partir["corporativo"]["pasos"])
           and any(p["id"] == "documentos-iniciales" for p in partir["masivos_con_documentos"]["pasos"]),
           "cada opción carga sus actividades")
     r = client.post("/procesos/plantillas", json={"nombre": "Masivos propio", "pasos": partir["masivos_sin_documentos"]["pasos"]})
@@ -224,8 +224,11 @@ with TestClient(app) as client:
     r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
     check(r.status_code == 200 and r.json()["estado"] == "Publicada", f"y se publica ({r.status_code} {r.text[:200]})")
 
+    # Cambio 30: el «Análisis de CV» ya es parte de la «Solicitud web con CV»; una ruta anterior que aún trae la actividad
+    # aparte (legado) sigue forzando el CV en la solicitud
     corp = sproc.ruta_base("corporativo")["pasos"]
-    corp = [{**x, "con_cv": False} if x["tipo"] == "solicitud_web" else x for x in corp]
+    corp = [{**x, "con_cv": False} if x["tipo"] == "solicitud_web" else x for x in corp] + [
+        {"id": "analisis_cv", "tipo": "analisis_cv", "etapa": "Prefiltro"}]
     r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": corp}})
     db.expire_all()
     v = db.get(Vacante, v.id)

@@ -29,7 +29,8 @@ def tiene_documentos_previos(pasos) -> bool:
 
 
 def exige_cv(pasos) -> bool:
-    return any(x.get("tipo") == "analisis_cv" for x in _vivos(pasos))
+    """Cambio 30: «Solicitud web con CV» (o el «Análisis de CV» de rutas anteriores) → el CV es obligatorio en la web."""
+    return any(x.get("tipo") == "analisis_cv" or (x.get("tipo") == "solicitud_web" and x.get("con_cv")) for x in _vivos(pasos))
 
 
 def tiene_prefiltro(pasos) -> bool:

@@ -26,6 +26,14 @@ const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "lla
 // Cambio 28: «Otra actividad» (nombre + mensaje) y «Capacitación» (curso) también se configuran aquí
 const CON_DETALLE = new Set(["solicitud_web", "entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
 
+/** Entrada del catálogo de un paso guardado (Cambio 30: la solicitud web es «sin CV» o «con CV»; la psicometría física
+ *  es su propia entrada). */
+export function claveCatalogo(p: Pick<PasoProceso, "tipo" | "con_cv" | "modalidad">): string {
+  if (p.tipo === "solicitud_web") return p.con_cv ? "solicitud_con_cv" : "solicitud_sin_cv";
+  if (p.tipo === "psicometrica" && p.modalidad === "fisica") return "psicometria_fisica";
+  return p.tipo;
+}
+
 function nuevoId(pasos: PasoProceso[], tipo: string): string {
   const base = tipo.replace(/_/g, "-");
   let i = 1;
@@ -78,7 +86,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   }, []);
   const tipos = useMemo(() => Object.fromEntries(opciones.tiposPaso.map((t) => [t.valor, t])), [opciones]);
 
-  const emitir = (lista: PasoProceso[]) => onChange(lista.map((p) => delCatalogo(p, tipos[p.tipo])), etapas);
+  const emitir = (lista: PasoProceso[]) => onChange(lista.map((p) => delCatalogo(p, tipos[claveCatalogo(p)])), etapas);
   const cambiarPaso = (id: string, cambios: Partial<PasoProceso>) => emitir(pasos.map((p) => (p.id === id ? { ...p, ...cambios } : p)));
   const quitarPaso = (id: string) => emitir(pasos.filter((p) => p.id !== id));
   function mover(id: string, delta: number) {
@@ -126,7 +134,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
             </header>
             <ul className="divide-y divide-border-faint">
               {deEtapa.map((p) => {
-                const t = tipos[p.tipo];
+                const t = tipos[claveCatalogo(p)];
                 const conDetalle = CON_DETALLE.has(p.tipo);
                 const expandido = conDetalle && abierto === p.id;
                 return (
@@ -146,7 +154,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                           p.tipo === "otra" && !p.nombre.trim() ? "border-bad/60" : "border-transparent")}
                         aria-label="Nombre de la actividad"
                       />
-                      <span className="text-[11px] text-ink-3">{p.modalidad === "fisica" ? "Psicometría física" : t?.texto ?? p.tipo}</span>
+                      <span className="text-[11px] text-ink-3">{t?.texto ?? p.tipo}</span>
                       {!soloLectura && (
                         <span className="ml-auto flex items-center">
                           <button type="button" onClick={() => mover(p.id, -1)} className="grid h-8 w-8 place-items-center rounded-lg text-ink-3 hover:bg-surface-2" aria-label="Subir"><ArrowUp className="h-3.5 w-3.5" /></button>

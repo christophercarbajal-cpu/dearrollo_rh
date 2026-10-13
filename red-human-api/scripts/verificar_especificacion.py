@@ -45,10 +45,11 @@ from app.services import proceso as sproc  # noqa: E402
 from app.services.configuracion import obtener  # noqa: E402
 
 OK = 0
-CATALOGO = ["Solicitud web", "Análisis de CV", "Prefiltro web", "Prefiltro WhatsApp", "Llamada Red Human",
+# Cambio 30 (2026-10-13): «Solicitud web sin CV» / «con CV» y «Oferta laboral» (21 actividades)
+CATALOGO = ["Solicitud web sin CV", "Solicitud web con CV", "Prefiltro web", "Prefiltro WhatsApp", "Llamada Red Human",
             "Entrevista Red Human por WhatsApp", "Entrevista Red Human con avatar", "Psicometría digital", "Psicometría física",
             "Entrevista humana", "Evaluación médica", "Evaluación técnica o práctica", "Estudio socioeconómico",
-            "Referencias laborales", "Documentos", "Propuesta y aceptación", "Carta de intención",
+            "Referencias laborales", "Documentos", "Oferta laboral",
             "Contrato y firma", "Capacitación / Inducción", "Tareas de onboarding", "Confirmación de ingreso", "Otra actividad"]
 
 
@@ -78,11 +79,11 @@ with TestClient(app) as client:
     # ================= 1. Catálogo definitivo =================
     print("\n--- 1. Catálogo de 22 actividades ---")
     tipos = client.get("/procesos/opciones", headers=H).json()["tiposPaso"]
-    check([t["texto"] for t in tipos] == CATALOGO, "el catálogo tiene EXACTAMENTE las 22 actividades, con sus nombres y en orden")
+    check([t["texto"] for t in tipos] == CATALOGO, "el catálogo tiene EXACTAMENTE sus actividades (Cambio 30), con sus nombres y en orden")
     check(not any(t["valor"] == "solicitud_documentos" for t in tipos),
           "«Documentos» unifica las de documentos (la vieja ya no se ofrece)")
-    check(next(t for t in tipos if t["valor"] == "carta_intencion")["obligatorio"] is True,
-          "Cambio 28: «Carta de intención» ya no lleva «(opcional)»: toda actividad es obligatoria")
+    check(next(t for t in tipos if t["valor"] == "oferta")["obligatorio"] is True,
+          "Cambio 30: «Oferta laboral» (une propuesta y carta de intención) nace obligatoria")
     pasos = sproc.normalizar_pasos([{"tipo": "psicometria_fisica", "etapa": "Entrevista Humana"},
                                     {"tipo": "carta_intencion", "etapa": "Contratación"},
                                     {"tipo": "solicitud_documentos", "etapa": "Prefiltro"}])

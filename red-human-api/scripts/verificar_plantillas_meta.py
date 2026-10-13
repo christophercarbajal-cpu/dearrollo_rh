@@ -127,6 +127,26 @@ with TestClient(app) as client:
     asyncio.run(sproc.avanzar_seguro(db, p1))
     check(len(plantillas(desde, "inicio_entrevista_rh")) == 1, "no se repite")
 
+    print("\n--- 1b. Desacoplado: si Meta truena, la postulación se guarda igual (sin 500 ni rollback) ---")
+    original = whatsapp._meta_post
+
+    async def _meta_truena(cuerpo):
+        raise RuntimeError("Graph API respondió algo inesperado")
+
+    whatsapp._meta_post = _meta_truena
+    app.dependency_overrides.pop(cuenta_actual, None)
+    r = client.post("/candidatos/postular", data={"vacante": vm.slug, "nombre": "Pablo Falla", "telefono": "+52 1 55 1277 0099",
+                                                  "consentimiento": "true"})
+    app.dependency_overrides[cuenta_actual] = lambda: cuenta
+    whatsapp._meta_post = original
+    pf = db.query(Postulacion).filter_by(codigo=(r.json() or {}).get("postulacion", "")).first() if r.status_code == 201 else None
+    check(r.status_code == 201 and pf is not None and pf.activa and pf.etapa == "Prefiltro" and pf.telefono == "5512770099",
+          f"Meta lanza una excepción → 201 y el candidato queda en Prefiltro ({r.status_code})")
+    db.refresh(pf)
+    check("RuntimeError" in (plantillas_meta.estado(pf).get("error") or ""), "el error de Meta queda registrado en la postulación (y en el log)")
+    check(ENVIADOS and ENVIADOS[0]["to"] == "525512770001" and ENVIADOS[0]["recipient_type"] == "individual",
+          "payload de la plantilla: messaging_product, recipient_type, to = 52 + 10 dígitos, template {name, language, components}")
+
     # ================= 2. Respuesta al botón =================
     print("\n--- 2. «Sí, empezar ahora» → ventana de 24 h + saludo estricto y primera pregunta ---")
     msg = whatsapp.parsear_webhook(boton("5512770001", "Sí, empezar ahora"))

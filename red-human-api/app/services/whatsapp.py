@@ -175,7 +175,8 @@ async def enviar_plantilla(
         })
     cuerpo = {
         "messaging_product": "whatsapp",
-        "to": numero_e164(telefono),
+        "recipient_type": "individual",
+        "to": numero_e164(telefono),  # E.164 sin «+»: 52 + 10 dígitos (sin el «1» de celular)
         "type": "template",
         "template": {
             "name": plantilla,

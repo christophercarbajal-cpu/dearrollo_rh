@@ -81,15 +81,48 @@ async def revisar_inicio_prefiltro(db: Session, p: Optional[Postulacion]) -> Opt
     if estado(p).get("enviada_en") or _ya_conversa(p) or not prefiltro_habilitado(p):
         return None
     from ..routers.candidatos import _disparar_plantilla_inicio
+    from .whatsapp import numero_e164
 
+    destino = numero_e164(p.telefono)
+    if not (len(destino) == 12 and destino.startswith("52")):
+        # número que Meta no puede entregar (no es 52 + 10 dígitos): se registra y no se llama a la API
+        _guardar(p, {"error": f"Teléfono inválido para WhatsApp: «{p.telefono}» → «{destino}»", "plantilla": nombre_plantilla_inicio()})
+        registrar(db, ACTOR, "plantilla_inicio_fallida", "postulacion", p.codigo, {"motivo": "telefono_invalido", "destino": destino})
+        db.commit()
+        print(f"[whatsapp][HSM] {p.codigo}: teléfono inválido para WhatsApp ({p.telefono!r} → {destino!r}); no se manda la plantilla", flush=True)
+        return {"enviado": False, "detalle": "teléfono inválido"}
     _guardar(p, {"enviada_en": datetime.now(timezone.utc).isoformat(), "plantilla": nombre_plantilla_inicio()})
-    db.commit()
-    envio = await _disparar_plantilla_inicio(db, p)
+    db.commit()  # reclamada ANTES de llamar a Meta: nunca sale dos veces
+    try:
+        envio = await _disparar_plantilla_inicio(db, p)
+    except Exception as ex:  # noqa: BLE001 — un error de Meta nunca rompe el flujo que la disparó
+        db.rollback()
+        envio = {"enviado": False, "detalle": f"{type(ex).__name__}: {str(ex)[:300]}"}
+        registrar(db, ACTOR, "plantilla_inicio_fallida", "postulacion", p.codigo, {"motivo": "excepcion", "detalle": envio["detalle"]})
     e = estado(p)
     e["entregada"] = bool(envio.get("enviado"))
+    if not envio.get("enviado"):
+        e["error"] = str(envio.get("detalle") or "")[:300]
+        print(f"[whatsapp][HSM] {p.codigo}: «{nombre_plantilla_inicio()}» a {destino} NO salió — {e['error']}", flush=True)
     _guardar(p, e)
     db.commit()
     return envio
+
+
+async def inicio_en_segundo_plano(postulacion_id: int) -> None:
+    """Envío DESACOPLADO de `inicio_entrevista_rh` (después de responder `/candidatos/postular`): sesión propia y nunca
+    lanza. La postulación ya está guardada; si Meta falla, queda en `analisis.plantilla_inicio.error` y en el log."""
+    from ..database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        p = db.get(Postulacion, postulacion_id)
+        await revisar_inicio_prefiltro(db, p)
+    except Exception as ex:  # noqa: BLE001
+        db.rollback()
+        print(f"[whatsapp][HSM] postulación {postulacion_id}: error al mandar la plantilla de inicio — {type(ex).__name__}: {ex}", flush=True)
+    finally:
+        db.close()
 
 
 def marcar_respuesta(db: Session, p: Postulacion, texto: str) -> bool:

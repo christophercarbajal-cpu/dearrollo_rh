@@ -18,7 +18,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
@@ -844,10 +844,13 @@ async def postular(
     consentimiento: bool = Form(default=False),
     respuestas: str = Form(default="", description="JSON: [{pregunta, respuesta}]"),
     cv: Optional[UploadFile] = File(default=None, description="CV en PDF o imagen"),
+    tareas: BackgroundTasks = None,
     db: Session = Depends(get_db),
 ):
     """Postulación desde la página pública `/aplicar/[slug]` — un solo paso para el candidato.
-    Una misma persona puede postularse a varias vacantes: cada una es su propia Postulación."""
+    Una misma persona puede postularse a varias vacantes: cada una es su propia Postulación.
+    2026-10-13: la plantilla de WhatsApp (`inicio_entrevista_rh`) sale en SEGUNDO PLANO, después de responder y con su
+    propia sesión: un error de Meta (o de red) nunca regresa 500 ni afecta la postulación, que ya quedó guardada."""
     if not nombre.strip():
         raise HTTPException(400, "Necesitamos tu nombre completo.")
     if not consentimiento:
@@ -938,12 +941,16 @@ async def postular(
     canales = canales_publicos(vac, db)
     # 2026-10-13: la liga de Telegram de la postulación SOLO si el canal configurado incluye Telegram (nunca en «solo WhatsApp»)
     liga_telegram = tg.liga_postulacion(p) if canales["canalCandidatos"] in ("telegram", "ambos") else ""
+    db.commit()
     if nueva_postulacion and canal_cuenta != "telegram":
-        # 2026-10-13: `inicio_entrevista_rh` sale cuando la actividad «Prefiltro por WhatsApp» de SU ruta se habilita
+        # 2026-10-13: `inicio_entrevista_rh` sale cuando la actividad «Prefiltro por WhatsApp» de SU ruta se habilita —
+        # DESACOPLADA de la transacción y de la respuesta (segundo plano, sesión propia, nunca lanza)
         from ..services import plantillas_meta
 
-        await plantillas_meta.revisar_inicio_prefiltro(db, p)
-    db.commit()
+        if tareas is not None:
+            tareas.add_task(plantillas_meta.inicio_en_segundo_plano, p.id)
+        else:
+            await plantillas_meta.inicio_en_segundo_plano(p.id)
     # 2026-10-08 (motor de ruta automatizado, SOLO CUENTAS_RUTA_AUTOMATICA): el prefiltro web se resuelve contra la
     # vacante al instante y, si cumple, la ruta sigue sola (dispara lo que se habilite).
     from ..models import ruta_automatica

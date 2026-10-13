@@ -185,8 +185,20 @@ def prefiltro_datos(p) -> Optional[dict]:
             "traslado": d.get("traslado") or "", "trasladoMin": m, "transporte": d.get("transporte_medio") or d.get("transporte") or "",
             # C5 (prueba del 11 de octubre): su respuesta a «El sueldo es desde… ¿Te parece bien?»
             "sueldo": d.get("sueldo") or "", "sueldoAcepta": d.get("sueldo_acepta"), "sueldoOfrecido": d.get("sueldo_ofrecido") or "",
+            # Cambio 24 (ruta corporativa): expectativa del candidato y si supera en más de 20 % el sueldo de la vacante
+            "sueldoExpectativa": d.get("sueldo_expectativa"), "sueldoSobreTope": bool(d.get("sueldo_sobre_tope")),
             # Cambio 19: sin umbrales fijos — el traslado solo se registra (ninguna alerta por minutos)
             "alerta": None}
+
+
+def _comparativo(p) -> List[dict]:
+    try:
+        from .services.prefiltro_conversacional import comparativo_indispensables
+
+        return comparativo_indispensables(p)
+    except Exception as ex:  # noqa: BLE001 — la ficha nunca se cae por el comparativo
+        print(f"[serial] comparativo de indispensables de {getattr(p, 'codigo', '?')}: {ex}")
+        return []
 
 
 def _dedupe_cap(items: List[Optional[str]], maximo: int) -> List[str]:
@@ -662,6 +674,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "pideCv": _pide_cv(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)
         "prefiltroDatos": prefiltro_datos(p),
+        # Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato («Inconsistencia» si difieren)
+        "comparativoIndispensables": _comparativo(p),
         # C12 (prueba del 11 de octubre): actividad agregada pendiente (bloquea lo siguiente y «Enviar propuesta»)
         "actividadAgregada": _agregada(p),
         "experiencia": c.experiencia or "",

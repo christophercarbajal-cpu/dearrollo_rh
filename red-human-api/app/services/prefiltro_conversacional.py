@@ -72,8 +72,10 @@ def ubicacion_vacante(v) -> str:
     return (v.ubicacion or "").strip() or ", ".join(x for x in (v.ubicacion_municipio, v.ubicacion_estado) if x)
 
 
-def criterios_de(v) -> List[dict]:
-    """Criterios del prefiltro de la vacante, en el orden configurado."""
+def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
+    """Criterios del prefiltro de la vacante, en el orden configurado. Con `p` se ajustan a SU ruta (Cambio 24: en la
+    ruta corporativa no se pregunta colonia ni transporte y el sueldo es la expectativa) y se suman las brechas de SU
+    Análisis de CV (Cambio 22)."""
     salida: List[dict] = []
     usados = set()
     ubic = ubicacion_vacante(v)
@@ -168,8 +170,14 @@ def criterios_de(v) -> List[dict]:
                 d["nivel_requerido"] = nivel
                 d["indispensable" if pw.get("descarta") else "registra"] = True
         datos.append(d)
+    corporativa = p is not None and _es_corporativa(p)
+    if corporativa:
+        # Cambio 24: ruta corporativa — sin colonia ni transporte; el sueldo pregunta la EXPECTATIVA del candidato
+        datos = [d for d in datos if d["dato"] not in ("zona", "transporte", "sueldo")]
+        datos.append(dato_expectativa(v))
+    brechas = criterios_brecha(salida, p) if p is not None else []
     if not datos:
-        return salida + registro
+        return _con_brechas(salida + registro, brechas)
     q_sueldo = ia.pregunta_sueldo(v.sueldo or "")
     if q_sueldo and not any(d["dato"] == "sueldo" for d in datos):
         # C2 (prueba del 11 de octubre): vacantes con los 4 datos ya guardados también preguntan el sueldo (sin regenerar)
@@ -190,7 +198,142 @@ def criterios_de(v) -> List[dict]:
     otros = [d for d in datos if d not in esc_desc and d not in esc_indisp]
     primero = [c for c in salida if c["indispensable"] or c.get("reconfirma")]
     resto = [c for c in salida if c not in primero]
-    return esc_indisp + primero + esc_desc + registro + otros + resto
+    return _con_brechas(esc_indisp + primero + esc_desc + registro + otros + resto, brechas)
+
+
+# ============================================================ Cambios 22 y 24: ruta corporativa y brechas del CV
+
+
+def _es_corporativa(p: Postulacion) -> bool:
+    from .proceso import es_corporativa
+
+    return es_corporativa(p)
+
+
+def tope_sueldo(v) -> Optional[int]:
+    """El sueldo más alto que ofrece la vacante (rango «hasta» o, si no, «desde»)."""
+    for x in (getattr(v, "sueldo_hasta", None), getattr(v, "sueldo_desde", None)):
+        if isinstance(x, (int, float)) and x > 0:
+            return int(x)
+    return None
+
+
+MARGEN_EXPECTATIVA = 0.20  # Cambio 24: una expectativa 20 % arriba del sueldo de la vacante va a Puntos por validar
+
+
+def dato_expectativa(v) -> dict:
+    periodo = str(getattr(v, "sueldo_periodicidad", "") or "").strip().lower()
+    q = "¿Cuánto esperas ganar " + {"semanal": "a la semana", "quincenal": "a la quincena", "anual": "al año"}.get(periodo, "al mes") + "?"
+    return {"id": "dato-sueldo", "clave": "sueldo", "dato": "sueldo", "expectativa": True, "tope": tope_sueldo(v),
+            "criterio": f"Sueldo: {(getattr(v, 'sueldo', '') or '').strip()}".rstrip(": ") or "Expectativa de sueldo",
+            "pregunta": q, "chat": q, "indispensable": False, "esperada": "si", "tipo": "dato",
+            "repregunta": "¿Qué cantidad tienes en mente? Por ejemplo, «15 mil al mes»."}
+
+
+_RE_MONTO = re.compile(r"(\d+(?:\.\d+)?)\s*(mil|k)?\b")
+
+
+def monto_de(texto: str) -> Optional[int]:
+    """«15 mil», «$15,000», «18k», «entre 15 y 18 mil» → 15000 (la primera cifra). None si no hay una cifra clara."""
+    t = re.sub(r"(?<=\d)[,\s](?=\d{3}\b)", "", (texto or "").lower()).replace("$", " ")
+    m = _RE_MONTO.search(t)
+    if not m:
+        return None
+    n = float(m.group(1))
+    if m.group(2) or (n < 1000 and re.search(r"\bmil\b", t)):
+        n *= 1000
+    return int(n) if n >= 1000 else None
+
+
+_RE_PREFIJO_BRECHA = re.compile(r"^(no (acredita|menciona|demuestra|muestra|indica|especifica)|sin (evidencia|experiencia comprobable|"
+                                r"mencion)( de| en| sobre)?|falta( de)?|no se (acredita|menciona))\s*:?\s*", re.IGNORECASE)
+
+
+def _texto_brecha(b: str) -> str:
+    t = _RE_PREFIJO_BRECHA.sub("", " ".join(str(b or "").split())).strip(" .")
+    return t[:1].upper() + t[1:] if t else ""
+
+
+def _coincide(c: dict, textos: List[str]) -> Optional[str]:
+    claves = _claves(c)
+    for t in textos:
+        palabras = {w for w in re.findall(r"[a-z]{5,}", _norm(t)) if w not in _PALABRAS_VACIAS}
+        if claves and palabras and len(claves & palabras) >= max(1, min(2, len(claves) // 2)):
+            return t
+    return None
+
+
+def criterios_brecha(salida: List[dict], p: Optional[Postulacion]) -> List[dict]:
+    """Cambio 22: cada brecha del Análisis de CV se vuelve una pregunta del prefiltro. Si es un indispensable de la vacante
+    se pregunta en el chat (aunque el formulario dijera «Sí») y reprobarlo DESCARTA; si no coincide con ninguno, solo se
+    registra (nunca descarta)."""
+    a = (p.analisis or {}) if p is not None else {}
+    if a.get("ia") is False:
+        return []  # análisis demo (sin IA): sus brechas no son reales
+    brechas = [str(b) for b in a.get("brechas") or [] if str(b or "").strip() and "modo demo" not in str(b).lower()]
+    salida_cv: List[dict] = []
+    indisp = [c for c in salida if c["indispensable"] and not c.get("reconfirma")]
+    reconfirmados = {c.get("reconfirma") for c in salida if c.get("reconfirma")}
+    vistos = set()
+    from . import ia
+
+    for i, b in enumerate(brechas[:4]):
+        base = next((c for c in indisp if _coincide(c, [b])), None)
+        if base is not None:
+            if base["id"] in vistos or base["id"] in reconfirmados:
+                continue
+            vistos.add(base["id"])
+            salida_cv.append({**base, "id": f"cv-{base['id']}", "clave": "brecha", "por_brecha": base["id"], "brecha": b})
+            continue
+        req = _texto_brecha(b)
+        if not req or len(req) > 90 or ia.es_autopercepcion(req):
+            continue
+        q = ia.pregunta_si_no_natural(req)
+        salida_cv.append({"id": f"cvb{i + 1}", "clave": "brecha", "criterio": req, "pregunta": q, "chat": q,
+                          "indispensable": False, "registra": True, "esperada": "si", "brecha": b})
+    return salida_cv
+
+
+def _con_brechas(criterios: List[dict], brechas: List[dict]) -> List[dict]:
+    """Las brechas de un indispensable van con los indispensables; las demás, con lo que se registra."""
+    if not brechas:
+        return criterios
+    indisp = [b for b in brechas if b.get("por_brecha")]
+    otras = [b for b in brechas if not b.get("por_brecha")]
+    corte = next((i for i, c in enumerate(criterios) if not (c["indispensable"] or c.get("reconfirma"))), len(criterios))
+    return criterios[:corte] + indisp + otras + criterios[corte:]
+
+
+def comparativo_indispensables(p: Postulacion) -> List[dict]:
+    """Cambio 22 (ficha de RH): por cada indispensable, lo que dice el CV (acreditado / no) contra lo que respondió el
+    candidato; «Inconsistencia» si difieren."""
+    if p is None or p.vacante is None:
+        return []
+    a = p.analisis or {}
+    acreditados = [str(x) for x in a.get("requisitos_cumplidos") or [] if str(x or "").strip()]
+    brechas = [str(x) for x in a.get("brechas") or [] if str(x or "").strip()]
+    hay_cv = bool(acreditados or brechas) and a.get("ia") is not False
+    criterios = criterios_de(p.vacante, p)
+    e = estado(p)
+    respuestas = e.get("respuestas") or {}
+    if not e.get("web_importada"):
+        respuestas = (_sembrar_web(p, dict(e), criterios).get("respuestas") or {})
+    filas = []
+    for c in criterios:
+        if c.get("reconfirma") or c.get("por_brecha") or not (c["indispensable"] or (c.get("dato") == "escolaridad" and c.get("nivel_requerido") is not None and not c.get("registra"))):
+            continue
+        cv = None
+        if hay_cv:
+            cv = False if _coincide(c, brechas) else (True if _coincide(c, acreditados) else False)
+        # la respuesta más reciente: la del chat por la brecha, la reconfirmación o la del indispensable
+        r = (respuestas.get(f"cv-{c['id']}") or next((respuestas[x["id"]] for x in criterios if x.get("reconfirma") == c["id"] and x["id"] in respuestas), None)
+             or respuestas.get(c["id"]) or {})
+        valor = r.get("valor")
+        cumple = None if valor is None else valor == c["esperada"]
+        filas.append({"requisito": c["criterio"], "cv": None if cv is None else ("Acreditado" if cv else "No acreditado"),
+                      "respuesta": r.get("respuesta", ""), "fuente": r.get("fuente", ""), "cumple": cumple,
+                      "inconsistencia": cv is not None and cumple is not None and cv != cumple})
+    return filas
 
 
 # ============================================================ datos de WhatsApp (escolaridad, zona, traslado, transporte)
@@ -325,6 +468,9 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
     if dato == "transporte":
         medio = medio_de(texto)
         return (None, {}) if medio is None else ("si", {"medio": medio})
+    if dato == "sueldo" and c.get("expectativa"):
+        monto = monto_de(texto)
+        return (None, {}) if monto is None else ("si", {"monto": monto})
     if dato == "sueldo":
         # C2 (prueba del 11 de octubre): se registra si le parece bien; un «no» nunca descarta (RH lo ve en la ficha)
         v = clasificar({"criterio": "sueldo", "pregunta": c.get("pregunta") or "", "chat": c.get("chat") or ""}, texto)
@@ -341,6 +487,16 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
         d["traslado_min"] = extra.get("minutos")
     elif c["dato"] == "transporte":
         d["transporte_medio"] = extra.get("medio") or texto.strip()[:60]
+    elif c["dato"] == "sueldo" and c.get("expectativa"):
+        # Cambio 24: expectativa del candidato; más de 20 % arriba del sueldo de la vacante → Puntos por validar
+        d["sueldo_expectativa"] = extra.get("monto")
+        d["sueldo_ofrecido"] = str(c.get("criterio") or "").removeprefix("Sueldo:").strip()
+        tope = c.get("tope")
+        if extra.get("monto") and tope and extra["monto"] > tope * (1 + MARGEN_EXPECTATIVA):
+            d["sueldo_sobre_tope"] = True
+            a["puntos_validar_prefiltro"] = list(a.get("puntos_validar_prefiltro") or []) + [
+                f"Expectativa de sueldo: ${extra['monto']:,} (más de 20 % arriba del sueldo de la vacante: "
+                f"{d['sueldo_ofrecido'] or f'${tope:,}'})"]
     elif c["dato"] == "sueldo":
         d["sueldo_acepta"] = extra.get("acepta")
         d["sueldo_ofrecido"] = str(c.get("criterio") or "").removeprefix("Sueldo: ").strip()
@@ -458,7 +614,7 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
 
 
 def aplica(p: Optional[Postulacion]) -> bool:
-    if p is None or p.vacante is None or not criterios_de(p.vacante):
+    if p is None or p.vacante is None or not criterios_de(p.vacante, p):
         return False
     if ruta_automatica(p.cuenta):
         return True
@@ -565,8 +721,8 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
     web = {_norm(r.get("pregunta", "")): str(r.get("respuesta", "")).strip()
            for r in (p.analisis or {}).get("respuestas_web") or [] if isinstance(r, dict)}
     for c in criterios:
-        if c["id"] in respuestas:
-            continue
+        if c["id"] in respuestas or c.get("por_brecha"):
+            continue  # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»
         valor = web.get(_norm(c["pregunta"])) or web.get(_norm(c["criterio"]))
         if not valor:
             continue
@@ -595,6 +751,11 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
     def falta(c: dict) -> bool:
         if c["id"] in respuestas:
             return False
+        if c.get("por_brecha"):
+            # Cambio 22: brecha del CV en un indispensable — se pregunta si el formulario dijo «Sí» (si no, ya lo cubre la
+            # pregunta del indispensable)
+            base = respuestas.get(c["por_brecha"]) or {}
+            return base.get("valor") == "si" and base.get("fuente") == "web"
         if c.get("dato") or c.get("registra"):
             return True  # los datos de WhatsApp y las condiciones de la descripción («Se registra») siempre se preguntan
         if c.get("reconfirma"):
@@ -635,7 +796,7 @@ def resumen(p: Postulacion) -> Optional[dict]:
     """Para la ficha y el paso del prefiltro: qué se respondió, por dónde, y qué falta."""
     if not aplica(p):
         return None
-    criterios = criterios_de(p.vacante)
+    criterios = criterios_de(p.vacante, p)
     e = estado(p)
     if not e.get("web_importada"):
         e = _sembrar_web(p, dict(e), criterios)
@@ -652,7 +813,7 @@ def pregunta_pendiente(p: Postulacion) -> Optional[str]:
     e = estado(p)
     if e.get("resultado"):
         return None
-    c = next((x for x in criterios_de(p.vacante) if x["id"] == e.get("pendiente")), None)
+    c = next((x for x in criterios_de(p.vacante, p) if x["id"] == e.get("pendiente")), None)
     return c["chat"] if c else None
 
 
@@ -716,7 +877,7 @@ def _respuestas_adelantadas(criterios: List[dict], e: dict, texto: str, actual: 
     respuestas = dict(e.get("respuestas") or {})
     partes = [x.strip() for x in re.split(r"[.;,\n]| y | pero | tambien ", limpiar(texto)) if x.strip()]
     for c in criterios:
-        if c["id"] == actual or c["id"] in respuestas or not c["indispensable"] or c.get("reconfirma"):
+        if c["id"] == actual or c["id"] in respuestas or not c["indispensable"] or c.get("reconfirma") or c.get("por_brecha"):
             continue
         claves = _claves(c)
         for parte in partes:
@@ -847,7 +1008,7 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     e = estado(p)
     if e.get("resultado") or not (p.analisis or {}).get("respuestas_web"):
         return None
-    criterios = criterios_de(p.vacante)
+    criterios = criterios_de(p.vacante, p)
     if not e.get("web_importada"):
         e = _sembrar_web(p, e, criterios)
         _guardar(p, e)
@@ -968,7 +1129,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     e = estado(p)
     if e.get("resultado"):
         return None
-    criterios = criterios_de(p.vacante)
+    criterios = criterios_de(p.vacante, p)
     if not e.get("web_importada"):
         e = _sembrar_web(p, e, criterios)
 
@@ -1011,7 +1172,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             e["aclaraciones"] = aclaraciones
             registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                       {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": 1})
-            return await responder(REPREGUNTA_DATO[pendiente["dato"]], aclaracion=True)
+            return await responder(pendiente.get("repregunta") or REPREGUNTA_DATO[pendiente["dato"]], aclaracion=True)
         fuente = canal_registro(canal)
         if valor is None:
             _no_concluyente(db, p, e, pendiente, texto.strip(), fuente)

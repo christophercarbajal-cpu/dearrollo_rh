@@ -159,11 +159,18 @@ with TestClient(app) as client:
 
     # ================= 3. «No aprobada» → deja de enviar mensajes =================
     print("\n--- 3. «No aprobada»: el agente deja de enviar mensajes ---")
-    q.score = 20  # bajo el mínimo del Análisis de CV → obligatoria «No aprobada»
+    # Cambio 22: el Análisis de CV ya NO detiene la ruta (sin mínimo); la «No aprobada» sale de la Entrevista Red Human
+    q.score = 20
     db.commit()
     db.expire_all()
     q = db.query(Postulacion).filter_by(codigo=q.codigo).one()
-    check(sproc.detenido_por_no_aprobada(q) is not None, "el Análisis de CV bajo el mínimo detiene la ruta")
+    check(sproc.detenido_por_no_aprobada(q) is None, "Cambio 22: un CV con score bajo ya no detiene la ruta")
+    db.add(Entrevista(codigo="ENT-NA1", candidato_id=q.candidato_id, postulacion_id=q.id, token="tok-no-aprobada", tipo="avatar",
+                      estado="evaluada", evaluacion={"score_entrevista": 20, "match_perfil": 20, "recomendacion": "no_avanzar"}))
+    db.commit()
+    db.expire_all()
+    q = db.query(Postulacion).filter_by(codigo=q.codigo).one()
+    check(sproc.detenido_por_no_aprobada(q) is not None, "la Entrevista Red Human bajo el mínimo detiene la ruta")
     ENVIOS.clear()
     r = asyncio.run(rc.procesar_prefiltro(db, q, "hola, ¿cuándo es mi entrevista?", "whatsapp"))
     check(r.get("detenido") and not [x for x in ENVIOS if x[1] == q.telefono], "no se le responde ni se agenda nada")

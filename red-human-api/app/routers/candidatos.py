@@ -1334,7 +1334,25 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         return {"respuesta": respuesta_final, "clasificacion": None, "ia": False, "whatsapp": envio, "cita": None, "detenido": motivo}
     d = agenda_chat.decidir(p, texto)
     cita = None
-    if d["accion"] == "registrar":
+    if d["accion"] in ("ahora", "plazo"):
+        # Cambio 24: «sí» → la liga ya; «no» → la misma liga con 3 días para hacerla. `videollamada_agendada_en` = el
+        # límite (el aviso de no-show sale si no la hizo en ese plazo).
+        ahora_utc = datetime.now(timezone.utc)
+        limite = ahora_utc + timedelta(days=agenda_chat.DIAS_PLAZO)
+        e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=ahora_utc)
+        db.flush()
+        liga = f"{settings.app_url}/entrevista/{e.token}"
+        p.videollamada_agendada_en = limite
+        p.videollamada_liga = liga
+        if ETAPAS_CANDIDATO.index(p.etapa) < ETAPAS_CANDIDATO.index("Entrevista IA"):
+            p.etapa = "Entrevista IA"
+        agenda_chat.fijar_propuesta(p, None)
+        registrar(db, "agente-ia", "entrevista_avatar_liga_enviada", "postulacion", p.codigo,
+                  {"ahora": d["accion"] == "ahora", "limite": limite.isoformat(), "liga": liga, "respuesta": texto[:120]})
+        respuesta_final = agenda_chat.texto_liga(nombre_ficha(p).split(" ")[0], liga, d["accion"] == "ahora",
+                                                 None if d["accion"] == "ahora" else limite)
+        cita = {"fechaHora": limite.isoformat(), "liga": liga, "ahora": d["accion"] == "ahora"}
+    elif d["accion"] == "registrar":
         cuando = d["cuando"].astimezone(timezone.utc)
         e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=cuando)
         db.flush()

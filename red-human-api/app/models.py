@@ -2550,7 +2550,8 @@ def _evaluacion(nombre: str, responsable: str = "rh") -> dict:
 TIPOS_PASO = {
     "solicitud_web": {"nombre": "Solicitud web", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "candidato",
                       "etapas": ("Prefiltro",)},
-    "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "calificacion", "responsable": "red_human",
+    # Cambio 22: sin calificación mínima — el Análisis de CV nunca detiene la ruta
+    "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "red_human",
                     "etapas": ("Prefiltro", "Entrevista IA")},
     "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
                       "etapas": ("Prefiltro",)},

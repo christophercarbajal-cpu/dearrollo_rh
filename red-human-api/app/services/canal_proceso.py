@@ -158,6 +158,45 @@ def respuesta_paso(db: Session, p: Postulacion, paso_id: str) -> dict:
         f"«{paso['nombre']}» lo coordina el equipo de RH ({paso['responsable'] or 'RH'}). Te contactaremos por aquí con los detalles.")
 
 
+# Cambio 23 (2026-10-12): respuesta al «/start» de la liga de UNA postulación según su estado (textos exactos)
+TEXTO_CV_EN_PROCESO = "Hola{nombre}. Estamos analizando tu CV para *{vacante}*. Te escribo por aquí en cuanto termine."
+TEXTO_CV_TERMINADO = "Hola{nombre}. Ya terminamos de analizar tu CV para *{vacante}*. Ahora unas preguntas para continuar."
+TEXTO_EN_ESPERA = ("Hola{nombre}. Tu postulación a *{vacante}* está en espera de decisión del equipo de RH. Te avisaremos por "
+                   "aquí en cuanto haya una respuesta.")
+TEXTO_DESCARTADO = ("Hola{nombre}. Gracias por tu interés en *{vacante}*. En esta ocasión no continuaremos con tu postulación; "
+                    "guardamos tus datos por si surge otra oportunidad.")
+MOTIVOS_DESCARTE = ("descartado", "prefiltro_no_aprobado")
+
+
+def estado_start(p: Postulacion) -> str:
+    """cv_en_proceso | cv_terminado (empieza el prefiltro) | en_espera | descartado | "" (el flujo de siempre)."""
+    if not p.activa:
+        return "descartado" if (p.motivo_cierre or "") in MOTIVOS_DESCARTE else ""
+    if sproc.detenido_por_no_aprobada(p) is not None or p.estado == "revision":
+        return "en_espera"
+    if sproc.es_corporativa(p) and p.etapa == "Prefiltro":
+        from . import prefiltro_conversacional as pconv
+
+        a = p.analisis or {}
+        hay_analisis = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv")) and p.score is not None
+        if not hay_analisis:
+            return "cv_en_proceso"
+        e = pconv.estado(p)
+        if pconv.aplica(p) and not e.get("resultado") and not e.get("preguntadas"):
+            return "cv_terminado"
+    return ""
+
+
+def texto_start(p: Postulacion, estado: str) -> str:
+    from ..routers.candidatos import nombre_ficha
+
+    nombre = (nombre_ficha(p) or "").split(" ")[0]
+    nombre = "" if not nombre or nombre.startswith("Candidato") else f", {nombre}"
+    plantilla = {"cv_en_proceso": TEXTO_CV_EN_PROCESO, "cv_terminado": TEXTO_CV_TERMINADO, "en_espera": TEXTO_EN_ESPERA,
+                 "descartado": TEXTO_DESCARTADO}[estado]
+    return plantilla.format(nombre=nombre, vacante=_vacante(p))
+
+
 def ligas_telegram(p: Postulacion) -> dict:
     """Deep links de la postulación y de cada paso del proceso (para que RH los copie desde el seguimiento)."""
     from . import telegram

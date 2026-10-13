@@ -143,19 +143,51 @@ def fijar_propuesta(p: Postulacion, dt: Optional[datetime]) -> None:
     flag_modified(p, "analisis")
 
 
+# Cambio 24 (2026-10-12): la Entrevista Red Human con avatar ya no se agenda a una hora — el bot pregunta «¿La quieres
+# hacer ahora?»: «sí» → manda la liga; «no» → manda la misma liga con 3 días para hacerla.
+PREGUNTA_AHORA = "¿La quieres hacer ahora?"
+DIAS_PLAZO = 3
+_RE_SI_AHORA = re.compile(r"^(si|sip|simon|claro|va|vale|dale|ok|okay|ahorita|ahora|de una|listo|listos|sale|por supuesto|"
+                          r"orale|perfecto|ya)\b|\b(ahora|ahorita|de una vez|en este momento|ya mismo)\b")
+_RE_NO_AHORA = re.compile(r"^(no|nop|nel|mejor no|ahorita no|ahora no|todavia no|aun no|despues|luego|mas tarde|otro dia|"
+                          r"manana)\b|\b(no puedo|ahorita no|ahora no|mas tarde|en otro momento|despues|luego)\b")
+
+
 def invitacion(p: Postulacion) -> str:
-    """Primer mensaje tras el prefiltro (ruta con Entrevista con avatar): propone un horario exacto. Sin valoraciones."""
-    dt = proponer()
-    fijar_propuesta(p, dt)
+    """Primer mensaje tras el prefiltro (ruta con Entrevista con avatar). Sin valoraciones ni promesas."""
+    a = dict(p.analisis or {})
+    a[CLAVE] = {"pregunta_ahora": True, "en": datetime.now(timezone.utc).isoformat()}
+    p.analisis = a
+    flag_modified(p, "analisis")
     nombre = (p.nombre or "").split(" ")[0]
     saludo = f"Gracias, {nombre}. " if nombre and not nombre.startswith("Candidato") else "Gracias. "
-    return (f"{saludo}El siguiente paso es una entrevista por videollamada con Red Human (unos 10 minutos). "
-            f"{pregunta_confirmacion(dt)}")
+    return f"{saludo}El siguiente paso es una entrevista por videollamada con Red Human (unos 10 minutos). {PREGUNTA_AHORA}"
+
+
+def decidir_ahora(texto: str) -> dict:
+    """Respuesta a «¿La quieres hacer ahora?»: {"accion": "ahora"} | {"accion": "plazo"} | {"accion": "responder"}."""
+    t = _norm(texto)
+    if _RE_NO_AHORA.search(t):
+        return {"accion": "plazo", "dias": DIAS_PLAZO}
+    if _RE_SI_AHORA.search(t):
+        return {"accion": "ahora"}
+    return {"accion": "responder", "texto": f"{PREGUNTA_AHORA} Respóndeme «sí» y te mando la liga, o «no» y te doy {DIAS_PLAZO} días para hacerla."}
+
+
+def texto_liga(nombre: str, liga: str, ahora: bool, limite: Optional[datetime] = None) -> str:
+    quien = f", {nombre}" if nombre and not nombre.startswith("Candidato") else ""
+    if ahora:
+        return f"Listo{quien}. Entra desde esta liga para hacer tu entrevista con Red Human:\n\n{liga}"
+    hasta = f", hasta {texto_horario(limite)} ({ETIQUETA_ZONA})" if limite else ""
+    return (f"Sin problema{quien}. Tienes {DIAS_PLAZO} días para hacerla{hasta}. Entra cuando puedas desde esta liga:\n\n{liga}")
 
 
 def decidir(p: Postulacion, texto: str) -> dict:
-    """Qué hacer con la respuesta del candidato. Regresa {"accion": "registrar", "cuando": dt} | {"accion": "responder",
-    "texto": str}. Solo «registrar» si hay propuesta vigente y el candidato dijo «sí» de forma explícita."""
+    """Qué hacer con la respuesta del candidato. Regresa {"accion": "registrar", "cuando": dt} | {"accion": "ahora" |
+    "plazo"} | {"accion": "responder", "texto": str}. Con la pregunta «¿La quieres hacer ahora?» vigente decide
+    `decidir_ahora`; las propuestas de horario anteriores al Cambio 24 siguen funcionando."""
+    if ((p.analisis or {}).get(CLAVE) or {}).get("pregunta_ahora"):
+        return decidir_ahora(texto)
     vigente = propuesta(p)
     nuevo = extraer_horario(texto)
     if vigente is not None and es_si_explicito(texto) and (nuevo is None or nuevo == vigente):
@@ -167,8 +199,7 @@ def decidir(p: Postulacion, texto: str) -> dict:
         fijar_propuesta(p, None)
         return {"accion": "responder", "texto": "Sin problema. ¿Qué día y a qué hora te queda mejor? Por ejemplo: «mañana a las 11 a.m.»."}
     if vigente is None or vigente <= _ahora():
-        dt = proponer()
-        fijar_propuesta(p, dt)
-        return {"accion": "responder", "texto": f"Te propongo un horario para tu entrevista con Red Human. {pregunta_confirmacion(dt)}"}
+        invitacion(p)  # Cambio 24: sin propuesta vigente se pregunta «¿La quieres hacer ahora?»
+        return {"accion": "responder", "texto": f"Tu siguiente paso es la entrevista con Red Human. {PREGUNTA_AHORA}"}
     return {"accion": "responder",
             "texto": f"Para agendarla necesito tu confirmación: {pregunta_confirmacion(vigente)} Respóndeme «Sí», o dime otro día y hora."}

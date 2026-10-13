@@ -461,6 +461,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {/* 2. Resultados clave */}
       <ResultadosClave c={c} />
+      <ComparativoIndispensables c={c} />
 
       {/* 2026-10-08: tareas de Onboarding en la ficha, cada una con su acción directa */}
       {c.etapa === "Onboarding" && c.expedienteId != null && (
@@ -890,7 +891,15 @@ function ResultadosClave({ c }: { c: Candidato }) {
           : []),
         ...(d.transporte ? [{ k: "Transporte", v: d.transporte }] : []),
         // C5: su respuesta al sueldo («El sueldo es desde… ¿Te parece bien?»); un «no» nunca descarta
-        ...(d.sueldoAcepta != null || d.sueldo
+        // Cambio 24: ruta corporativa — su expectativa (más de 20 % sobre el de la vacante va a Puntos por validar)
+        ...(d.sueldoExpectativa != null
+          ? [{
+              k: "Expectativa de sueldo",
+              v: `$${d.sueldoExpectativa.toLocaleString("es-MX")}` + (d.sueldoSobreTope ? " · más de 20 % arriba" : ""),
+              tono: d.sueldoSobreTope ? "text-warn" : undefined,
+            }]
+          : []),
+        ...(d.sueldoExpectativa == null && (d.sueldoAcepta != null || d.sueldo)
           ? [{
               k: "Sueldo",
               v: d.sueldoAcepta === true ? "Le parece bien" : d.sueldoAcepta === false ? `No le parece${d.sueldo ? ` («${d.sueldo}»)` : ""}` : d.sueldo,
@@ -917,6 +926,49 @@ function ResultadosClave({ c }: { c: Candidato }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato; «Inconsistencia» si difieren. */
+function ComparativoIndispensables({ c }: { c: Candidato }) {
+  const filas = c.comparativoIndispensables ?? [];
+  if (!filas.length || !filas.some((f) => f.cv != null)) return null;
+  return (
+    <Card className="p-3.5">
+      <Eyebrow>Indispensables: CV vs respuesta del candidato</Eyebrow>
+      <div className="scroll-x mt-1.5">
+        <table className="w-full text-left text-[12px]">
+          <thead className="text-ink-3">
+            <tr>
+              <th className="py-1 pr-3 font-medium">Requisito</th>
+              <th className="py-1 pr-3 font-medium">CV</th>
+              <th className="py-1 pr-3 font-medium">Respuesta del candidato</th>
+              <th className="py-1 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f, i) => (
+              <tr key={i} className="border-t border-border-faint align-top">
+                <td className="py-1.5 pr-3 text-ink-2">{f.requisito}</td>
+                <td className={cn("py-1.5 pr-3 font-semibold", f.cv === "Acreditado" ? "text-good" : f.cv ? "text-warn" : "text-ink-3")}>
+                  {f.cv ?? "Sin CV"}
+                </td>
+                <td className="py-1.5 pr-3 text-ink-2">
+                  {f.respuesta ? `${f.cumple === false ? "No" : f.cumple ? "Sí" : "Sin concluir"} («${f.respuesta}»)` : "Sin respuesta"}
+                </td>
+                <td className="py-1.5">
+                  {f.inconsistencia && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-warn/10 px-2 py-0.5 text-[11px] font-semibold text-warn">
+                      <AlertTriangle className="h-3 w-3" /> Inconsistencia
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -959,6 +1011,7 @@ function ResumenSinRuta({ c }: { c: Candidato }) {
   return (
     <div className="flex flex-col gap-3">
       <ResultadosClave c={c} />
+      <ComparativoIndispensables c={c} />
       <FortalezasYPuntos c={c} />
     </div>
   );

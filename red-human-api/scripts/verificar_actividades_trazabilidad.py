@@ -199,9 +199,9 @@ with TestClient(app) as client:
     falta = [x["id"] for x in sproc.faltantes(sproc.estado_pasos(post(PG)), sproc.desde_compuerta(post(PG)), "Contratación")]
     check("cv" not in falta, "ruta anterior a este cambio (sin etapa base): solo revisa su etapa actual (retrocompatible)")
     s = seg(PG)
-    check(paso(s, "cv")["condicion"] == "aprobacion" and paso(s, "tec")["condicion"] == "opcional"
+    check(paso(s, "cv")["condicion"] == "completarse" and paso(s, "tec")["condicion"] == "opcional"
           and paso(s, "solicitud")["condicionTexto"] == "Requiere completarse",
-          "cada actividad dice su condición: Requiere completarse / Requiere aprobación / Opcional")
+          "cada actividad dice su condición (Cambio 22: el Análisis de CV solo requiere completarse)")
 
     # ================= 3 + 4. Médica en dos fases + trazabilidad =================
     print("\n--- 3. Médica estricta en dos fases + trazabilidad por destinatario ---")

@@ -332,8 +332,20 @@ export interface Candidato {
     sueldo?: string;
     sueldoAcepta?: boolean | null;
     sueldoOfrecido?: string;
+    /** Cambio 24 (ruta corporativa): expectativa de sueldo; sobre tope = más de 20 % arriba del de la vacante. */
+    sueldoExpectativa?: number | null;
+    sueldoSobreTope?: boolean;
     alerta: "alerta" | "no_recomendable" | null;
   } | null;
+  /** Cambio 22: por indispensable, lo que acredita el CV contra lo que respondió el candidato. */
+  comparativoIndispensables?: {
+    requisito: string;
+    cv: "Acreditado" | "No acreditado" | null;
+    respuesta: string;
+    fuente: string;
+    cumple: boolean | null;
+    inconsistencia: boolean;
+  }[];
   pideCv?: boolean;
   experiencia: string;
   ubicacion: string;

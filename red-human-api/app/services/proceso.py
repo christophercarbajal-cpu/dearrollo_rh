@@ -85,6 +85,8 @@ def _id_paso(valor, usados: set) -> str:
 def _regla(crudo, tipo: str) -> dict:
     crudo = crudo if isinstance(crudo, dict) else {"tipo": crudo} if isinstance(crudo, str) else {}
     regla = crudo.get("tipo") or TIPOS_PASO[tipo]["regla"]
+    if tipo == "analisis_cv":
+        regla = "ninguna"  # Cambio 22: sin «mínimo 70» — el Análisis de CV nunca detiene la ruta
     if regla not in REGLAS_APROBACION:
         raise ErrorProceso(400, f"Condición de avance inválida en «{TIPOS_PASO[tipo]['nombre']}». Usa una de: {', '.join(REGLAS_APROBACION)}.")
     salida = {"tipo": regla}
@@ -955,10 +957,15 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
                 "detalle": {"cumple": "Cumple", "revision": "En revisión", "no_cumple": "No cumple"}.get(p.estado, "Completado"),
                 "revisadoPor": "Revisado por: Red Human"}
     if tipo == "analisis_cv":
+        # Cambio 22 (2026-10-12): el Análisis de CV NUNCA detiene la ruta ni pide decisión de RH (no hay «mínimo 70»):
+        # al terminar se cumple y la ruta pasa directo al prefiltro de WhatsApp, que pregunta las brechas del CV.
         hay_cv = bool(a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"))
-        if not hay_cv or not p.score:
-            return {**base, "espera": "Falta el CV del candidato"}
-        return _con_score(base, regla, int(p.score))
+        if not hay_cv or p.score is None:
+            return {**base, "espera": "Análisis de CV en proceso" if analisis_cv_en_proceso(p) else "Falta el CV del candidato"}
+        brechas = [b for b in a.get("brechas") or [] if str(b).strip()]
+        return {**base, "estado": "completada", "resultado": "con_observaciones" if brechas else "favorable", "cumple": True,
+                "detalle": f"{int(p.score)}/100" + (f" · {len(brechas)} brecha(s) a preguntar en el prefiltro" if brechas else ""),
+                "score": int(p.score), "revisadoPor": "Revisado por: Red Human"}
     # entrevista_agente / entrevista_whatsapp / llamada_agente: cada actividad lee SOLO sus entrevistas (2026-10-09)
     entrevistas = entrevistas_de_paso(p, tipo)
     evaluada = next((e for e in reversed(entrevistas) if e.estado == "evaluada" and e.evaluacion), None)
@@ -1023,6 +1030,21 @@ def _paso_solicitud(paso: dict, p: Postulacion) -> dict:
     via = {"formulario": "web", "web": "web", "whatsapp": "WhatsApp", "telegram": "Telegram"}.get(p.origen or "", p.origen or "web")
     return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"Solicitud recibida por {via}",
             "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(p.consentimiento_fecha or p.creado_en)}
+
+
+def es_corporativa(p_o_pasos) -> bool:
+    """Cambio 24 (2026-10-12): ruta corporativa = la ruta trae «Análisis de CV» (Corporativos o una propia con CV)."""
+    pasos = p_o_pasos if isinstance(p_o_pasos, list) else ((getattr(p_o_pasos, "proceso", None) or {}).get("pasos") or [])
+    return any(isinstance(x, dict) and x.get("tipo") == "analisis_cv" and not x.get("heredado") for x in pasos)
+
+
+def analisis_cv_en_proceso(p: Postulacion) -> bool:
+    """El candidato ya mandó su CV (archivo de la persona) pero el análisis todavía no termina."""
+    a = p.analisis or {}
+    if a.get("requisitos_cumplidos") or a.get("brechas") or a.get("fortalezas_cv"):
+        return False
+    c = p.candidato
+    return bool(c is not None and any(x.tipo == "cv" for x in (c.archivos or [])))
 
 
 def _con_score(base: dict, regla: dict, score: int) -> dict:
@@ -1280,7 +1302,8 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
     precarga = precarga or {}
     if not tiene_proceso(p):
         return []
-    pasos = p.proceso["pasos"]
+    # Cambio 22: el Análisis de CV nunca pide aprobación, aunque una ruta congelada antes guarde «calificación mínima»
+    pasos = [{**x, "regla": {"tipo": "ninguna"}} if x.get("tipo") == "analisis_cv" else x for x in p.proceso["pasos"]]
     if solo_evaluables:
         pasos = [x for x in pasos if x["tipo"] in TIPOS_PASO_EVALUACION or x["tipo"] == "analisis_cv" or x["tipo"] in TIPOS_PASO_ENTREVISTA_IA]
     evs = _evaluaciones_de(p, evaluaciones)

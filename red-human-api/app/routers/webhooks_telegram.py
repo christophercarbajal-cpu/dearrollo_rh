@@ -163,8 +163,10 @@ def _postulacion_demo(db: Session, payload: str):
     if tipo != "p" or not valor:
         return None
     p = db.query(Postulacion).filter(Postulacion.telegram_token == valor).first()
-    if p is None or not p.activa or not telegram.telefono_10(p.telefono) or not telegram_demo(db, p.cuenta):
+    if p is None or not telegram.telefono_10(p.telefono) or not telegram_demo(db, p.cuenta):
         return None
+    if not p.activa and canal_proceso.estado_start(p) != "descartado":
+        return None  # Cambio 23: una cerrada solo se abre para decirle que fue descartada
     return p
 
 
@@ -173,6 +175,9 @@ async def _abrir_demo(db: Session, ch, p: Postulacion, msg: dict) -> dict:
     estado actual. Nunca valida el número ni pide el contacto."""
     _tipo, _valor, paso = telegram.separar_inicio(msg.get("start") or "")
     tel = telegram.telefono_10(p.telefono)
+    if not p.activa:  # Cambio 23: descartada — solo se le contesta su estado (el chat no se amarra)
+        with en_conversacion("telegram", tel):
+            return await _responder_estado(db, p, tel, "descartado")
     anterior = {"telefono": ch.telefono or "", "postulacion_id": ch.postulacion_id}
     # Cambio 17: el chat conserva el número REAL que compartió; la conversación de la liga demo usa el del formulario
     ch.postulacion_id = p.id
@@ -267,6 +272,8 @@ async def _iniciar(db: Session, tel: str, payload: str, msg: dict) -> dict:
 
     p = db.query(Postulacion).filter(Postulacion.telegram_token == valor).first()
     with en_conversacion("telegram", tel):
+        if p is not None and not p.activa and canal_proceso.estado_start(p) == "descartado" and telegram.telefono_10(p.telefono) == tel:
+            return await _responder_estado(db, p, tel, "descartado")  # Cambio 23
         if p is None or not p.activa:
             await enviar_mensaje(tel, "Esta liga ya no está vigente. Escríbeme «Hola» y te muestro las vacantes disponibles. 🙂")
             return {"ok": True, "accion": "liga_no_vigente"}
@@ -286,6 +293,16 @@ async def _continuar_postulacion(db: Session, p: Postulacion, tel: str, paso: st
         fijar_conversacion(p)  # abrir la liga es una acción del candidato
         registrar(db, "sistema", "telegram_vinculado", "postulacion", p.codigo, {"chat_id": msg["chat_id"], "paso": paso})
         db.commit()
+        # Cambio 23: el «/start» responde SIEMPRE sobre la postulación de la liga, aunque la persona tenga otras abiertas
+        base = {**base, "postulacion_forzada": p.codigo}
+        estado = "" if paso else canal_proceso.estado_start(p)
+        if estado in ("cv_en_proceso", "en_espera"):
+            return await _responder_estado(db, p, tel, estado)
+        if estado == "cv_terminado":
+            # Análisis de CV terminado → aviso y empieza el prefiltro de WhatsApp en el mismo chat
+            await _responder_estado(db, p, tel, estado)
+            r = await procesar_entrante(db, telegram.mensaje_para_agente(base, tel))
+            return {**r, "estadoStart": estado}
         if not paso and (p.espera_respuesta or not p.consentimiento):
             return await procesar_entrante(db, telegram.mensaje_para_agente(base, tel))
         r = canal_proceso.respuesta_paso(db, p, paso) if paso else (
@@ -297,6 +314,16 @@ async def _continuar_postulacion(db: Session, p: Postulacion, tel: str, paso: st
         guardar_mensaje(db, p, "assistant", r["texto"], "whatsapp", envio)
         db.commit()
         return {"ok": True, "accion": "paso_proceso" if paso else "seguimiento_proceso", "postulacion": p.codigo, "paso": paso, "envio": envio}
+
+
+async def _responder_estado(db: Session, p: Postulacion, tel: str, estado: str) -> dict:
+    """Cambio 23: texto EXACTO del estado de la postulación («/start» de su liga)."""
+    texto = canal_proceso.texto_start(p, estado)
+    envio = await enviar_mensaje(tel, texto, cuenta_id=p.cuenta_id)
+    guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
+    registrar(db, "sistema", "telegram_start_estado", "postulacion", p.codigo, {"estado": estado})
+    db.commit()
+    return {"ok": True, "accion": "estado_" + estado, "postulacion": p.codigo, "estadoStart": estado, "texto": texto, "envio": envio}
 
 
 async def _iniciar_vacante(db: Session, tel: str, codigo: str, msg: dict, base: dict) -> dict:

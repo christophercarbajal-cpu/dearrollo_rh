@@ -270,6 +270,8 @@ class CitaIn(BaseModel):
     usar_teams: bool = True  # Fase 7B: con Teams conectado la videollamada se crea sola
     hasta: str = ""  # 2026-10-10: fin del rango de hora (opcional, 11:00)
     instrucciones: Optional[str] = None  # 2026-10-10: «Instrucciones (opcional)» de la cita → «📝 Indicaciones: …»
+    # Cambio 21: «Indicaciones para el entrevistador» (opcional; solo para él, nunca al candidato)
+    indicaciones_entrevistador: Optional[str] = None
     # 2026-10-10: adjuntos de la última cita de la vacante que RH reutiliza ({evaluacion, ids}); el servidor los valida
     adjuntos_previos: Optional[dict] = None
 
@@ -303,7 +305,9 @@ def _guion_entrevista_humana(p: Postulacion, paso: Optional[dict]) -> dict:
         g, con_ia = ia.guion_entrevista_humana(tipo, v.titulo if v else "la vacante", (v.requisitos if v else "") or "", p.experiencia or "")
     except Exception:  # noqa: BLE001
         return {}
-    return {**g.model_dump(), "tipo": tipo, "tipoTexto": TIPOS_ENTREVISTA_HUMANA.get(tipo, tipo), "ia": con_ia}
+    g = g.model_dump()
+    g["preguntas"] = sev.guion_sin_prefiltro(g.get("preguntas") or [], p)  # Cambio 21: nada de lo que ya respondió en el prefiltro
+    return {**g, "tipo": tipo, "tipoTexto": TIPOS_ENTREVISTA_HUMANA.get(tipo, tipo), "ia": con_ia}
 
 
 async def _cita_con_teams(db: Session, p: Postulacion, cita: CitaIn, evaluador: dict, actual=None) -> dict:
@@ -403,6 +407,7 @@ async def crear_evaluacion(codigo: str, datos: CrearEvaluacionIn, db: Session = 
     cita_registro = datos.forma == "registro_directo" and scitas.requiere_cita(paso)
     if datos.cita and (datos.forma != "registro_directo" or cita_registro):
         campos.update(await _cita_con_teams(db, p, datos.cita, evaluador))
+        campos["indicaciones_entrevistador"] = (datos.cita.indicaciones_entrevistador or "").strip()[:2000]
         adjuntos = scitas.sanear_metadata(datos.cita_adjuntos) if datos.cita_adjuntos else []
         if datos.cita.adjuntos_previos:  # adjuntos de la última cita de la vacante que RH dejó en el formulario
             adjuntos += scitas.adjuntos_de_referencia(db, p, datos.cita.adjuntos_previos)
@@ -556,6 +561,7 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
             for k, v in nuevo.items():
                 setattr(ev, k, v)
     reprogramada = False
+    solo_entrevistador = False
     aviso_teams = None
     if datos.quitar_cita and ev.cita_fecha_hora:
         anteriores["cita_fecha_hora"] = fechas.iso(ev.cita_fecha_hora)
@@ -592,13 +598,24 @@ async def modificar(codigo: str, datos: ModificarIn, db: Session = Depends(get_d
         # 2026-10-10: cambiar las indicaciones de una cita también es «Tu cita cambió» (UN solo aviso con los datos nuevos)
         if "instrucciones" in anteriores and not primera:
             reprogramada = True
+        ie = datos.cita.indicaciones_entrevistador
+        if ie is not None and ie.strip() != (ev.indicaciones_entrevistador or ""):
+            anteriores["indicaciones_entrevistador"], ev.indicaciones_entrevistador = ev.indicaciones_entrevistador, ie.strip()[:2000]
+            # Cambio 21: si SOLO cambian sus indicaciones, «Tu cita cambió» va solo al entrevistador (misma liga)
+            if not reprogramada and not primera:
+                solo_entrevistador = True
     if not anteriores and not reprogramada and datos.cita is None:
         return _respuesta(db, ev, u)
     sev.evento(db, ev, "reprogramada" if reprogramada else "modificada", u.nombre, anteriores=anteriores, usuario_id=u.id,
                cita=fechas.iso(ev.cita_fecha_hora))
-    evento_aviso = "evaluacion_reprogramada" if reprogramada and not (datos.cita is not None and primera) else "evaluacion_asignada"
-    resultados = await sev.notificar(db, ev, p, evento_aviso, u.nombre,
-                                     override=override_de(datos.notificar)) if (reprogramada or "evaluador" in anteriores) else []
+    evento_aviso = "evaluacion_reprogramada" if (reprogramada or solo_entrevistador) and not (datos.cita is not None and primera) \
+        else "evaluacion_asignada"
+    if solo_entrevistador and not reprogramada and "evaluador" not in anteriores:
+        resultados = await sev.notificar(db, ev, p, "evaluacion_reprogramada", u.nombre, override=override_de(datos.notificar),
+                                         audiencias={"entrevistador"})
+    else:
+        resultados = await sev.notificar(db, ev, p, evento_aviso, u.nombre,
+                                         override=override_de(datos.notificar)) if (reprogramada or "evaluador" in anteriores) else []
     registrar(db, u.nombre, "evaluacion_modificada", "postulacion", p.codigo,
               {"evaluacion": ev.codigo, "cambios": list(anteriores), "reprogramada": reprogramada, "correo_rh": u.correo, "notificaciones": resultados})
     _tocar(p)
@@ -625,6 +642,8 @@ async def reprogramar(codigo: str, datos: ReprogramarIn, db: Session = Depends(g
         setattr(ev, k, v)
     if datos.cita.instrucciones is not None:
         ev.instrucciones = datos.cita.instrucciones.strip()[:4000]
+    if datos.cita.indicaciones_entrevistador is not None:
+        ev.indicaciones_entrevistador = datos.cita.indicaciones_entrevistador.strip()[:2000]
     with _negocio():
         if ev.estado == "no_realizada":
             sev.cambiar_estado(db, ev, "pendiente", u.nombre, usuario_id=u.id, motivo="")
@@ -1348,7 +1367,11 @@ def _expediente_para_evaluador(db: Session, ev: Evaluacion, p: Postulacion) -> d
     base = {
         "candidato": {"nombre": p.nombre or "", "telefono": (c.telefono if c else "") or "", "correo": (c.correo if c else "") or ""},
         "vacante": {"titulo": v.titulo if v else "", "requisitos": (v.requisitos if v else "") or "", "perfilIdeal": (v.perfil_ideal if v else "") or "",
-                    "empresa": nombre_empresa_candidato(v) if v else ""},
+                    "empresa": nombre_empresa_candidato(v) if v else "",
+                    # Cambio 21: la lista de requisitos SIN duplicados (indispensables + deseables)
+                    "requisitosLista": sev.requisitos_sin_duplicados(v)},
+        # Cambio 21: «Lo que ya respondió en el prefiltro» (el entrevistador no lo vuelve a preguntar)
+        "prefiltro": sev.respuestas_prefiltro(p),
         "cv": {"resumen": cv.get("resumen_profesional") or "", "habilidades": cv.get("habilidades") or [], "estudios": cv.get("estudios") or [],
                "idiomas": cv.get("idiomas") or [], "experiencia": cv.get("experiencia") or cv.get("experiencia_laboral") or [],
                "anosExperiencia": cv.get("anos_experiencia")},
@@ -1382,8 +1405,15 @@ def publica(token: str, db: Session = Depends(get_db)):
     with _negocio():
         p = sev.postulacion_de(db, ev)
     registrada_por_rh = ev.estado == "con_resultado" and ev.registrada_via == "sistema"
+    d_ev = evaluacion_dict(ev, publico=True)
+    if ev.cita_fecha_hora:
+        # Cambio 21: las instrucciones de la cita son las del CANDIDATO — el entrevistador solo ve las suyas
+        d_ev["instrucciones"] = ""
+    d_ev["indicacionesEntrevistador"] = ev.indicaciones_entrevistador or ""
+    if isinstance(d_ev.get("guion"), dict) and d_ev["guion"].get("preguntas"):
+        d_ev["guion"] = {**d_ev["guion"], "preguntas": sev.guion_sin_prefiltro(d_ev["guion"]["preguntas"], p)}
     return {
-        "evaluacion": evaluacion_dict(ev, publico=True),
+        "evaluacion": d_ev,
         "cancelada": ev.estado == "cancelada",
         "enEsperaConsentimiento": bool(sev.bloqueo_consentimiento(ev)),
         "yaTieneResultado": ev.estado == "con_resultado",

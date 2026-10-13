@@ -3448,6 +3448,7 @@ export function ligaMapa(direccion: string, contexto = "") {
 /** Precarga del formulario de cita (2026-10-10): la ÚLTIMA cita agendada en la vacante (sin fecha ni hora). */
 export interface UltimaCita {
   evaluacion: string; tipo: string; modalidad: ModalidadCita | ""; direccion: string; instrucciones: string; adjuntos: AdjuntoCita[];
+  indicacionesEntrevistador?: string;
   evaluador: { tipo: "interno" | "externo"; usuario_id: number | null; contacto_id: number | null; nombre: string; correo: string; whatsapp: string } | null;
 }
 export function fetchUltimaCita(codigoPostulacion: string, tipo: string) {
@@ -3457,7 +3458,7 @@ export function fetchUltimaCita(codigoPostulacion: string, tipo: string) {
 export interface CitaSnake {
   fecha: string; hora: string; modalidad: string; direccion?: string; liga_videollamada?: string; telefono?: string; usar_teams?: boolean; hasta?: string;
   /** 2026-10-10: «Instrucciones (opcional)» → «📝 Indicaciones: …» y adjuntos reutilizados de la última cita de la vacante. */
-  instrucciones?: string; adjuntos_previos?: { evaluacion: string; ids: string[] } | null;
+  instrucciones?: string; indicaciones_entrevistador?: string; adjuntos_previos?: { evaluacion: string; ids: string[] } | null;
 }
 export const MAX_ADJUNTOS_CITA = 5;
 export const MAX_MB_ADJUNTO_CITA = 10;
@@ -3487,6 +3488,8 @@ export interface Evaluacion {
   consentimiento: CondicionConsentimiento; consentimientoTexto: string; consentimientoEn: string | null; ligaConsentimiento: string | null;
   evaluador: { tipo: "interno" | "externo" | ""; usuarioId: number | null; contactoId: number | null; nombre: string; correo: string; whatsapp: string } | null;
   instrucciones: string; ligaExternaCandidato: string; pruebaId: number | null; proveedor: string; idProveedor: string;
+  /** Cambio 21: «Indicaciones para el entrevistador» de la cita (nunca le llegan al candidato). */
+  indicacionesEntrevistador?: string;
   claveProveedor: string | null; urlCandidatoProveedor: string | null; usaPsicometricas: boolean; pasoIntegrada: string | null; siguientePaso: string | null;
   /** 2026-10-07: psicometría integrada → solo Pendiente / En curso / Completada. */
   estadoProveedor?: "pendiente" | "en_curso" | "completada" | null; estadoProveedorTexto?: string;
@@ -3526,6 +3529,8 @@ export interface EvaluadorEntrada { tipo: "interno" | "externo"; usuarioId?: num
 export interface CitaEntrada {
   fecha: string; hora: string; modalidad: ModalidadCita; direccion?: string; ligaVideollamada?: string; telefono?: string; usarTeams?: boolean; hasta?: string;
   instrucciones?: string; adjuntosPrevios?: { evaluacion: string; ids: string[] } | null;
+  /** Cambio 21: solo para el entrevistador (aviso y su liga). */
+  indicacionesEntrevistador?: string;
 }
 export interface DatosResultado {
   conclusion: string; comentarios: string; realizadaPor: string; archivos: File[]; version: number; modo: "registrar" | "corregir" | "complementar";
@@ -3540,6 +3545,7 @@ function citaSnake(c?: CitaEntrada | null): CitaSnake | undefined {
   return {
     fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion ?? "", liga_videollamada: c.ligaVideollamada ?? "", telefono: c.telefono ?? "",
     usar_teams: c.usarTeams ?? true, hasta: c.hasta ?? "", ...(c.instrucciones !== undefined ? { instrucciones: c.instrucciones } : {}),
+    ...(c.indicacionesEntrevistador !== undefined ? { indicaciones_entrevistador: c.indicacionesEntrevistador } : {}),
     ...(c.adjuntosPrevios ? { adjuntos_previos: c.adjuntosPrevios } : {}),
   };
 }
@@ -3635,7 +3641,9 @@ export function urlAdjuntoEvaluacion(codigo: string, adjuntoId: string, descarga
 /* Liga del evaluador (sin sesión; el token es la credencial) — la usa la MISMA pantalla de resultado. */
 export interface ExpedienteEvaluador {
   candidato: { nombre: string; telefono: string; correo: string };
-  vacante: { titulo: string; requisitos: string; perfilIdeal: string; empresa: string };
+  vacante: { titulo: string; requisitos: string; perfilIdeal: string; empresa: string; requisitosLista?: string[] };
+  /** Cambio 21: «Lo que ya respondió en el prefiltro». */
+  prefiltro?: { pregunta: string; respuesta: string; fuente: string }[];
   cv: { resumen: string; habilidades: string[]; estudios: string[]; idiomas: string[]; experiencia: (string | { puesto?: string; empresa?: string; periodo?: string })[]; anosExperiencia?: number | null };
   archivos: { id: number; tipo: string; nombre: string; mime: string }[];
   analisis: { requisitosCumplidos: string[]; brechas: string[]; fortalezas: string[]; alertas: string[]; resumen: string } | null;

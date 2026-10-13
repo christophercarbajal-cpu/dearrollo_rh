@@ -456,6 +456,26 @@ def _mensaje_evaluacion(evento: str, audiencia: str, canal: str, c: Postulacion,
         if canal == "whatsapp":
             return texto
         return plantillas_correo.html_aviso(f"Cita cancelada — {puesto}", texto, d.get("empresa") or "", [])
+    if audiencia == "entrevistador" and d.get("con_cita") and evento != "evaluacion_cancelada":
+        # Cambio 21: aviso FIJO al entrevistador (todos los tipos con cita): sus indicaciones + la liga de su evaluación;
+        # nunca las indicaciones ni los adjuntos del candidato
+        from .citas import texto_entrevistador
+
+        actividad = {"entrevista_humana": "entrevista", "medica": "evaluación médica", "tecnica": "evaluación técnica",
+                     "psicometrica": "psicometría"}.get(d.get("tipo"), "evaluación")
+        puesto = d.get("vacante") or (c.vacante.titulo if c.vacante else "la vacante")
+        evaluador = (getattr(eh, "entrevistador", "") or d.get("evaluador") or "").split(" ")[0]
+        texto = texto_entrevistador(evento, evaluador, actividad, c.nombre or "el candidato", puesto, d.get("empresa") or "", d)
+        if canal == "whatsapp":
+            return texto
+        filas = [(k, v) for k, v in (("Candidato", c.nombre), ("Vacante", puesto), ("Fecha", d.get("fecha_texto")),
+                                      ("Hora", d.get("horario_texto")), ("Lugar", d.get("direccion") if d.get("modalidad") == "Presencial" else ""),
+                                      ("Videollamada", d.get("liga_videollamada")), ("Indicaciones para ti", d.get("indicaciones_entrevistador")))
+                 if v]
+        cta = ("Abrir la evaluación", d["liga_evaluador"]) if d.get("liga_evaluador") else None
+        asunto = {"evaluacion_asignada": f"Nueva cita: {c.nombre} — {puesto}", "evaluacion_reprogramada": f"Tu cita cambió: {c.nombre} — {puesto}",
+                  "recordatorio_evaluacion": f"Recordatorio: {c.nombre} — {puesto}"}[evento]
+        return plantillas_correo.html_aviso(asunto, texto, d.get("empresa") or "", filas, cta)
     if (audiencia == "candidato" and d.get("presencial") and d.get("con_cita") and d.get("modalidad") == "Presencial"
             and evento != "evaluacion_cancelada" and (canal == "whatsapp" or d.get("tipo") != "entrevista_humana")):
         # 2026-10-10 (Cambio 2): aviso FIJO de la cita al candidato — fecha, rango de hora, lugar, mapa y adjuntos

@@ -10,6 +10,7 @@
   que toca la etapa es ASIGNAR una entrevista humana (lo hace el router, comportamiento actual).
 """
 
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -703,6 +704,9 @@ def datos_evaluacion(ev: Evaluacion, p: Postulacion) -> dict:
         "adjuntos": len(ev.cita_adjuntos or []),
         # 2026-10-10: «👤 Pregunta por: …» en el aviso de la cita
         "evaluador": (ev.evaluador_nombre or "") if ev.forma == "asignada" else "",
+        # Cambio 21: aviso al entrevistador (texto fijo, sin las indicaciones ni los adjuntos del candidato)
+        "indicaciones_entrevistador": ev.indicaciones_entrevistador or "", "candidato": p.nombre or "",
+        "telefono_cita": ev.cita_telefono or "", "mapa_evaluador": ev.cita_mapa or "",
     }
 
 
@@ -828,12 +832,90 @@ def texto_aviso(db: Session, ev: Evaluacion, p: Postulacion, audiencia: str = "e
         return ""
 
 
+# ------------------------------------------------------------ Cambio 21: liga del entrevistador
+
+
+def requisitos_sin_duplicados(v) -> List[str]:
+    """Indispensables y deseables de la vacante en una sola lista, sin repetidos (mismo texto normalizado)."""
+    if v is None:
+        return []
+    from ..routers.vacantes import requisitos_lista
+
+    vistos, salida = set(), []
+    for r in list(requisitos_lista(v.requisitos or "")) + [str(x) for x in (getattr(v, "requisitos_deseables", None) or [])
+                                                          if isinstance(x, str)]:
+        clave = " ".join(_sin_acentos(str(r)).lower().split()).strip(" .")
+        if clave and clave not in vistos:
+            vistos.add(clave)
+            salida.append(str(r).strip())
+    return salida
+
+
+def _sin_acentos(t: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", t or "") if unicodedata.category(c) != "Mn")
+
+
+def respuestas_prefiltro(p: Postulacion) -> List[dict]:
+    """«Lo que ya respondió en el prefiltro»: pregunta → respuesta (formulario web y chat) más los datos del chat."""
+    salida: List[dict] = []
+    vistos = set()
+
+    def agregar(pregunta: str, respuesta: str, fuente: str = "") -> None:
+        clave = _sin_acentos(pregunta).lower().strip()
+        if pregunta and respuesta and clave not in vistos:
+            vistos.add(clave)
+            salida.append({"pregunta": pregunta.strip(), "respuesta": str(respuesta).strip()[:300], "fuente": fuente})
+
+    try:
+        from . import prefiltro_conversacional as pconv
+
+        r = pconv.resumen(p)
+        for x in (r or {}).get("criterios") or []:
+            agregar(x.get("pregunta") or x.get("criterio") or "", x.get("respuesta") or "", x.get("fuente") or "")
+    except Exception as ex:  # noqa: BLE001 — la liga del entrevistador nunca se cae por esto
+        print(f"[evaluaciones] respuestas del prefiltro de {p.codigo}: {ex}")
+    a = p.analisis or {}
+    for x in a.get("respuestas_prefiltro") or []:
+        if isinstance(x, dict):
+            agregar(x.get("pregunta") or x.get("criterio") or "", x.get("respuesta") or "", "whatsapp")
+    for x in a.get("respuestas_web") or []:
+        if isinstance(x, dict):
+            agregar(x.get("pregunta") or "", x.get("respuesta") or "", "web")
+    return salida
+
+
+def guion_sin_prefiltro(preguntas: List[str], p: Postulacion) -> List[str]:
+    """El guion sugerido del entrevistador NO repite lo del prefiltro: fuera los temas del prefiltro (sueldo, traslado,
+    colonia, transporte, escolaridad) y las preguntas sobre un criterio que el candidato ya respondió."""
+    from .entrevista_operativa import tema_de_prefiltro
+
+    previas = respuestas_prefiltro(p)
+    claves_prev = [set(re.findall(r"[a-z]{5,}", _sin_acentos(x["pregunta"]).lower())) - _VACIAS for x in previas]
+    salida = []
+    for q in preguntas or []:
+        t = _sin_acentos(str(q)).lower()
+        if tema_de_prefiltro(t) or re.search(r"\b(escolaridad|estudiaste|secundaria|preparatoria|prepa|primaria|hasta que ano)\b", t):
+            continue
+        palabras = set(re.findall(r"[a-z]{5,}", t)) - _VACIAS
+        if any(c and len(c & palabras) >= max(2, (len(c) + 1) // 2) for c in claves_prev):
+            continue
+        salida.append(q)
+    return salida
+
+
+_VACIAS = {"tienes", "cuentas", "puedes", "experiencia", "trabajo", "puesto", "vacante", "cuantos", "cuanto", "alguna", "sobre",
+           "donde", "desde", "como", "cuales", "cual", "estas", "esta", "este"}
+
+
 def firma_cita(ev: Evaluacion) -> str:
     """Identifica UNA cita (fecha, rango, lugar/liga y a quién se le avisa): cambia si se reprograma o cambia el evaluador."""
     if not ev.cita_fecha_hora:
         return ""
     return "|".join(str(x or "") for x in (fechas.iso(ev.cita_fecha_hora), fechas.iso(ev.cita_hasta), ev.cita_modalidad, ev.cita_direccion,
-                                           ev.cita_liga_videollamada, ev.evaluador_correo, ev.evaluador_whatsapp))
+                                           ev.cita_liga_videollamada, ev.evaluador_correo, ev.evaluador_whatsapp,
+                                           ev.indicaciones_entrevistador))
 
 
 def ultimo_aviso_entrevistador(db: Session, ev: Evaluacion, firma: str, destinatario: str = "entrevistador") -> Optional[datetime]:

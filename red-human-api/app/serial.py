@@ -1499,6 +1499,7 @@ def evaluacion_dict(ev, usuario=None, *, publico: bool = False) -> dict:
             "whatsapp": "" if publico else (ev.evaluador_whatsapp or ""),
         } if ev.forma == "asignada" else None,
         "instrucciones": ev.instrucciones or "",
+        "indicacionesEntrevistador": ev.indicaciones_entrevistador or "",  # Cambio 21: solo para el entrevistador
         "pasoId": ev.paso_id or "",  # proceso configurable (2026-10-06)
         "guion": ev.guion or {},  # guion de la entrevista humana según su tipo
         "ligaExternaCandidato": ev.liga_externa_candidato or "",

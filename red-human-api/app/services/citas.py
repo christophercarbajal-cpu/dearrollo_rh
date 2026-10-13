@@ -141,6 +141,30 @@ def texto_candidato(evento: str, nombre: str, actividad: str, puesto: str, empre
     return "\n".join(lineas)
 
 
+def texto_entrevistador(evento: str, nombre: str, actividad: str, candidato: str, puesto: str, empresa: str, d: dict) -> str:
+    """Cambio 21 (2026-10-12): aviso FIJO de la cita al entrevistador / evaluador. Lleva SUS indicaciones («Indicaciones
+    para el entrevistador») y la liga de su evaluación (una sola por cita: la misma al reprogramar); nunca las
+    indicaciones ni los adjuntos del candidato."""
+    hola = f"Hola {nombre}" if nombre else "Hola"
+    donde = f"{puesto}{f' en {empresa}' if empresa else ''}"
+    inicio = {"evaluacion_asignada": f"{hola}, tienes una {actividad} con {candidato} para {donde}.",
+              "evaluacion_reprogramada": f"{hola}, tu cita cambió. Estos son los nuevos datos de la {actividad} con {candidato} para {donde}:",
+              "recordatorio_evaluacion": f"{hola}, te recordamos la {actividad} con {candidato} para {donde}."}[evento]
+    lineas = [inicio, f"📅 Fecha: {d.get('fecha_texto')}", f"🕘 Hora: {d.get('horario_texto')} ({fechas.ETIQUETA_ZONA})"]
+    if d.get("modalidad") == "Presencial":
+        if d.get("direccion"):
+            lineas.append(f"📍 Lugar: {d['direccion']}")
+    elif d.get("modalidad") == "Videollamada" and d.get("liga_videollamada"):
+        lineas.append(f"💻 Videollamada: {d['liga_videollamada']}")
+    elif d.get("modalidad") == "Teléfono":
+        lineas.append(f"📞 Llamada al candidato{': ' + d['telefono_cita'] if d.get('telefono_cita') else ''}")
+    if d.get("indicaciones_entrevistador"):
+        lineas.append(f"📝 Indicaciones para ti: {d['indicaciones_entrevistador']}")
+    if d.get("liga_evaluador"):
+        lineas.append(f"🔗 Expediente del candidato y registro del resultado: {d['liga_evaluador']}")
+    return "\n".join(lineas)
+
+
 def texto_cancelacion_reemplazo(nombre: str, actividad: str, puesto: str, d: dict) -> str:
     """La cita anterior se canceló porque RH programó otra para la misma actividad (los datos nuevos llegan aparte)."""
     cuando = " ".join(x for x in (d.get("fecha_texto"), f"a las {d['horario_texto']}" if d.get("horario_texto") else "") if x)
@@ -169,7 +193,9 @@ def ultima_cita_vacante(db, p, tipo: str = "") -> Optional[dict]:
         evaluador = {"tipo": ev.evaluador_tipo, "usuario_id": ev.evaluador_usuario_id, "contacto_id": ev.evaluador_contacto_id,
                      "nombre": ev.evaluador_nombre or "", "correo": ev.evaluador_correo or "", "whatsapp": ev.evaluador_whatsapp or ""}
     return {"evaluacion": ev.codigo, "tipo": ev.tipo, "evaluador": evaluador, "modalidad": ev.cita_modalidad or "",
-            "direccion": ev.cita_direccion or "", "instrucciones": instrucciones, "adjuntos": adjuntos_publicos(ev.cita_adjuntos)}
+            "direccion": ev.cita_direccion or "", "instrucciones": instrucciones, "adjuntos": adjuntos_publicos(ev.cita_adjuntos),
+            # Cambio 21: también las indicaciones para el entrevistador
+            "indicacionesEntrevistador": ev.indicaciones_entrevistador or ""}
 
 
 def adjuntos_de_referencia(db, p, ref) -> List[dict]:

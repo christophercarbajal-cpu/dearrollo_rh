@@ -788,6 +788,7 @@ function citaDesde(e: Evaluacion): EstadoCita {
     fecha: p.fecha, hora: p.hora, modalidad: (e.cita.modalidad || "Videollamada") as EstadoCita["modalidad"], direccion: e.cita.direccion,
     liga: e.cita.porTeams ? "" : e.cita.ligaVideollamada, telefono: e.cita.telefono, otraLiga: !e.cita.porTeams && Boolean(e.cita.ligaVideollamada),
     hasta: e.cita.hasta ? partesLocales(e.cita.hasta).hora : "", instrucciones: e.instrucciones ?? "", previos: null,
+    indicacionesEntrevistador: e.indicacionesEntrevistador ?? "",
   };
 }
 

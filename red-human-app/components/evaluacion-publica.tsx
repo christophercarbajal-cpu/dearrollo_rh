@@ -111,10 +111,31 @@ export function EvaluacionPublicaPagina({ token }: { token: string }) {
                 </dl>
               </Card>
             )}
-            {ev.instrucciones && (
+            {/* Cambio 21: solo las indicaciones PARA el entrevistador (las del candidato no se muestran aquí) */}
+            {ev.indicacionesEntrevistador && (
+              <Card className="mt-3 p-5">
+                <p className="text-sm font-semibold">Indicaciones para el entrevistador</p>
+                <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-ink-2">{ev.indicacionesEntrevistador}</p>
+              </Card>
+            )}
+            {ev.instrucciones && !ev.cita && (
               <Card className="mt-3 p-5">
                 <p className="text-sm font-semibold">Instrucciones</p>
                 <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-ink-2">{ev.instrucciones}</p>
+              </Card>
+            )}
+            {(exp.prefiltro?.length ?? 0) > 0 && (
+              <Card className="mt-3 p-5">
+                <p className="text-sm font-semibold">Lo que ya respondió en el prefiltro</p>
+                <p className="mt-1 text-[12px] text-ink-3">No hace falta volver a preguntarlo.</p>
+                <dl className="mt-2 flex flex-col gap-1.5 text-sm">
+                  {exp.prefiltro!.map((x, i) => (
+                    <div key={i} className="flex flex-col gap-0.5 border-t border-border-faint pt-1.5 first:border-t-0 first:pt-0 sm:flex-row sm:gap-3">
+                      <dt className="text-ink-3 sm:w-1/2">{x.pregunta}</dt>
+                      <dd className="font-medium text-ink-2 sm:w-1/2">{x.respuesta}</dd>
+                    </div>
+                  ))}
+                </dl>
               </Card>
             )}
             {ev.tipo === "referencias" && (
@@ -152,7 +173,12 @@ export function EvaluacionPublicaPagina({ token }: { token: string }) {
                   <Dato k="Correo" v={exp.candidato.correo || "—"} />
                   <Dato k="Vacante" v={exp.vacante.titulo || "—"} />
                 </dl>
-                {exp.vacante.requisitos && <p className="mt-3 text-xs leading-relaxed text-ink-3"><b className="text-ink-2">Requisitos:</b> {exp.vacante.requisitos}</p>}
+                {/* Cambio 21: requisitos sin duplicados */}
+                {(exp.vacante.requisitosLista?.length ?? 0) > 0 ? (
+                  <Lista titulo="Requisitos" items={exp.vacante.requisitosLista!} />
+                ) : exp.vacante.requisitos ? (
+                  <p className="mt-3 text-xs leading-relaxed text-ink-3"><b className="text-ink-2">Requisitos:</b> {exp.vacante.requisitos}</p>
+                ) : null}
                 {exp.vacante.perfilIdeal && <p className="mt-1 text-xs leading-relaxed text-ink-3"><b className="text-ink-2">Perfil ideal:</b> {exp.vacante.perfilIdeal}</p>}
               </Seccion>
 

@@ -2335,6 +2335,9 @@ class Evaluacion(Base):
     evaluador_whatsapp: Mapped[str] = mapped_column(String(30), default="")
     token_evaluador: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # liga sin cuenta; lo genera Red Human
     instrucciones: Mapped[str] = mapped_column(Text, default="")
+    # Cambio 21 (2026-10-12): «Indicaciones para el entrevistador» de la cita — SOLO las ve el entrevistador (aviso y su
+    # liga); nunca le llegan al candidato
+    indicaciones_entrevistador: Mapped[str] = mapped_column(Text, default="")
     # Proceso configurable (2026-10-06): paso del proceso que cumple esta evaluación ("" = agregada fuera del proceso)
     # y guion específico de la entrevista humana según su tipo (`TIPOS_ENTREVISTA_HUMANA`).
     paso_id: Mapped[str] = mapped_column(String(40), default="")

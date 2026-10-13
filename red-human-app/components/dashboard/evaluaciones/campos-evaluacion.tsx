@@ -181,9 +181,12 @@ export function SelectorEvaluador({ valor, onChange, internos, contactos, client
 export type EstadoCita = {
   fecha: string; hora: string; modalidad: ModalidadCita; direccion: string; liga: string; telefono: string; otraLiga: boolean; hasta: string;
   instrucciones: string; previos: { evaluacion: string; adjuntos: AdjuntoCita[] } | null;
+  /** Cambio 21: «Indicaciones para el entrevistador» (opcional; solo él las ve). */
+  indicacionesEntrevistador: string;
 };
 export const citaVacia: EstadoCita = {
   fecha: "", hora: "", modalidad: "Videollamada", direccion: "", liga: "", telefono: "", otraLiga: false, hasta: "", instrucciones: "", previos: null,
+  indicacionesEntrevistador: "",
 };
 
 /** Precarga con la última cita de la vacante: evaluador, modalidad, dirección, indicaciones y adjuntos — NUNCA fecha ni hora. */
@@ -192,6 +195,7 @@ export function citaDesdeUltima(u: UltimaCita, base: EstadoCita = citaVacia): Es
     ...base, fecha: "", hora: "", hasta: "",
     modalidad: (u.modalidad || base.modalidad) as ModalidadCita, direccion: u.direccion || base.direccion,
     instrucciones: u.instrucciones || base.instrucciones, previos: u.adjuntos.length ? { evaluacion: u.evaluacion, adjuntos: u.adjuntos } : null,
+    indicacionesEntrevistador: u.indicacionesEntrevistador || base.indicacionesEntrevistador,
   };
 }
 export function evaluadorDesdeUltima(u: UltimaCita): EstadoEvaluador | null {
@@ -227,6 +231,7 @@ export function citaEntrada(c: EstadoCita, teams: boolean): CitaEntrada {
     fecha: c.fecha, hora: c.hora, modalidad: c.modalidad, direccion: c.direccion.trim(),
     ligaVideollamada: porTeams ? "" : c.liga.trim(), telefono: c.telefono.trim(), usarTeams: porTeams, hasta: c.hasta || "",
     instrucciones: c.instrucciones.trim(),
+    indicacionesEntrevistador: c.indicacionesEntrevistador.trim(),
     adjuntosPrevios: c.previos && c.previos.adjuntos.length ? { evaluacion: c.previos.evaluacion, ids: c.previos.adjuntos.map((a) => a.id) } : null,
   };
 }
@@ -242,7 +247,8 @@ function contarAdjuntos(lista: { mime?: string; type?: string }[]): string {
 export function resumenMasDetalles(c: EstadoCita, archivos: File[] = [], conInstrucciones = true): string {
   const corto = (t: string) => (t.length > 28 ? `${t.slice(0, 28).trim()}…` : t);
   const adj = contarAdjuntos([...(c.previos?.adjuntos ?? []), ...archivos]);
-  return [c.hasta && `Hasta ${c.hasta}`, conInstrucciones && c.instrucciones.trim() && `Indicaciones: ${corto(c.instrucciones.trim())}`, adj]
+  return [c.hasta && `Hasta ${c.hasta}`, conInstrucciones && c.instrucciones.trim() && `Indicaciones: ${corto(c.instrucciones.trim())}`,
+    c.indicacionesEntrevistador.trim() && `Para el entrevistador: ${corto(c.indicacionesEntrevistador.trim())}`, adj]
     .filter(Boolean).join(" · ");
 }
 
@@ -305,7 +311,7 @@ export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones 
           className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-semibold text-ink-2 hover:text-ink">
           <span className={cn("inline-block transition-transform", abierto && "rotate-90")}>▸</span>
           <span className="truncate">{resumen || "Más detalles"}</span>
-          {!resumen && <span className="font-normal text-ink-3">(hasta, {conInstrucciones ? "instrucciones, " : ""}adjuntos)</span>}
+          {!resumen && <span className="font-normal text-ink-3">(hasta, {conInstrucciones ? "instrucciones, " : ""}indicaciones para el entrevistador, adjuntos)</span>}
         </button>
         {abierto && (
           <div className="flex flex-col gap-3 border-t border-border-soft p-3">
@@ -319,6 +325,11 @@ export function CamposCita({ valor, onChange, teams, adjuntos, conInstrucciones 
                   className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
               </Campo>
             )}
+            <Campo etiqueta="Indicaciones para el entrevistador (opcional)" ayuda="Solo le llegan al entrevistador (en su aviso y en su liga); el candidato no las ve.">
+              <textarea value={valor.indicacionesEntrevistador} onChange={(e) => onChange({ ...valor, indicacionesEntrevistador: e.target.value })} rows={2}
+                placeholder="Revisa su experiencia en montacargas, confirma disponibilidad de turnos…"
+                className="rounded-xl border border-border-soft bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
+            </Campo>
             {adjuntos && (
               <>
                 {valor.previos && valor.previos.adjuntos.length > 0 && (

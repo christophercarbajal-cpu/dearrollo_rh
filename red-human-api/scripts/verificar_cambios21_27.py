@@ -8,6 +8,11 @@ detiene la ruta (sin «mínimo 70») y sus brechas se vuelven preguntas del pref
 la ficha compara CV vs respuesta por indispensable; en la ruta corporativa no se pregunta colonia ni transporte, el
 sueldo es la expectativa (> 20 % arriba → Puntos por validar) y la entrevista con avatar pregunta «¿La quieres hacer
 ahora?» (sí → liga; no → 3 días).
+
+Bloque 2 (Cambios 21 y 26): «Indicaciones para el entrevistador» en la cita (precargadas con la última cita de la vacante);
+el aviso al entrevistador tiene texto fijo, sus indicaciones y la liga de su evaluación (una por cita, la misma al
+editar: «Tu cita cambió»), nunca las indicaciones ni los adjuntos del candidato; su página no muestra las instrucciones
+del candidato, deduplica requisitos, muestra «Lo que ya respondió en el prefiltro» y el guion no repite el prefiltro.
 """
 
 import asyncio
@@ -252,5 +257,118 @@ with TestClient(app) as client:
     db.commit()
     check(agenda_chat.decidir(p5, "Sí, de una vez") == {"accion": "ahora"} and agenda_chat.decidir(p5, "mejor luego")["accion"] == "plazo"
           and agenda_chat.decidir(p5, "¿cuánto dura?")["accion"] == "responder", "sí → ahora · no → plazo · otra cosa → repregunta")
+
+    # ================= Bloque 2 (Cambios 21 y 26) · citas y avisos al entrevistador =================
+    print("\n--- Cambios 21/26 · aviso al entrevistador ---")
+    import app.services.correo as correo_srv
+    import app.services.notificaciones as notif
+    import app.services.whatsapp as wa_srv
+    from app.deps import cuenta_actual, usuario_actual, usuario_decisor
+    from app.models import Evaluacion, Usuario, UsuarioCuenta
+    from app.services import evaluaciones as sev
+
+    ENV = []
+
+    async def _wa(tel, texto, *a, **k):
+        ENV.append(("whatsapp", str(tel), texto))
+        return {"enviado": True, "proveedor": "meta", "detalle": "ok"}
+
+    async def _wab(tel, texto, boton, url, *a, **k):
+        return await _wa(tel, f"{texto} {url}")
+
+    async def _correo(dest, asunto, html, adjuntos=None, *a, **k):
+        ENV.append(("correo", str(dest), asunto, html))
+        return {"enviado": True, "proveedor": "resend", "detalle": "ok"}
+
+    wa_srv.enviar_mensaje = notif.enviar_mensaje = _wa
+    wa_srv.enviar_con_boton = _wab
+    correo_srv.enviar_correo = notif.enviar_correo = _correo
+    admin = db.query(Usuario).filter(Usuario.rol == "Administrador").first()
+    cuenta2 = Cuenta(nombre="C21 citas", nombre_comercial="Citas MX", estado="Activa", slug="c21-citas")
+    db.add(cuenta2)
+    db.flush()
+    db.add(UsuarioCuenta(usuario_id=admin.id, cuenta_id=cuenta2.id))
+    for dep in (usuario_actual, usuario_decisor):
+        app.dependency_overrides[dep] = lambda: admin
+    app.dependency_overrides[cuenta_actual] = lambda: cuenta2
+    v2 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id != v.id).order_by(Vacante.id).first()
+    v2.cuenta_id, v2.cliente_id, v2.titulo, v2.responsable_id = cuenta2.id, None, "Montacarguista", admin.id
+    v2.requisitos = "Licencia de montacargas · Experiencia en almacén · licencia de montacargas."
+    v2.requisitos_deseables = ["Experiencia en almacén", "Disponibilidad para rolar turnos"]
+    v2.preguntas_filtro = [{"pregunta": "¿Tienes licencia de montacargas?", "tipo": "si_no", "valida": "Licencia de montacargas",
+                            "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No"]}]
+    v2.preguntas_filtro_whatsapp = []
+    v2.proceso = sproc.proceso_para_vacante(db, cuenta2.id, {}, {"pasos": [
+        {"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"}, {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
+    db.commit()
+    c2 = _crear_candidato(db, cuenta2.id, "Jorge Medina", "Portal", False, telefono="5512340001")
+    q = crear_postulacion(db, c2, v2, cuenta2.id, "web", consentimiento=True)
+    q.analisis = {"respuestas_web": [{"pregunta": "¿Tienes licencia de montacargas?", "respuesta": "Sí"}],
+                  "respuestas_prefiltro": [{"criterio": "Sueldo", "pregunta": "El sueldo es desde $10,000. ¿Te parece bien?",
+                                            "respuesta": "Sí, está bien"}]}
+    db.commit()
+    CITA2 = {"fecha": "2026-12-15", "hora": "10:00", "modalidad": "Presencial", "direccion": "Av. Uno 100, Tultitlán",
+             "instrucciones": "Trae tu INE", "indicaciones_entrevistador": "Valida que sepa revisar el montacargas"}
+    EVAL = {"tipo": "externo", "nombre": "Marta Ruiz", "correo": "marta@citas.mx", "whatsapp": "5512349999"}
+    r = client.post(f"/evaluaciones/postulaciones/{q.codigo}", json={"tipo": "entrevista_humana", "forma": "asignada", "evaluador": EVAL, "cita": CITA2})
+    check(r.status_code == 201, f"cita creada ({r.status_code} {r.text[:200]})")
+    db.expire_all()
+    ev = db.query(Evaluacion).filter_by(postulacion_id=q.id).order_by(Evaluacion.id.desc()).first()
+    liga_ev = sev.liga_evaluador(ev)
+    token_antes = ev.token_evaluador
+    check(ev.indicaciones_entrevistador == "Valida que sepa revisar el montacargas", "se guardan las «Indicaciones para el entrevistador»")
+    al_ent = [x for x in ENV if x[0] == "whatsapp" and x[1].endswith("5512349999")]
+    check(len(al_ent) == 1, f"UN aviso al entrevistador ({len(al_ent)})")
+    t = al_ent[0][2]
+    check(t.startswith("Hola Marta, tienes una entrevista con Jorge Medina para Montacarguista") and "📅 Fecha:" in t
+          and "📍 Lugar: Av. Uno 100" in t and "📝 Indicaciones para ti: Valida que sepa revisar el montacargas" in t and liga_ev in t,
+          f"texto fijo con sus indicaciones y su liga: {t!r}")
+    check("Trae tu INE" not in t and "archivo" not in t and "Pregunta por" not in t,
+          "sin las indicaciones ni los adjuntos del candidato")
+    correo_ent = [x for x in ENV if x[0] == "correo" and x[1] == "marta@citas.mx"]
+    check(correo_ent and "Trae tu INE" not in correo_ent[0][3] and "Indicaciones para ti" in correo_ent[0][3],
+          "el correo al entrevistador tampoco lleva lo del candidato")
+    al_cand = [x for x in ENV if x[0] == "whatsapp" and x[1].endswith("5512340001")]
+    check(al_cand and "Trae tu INE" in al_cand[0][2] and "Valida que sepa" not in al_cand[0][2],
+          "el candidato recibe SUS indicaciones y nunca las del entrevistador")
+
+    print("\n--- Cambio 21 · editar la cita: «Tu cita cambió» con la misma liga ---")
+    n = len(ENV)
+    r = client.patch(f"/evaluaciones/{ev.codigo}", json={"cita": {**CITA2, "indicaciones_entrevistador": "Valida montacargas y turnos"}})
+    check(r.status_code == 200, f"editar solo sus indicaciones ({r.status_code})")
+    nuevos = ENV[n:]
+    check(not any(x[1].endswith("5512340001") for x in nuevos), "si solo cambian sus indicaciones, el candidato no recibe nada")
+    cambio = [x for x in nuevos if x[0] == "whatsapp" and x[1].endswith("5512349999")]
+    check(len(cambio) == 1 and cambio[0][2].startswith("Hola Marta, tu cita cambió") and liga_ev in cambio[0][2]
+          and "Valida montacargas y turnos" in cambio[0][2], "el entrevistador recibe «Tu cita cambió» con la MISMA liga")
+    n = len(ENV)
+    r = client.patch(f"/evaluaciones/{ev.codigo}", json={"cita": {**CITA2, "hora": "12:00", "indicaciones_entrevistador": "Valida montacargas y turnos"}})
+    db.expire_all()
+    ev = db.get(Evaluacion, ev.id)
+    nuevos = ENV[n:]
+    ent = [x for x in nuevos if x[0] == "whatsapp" and x[1].endswith("5512349999")]
+    cand = [x for x in nuevos if x[0] == "whatsapp" and x[1].endswith("5512340001")]
+    check(ev.token_evaluador == token_antes and len(ent) == 1 and "tu cita cambió" in ent[0][2] and liga_ev in ent[0][2]
+          and cand and "tu cita cambió" in cand[0][2], "cambiar la hora: «Tu cita cambió» a ambos y una sola liga de evaluación por cita")
+    pre = client.get(f"/evaluaciones/postulaciones/{q.codigo}/ultima-cita?tipo=entrevista_humana").json()
+    check(pre["cita"]["indicacionesEntrevistador"] == "Valida montacargas y turnos" and pre["cita"]["instrucciones"] == "Trae tu INE",
+          "la siguiente cita de la vacante precarga las indicaciones para el entrevistador")
+
+    print("\n--- Cambio 26 · página del entrevistador ---")
+    pub = client.get(f"/evaluaciones/publica/{ev.token_evaluador}").json()
+    check(pub["evaluacion"]["instrucciones"] == "" and pub["evaluacion"]["indicacionesEntrevistador"] == "Valida montacargas y turnos",
+          "sin las instrucciones del candidato; solo «Indicaciones para el entrevistador»")
+    reqs = pub["expediente"]["vacante"]["requisitosLista"]
+    check(reqs == ["Licencia de montacargas", "Experiencia en almacén", "Disponibilidad para rolar turnos"], f"requisitos sin duplicados: {reqs}")
+    pf = pub["expediente"]["prefiltro"]
+    check(any("licencia" in x["pregunta"].lower() and x["respuesta"] == "Sí" for x in pf) and any("sueldo" in x["pregunta"].lower() for x in pf),
+          f"«Lo que ya respondió en el prefiltro»: {[x['pregunta'] for x in pf]}")
+    qs = ["¿Cuánto ganabas en tu último trabajo?", "¿Tienes licencia de montacargas vigente?", "¿Cómo revisas un montacargas antes de usarlo?",
+          "¿Hasta qué año estudiaste?", "¿Cuánto tiempo haces de tu casa a la planta?"]
+    check(sev.guion_sin_prefiltro(qs, q) == ["¿Cómo revisas un montacargas antes de usarlo?"],
+          "el guion sugerido ya no pregunta lo del prefiltro (sueldo, licencia ya respondida, escolaridad, traslado)")
+    check(not any(sev.guion_sin_prefiltro([x], q) != [x] for x in (pub["evaluacion"].get("guion") or {}).get("preguntas") or []),
+          "el guion que ve el entrevistador ya viene filtrado")
+    app.dependency_overrides.clear()
 
 print(f"\n🎉 {OK} comprobaciones OK — Cambios 21-27")

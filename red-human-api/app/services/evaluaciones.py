@@ -663,6 +663,7 @@ class CitaComoEntrevista:
         self.mapa = ev.cita_mapa or ""
         self.telefono_contacto = ev.cita_telefono or ""
         self.comentario = ev.instrucciones or ""
+        self.indicaciones_entrevistador = ev.indicaciones_entrevistador or ""  # {{7}} de `alerta_entrevista_asig`
         self.token = ev.token_evaluador
         self.teams_evento_id = ev.teams_evento_id or ""
         self.resultado = ""

@@ -1,5 +1,5 @@
 """Verificación (2026-09-18; sobre Evaluaciones unificadas desde 2026-09-29): notificaciones automatizadas de Entrevista Humana — WhatsApp (plantilla de Meta
-«alerta_entrevista_asignada» con 6 parámetros posicionales al entrevistador) y correo (Resend, plantillas
+«alerta_entrevista_asig» con 8 parámetros posicionales al entrevistador) y correo (Resend, plantillas
 HTML corporativas para entrevistador y candidato) + vistas previas. Modo demo, base desechable.
 
 Uso (desde red-human-api/):
@@ -104,7 +104,9 @@ with TestClient(app) as client:
     r = client.get("/api/emails/preview/candidato?modalidad=Presencial")
     check("Reforma 222" in r.text and "Unirme a la entrevista" not in r.text, "variante presencial (lugar en vez de liga)")
     r = client.get("/api/emails/preview/entrevistador?json=1").json()
-    check(r["parametros_meta"] == ["Mariana López", "Carlos Hernández Ruiz", "Abogado Fiscalista", "jueves 24 de septiembre de 2026", "10:30 h (hora de Ciudad de México)", r["datos"]["liga_expediente"]], "orden de los 6 parámetros de Meta en la vista previa (hora con su zona, 2026-09-29)")
+    # 2026-10-13: plantilla oficial `alerta_entrevista_asig` — 8 variables (6 contacto, 7 indicaciones del entrevistador)
+    check(r["parametros_meta"][:5] == ["Mariana López", "Carlos Hernández Ruiz", "Abogado Fiscalista", "jueves 24 de septiembre de 2026", "10:30 h (hora de Ciudad de México)"]
+          and len(r["parametros_meta"]) == 8 and r["parametros_meta"][7] == r["datos"]["liga_expediente"], "orden de los 8 parámetros de Meta en la vista previa (hora con su zona)")
 
     # ================= 2. Disparo al asignar Entrevista Humana =================
     print("\n--- 2. Asignar Entrevista Humana → WhatsApp (plantilla) + correos ---")
@@ -124,19 +126,20 @@ with TestClient(app) as client:
     check(r.status_code == 201, f"entrevista humana programada ({r.status_code})")
     COD = r.json()["evaluacion"]["codigo"]
     res = {(x["destinatario"], x["canal"]): x for x in r.json()["resultados"]}
-    check(len(WA_PLANTILLA) == 1 and WA_PLANTILLA[0][1] == "alerta_entrevista_asignada" and WA_PLANTILLA[0][0] == "3399998888", "al entrevistador le llega la plantilla de Meta «alerta_entrevista_asignada» a su WhatsApp del perfil")
+    check(len(WA_PLANTILLA) == 1 and WA_PLANTILLA[0][1] == "alerta_entrevista_asig" and WA_PLANTILLA[0][0] == "3399998888", "al entrevistador le llega la plantilla de Meta «alerta_entrevista_asig» a su WhatsApp del perfil")
     params = WA_PLANTILLA[0][2]
-    check(len(params) == 6, "exactamente 6 parámetros posicionales")
+    check(len(params) == 8, "exactamente 8 parámetros posicionales")
     check(params[0] == admin.nombre and params[1] == "Carlos Hernández" and params[2] == vac["titulo"], "1 entrevistador · 2 candidato · 3 vacante")
     check("2026" in params[3] and "septiembre" in params[3] and params[4].endswith(" h (hora de Ciudad de México)"), f"4 fecha «{params[3]}» · 5 hora «{params[4]}» (hora de México)")
-    check(params[5].startswith(settings.app_url + "/evaluacion/") and len(params[5]) > len(settings.app_url) + 25, "6 liga al expediente del candidato (liga del evaluador)")
+    check("5512345678" in params[5] and params[6] == "Sin indicaciones", f"6 contacto del candidato «{params[5]}» · 7 indicaciones para el entrevistador")
+    check(params[7].startswith(settings.app_url + "/evaluacion/") and len(params[7]) > len(settings.app_url) + 25, "8 liga al expediente del candidato (liga del evaluador)")
     check(res[("entrevistador", "whatsapp")]["enviado"] is True and "plantilla" in res[("entrevistador", "whatsapp")], "resultado visible para RH: plantilla enviada")
     check(any(t[0] == "5512345678" for t in WA_TEXTO), "el candidato recibe su WhatsApp de texto (aviso de entrevista)")
     correos = {c[0]: c for c in CORREOS}
     check(admin.correo in correos and "carlos@correo.mx" in correos, "salen los dos correos: entrevistador y candidato")
     asunto_e, html_e = correos[admin.correo][1], correos[admin.correo][2]
     # Cambio 21: el aviso al entrevistador con cita es el texto FIJO («Nueva cita: …») con la liga de SU evaluación
-    check(asunto_e.startswith("Nueva cita: Carlos Hernández") and params[5] in html_e,
+    check(asunto_e.startswith("Nueva cita: Carlos Hernández") and params[7] in html_e,
           f"correo del entrevistador: texto fijo de la cita con la liga a su evaluación ({asunto_e!r})")
     # Cambio 21: el texto fijo no repite las indicaciones del candidato (solo «Indicaciones para ti»)
     check("Red</span>" in html_e and "<!doctype html>" in html_e.lower(), "…con el layout corporativo y logo Red Human")

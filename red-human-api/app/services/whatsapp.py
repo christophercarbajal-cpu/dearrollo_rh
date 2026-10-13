@@ -221,17 +221,17 @@ async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallba
 
 
 async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], texto_fallback: str, cuenta_id: Optional[int] = None) -> dict:
-    """Aviso al entrevistador de una Entrevista Humana asignada (2026-09-18): plantilla
-    META_PLANTILLA_ENTREVISTA («alerta_entrevista_asignada») con EXACTAMENTE 6 parámetros posicionales
-    [entrevistador, candidato, vacante, fecha, hora, liga al expediente]. Sirve fuera de la ventana de 24 h
+    """Aviso al entrevistador de una cita nueva: plantilla META_PLANTILLA_ENTREVISTA («alerta_entrevista_asig»,
+    2026-10-13) con EXACTAMENTE 8 parámetros posicionales [entrevistador, candidato, vacante, fecha, hora, contacto,
+    indicaciones, liga al expediente]. Sirve fuera de la ventana de 24 h
     (el entrevistador casi nunca le ha escrito al número). Si no está configurada o Meta la rechaza, texto
     libre (que a su vez cae a META_PLANTILLA_AVISO)."""
     if _por_telegram(telefono, cuenta_id):
         return await telegram.enviar_texto(telefono, texto_fallback)
     plantilla = (settings.meta_plantilla_entrevista or "").strip()
     if settings.whatsapp_provider == "meta" and plantilla:
-        if len(parametros) != 6:
-            raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
+        if len(parametros) != 8:
+            raise ValueError(f"La plantilla {plantilla} requiere 8 parámetros; llegaron {len(parametros)}")
         resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma)
         if resultado.get("enviado"):
             resultado["plantilla"] = plantilla

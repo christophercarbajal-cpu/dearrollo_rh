@@ -2571,6 +2571,13 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
         from . import actividades_rh
 
         await actividades_rh.revisar(db, p)
+        # 2026-10-13: al habilitarse «Prefiltro por WhatsApp», la plantilla oficial `inicio_entrevista_rh` abre el flujo
+        from ..config import settings as _settings
+
+        if _settings.whatsapp_provider == "meta":
+            from . import plantillas_meta
+
+            await plantillas_meta.revisar_inicio_prefiltro(db, p)
         # 2026-10-10 (Cambio 3): UN aviso de estado al candidato si se completó una actividad o terminó la selección
         from . import avisos_estado
 

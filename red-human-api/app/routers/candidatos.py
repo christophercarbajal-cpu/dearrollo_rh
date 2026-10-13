@@ -813,6 +813,9 @@ async def _disparar_plantilla_inicio(db: Session, p: Postulacion) -> dict:
     única que espera respuesta, el webhook la elige; si hay varias, le pregunta (B1)."""
     if not p.telefono:
         return {"enviado": False, "detalle": "El candidato no dejó WhatsApp."}
+    from ..services.plantillas_meta import nombre_plantilla_inicio
+
+    PLANTILLA_INICIO_ENTREVISTA = nombre_plantilla_inicio()  # META_PLANTILLA_INICIO (default «inicio_entrevista_rh»)
     primer_nombre = (p.nombre or "").split(" ")[0] or "candidato(a)"
     with de_cuenta(p.cuenta_id):
         envio = await enviar_plantilla(
@@ -935,7 +938,10 @@ async def postular(
     demo_tg = telegram_demo(db, p.cuenta)
     liga_telegram = tg.liga_postulacion(p) if canal_cuenta in ("telegram", "ambos") or demo_tg else ""
     if nueva_postulacion and canal_cuenta != "telegram":
-        await _disparar_plantilla_inicio(db, p)
+        # 2026-10-13: `inicio_entrevista_rh` sale cuando la actividad «Prefiltro por WhatsApp» de SU ruta se habilita
+        from ..services import plantillas_meta
+
+        await plantillas_meta.revisar_inicio_prefiltro(db, p)
     db.commit()
     # 2026-10-08 (motor de ruta automatizado, SOLO CUENTAS_RUTA_AUTOMATICA): el prefiltro web se resuelve contra la
     # vacante al instante y, si cumple, la ruta sigue sola (dispara lo que se habilite).
@@ -1163,6 +1169,10 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
         registrar(db, "agente-ia", "agenda_detenida_por_ruta", "postulacion", p.codigo, {"motivo": motivo})
         return {"enviado": False, "detalle": f"No se agenda: {motivo}", "texto": ""}
     texto = _texto_apto(p)
+    # 2026-10-13: el candidato debe confirmar horario → plantilla `aviso_proceso_rh` (sirve fuera de la ventana de 24 h)
+    from ..services import plantillas_meta
+
+    await plantillas_meta.enviar_aviso_agenda(db, p, texto)
     envio = await _enviar_whatsapp(p, texto)
     guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
     return {**envio, "texto": texto}

@@ -1143,6 +1143,12 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     e = estado(p)
     if e.get("resultado"):
         return None
+    from . import plantillas_meta
+
+    if plantillas_meta.marcar_respuesta(db, p, texto) and plantillas_meta.es_confirmacion_inicio(texto):
+        # 2026-10-13: respuesta al botón de `inicio_entrevista_rh` («Sí, empezar ahora»): abre la ventana de 24 h y el bot
+        # contesta YA con el saludo estricto + la primera pregunta (nunca se toma como respuesta a un criterio)
+        reconexion = True
     criterios = criterios_de(p.vacante, p)
     if not e.get("web_importada"):
         e = _sembrar_web(p, e, criterios)

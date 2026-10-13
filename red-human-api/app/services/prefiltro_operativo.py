@@ -32,7 +32,7 @@ REPREGUNTAS = {
     "sueldo": "Claro. Solo para tenerlo en cuenta, ¿te interesa el sueldo?",
     "zona": "Claro. Solo para tenerlo en cuenta, ¿en qué colonia y municipio vives?",
 }
-DATOS_OPERATIVOS = ("experiencia", "licencia", "disponibilidad", "requisito", "edad", "interes", "puede_trasladarse")
+DATOS_OPERATIVOS = ("experiencia", "licencia", "transportes", "disponibilidad", "requisito", "edad", "interes", "puede_trasladarse")
 
 
 def _n(t: str) -> str:
@@ -72,6 +72,34 @@ _RE_TRASLADO = re.compile(r"\b(traslado|vivir|vive|vivas|cerca|radio|distancia|d
 _RE_DISPONIBILIDAD = re.compile(r"\b(disponibilidad|turnos?|horario|fines? de semana|rolar|nocturn\w*|tiempo completo|horas extra)\b")
 _RE_LICENCIA = re.compile(r"\blicencia\b")
 _RE_LETRA_LICENCIA = re.compile(r"\btipo\s*([a-e])\b|\b([a-e])\s*$")
+_RE_LETRAS_LICENCIA = re.compile(r"\btipos?\s+([a-e](?:\s*(?:,|/|o|y)\s*[a-e])*)\b")
+# 2026-10-13 (demo DECASA): «No más de 2 transportes para llegar…» → se pregunta CUÁNTOS y descarta si son más
+_RE_TRANSPORTES = re.compile(r"\b(?:no mas de|maximo|hasta|a lo mucho|menos de)\s*(\d+|un|uno|dos|tres|cuatro)\s*(?:transportes?|camion\w*|rutas?)\b")
+_CANTIDADES = {"cero": 0, "ninguno": 0, "ninguna": 0, "un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4,
+               "cinco": 5, "seis": 6}
+
+
+def maximo_transportes(req: str) -> Optional[int]:
+    """Tope de transportes de un indispensable («No más de 2 transportes» → 2); None si no es de transportes."""
+    m = _RE_TRANSPORTES.search(_n(req))
+    if not m:
+        return None
+    n = int(m.group(1)) if m.group(1).isdigit() else _CANTIDADES[m.group(1)]
+    return n - 1 if "menos de" in m.group(0) else n
+
+
+def cantidad_de(t: str) -> Optional[int]:
+    """Cantidad de una respuesta libre («2», «dos camiones», «solo uno», «ninguno, llego caminando»)."""
+    t = _n(t)
+    m = re.search(r"\b(\d+)\b", t)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\b(" + "|".join(_CANTIDADES) + r")\b", t)
+    if m:
+        return _CANTIDADES[m.group(1)]
+    if re.search(r"\b(caminando|a pie|en bici\w*|en mi (?:carro|auto|moto)|carro propio|auto propio)\b", t):
+        return 0
+    return None
 
 
 def edad_de_requisito(req: str) -> Optional[Tuple[Optional[int], Optional[int]]]:
@@ -145,10 +173,15 @@ def _pregunta_indispensable_base(i: int, req: str) -> dict:
             n = n / 12
         tema = ia._tema_experiencia(r)
         return _criterio(cid, "experiencia", r, f"¿Cuánto tiempo {ia._de_experiencia(tema)} tienes?", True, minimo=n)
+    tope = maximo_transportes(r)
+    if tope is not None:
+        return _criterio(cid, "transportes", r, "¿Cuántos transportes tomarías para llegar al trabajo?", True, maximo=tope)
     if _RE_LICENCIA.search(t):
+        varias = _RE_LETRAS_LICENCIA.search(t)
         letra = _RE_LETRA_LICENCIA.search(t)
-        return _criterio(cid, "licencia", r, "¿Qué tipo de licencia tienes?", True,
-                         letra=(letra.group(1) or letra.group(2)) if letra else "")
+        letras = "".join(re.findall(r"[a-e]", re.sub(r"(?:o|y)", " ", varias.group(1)))) if varias else (
+            (letra.group(1) or letra.group(2)) if letra else "")
+        return _criterio(cid, "licencia", r, "¿Qué tipo de licencia tienes?", True, letra=letras)
     if _RE_DISPONIBILIDAD.search(t):
         tema = re.sub(r"^disponibilidad\s+(?:para|de)\s+", "", r, flags=re.IGNORECASE)
         tema = tema[:1].lower() + tema[1:] if tema[:2] != tema[:2].upper() else tema
@@ -273,9 +306,14 @@ def clasificar(c: dict, texto: str) -> Tuple[Optional[str], dict]:
         if letra is None and len(t.split()) <= 2 and _si_no(texto) == "si":
             return None, {}  # «sí» a secas no es un dato concreto
         extra = {"tipo": letra.group(1).upper() if letra else ""}
-        if c.get("letra") and letra and letra.group(1) != c["letra"]:
+        if c.get("letra") and letra and letra.group(1) not in c["letra"]:
             extra["otra_letra"] = True  # otra letra: no se descarta, va a Puntos por validar
         return "si", extra
+    if dato == "transportes":
+        n = cantidad_de(t)
+        if n is None:
+            return None, {}  # «sí» a secas o sin cifra: se pide el número una vez
+        return ("si" if n <= int(c.get("maximo") if c.get("maximo") is not None else 10 ** 6) else "no"), {"transportes": n}
     if dato in ("disponibilidad", "requisito"):
         if niega:
             return "no", {}
@@ -316,6 +354,8 @@ def guardar(a: dict, d: dict, c: dict, texto: str, extra: dict) -> None:
         d["puede_trasladarse"] = extra.get("acepta")
         if extra.get("acepta") is False:
             puntos.append(f"No puede trasladarse: {c['criterio'].removeprefix('Trasladarse a ')}")
+    elif dato == "transportes" and extra.get("transportes") is not None:
+        d["transportes"] = extra["transportes"]
     elif dato == "licencia" and extra.get("otra_letra"):
         puntos.append(f"Licencia tipo {extra.get('tipo')}; la vacante pide: {c['criterio']}")
     elif dato == "experiencia" and extra.get("anos") is not None:

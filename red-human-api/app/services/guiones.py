@@ -168,11 +168,12 @@ def normalizar_pregunta(q) -> Optional[dict]:
     for k in ("reconfirma", "clave", "pregunta_chat", "regla"):
         if _texto(q.get(k)):
             salida[k] = _texto(q[k], 200)
-    if q.get("minimo") not in (None, ""):
-        try:
-            salida["minimo"] = float(q["minimo"])
-        except (TypeError, ValueError):
-            pass
+    for k in ("minimo", "maximo"):  # 2026-10-13: «maximo» = tope numérico («No más de 2 transportes»)
+        if q.get(k) not in (None, ""):
+            try:
+                salida[k] = float(q[k])
+            except (TypeError, ValueError):
+                pass
     if isinstance(q.get("opciones_validas"), list):
         salida["opciones_validas"] = [_texto(o, 80) for o in q["opciones_validas"] if _texto(o)]
     if q.get("solo_con_ubicacion"):

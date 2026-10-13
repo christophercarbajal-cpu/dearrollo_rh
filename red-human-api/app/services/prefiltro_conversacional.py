@@ -145,6 +145,7 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
             "id": f"rc-{base['id']}", "clave": "reconfirma", "criterio": base["criterio"], "pregunta": str(pw["pregunta"]).strip(),
             "chat": chat, "indispensable": False, "esperada": "si", "reconfirma": base["id"], "tipo": pw.get("tipo") or "opcion",
             "opciones": opciones, "opciones_validas": [str(o) for o in pw.get("opciones_validas") or []], "minimo": pw.get("minimo"),
+            "maximo": pw.get("maximo"),
         })
     # Cambio 19 (2026-10-12): condiciones de la DESCRIPCIÓN («Se registra»): se preguntan en el chat, nunca descartan;
     # un «no» va a Puntos por validar
@@ -625,6 +626,12 @@ def clasificar_dato(c: dict, texto: str) -> Optional[str]:
                                                                               if _norm(o) and _norm(o) in t), None)
     if elegida is not None and validas:
         return "si" if _norm(elegida) in validas else "no"
+    if c.get("tipo") == "numero" and c.get("maximo") not in (None, ""):
+        # 2026-10-13: tope numérico («No más de 2 transportes»): más del tope NO cumple
+        from .prefiltro_operativo import cantidad_de
+
+        n = cantidad_de(t)
+        return None if n is None else ("si" if n <= float(c["maximo"]) else "no")
     if c.get("tipo") == "numero" and c.get("minimo") not in (None, ""):
         n = _anos(t)
         if n is not None:

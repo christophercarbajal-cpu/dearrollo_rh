@@ -14,7 +14,8 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:  # noqa: BLE001
     pass
-d = tempfile.mkdtemp(); os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(d)/"p.db").replace("\\","/")
+import _temporal  # noqa: E402 — la base temporal se borra al terminar (pase o falle)
+d = _temporal.directorio("rh_google_empleos_"); os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(d)/"p.db").replace("\\","/")
 for k in ("OPENAI_API_KEY","WHATSAPP_PROVIDER","META_WHATSAPP_TOKEN","ANAM_API_KEY","RESEND_API_KEY"): os.environ[k] = ""
 os.environ["ADMIN_PASSWORD"]="x"; os.environ["SEMBRAR_DEMO"]="false"
 from fastapi.testclient import TestClient

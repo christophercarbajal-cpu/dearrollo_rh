@@ -19,7 +19,8 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-_dir = tempfile.mkdtemp(prefix="rh_cfg_")
+import _temporal  # noqa: E402 — la base temporal se borra al terminar (pase o falle)
+_dir = _temporal.directorio("rh_cfg_")
 os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_dir) / "cfg.db").replace("\\", "/")
 for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "META_PHONE_NUMBER_ID", "ANAM_API_KEY"):
     os.environ[k] = ""

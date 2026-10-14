@@ -18,7 +18,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 # Modo demo total + base desechable ANTES de importar app.* (settings se lee al importar).
-_dir = tempfile.mkdtemp(prefix="rh_fase2_")
+import _temporal  # noqa: E402 — la base temporal se borra al terminar (pase o falle)
+_dir = _temporal.directorio("rh_fase2_")
 os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_dir) / "fase2.db").replace("\\", "/")
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["WHATSAPP_PROVIDER"] = ""

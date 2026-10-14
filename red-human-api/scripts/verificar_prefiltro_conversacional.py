@@ -29,7 +29,8 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-_dir = tempfile.mkdtemp(prefix="rh_prefiltro_conv_")
+import _temporal  # noqa: E402 — la base temporal se borra al terminar (pase o falle)
+_dir = _temporal.directorio("rh_prefiltro_conv_")
 os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_dir) / "pconv.db").replace("\\", "/")
 for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "META_PHONE_NUMBER_ID", "META_APP_SECRET", "ANAM_API_KEY",
           "RESEND_API_KEY", "PSICOMETRICAS_TOKEN", "PSICOMETRICAS_PASSWORD", "PSICOMETRICAS_USUARIO", "TELEGRAM_WEBHOOK_SECRET",

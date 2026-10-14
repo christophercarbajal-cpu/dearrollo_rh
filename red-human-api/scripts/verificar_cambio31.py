@@ -24,7 +24,8 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:  # noqa: BLE001
     pass
-_dir = tempfile.mkdtemp(prefix="rh_c31_")
+import _temporal  # noqa: E402 — la base temporal se borra al terminar (pase o falle)
+_dir = _temporal.directorio("rh_c31_")
 os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_dir) / "c31.db").replace(chr(92), "/")
 for k in ("OPENAI_API_KEY", "ANAM_API_KEY", "RESEND_API_KEY", "TELEGRAM_BOT_TOKEN", "PSICOMETRICAS_TOKEN", "DROPBOX_SIGN_API_KEY"):
     os.environ[k] = ""

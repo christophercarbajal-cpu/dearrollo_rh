@@ -54,6 +54,12 @@ def _no_eliminada(v: Vacante) -> Vacante:
     return v
 
 
+def liga_congelada(v: Vacante) -> bool:
+    """La liga de postulación (`slug`) queda CONGELADA desde la primera publicación: ya circula en portal, WhatsApp y las
+    plataformas (cada una con su `?canal=`). Editar el título después cambia el título, nunca la liga."""
+    return bool(v.slug) and (v.publicada_en is not None or v.estado in ("Publicada", "Pausada", "Cerrada"))
+
+
 def _slug_unico(db: Session, titulo: str, vacante_id: int) -> str:
     base = slugificar(titulo)
     tomado = (
@@ -883,6 +889,7 @@ async def actualizar(
 ):
     """Edición manual de RH sobre lo que generó la IA (el agente propone, RH dispone)."""
     v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    congelada = liga_congelada(v)  # antes de aplicar cambios: el estado previo decide
     colaboradores_validos = _validar_relaciones(
         db, cuenta, datos.cliente_id, datos.responsable_id, datos.colaboradores_ids, None
     )
@@ -978,8 +985,10 @@ async def actualizar(
     db.flush()
     db.refresh(v)  # recarga cliente/cuenta si cambió cliente_id
     v.empresa = nombre_empresa_candidato(v)
-    if datos.titulo:
-        v.slug = _slug_unico(db, v.titulo, v.id)
+    if datos.titulo and not congelada:
+        v.slug = _slug_unico(db, v.titulo, v.id)  # una vacante ya publicada conserva su liga original
+    if v.estado == "Publicada" and v.publicada_en is None:
+        v.publicada_en = datetime.now(timezone.utc)  # publicada por edición de estado: desde aquí la liga queda fija
     if datos.publicaciones:
         v.texto_bolsa = (datos.publicaciones.get("occ") or {}).get("page", v.texto_bolsa)
 

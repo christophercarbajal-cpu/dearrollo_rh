@@ -218,6 +218,37 @@ with TestClient(app) as client:
     check(len(LLAMADAS) == antes, "Modo Demo: CERO requests externos")
     actual["c"] = cuenta
 
+    print("\n--- 2e. La liga de postulación queda congelada al publicar ---")
+    r = client.post("/vacantes", json={**FICHA, "titulo": "Surtidor nocturno", "proceso": {"pasos": MASIVOS}})
+    vb = r.json()
+    r = client.patch(f"/vacantes/{vb['id']}", json={"titulo": "Surtidor de turno nocturno"})
+    check(r.json()["slug"] != vb["slug"] and r.json()["slug"].startswith("surtidor-de-turno-nocturno"),
+          "en Borrador, cambiar el título todavía cambia la liga (nadie la ha recibido)")
+    r = client.post(f"/vacantes/{vb['id']}/publicar", json={"canales": ["portal", "whatsapp"]})
+    slug_pub = r.json()["slug"]
+    ligas = {k: e["liga"] for k, e in r.json()["distribucion"].items()}
+    r = client.patch(f"/vacantes/{vb['id']}", json={"titulo": "Surtidor(a) nocturno(a) — CEDIS Apodaca"})
+    check(r.status_code == 200 and r.json()["titulo"] == "Surtidor(a) nocturno(a) — CEDIS Apodaca" and r.json()["slug"] == slug_pub,
+          "publicada: el título se actualiza pero la liga original se conserva")
+    check({k: e["liga"] for k, e in r.json()["distribucion"].items()} == ligas and all(f"/aplicar/{slug_pub}?canal=" in x for x in ligas.values()),
+          "las ligas de cada canal (?canal=) siguen siendo las mismas")
+    app.dependency_overrides.pop(cuenta_actual, None)
+    pub = client.get(f"/vacantes/slug/{slug_pub}")
+    check(pub.status_code == 200 and pub.json()["titulo"] == "Surtidor(a) nocturno(a) — CEDIS Apodaca",
+          "la liga original abre la vacante con su título nuevo")
+    r = client.post("/candidatos/postular", data={"vacante": slug_pub, "nombre": "Lalo Liga", "telefono": "5512360011", "consentimiento": "true"})
+    check(r.status_code == 201, "y sigue recibiendo postulaciones")
+    app.dependency_overrides[cuenta_actual] = lambda: actual["c"]
+    client.post(f"/vacantes/{vb['id']}/pausar")
+    r = client.patch(f"/vacantes/{vb['id']}", json={"titulo": "Surtidor nocturno (pausa)"})
+    check(r.json()["slug"] == slug_pub, "en pausa tampoco cambia")
+    client.post(f"/vacantes/{vb['id']}/cerrar", json={})
+    r = client.patch(f"/vacantes/{vb['id']}", json={"titulo": "Surtidor nocturno (cerrada)"})
+    check(r.json()["slug"] == slug_pub, "ni cerrada: la liga queda congelada para siempre")
+    r = client.post("/vacantes", json={**FICHA, "titulo": "Surtidor de turno nocturno", "proceso": {"pasos": MASIVOS}})
+    r = client.patch(f"/vacantes/{r.json()['id']}", json={"titulo": "Surtidor nocturno"})
+    check(r.json()["slug"] != slug_pub, "otra vacante con el mismo título nunca toma la liga congelada")
+
     # ===================================================== 3. Cambio 38
     print("\n--- 3. Cambio 38: vocabulario y etiqueta única ---")
     check([sei.ESTADOS_INTEGRAL[k] for k in ("apto", "con_observaciones", "no_apto")] == ["Recomendable", "Con reservas", "No recomendable"]

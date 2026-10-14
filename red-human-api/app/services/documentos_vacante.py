@@ -2,8 +2,8 @@
 
 - La vacante define «Documentos y fotos que se piden» (`Vacante.documentos_solicitados`, [{nombre, cantidad, foto}]); la
   IA lo llena si la descripción los menciona (`detectar`, determinista: nunca inventa documentos que nadie mencionó).
-- Con elementos, la ruta de cada postulación suma la actividad «Documentos» DESPUÉS del prefiltro de WhatsApp
-  (`con_documentos_vacante`, al congelar la ruta). Sin elementos, la ruta no cambia.
+- Cambio 36: la vacante NUNCA modifica el proceso. Si la ruta trae «Documentos» antes de Contratación, esa actividad
+  recoge los documentos de la vacante (`con_documentos_vacante`); si no, el campo ni se muestra en la vacante.
 - Al habilitarse, el agente manda la liga para subir archivos (`revisar`, desde `proceso.avanzar_seguro`); una foto que
   llegue por el chat antes de Contratación se ataja con «Súbela aquí, por favor: [liga]» (`liga_si_intercepta`).
 - Cada archivo es su propio registro (`ArchivoDocumento`) ligado al documento solicitado; las fotos del auto exigen 4.
@@ -103,29 +103,20 @@ def texto_documento(d: dict) -> str:
 # ============================================================ ruta
 
 def con_documentos_vacante(proc: dict, v) -> dict:
-    """Suma la actividad «Documentos» después del prefiltro de WhatsApp si la vacante pide documentos. Si la ruta ya trae
-    documentos antes de Contratación (Masivos con documentos), ESA actividad valida los de la vacante (no se duplica)."""
-    from .proceso import _indice, _regla, _responsable
+    """Cambio 36 («El proceso manda»): la vacante NUNCA modifica el proceso. Si la ruta ya trae «Documentos» antes de
+    Contratación (Masivos con documentos), ESA actividad recoge los documentos de la vacante; si no la trae, la ruta queda
+    tal cual (ya no se inyecta una actividad «Documentos» después del prefiltro)."""
+    from .proceso import _indice
 
     docs = de_vacante(v, (proc or {}).get("pasos") or [], tempranos=True)
     if not docs or not proc or not proc.get("pasos"):
         return proc
-    nombres = [d["nombre"] for d in docs]
     pasos = [dict(x) for x in proc["pasos"]]
     previo = next((x for x in pasos if x["tipo"] == "documentos" and _indice(x["etapa"]) < _indice("Contratación")), None)
-    if previo is not None:
-        previo["documentos"] = list(dict.fromkeys([*(previo.get("documentos") or []), *nombres]))
-        previo["documentos_vacante"] = True
-    else:
-        ancla = next((x for t in ("prefiltro_whatsapp", "prefiltro_web", "solicitud_web") for x in pasos if x["tipo"] == t), None)
-        paso = {"id": ID_PASO, "tipo": "documentos", "nombre": "Documentos", "etapa": "Prefiltro", "obligatorio": True,
-                "depende_de": [ancla["id"]] if ancla else [], "responsable": _responsable(None, "documentos"),
-                "regla": _regla(None, "documentos"), "plazo_dias": None, "orden": 0, "documentos": nombres,
-                "documentos_vacante": True}
-        i = pasos.index(ancla) + 1 if ancla else next((k for k, x in enumerate(pasos) if _indice(x["etapa"]) > 0), len(pasos))
-        pasos.insert(i, paso)
-    for k, x in enumerate(pasos):
-        x["orden"] = k
+    if previo is None:
+        return proc
+    previo["documentos"] = list(dict.fromkeys([*(previo.get("documentos") or []), *[d["nombre"] for d in docs]]))
+    previo["documentos_vacante"] = True
     return {**proc, "pasos": pasos}
 
 

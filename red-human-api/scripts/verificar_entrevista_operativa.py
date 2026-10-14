@@ -86,8 +86,9 @@ check(eop.recomendacion_de(reqs) == "recomendable" and not any(hasattr(eop, x) f
                                                                                          "INICIO_MAX_DIAS", "EMPLEO_MIN_MESES")),
       "un traslado de 300 min ya no cambia nada: no hay umbrales fijos en el código")
 from app.services import evaluacion_integral as sint  # noqa: E402
-check(sint._resultado([], operativo=False)["texto"] == "Apto" and sint._resultado([], operativo=True)["texto"] == "Recomendable",
-      "C6 regla 6: el perfil Corporativo conserva «Apto»; solo el Operativo usa «Recomendable»")
+# Cambio 38: un solo vocabulario (Recomendable / Con reservas / No recomendable) también en el perfil Corporativo
+check(sint._resultado([], operativo=False)["texto"] == "Recomendable" and sint._resultado([], operativo=True)["texto"] == "Recomendable",
+      "Cambio 38: Corporativo y Operativo dicen «Recomendable» («Apto» solo en médica y socioeconómico)")
 check([eop.dias_inicio(x) for x in ("mañana", "el lunes", "en 2 semanas", "en un mes", "no sé")] == [1, 7, 14, 30, None],
       "la fecha de inicio se lee en días (solo informativo: ya no hay umbral)")
 check(eop.faltan_de({"experiencia": {"estado": "no_cumple"}, "puntos": {"estado": "no_cumple", "cantidad": 2}})

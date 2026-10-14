@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     # URL pública del frontend (ligas de entrevista para candidatos)
     app_url: str = "http://localhost:3000"
 
+    # Cambio 36 (publicador multicanal): un canal EXTERNO está «conectado» solo si tiene su conector configurado — URL del
+    # conector (integración propia o un servicio intermediario) y su token. Solo en el .env del servidor.
+    publicador_occ_url: str = ""
+    publicador_occ_token: str = ""
+    publicador_linkedin_url: str = ""
+    publicador_linkedin_token: str = ""
+    publicador_indeed_url: str = ""
+    publicador_indeed_token: str = ""
+    publicador_computrabajo_url: str = ""
+    publicador_computrabajo_token: str = ""
+
     # Primer administrador. Si no se define contraseña, se genera una al arrancar
     # y se imprime UNA sola vez en el log del servicio.
     admin_email: str = "admin@redhuman.mx"

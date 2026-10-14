@@ -1,7 +1,7 @@
 """Cambio 28 (2026-10-12): sincronización Proceso ↔ Vacante.
 
-- La vacante pide documentos y su ruta no trae la actividad «Documentos» antes de Contratación → se agrega sola después
-  del prefiltro (`sincronizar`, al guardar la vacante; misma regla que `documentos_vacante.con_documentos_vacante`).
+- Cambio 36: la vacante NUNCA modifica el proceso (ya no se agrega «Documentos»); si la ruta trae «Documentos» antes de
+  Contratación, esa actividad recoge los documentos de la vacante (`documentos_vacante.con_documentos_vacante`).
 - La ruta trae «Documentos» antes de Contratación → «Documentos y fotos que se piden» es obligatorio.
 - La ruta trae «Análisis de CV» → el CV es obligatorio en la solicitud web (`con_cv` y `/candidatos/postular`).
 - La ruta trae prefiltro (web o WhatsApp) → la vacante exige al menos 1 indispensable (Cambio 37; antes 3).

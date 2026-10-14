@@ -47,6 +47,7 @@ os.environ["TELEGRAM_BOT_USERNAME"] = "RedHumanPruebaBot"
 os.environ["ADMIN_PASSWORD"] = "prueba-c21"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
@@ -411,8 +412,11 @@ with TestClient(app) as client:
     v3 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id])).order_by(Vacante.id).first()
     v3.cuenta_id, v3.cliente_id, v3.titulo, v3.responsable_id = cuenta3.id, None, "Repartidor con auto", admin.id
     v3.preguntas_filtro, v3.preguntas_filtro_whatsapp = [], []
+    # Cambio 36 («El proceso manda»): la vacante ya no inyecta «Documentos»; la RUTA trae la actividad y ésta recoge los
+    # documentos que pide la vacante
     RUTA_DOCS = {"pasos": [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
                            {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"},
+                           {"id": "docs", "tipo": "documentos", "etapa": "Prefiltro", "depende_de": ["pwa"]},
                            {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA"}]}
     v3.proceso = sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS)
     db.commit()
@@ -429,14 +433,16 @@ with TestClient(app) as client:
 
     q3 = nueva_postulacion("Pedro Ramos", "5512350001", v3)
     pasos = [x["id"] for x in q3.proceso["pasos"]]
-    paso_docs = next(x for x in q3.proceso["pasos"] if x["id"] == sdv.ID_PASO)
-    check(pasos[:3] == ["sw", "pwa", sdv.ID_PASO] and paso_docs["etapa"] == "Prefiltro" and paso_docs["depende_de"] == ["pwa"]
-          and paso_docs["documentos"] == ["INE (frente y reverso)", "Fotos del auto"], f"la ruta suma «Documentos» DESPUÉS del prefiltro de WhatsApp: {pasos}")
+    paso_docs = next(x for x in q3.proceso["pasos"] if x["tipo"] == "documentos")
+    check(pasos[:3] == ["sw", "pwa", "docs"] and paso_docs["etapa"] == "Prefiltro" and paso_docs["depende_de"] == ["pwa"]
+          and paso_docs.get("documentos_vacante") and paso_docs["documentos"] == ["INE (frente y reverso)", "Fotos del auto"],
+          f"la actividad «Documentos» de la ruta (después del prefiltro) recoge los documentos de la vacante: {pasos}")
     v4 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id, v3.id])).order_by(Vacante.id).first()
     v4.cuenta_id, v4.proceso, v4.documentos_solicitados = cuenta3.id, sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS), []
     db.commit()
     q4 = nueva_postulacion("Sin Docs", "5512350002", v4)
-    check(not any(x["tipo"] == "documentos" for x in q4.proceso["pasos"]), "sin documentos en la vacante la ruta no cambia")
+    check(not any(x.get("documentos_vacante") for x in q4.proceso["pasos"]) and len(q4.proceso["pasos"]) == len(RUTA_DOCS["pasos"]),
+          "sin documentos en la vacante la ruta no cambia")
 
     n = len(ENV)
     check(asyncio.run(sdv.revisar(db, q3)) is None and len(ENV) == n, "antes de terminar el prefiltro no se pide nada")
@@ -526,7 +532,7 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["expediente"]["estadoDocumentos"]["texto"] == "Documentos aprobados", f"«Documentos aprobados» ({r.status_code} {r.text[:160]})")
     db.expire_all()
     q3 = db.get(Postulacion, q3.id)
-    paso = next(x for x in sproc.estado_pasos(q3) if x["id"] == sdv.ID_PASO)
+    paso = next(x for x in sproc.estado_pasos(q3) if x["id"] == "docs")  # Cambio 36: la actividad «Documentos» de la ruta
     check(paso["estado"] == "completada" and q3.etapa == "Entrevista IA", f"documentos aprobados → la ruta sigue ({paso['estado']}, {q3.etapa})")
 
     q5 = nueva_postulacion("Lalo Excepción", "5512350003", v3)
@@ -557,8 +563,8 @@ with TestClient(app) as client:
           and sproc.enfoque_de_ruta(corporativo) is None, "Masivos → Operativo; Corporativos → lo decide la vacante")
     db.expire_all()
     v4 = db.get(Vacante, v4.id)
-    r = client.patch(f"/vacantes/{v4.codigo}", json={"seniority": "Senior", "enfoque_entrevista": "profesional",
-                                                      "proceso": {"pasos": masivos["pasos"]}})
+    fijar_ruta(db, v4.codigo, json={"pasos": masivos["pasos"]})  # Cambio 36: con candidatos, la ruta se fija como configuración
+    r = client.patch(f"/vacantes/{v4.codigo}", json={"seniority": "Senior", "enfoque_entrevista": "profesional"})
     db.expire_all()
     v4 = db.get(Vacante, v4.id)
     check(r.status_code == 200 and v4.enfoque_entrevista == "operativo" and v4.seniority == "Senior",
@@ -566,7 +572,8 @@ with TestClient(app) as client:
     r = client.patch(f"/vacantes/{v4.codigo}", json={"enfoque_entrevista": "profesional"})
     db.expire_all()
     check(db.get(Vacante, v4.id).enfoque_entrevista == "operativo", "con ruta Masivos no se puede cambiar a otro enfoque")
-    r = client.patch(f"/vacantes/{v4.codigo}", json={"enfoque_entrevista": "profesional", "proceso": {"pasos": corporativo["pasos"]}})
+    fijar_ruta(db, v4.codigo, json={"pasos": corporativo["pasos"]})  # Cambio 36: con candidatos, la ruta se fija como configuración
+    r = client.patch(f"/vacantes/{v4.codigo}", json={"enfoque_entrevista": "profesional"})
     db.expire_all()
     check(db.get(Vacante, v4.id).enfoque_entrevista == "profesional", "con ruta Corporativos se respeta el que eligió RH")
     q6 = nueva_postulacion("Ruta Masiva", "5512350004", v3)
@@ -589,8 +596,9 @@ with TestClient(app) as client:
     seg = (app_dir / "components/dashboard/procesos/seguimiento-proceso.tsx").read_text(encoding="utf-8")
     check("90 min" not in form and "90 min" not in seg and "no recomendable" not in seg.split("const traslado")[1][:600],
           "sin «más de 90 min = alerta»: el límite de traslado sale solo del indispensable")
-    check("Lo define la ruta Masivos, sin importar el seniority." in form and "Usar Operativo" not in form,
-          "el formulario muestra el enfoque que define la ruta (sin sugerencia por seniority)")
+    # Cambio 36: el proceso manda — ya no hay selector de enfoque; con ruta Masivos el formulario lo fija en Operativo
+    check('label="Enfoque de entrevista"' not in form and 'enfoque_entrevista: "operativo"' in form and "Usar Operativo" not in form,
+          "el enfoque lo define la ruta (sin selector ni sugerencia por seniority)")
 
     print("\n--- Cambio 27 · selector de vacantes del tablero ---")
     tablero = (app_dir / "app/dashboard/candidatos/page.tsx").read_text(encoding="utf-8")

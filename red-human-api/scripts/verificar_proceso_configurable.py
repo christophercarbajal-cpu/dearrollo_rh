@@ -34,6 +34,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "META_PH
 os.environ["ADMIN_PASSWORD"] = "prueba-proc"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
@@ -175,14 +176,17 @@ with TestClient(app) as client:
           "seguimiento: nombre, responsable (Red Human) y estado Pendiente del prefiltro")
     check(s["siguienteAccion"]["tipo"] in ("esperar", "paso"), "la siguiente acción arriba: esperar al candidato")
     # personalizar la vacante → versión 2; el candidato ya creado conserva la suya
-    r = client.patch(f"/vacantes/{V1}", json={"proceso": {"pasos": pv["pasos"] + [{"id": "referencias", "tipo": "referencias", "obligatorio": False,
-                                                                                    "etapa": "Entrevista Humana"}]}})
+    nuevos = pv["pasos"] + [{"id": "referencias", "tipo": "referencias", "obligatorio": False, "etapa": "Entrevista Humana"}]
+    r = client.patch(f"/vacantes/{V1}", json={"proceso": {"pasos": nuevos}})
+    check(r.status_code == 409 and r.json()["detail"].startswith("No se puede cambiar"),
+          "Cambio 36: con candidatos, la API ya no cambia el proceso de la vacante (409)")
+    r = fijar_ruta(db, V1, json={"pasos": nuevos})  # la versión nueva se fija como configuración para probar el aislamiento
     check(r.status_code == 200 and r.json()["proceso"]["version"] == 2 and r.json()["proceso"]["personalizado"],
           "personalizar el proceso en la vacante sube su versión (personalizado, sin tocar la plantilla)")
     check(len(client.get("/procesos/plantillas").json()[0]["pasos"]) >= 2 and len(post(P1).proceso["pasos"]) == 3,
           "el candidato existente NO cambia (sigue con 3 pasos de la v1)")
     check(seg(P1)["desactualizado"] is True, "la ficha avisa que hay una versión más nueva del proceso")
-    client.patch(f"/vacantes/{V1}", json={"proceso": {"pasos": pv["pasos"]}})  # v3 = sin referencias (para los siguientes)
+    fijar_ruta(db, V1, json={"pasos": pv["pasos"]})  # v3 = sin referencias (para los siguientes)
 
     # compuerta: avanzar a Contratación sin el prefiltro (obligatorio) → 409; omitir requiere justificación + permiso
     P1b = nueva("Paula Pendiente", V1)
@@ -251,7 +255,7 @@ with TestClient(app) as client:
     for x in pasos2:
         if x["id"] == "entrevista_agente":
             x["tipo_entrevista"] = "profesional_personal"
-    client.put(f"/procesos/vacantes/{V2}", json={"pasos": pasos2})
+    fijar_ruta(db, V2, json={"pasos": pasos2})
     P2 = nueva("Ana Administrativa", V2)
     p2 = post(P2)
     check(sproc.enfoque_entrevista_agente(p2, p2.vacante) == "profesional_personal" and p2.vacante.enfoque_entrevista == "profesional",
@@ -338,7 +342,7 @@ with TestClient(app) as client:
 
     # versionado: quitar «referencias» de la vacante y aplicar la versión vigente a P2 (que ya tiene referencias hecha)
     pasos2 = [x for x in client.get(f"/procesos/vacantes/{V2}").json()["proceso"]["pasos"] if x["id"] != "referencias"]
-    client.put(f"/procesos/vacantes/{V2}", json={"pasos": pasos2})
+    fijar_ruta(db, V2, json={"pasos": pasos2})
     check(any(x["id"] == "referencias" for x in post(P2).proceso["pasos"]), "quitar un paso de la vacante no toca al candidato existente")
     r = client.post(f"/procesos/postulaciones/{P2}/aplicar-vigente")
     ref = paso(r.json()["proceso"], "referencias")
@@ -348,7 +352,7 @@ with TestClient(app) as client:
     # ================= 3. Actividades en paralelo =================
     print("\n--- 3. Médica y socioeconómica en paralelo ---")
     V3 = vacante("Chofer repartidor", {"plantilla_id": plantillas["paralelo_medica_socioeconomica"]["id"]})
-    client.put(f"/procesos/vacantes/{V3}", json={"etapas": {"Entrevista Humana": {"avance_automatico": True}}})
+    fijar_ruta(db, V3, json={"etapas": {"Entrevista Humana": {"avance_automatico": True}}})
     P3 = nueva("Carla Paralelo", V3)
     r = client.post(f"/evaluaciones/postulaciones/{P3}", json={"tipo": "entrevista_humana", "forma": "registro_directo"})
     check(r.status_code == 201 and r.json()["movidaAFiltroHumano"] is False and post(P3).etapa == "Prefiltro" and r.json()["avisoProceso"],

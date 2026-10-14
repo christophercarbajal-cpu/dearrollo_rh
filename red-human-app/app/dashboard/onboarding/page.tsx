@@ -343,7 +343,8 @@ function Expediente({
   const recibidos = aplicables.filter((d) => d.aprobado ?? d.estado === "recibido").length;
   const evaluacion = n.evaluacion;
   const brechas = evaluacion?.brechas ?? [];
-  const resultado = brechas.length > 0 ? "Apto con observaciones" : "Apto";
+  // Cambio 38: vocabulario único de la recomendación («Apto / No apto» solo en médica y socioeconómico)
+  const resultado = brechas.length > 0 ? "Con reservas" : "Recomendable";
 
   return (
     <Card className="overflow-hidden">
@@ -437,7 +438,7 @@ function Expediente({
         <Eyebrow>Resumen de evaluación</Eyebrow>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <span className="font-display text-2xl font-bold tabular">{evaluacion?.score ?? n.score ?? 0}</span>
-          <Badge tone={resultado === "Apto" ? "good" : "warn"} dot>
+          <Badge tone={resultado === "Recomendable" ? "good" : "warn"} dot>
             {resultado}
           </Badge>
           {brechas.length > 0 && (

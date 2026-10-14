@@ -715,10 +715,10 @@ function CandidatosContenido() {
             </select>
           </div>
 
-          {/* Apto (Punto 21) */}
+          {/* Recomendación (Punto 21; Cambio 38: vocabulario Recomendable / No recomendable) */}
           <div>
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-ink-3">
-              Resultado Apto
+              Recomendación
             </label>
             <select
               value={fApto}
@@ -726,8 +726,8 @@ function CandidatosContenido() {
               className="w-full rounded-lg border border-border-soft bg-surface p-2 text-xs outline-none focus:border-brand"
             >
               <option value="todos">Todos los resultados</option>
-              <option value="apto">Apto (Sí)</option>
-              <option value="no_apto">No apto (No)</option>
+              <option value="apto">Recomendable</option>
+              <option value="no_apto">No recomendable</option>
               <option value="sin_evaluar">Sin evaluar</option>
             </select>
           </div>

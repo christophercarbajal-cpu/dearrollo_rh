@@ -24,6 +24,7 @@ Uso (desde red-human-api/, con el .env del ambiente; la API debe haber arrancado
 Opciones: --borrador (vacantes en Borrador en vez de Publicadas) · --canal whatsapp|telegram|ambos
 """
 
+import asyncio
 import argparse
 import sys
 from pathlib import Path
@@ -330,7 +331,7 @@ def asegurar_vacantes(db, cu: Cuenta, cl: Cliente, u: Usuario, procesos: dict, p
             guiones=guiones, generar_si_falta=False, publicar=publicar, plataformas=["Portal", "WhatsApp"] if publicar else [],
         )
         try:
-            rvac.crear(datos, db, u, cu)
+            asyncio.run(rvac.crear(datos, db, u, cu))  # Cambio 36: el alta es asíncrona (publica en sus canales)
         except HTTPException as e:
             raise Abortar(f"Vacante «{d['titulo']}»: {e.detail}")
         v = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == d["titulo"]).order_by(Vacante.id.desc()).first()

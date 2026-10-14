@@ -33,6 +33,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "ANAM_AP
 os.environ["ADMIN_PASSWORD"] = "prueba-continuidad"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.services.correo as correo_srv  # noqa: E402
@@ -122,7 +123,7 @@ with TestClient(app) as client:
         {"id": "refs", "tipo": "referencias", "etapa": "Entrevista Humana"},
         {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"},
     ]
-    r = client.put(f"/procesos/vacantes/{V}", json={"pasos": PASOS, "etapas": AUTO})
+    r = fijar_ruta(db, V, json={"pasos": PASOS, "etapas": AUTO})
     assert r.status_code == 200, r.text
     tel = iter(range(5586000000, 5586999999))
 
@@ -225,7 +226,7 @@ with TestClient(app) as client:
     actual["c"] = auto
     PASOS_AUTO = [{"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
                   {"id": "refs", "tipo": "referencias", "etapa": "Entrevista Humana"}]  # Cambio 28: catálogo estricto
-    assert client.put(f"/procesos/vacantes/{VA}", json={"pasos": PASOS_AUTO, "etapas": AUTO}).status_code == 200
+    assert fijar_ruta(db, VA, json={"pasos": PASOS_AUTO, "etapas": AUTO}).status_code == 200
     PA = nueva("Ana Automática", VA)
     asyncio.run(motor_ruta.procesar(db, post(PA)))
     x = paso(seg(PA), "refs")
@@ -251,7 +252,7 @@ with TestClient(app) as client:
     PASOS_PSI = [{"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
                  {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista IA", "pruebas": [GER]}]  # Cambio 28: catálogo estricto
     VP = vacs[0].codigo
-    assert client.put(f"/procesos/vacantes/{VP}", json={"pasos": PASOS_PSI, "etapas": AUTO}).status_code == 200
+    assert fijar_ruta(db, VP, json={"pasos": PASOS_PSI, "etapas": AUTO}).status_code == 200
     settings.psicometricas_token, settings.psicometricas_password = "T" * 20, "P" * 20
     orig_post = psi.httpx.post
     psi.httpx.post = lambda url, data=None, timeout=None: (LLAMADAS_PROVEEDOR.append(data), R(200, {"status": "200", "clave": "1-CONT-0001"}))[1]

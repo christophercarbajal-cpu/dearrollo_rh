@@ -152,6 +152,19 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[vacantes] ⚠️ migración de «Preguntas filtro» no aplicada: {ex}", flush=True)
+        # Cambio 38 (2026-10-14): vocabulario único de la recomendación (Recomendable / Con reservas / No recomendable) en lo
+        # que quedó guardado. Una sola vez (marca en bitácora), NO fatal.
+        try:
+            from .services import vocabulario as _svoc
+
+            with db.begin_nested():
+                c38 = _svoc.migrar(db, aplicar=True)
+            db.commit()
+            if c38.get("valores"):
+                print(f"[candidatos] Cambio 38: {c38['valores']} valor(es) con el vocabulario anterior normalizados", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[candidatos] ⚠️ normalización del vocabulario no aplicada: {ex}", flush=True)
         # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato; quien YA tenía
         # condiciones guardadas la conserva cumplida («aceptada · legado»). Una sola vez, NO fatal.
         try:

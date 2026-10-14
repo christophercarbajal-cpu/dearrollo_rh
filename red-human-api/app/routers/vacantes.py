@@ -27,7 +27,16 @@ from ..services import ia
 
 router = APIRouter(prefix="/vacantes", tags=["vacantes"])
 
-ESTADOS = ["Borrador", "En revisión", "Publicada", "Cerrada"]  # «Eliminada» solo vía DELETE (baja lógica)
+ESTADOS = ["Borrador", "En revisión", "Publicada", "Pausada", "Cerrada"]  # «Eliminada» solo vía DELETE (baja lógica)
+# Cambio 36: «El proceso manda» — con candidatos, la ruta de la vacante ya no se cambia
+MENSAJE_PROCESO_BLOQUEADO = ("No se puede cambiar: la vacante ya tiene candidatos y cada uno sigue la ruta con la que entró. "
+                             "Para usar otra ruta, crea una vacante nueva.")
+MENSAJE_PAUSADA = "Esta vacante está en pausa: por ahora no recibe postulaciones."
+
+
+def con_candidatos(db: Session, v: Vacante) -> int:
+    """Postulaciones (activas o cerradas) de la vacante: con alguna, su proceso queda bloqueado."""
+    return db.query(Postulacion).filter(Postulacion.vacante_id == v.id).count() if v.id else 0
 
 
 def _por_codigo(db: Session, codigo: str, cuenta_id: int) -> Vacante:
@@ -84,10 +93,14 @@ def _salida(db: Session, v: Vacante) -> dict:
 
 def _salida_rh(db: Session, v: Vacante) -> dict:
     """Detalle para RH: agrega las plantillas de conversación (guiones por actividad de la ruta). NUNCA en los payloads
-    públicos (portal, /aplicar): el guion de la entrevista no se le muestra al candidato."""
+    públicos (portal, /aplicar): el guion de la entrevista no se le muestra al candidato. Cambio 36: canales conectados
+    («Publicar en») y si el proceso quedó bloqueado por tener candidatos."""
     from ..services import guiones as sgui
+    from ..services import publicador
 
-    return {**_salida(db, v), "guiones": sgui.vista(v, db=db)}
+    n = con_candidatos(db, v)
+    return {**_salida(db, v), "guiones": sgui.vista(v, db=db), "canalesConectados": publicador.conectados(db, v),
+            "candidatosTotales": n, "procesoBloqueado": MENSAJE_PROCESO_BLOQUEADO if n else ""}
 
 
 def _guardar_guiones(v: Vacante, entrada: Optional[dict], por: str, web=None, whatsapp=None) -> None:
@@ -502,10 +515,12 @@ class CrearIn(GenerarIn):
     # Plantillas de conversación (2026-10-09): {secciones: {entrevista_whatsapp|entrevista_avatar|llamada: guion},
     # meta: {...de /generar}} — los prefiltros viajan en preguntas_filtro / preguntas_filtro_whatsapp.
     guiones: Optional[dict] = None
+    # Cambio 36: canales marcados en «Publicar en» (claves de `publicador.CANALES`); sin ellos, `plataformas` (compatibilidad)
+    canales: Optional[List[str]] = None
 
 
 @router.post("", status_code=201)
-def crear(
+async def crear(
     datos: CrearIn,
     db: Session = Depends(get_db),
     u: Usuario = Depends(usuario_decisor),
@@ -618,6 +633,13 @@ def crear(
          "proceso": (v.proceso or {}).get("plantilla_nombre") or ("personalizado" if v.proceso else "")},
     )
     db.commit()
+    if datos.publicar:
+        # Cambio 36: «Publicar» distribuye a TODOS los canales marcados (cada uno queda «Publicada» o «Error: motivo»)
+        from ..services import publicador
+
+        await publicador.publicar(db, v, datos.canales if datos.canales is not None else (plataformas or ["Portal", "WhatsApp"]))
+        registrar(db, u.nombre, "vacante_distribuida", "vacante", v.codigo, {"distribucion": publicador.vista(v)})
+        db.commit()
     return _salida_rh(db, v)
 
 
@@ -643,6 +665,14 @@ def _proceso_nuevo(db: Session, cuenta_id: int, datos: Optional[dict]) -> dict:
         return sproc.proceso_para_vacante(db, cuenta_id, {}, datos)
     except sproc.ErrorProceso as e:
         raise HTTPException(e.status, e.mensaje)
+
+
+@router.get("/canales")
+def canales_conectados(db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Cambio 36 — panel «Publicar en» de una vacante NUEVA: los canales conectados de la Cuenta (marcados por defecto)."""
+    from ..services import publicador
+
+    return publicador.conectados(db, cuenta=cuenta)
 
 
 @router.get("/perfiles-operativos")
@@ -690,6 +720,8 @@ def por_slug(slug: str, db: Session = Depends(get_db)):
     v = db.query(Vacante).filter(Vacante.slug == slug).first()
     if not v:
         raise HTTPException(404, "Vacante no encontrada")
+    if v.estado == "Pausada":
+        raise HTTPException(410, MENSAJE_PAUSADA)  # Cambio 36: la liga muestra el aviso de pausa
     if v.estado != "Publicada":
         raise HTTPException(410, "Esta vacante ya no está recibiendo postulaciones.")
     return _con_logo(db, _salida(db, v), v)
@@ -845,7 +877,7 @@ class ActualizarIn(BaseModel):
 
 
 @router.patch("/{codigo}")
-def actualizar(
+async def actualizar(
     codigo: str, datos: ActualizarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
@@ -879,6 +911,8 @@ def actualizar(
             raise HTTPException(e.status, e.mensaje)
         if cambios["proceso"] == (v.proceso or {}):
             cambios.pop("proceso")
+        elif con_candidatos(db, v):
+            raise HTTPException(409, MENSAJE_PROCESO_BLOQUEADO)  # Cambio 36: el proceso manda y no cambia con candidatos
     if "curso_filtro" in cambios:
         codigo_curso = (cambios.pop("curso_filtro") or "").strip()
         if not codigo_curso:
@@ -951,6 +985,12 @@ def actualizar(
 
     registrar(db, u.nombre, "vacante_editada", "vacante", v.codigo, {"campos": sorted(cambios)})
     db.commit()
+    if v.estado == "Publicada" and set(cambios) - {"estado", "responsable_id", "colaboradores_ids"}:
+        # Cambio 36: «Editar» de una vacante publicada se SINCRONIZA en las plataformas donde está
+        from ..services import publicador
+
+        await publicador.a_todos(db, v, "actualizar")
+        db.commit()
     return _salida_rh(db, v)
 
 
@@ -1040,6 +1080,8 @@ def generar_guiones_vacante(
 
 class PublicarIn(BaseModel):
     plataformas: List[str] = ["Portal", "WhatsApp"]
+    # Cambio 36: canales marcados en «Publicar en» (claves de `publicador.CANALES`); manda sobre `plataformas`
+    canales: Optional[List[str]] = None
 
 
 def _unir_plataformas(actuales: List[str], nuevas: List[str]) -> List[str]:
@@ -1058,22 +1100,27 @@ async def publicar(
     codigo: str, datos: PublicarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
+    from ..services import publicador
+
     v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
     _sincronizar_ruta(db, v, publicar=True)
-    if not any(p in PLATAFORMAS for p in datos.plataformas):
-        raise HTTPException(400, f"Elige al menos una plataforma válida: {', '.join(PLATAFORMAS)}")
+    canales = [c for c in (publicador.clave_canal(x) for x in (datos.canales if datos.canales is not None else datos.plataformas)) if c]
+    if not canales:
+        raise HTTPException(400, f"Elige al menos un canal: {', '.join(c['nombre'] for c in publicador.CANALES.values())}")
     if not (v.publicaciones or v.descripcion):
         raise HTTPException(409, "La vacante no tiene contenido. Genera la publicación antes de distribuirla.")
 
     v.estado = "Publicada"
-    v.plataformas = _unir_plataformas(v.plataformas, datos.plataformas)
     if not v.slug:
         v.slug = _slug_unico(db, v.titulo, v.id)
     # Fase C: estampar fecha de primera publicación (solo la primera vez; no sobreescribir en
     # reaperturas — la fecha que importa es cuándo salió por primera vez al público).
     if v.publicada_en is None:
         v.publicada_en = datetime.now(timezone.utc)
-    registrar(db, u.nombre, "vacante_publicada", "vacante", v.codigo, {"plataformas": v.plataformas})
+    db.flush()
+    # Cambio 36: distribuye a TODOS los canales marcados; cada uno queda «Publicada» (con liga ?canal=) o «Error: motivo»
+    await publicador.publicar(db, v, canales)
+    registrar(db, u.nombre, "vacante_publicada", "vacante", v.codigo, {"plataformas": v.plataformas, "distribucion": publicador.vista(v)})
     db.commit()
     # 2026-09-19: descripción de la vacante (HTML corporativo) al Cliente y al responsable; nunca bloquea.
     envios = await notificaciones.notificar_vacante_publicada(db, v, u.nombre)
@@ -1082,16 +1129,52 @@ async def publicar(
 
 
 @router.post("/{codigo}/cerrar")
-def cerrar(
+async def cerrar(
     codigo: str, datos: PublicarIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
     cuenta: Cuenta = Depends(cuenta_actual),
 ):
+    """Cerrar (definitivo): la vacante se retira de todos los canales donde estaba."""
+    from ..services import publicador
+
     v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    await publicador.a_todos(db, v, "cerrar")
     v.estado = "Cerrada"
     v.plataformas = []
-    registrar(db, u.nombre, "vacante_cerrada", "vacante", v.codigo, {})
+    registrar(db, u.nombre, "vacante_cerrada", "vacante", v.codigo, {"distribucion": publicador.vista(v)})
     db.commit()
     return _salida(db, v)
+
+
+@router.post("/{codigo}/pausar")
+async def pausar(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                 cuenta: Cuenta = Depends(cuenta_actual)):
+    """Cambio 36 — Pausar: la liga muestra «en pausa» (no recibe postulaciones), sale del portal y de WhatsApp y se retira de
+    las plataformas. Los candidatos que ya tiene siguen su proceso. «Reanudar» la vuelve a publicar donde estaba."""
+    from ..services import publicador
+
+    v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    if v.estado != "Publicada":
+        raise HTTPException(409, "Solo se puede pausar una vacante publicada.")
+    await publicador.a_todos(db, v, "pausar")
+    v.estado = "Pausada"
+    registrar(db, u.nombre, "vacante_pausada", "vacante", v.codigo, {"distribucion": publicador.vista(v)})
+    db.commit()
+    return _salida_rh(db, v)
+
+
+@router.post("/{codigo}/reanudar")
+async def reanudar(codigo: str, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                   cuenta: Cuenta = Depends(cuenta_actual)):
+    from ..services import publicador
+
+    v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
+    if v.estado != "Pausada":
+        raise HTTPException(409, "Solo se puede reanudar una vacante en pausa.")
+    v.estado = "Publicada"
+    await publicador.a_todos(db, v, "reanudar")
+    registrar(db, u.nombre, "vacante_reanudada", "vacante", v.codigo, {"distribucion": publicador.vista(v)})
+    db.commit()
+    return _salida_rh(db, v)
 
 
 @router.delete("/{codigo}")

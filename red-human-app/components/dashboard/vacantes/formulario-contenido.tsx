@@ -27,25 +27,32 @@
    etiqueta «Propuesto por Red Human»; «Falta para publicar» solo aparece tras «Generar con Red Human» o al intentar
    publicar (`intentoPublicar`).
 
+   Cambio 36 (2026-10-14): UNA sola página en DOS bloques. Bloque 1 (lo que captura RH): Datos principales → Proceso
+   (preseleccionado; manda) → Descripción breve → Indispensables / deseables / prestaciones (opcionales) → «Documentos y
+   fotos» SOLO si la ruta trae «Documentos» → «Generar con Red Human». Bloque 2 (lo que genera Red Human, aparece al
+   generar y la página baja a él): Responsabilidades → Requisitos (Requisito · Pregunta · Descarta si) → Preguntas base →
+   Entrevista → Textos por plataforma; si se edita el Bloque 1 después, «Volver a generar». Sin avisos de «Cumplimiento»:
+   lo que falta se dice en línea («Sin capturar: no se publican prestaciones»). Sin selectores de enfoque ni de oficio: el
+   proceso manda.
+
    Dos reglas NO NEGOCIABLES (también garantizadas en el servidor, ia._asegurar_capturado):
    - Red Human no inventa condiciones reales (sueldo, periodicidad, ubicación, modalidad, horario,
      prestaciones): lo que RH no capturó queda vacío/pendiente, nunca rellenado.
    - Red Human respeta lo capturado: indispensable sigue indispensable, deseable sigue deseable;
      solo complementa lo vacío. `contenidoDesdeGenerado` aplica exactamente eso del lado del cliente. */
 
-import { useEffect, useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronUp, MessageSquareText, Sparkles, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, MessageSquareText, RefreshCw, Sparkles, X } from "lucide-react";
 import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
 import type { EtapaCandidato, PasoProceso, Vacante } from "@/lib/data";
-import { PerfilOperativoCampo, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
+import { rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import {
   ETAPAS_PIPELINE,
   nombreEtapa,
   generarVacanteIA,
-  ENFOQUES_ENTREVISTA,
   ORDEN_GUIONES,
   TITULOS_GUION,
   type ClaveGuion,
@@ -54,6 +61,7 @@ import {
   type ProcesoEntrada,
   type PreguntaRequisito,
   type PreguntaFiltroU,
+  type BloquePlataforma,
   TIPOS_PREGUNTA_FILTRO,
   type EntrevistaBaseConfig,
   MONEDAS_SUELDO,
@@ -99,6 +107,8 @@ export interface ContenidoVacante {
   filtro: PreguntaFiltroU[];
   /** Cambio 37: indispensables que propuso Red Human (no los capturó RH). */
   indispensables_propuestos: string[];
+  /** Cambio 36: textos por plataforma (portal, OCC, LinkedIn…) que genera Red Human y RH puede ajustar. */
+  publicaciones: Record<string, BloquePlataforma>;
   /* --- 5. selección --- */
   /** Preguntas del prefiltro de la POSTULACIÓN WEB (/aplicar). */
   preguntas_filtro: CriterioFiltro[];
@@ -158,6 +168,7 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   preguntas_requisitos: [],
   filtro: [],
   indispensables_propuestos: [],
+  publicaciones: {},
   preguntas_filtro: [],
   preguntas_filtro_whatsapp: [],
   enfoque_entrevista: "profesional",
@@ -232,6 +243,7 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     preguntas_requisitos: [],
     filtro: [],
     indispensables_propuestos: [],
+    publicaciones: {},
     preguntas_filtro: [...(p.preguntasFiltro ?? [])],
     preguntas_filtro_whatsapp: [...(p.preguntasFiltroWhatsapp ?? [])],
     enfoque_entrevista: p.enfoqueEntrevista ?? "profesional",
@@ -293,6 +305,7 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     preguntas_requisitos: [...(v.preguntasRequisitos ?? [])],
     filtro: [...(v.filtro ?? [])],
     indispensables_propuestos: [...(v.indispensablesPropuestos ?? [])],
+    publicaciones: { ...((v.publicaciones ?? {}) as Record<string, BloquePlataforma>) },
     preguntas_filtro: [...((v.criterios ?? []) as CriterioFiltro[])],
     preguntas_filtro_whatsapp: [...((v.criteriosWhatsapp ?? []) as CriterioFiltro[])],
     enfoque_entrevista: v.enfoqueEntrevista ?? "profesional",
@@ -322,6 +335,7 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     preguntas_requisitos: g.preguntas_requisitos ?? base.preguntas_requisitos,
     filtro: g.filtro ?? base.filtro,
     indispensables_propuestos: g.indispensables_propuestos ?? base.indispensables_propuestos,
+    publicaciones: { ...base.publicaciones, ...(g.occ ? { occ: g.occ } : {}), ...(g.linkedin ? { linkedin: g.linkedin } : {}), ...(g.portal ? { portal: g.portal } : {}) },
     preguntas_filtro: base.preguntas_filtro.length ? base.preguntas_filtro : g.preguntas_filtro ?? [],
     preguntas_filtro_whatsapp: base.preguntas_filtro_whatsapp.length ? base.preguntas_filtro_whatsapp : g.preguntas_filtro_whatsapp ?? [],
     resumen: base.resumen || g.resumen,
@@ -433,6 +447,9 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     // Cambio 37: la entidad única «Preguntas filtro» (el servidor deriva el formulario web y la pregunta de cada requisito)
     filtro: c.filtro,
     indispensables_propuestos: c.indispensables_propuestos.filter((x) => c.requisitos.some((r) => clave(r) === clave(x))),
+    ...(Object.keys(c.publicaciones).length
+      ? { publicaciones: { ...c.publicaciones, whatsapp: { titulo: c.titulo, copy: c.texto_whatsapp, page: c.texto_whatsapp, etiquetas: [] } } }
+      : {}),
     enfoque_entrevista: c.enfoque_entrevista,
     resumen: c.resumen,
     perfil_ideal: c.perfil_ideal,
@@ -576,12 +593,6 @@ function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; 
   );
 }
 
-/** Huella de lo que alimenta los guiones: si cambia después de generar, se sugiere volver a generar. */
-function firmaGeneracion(c: ContenidoVacante, ruta?: ProcesoEntrada) {
-  const pasos = ruta && "pasos" in ruta ? (ruta.pasos ?? []).map((x) => x.tipo) : ruta ?? null;
-  return JSON.stringify([c.titulo, c.responsabilidades, c.requisitos, c.requisitos_deseables, c.ubicacion_estado, c.ubicacion_municipio,
-    c.modalidad, c.sueldo_desde, c.sueldo_hasta, c.sueldo_periodicidad, c.enfoque_entrevista, pasos]);
-}
 
 export function FormularioContenidoVacante({
   value,
@@ -622,12 +633,19 @@ export function FormularioContenidoVacante({
   const set = <K extends keyof ContenidoVacante>(k: K) => (v: ContenidoVacante[K]) => onChange({ ...value, [k]: v });
   const [generando, setGenerando] = useState(false);
   const [errorIA, setErrorIA] = useState("");
-  const [avanzado, setAvanzado] = useState(false);
   const [empresaIA, setEmpresaIA] = useState("");
   const [generado, setGenerado] = useState(() => tieneContenidoManual(value));
-  const [firmaGen, setFirmaGen] = useState<string | null>(null);
+  // Cambio 36: la firma del Bloque 1 al generar (o al abrir una vacante ya generada); si cambia → «Volver a generar»
+  const [firmaGen, setFirmaGen] = useState<string | null>(() => (tieneContenidoManual(value) ? firmaBloque1(value) : null));
   const [confirmar, setConfirmar] = useState<ClaveGuion[] | null>(null);
-  const avisos = avisosVigentes(value);
+  const bloque2 = useRef<HTMLDivElement>(null);
+  const [bajar, setBajar] = useState(false);
+  useEffect(() => {
+    if (bajar && generado && bloque2.current) {
+      bloque2.current.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      setBajar(false);
+    }
+  }, [bajar, generado]);
   // Cambio 27 (2026-10-12): la plantilla de ruta define el enfoque — Masivos = Operativo, sin importar el seniority
   const enfoquePorRuta = conGuiones && rutaMasiva(rutaGeneracion);
   useEffect(() => {
@@ -641,7 +659,9 @@ export function FormularioContenidoVacante({
   useEffect(() => {
     if (intentoPublicar > 0) setMostrarFaltantes(true);
   }, [intentoPublicar]);
-  const desactualizado = conGuiones && generado && (firmaGen !== null ? firmaGen !== firmaGeneracion(value, rutaGeneracion) : value.guiones.desactualizado);
+  const desactualizado = generado && firmaGen !== null && firmaGen !== firmaBloque1(value);
+  // Cambio 36: el proceso manda — el campo de documentos solo existe si la ruta trae «Documentos»
+  const conDocumentos = !conGuiones || reqRuta.etapasDocumentos.length > 0;
 
   async function generar(decision?: "conservar" | "sobrescribir") {
     // «Volver a generar»: las secciones editadas por RH nunca se pisan sin preguntar
@@ -696,194 +716,193 @@ export function FormularioContenidoVacante({
     }
     const base = contenidoDesdeGenerado(value, r.data);
     onChange(conGuiones ? aplicarGuionesGenerados(base, r.data) : base);
-    setFirmaGen(firmaGeneracion(value, rutaGeneracion));
+    setFirmaGen(firmaBloque1(value));
     onGenerado?.(r.data);
     setGenerado(true);
     setMostrarFaltantes(true);
+    setBajar(true);
     if (r.data.empresa) setEmpresaIA(r.data.empresa);
   }
 
   const sueldo = { desde: value.sueldo_desde, hasta: value.sueldo_hasta, moneda: value.sueldo_moneda, periodicidad: value.sueldo_periodicidad };
 
-  const nPrefiltro = value.filtro.length;
-  const resumenAvanzado = generado
-    ? [
-        value.responsabilidades.length ? `${value.responsabilidades.length} responsabilidades` : "",
-        nPrefiltro ? `${nPrefiltro} preguntas filtro` : "",
-        value.perfil_ideal ? "perfil ideal" : "",
-        value.texto_whatsapp || value.texto_bolsa ? "textos de publicación" : "",
-      ].filter(Boolean).join(" · ")
-    : "Red Human genera todo esto al presionar el botón; ábrelo solo si quieres ajustarlo a mano.";
+  const setPub = (canal: string, page: string) =>
+    onChange({ ...value, publicaciones: { ...value.publicaciones, [canal]: { ...{ titulo: value.titulo, copy: "", etiquetas: [] as string[] }, ...value.publicaciones[canal], page } } });
+  const avisoConfirmar = confirmar && (
+    <div className="rounded-lg border border-warn/40 bg-warn-soft/50 p-3 text-sm text-ink-2">
+      <p className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
+        <span>Editaste a mano: {confirmar.map((k) => `«${TITULOS_GUION[k]}»`).join(", ")}. ¿Qué hacemos con esas ediciones?</span>
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={() => generar("conservar")}>Conservar mis ediciones</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => generar("sobrescribir")}>Sobrescribirlas</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => setConfirmar(null)}>Cancelar</Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col gap-6">
-      {/* 1. Datos principales — condiciones reales que la IA nunca inventa (Puesto, Cliente, ubicación,
-          modalidad, sueldo). Se mantienen arriba porque sin ellas no se puede generar ni publicar. */}
-      <Seccion titulo="Datos principales">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Puesto *" value={value.titulo} onChange={set("titulo")} placeholder="Ej. Cajero(a) de sucursal" full />
-          <Field label="Área *" value={value.area} onChange={set("area")} placeholder="Operaciones, Ventas…" />
-          <Selector label="Seniority *" value={value.seniority} onChange={set("seniority")} opciones={[{ valor: "", texto: "Elige un nivel…" }, ...SENIORITIES.map((s) => ({ valor: s, texto: s }))]} />
-          {slotDatosPrincipales}
-          <SelectorUbicacion
-            estado={value.ubicacion_estado}
-            municipio={value.ubicacion_municipio}
-            libre={value.ubicacion}
-            onChange={(estado, municipio) =>
-              onChange({ ...value, ubicacion_estado: estado, ubicacion_municipio: municipio, ubicacion: textoUbicacion(estado, municipio, value.ubicacion) })
-            }
-          />
-          <Selector label="Modalidad *" value={value.modalidad} onChange={set("modalidad")} opciones={MODALIDADES} />
-          <CampoSueldo
-            value={sueldo}
-            onChange={(v) =>
-              onChange({ ...value, sueldo_desde: v.desde, sueldo_hasta: v.hasta, sueldo_moneda: v.moneda, sueldo_periodicidad: v.periodicidad as PeriodicidadSueldo | "" })
-            }
-            periodicidades={PERIODICIDADES_SUELDO}
-            monedas={MONEDAS_SUELDO}
-          />
-        </div>
-      </Seccion>
-
-      {/* 2. Lo que RH captura (regla 2026-09-16): descripción breve, indispensables, deseables, prestaciones y
-          enfoque de entrevista. Lo capturado se respeta literal; Red Human solo complementa lo vacío. */}
-      <Seccion titulo="Sobre la vacante">
-        <Area
-          label="Descripción breve"
-          value={value.descripcion}
-          onChange={set("descripcion")}
-          rows={generado ? 4 : 3}
-          placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
-        />
-        <ListaEditable label={reqRuta.minIndispensables ? `Requisitos indispensables * (mínimo ${reqRuta.minIndispensables})` : "Requisitos indispensables"}
-          items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida"
-          ayuda="Máximo 5. Solo condiciones que se puedan verificar (no tareas del puesto)." />
-        <PropuestosRedHuman requisitos={value.requisitos} propuestos={value.indispensables_propuestos} />
-        <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
-        <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
-        {conGuiones && <EditorPreguntasFiltro requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />}
-        <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
-          obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
-        {mostrarFaltantes && avisosRuta.length > 0 && (
-          <div className="rounded-xl border border-warn/40 bg-warn-soft px-3.5 py-2.5 text-xs text-ink-2" role="alert">
-            <p className="font-semibold text-ink">Falta para publicar (lo pide la ruta):</p>
-            <ul className="mt-1 list-disc pl-4">{avisosRuta.map((a) => <li key={a}>{a}</li>)}</ul>
-          </div>
-        )}
-        {enfoquePorRuta ? (
-          <div className="rounded-xl border border-border-soft bg-surface-2/50 px-3.5 py-2.5">
-            <p className="text-sm font-semibold text-ink">Enfoque de entrevista: Operativo</p>
-            <p className="mt-0.5 text-xs text-ink-3">Lo define la ruta Masivos, sin importar el seniority.</p>
-          </div>
-        ) : (
+      {/* ===================== BLOQUE 1 · lo que captura RH ===================== */}
+      <section className="flex flex-col gap-6" aria-label="Bloque 1: datos de la vacante" data-bloque="1">
+        <Seccion titulo="Datos principales">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Selector
-              label="Enfoque de entrevista"
-              value={value.enfoque_entrevista}
-              onChange={(v) => set("enfoque_entrevista")(v as EnfoqueEntrevista)}
-              opciones={ENFOQUES_ENTREVISTA.map((e) => ({ valor: e.valor, texto: e.texto }))}
+            <Field label="Puesto *" value={value.titulo} onChange={set("titulo")} placeholder="Ej. Cajero(a) de sucursal" full />
+            <Field label="Área *" value={value.area} onChange={set("area")} placeholder="Operaciones, Ventas…" />
+            <Selector label="Seniority *" value={value.seniority} onChange={set("seniority")} opciones={[{ valor: "", texto: "Elige un nivel…" }, ...SENIORITIES.map((s) => ({ valor: s, texto: s }))]} />
+            {slotDatosPrincipales}
+            <SelectorUbicacion
+              estado={value.ubicacion_estado}
+              municipio={value.ubicacion_municipio}
+              libre={value.ubicacion}
+              onChange={(estado, municipio) =>
+                onChange({ ...value, ubicacion_estado: estado, ubicacion_municipio: municipio, ubicacion: textoUbicacion(estado, municipio, value.ubicacion) })
+              }
             />
-            <p className="self-end pb-2 text-xs leading-relaxed text-ink-3">
-              {ENFOQUES_ENTREVISTA.find((e) => e.valor === value.enfoque_entrevista)?.detalle}
-            </p>
+            <Selector label="Modalidad *" value={value.modalidad} onChange={set("modalidad")} opciones={MODALIDADES} />
+            <div className="sm:col-span-2">
+              <CampoSueldo
+                value={sueldo}
+                onChange={(v) =>
+                  onChange({ ...value, sueldo_desde: v.desde, sueldo_hasta: v.hasta, sueldo_moneda: v.moneda, sueldo_periodicidad: v.periodicidad as PeriodicidadSueldo | "" })
+                }
+                periodicidades={PERIODICIDADES_SUELDO}
+                monedas={MONEDAS_SUELDO}
+              />
+              {value.sueldo_periodicidad === "a_convenir" && <ErrorLinea>Sin capturar: no se publica el sueldo.</ErrorLinea>}
+            </div>
           </div>
-        )}
-        {conGuiones && enfoquePorRuta && (
-          <EntrevistaWhatsappBase
-            value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
-            onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
-          />
-        )}
-        {conGuiones && value.enfoque_entrevista === "operativo" && !enfoquePorRuta && (
-          <PerfilOperativoCampo
-            value={value.guiones.perfil_operativo ?? null}
-            detectado={value.guiones.perfil_detectado ?? ""}
-            onChange={(p) => onChange({ ...value, guiones: { ...value.guiones, perfil_operativo: p } })}
-          />
-        )}
-      </Seccion>
+        </Seccion>
 
-      {/* 2026-10-09: «Proceso de selección» ANTES de generar — se genera solo lo de las actividades de la ruta */}
-      {slotProceso}
+        {/* El proceso manda: va antes de lo demás y decide qué se pide y qué se genera */}
+        {slotProceso}
 
-      {/* 3. Única acción principal */}
-      {conIA && (
-        <div className="rounded-xl border border-dashed border-brand/40 bg-brand-soft/30 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-ink-2">
-              {generado ? "Vuelve a generar si cambiaste algo arriba." : "Red Human completa descripción, responsabilidades, prefiltros, entrevista y textos de publicación."}
-            </p>
-            <Button type="button" onClick={() => generar()} disabled={generando}>
-              <Sparkles className="h-4 w-4" /> {generando ? "Generando…" : generado ? "Volver a generar" : "Generar vacante con Red Human"}
-            </Button>
+        <Seccion titulo="Sobre la vacante">
+          <Area
+            label="Descripción breve"
+            value={value.descripcion}
+            onChange={set("descripcion")}
+            rows={3}
+            placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
+          />
+          <div>
+            <ListaEditable label={reqRuta.minIndispensables ? `Requisitos indispensables (mínimo ${reqRuta.minIndispensables} para publicar)` : "Requisitos indispensables"}
+              items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Licencia de manejo tipo B"
+              ayuda="Opcional. Máximo 5, verificables; las tareas del puesto no son requisitos." />
+            {!value.requisitos.length && (
+              <ErrorLinea tono="info">Sin capturar: Red Human los propone desde la descripción (o «Disponibilidad para trabajar…»).</ErrorLinea>
+            )}
           </div>
-          {errorIA && <p className="mt-2 text-xs text-bad">{errorIA}</p>}
-          {empresaIA && !errorIA && (
-            <p className="mt-2 text-xs text-ink-3">
-              Contenido generado a nombre de <b className="text-ink">{empresaIA}</b>.
-            </p>
-          )}
-          {confirmar && (
-            <div className="mt-3 rounded-lg border border-warn/40 bg-warn-soft/50 p-3 text-sm text-ink-2">
-              <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
-                <span>Editaste a mano: {confirmar.map((k) => `«${TITULOS_GUION[k]}»`).join(", ")}. ¿Qué hacemos con esas ediciones?</span>
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button type="button" size="sm" onClick={() => generar("conservar")}>Conservar mis ediciones</Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => generar("sobrescribir")}>Sobrescribirlas</Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => setConfirmar(null)}>Cancelar</Button>
-              </div>
+          <PropuestosRedHuman requisitos={value.requisitos} propuestos={value.indispensables_propuestos} />
+          <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" ayuda="Opcional." />
+          <div>
+            <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Opcional. Solo se publican las que captures aquí." />
+            {!value.beneficios.some((b) => b.trim()) && <ErrorLinea>Sin capturar: no se publican prestaciones.</ErrorLinea>}
+          </div>
+          {conDocumentos && (
+            <div>
+              <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
+                obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
+              {reqRuta.documentosObligatorios && !value.documentos_solicitados.length && (
+                <ErrorLinea>Sin capturar: la ruta incluye «Documentos»; indica cuáles se piden.</ErrorLinea>
+              )}
             </div>
           )}
-          {desactualizado && !confirmar && (
-            <p className="mt-2 flex items-center gap-1.5 text-xs text-warn">
-              <AlertTriangle className="h-3.5 w-3.5" /> Cambiaste datos de la vacante o su ruta después de generar: vuelve a generar para actualizar los guiones.
+          {mostrarFaltantes && avisosRuta.length > 0 && (
+            <div className="rounded-xl border border-warn/40 bg-warn-soft px-3.5 py-2.5 text-xs text-ink-2" role="alert">
+              <p className="font-semibold text-ink">Falta para publicar (lo pide la ruta):</p>
+              <ul className="mt-1 list-disc pl-4">{avisosRuta.map((a) => <li key={a}>{a}</li>)}</ul>
+            </div>
+          )}
+        </Seccion>
+
+        {conIA && !generado && (
+          <div className="flex flex-col gap-2 rounded-xl border border-dashed border-brand/40 bg-brand-soft/30 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-ink-2">Red Human completa responsabilidades, requisitos con su pregunta, entrevista y textos por plataforma.</p>
+              <Button type="button" onClick={() => generar()} disabled={generando}>
+                <Sparkles className="h-4 w-4" /> {generando ? "Generando…" : "Generar con Red Human"}
+              </Button>
+            </div>
+            {errorIA && <p className="text-xs text-bad">{errorIA}</p>}
+          </div>
+        )}
+      </section>
+
+      {/* ===================== BLOQUE 2 · lo que genera Red Human (solo después de generar) ===================== */}
+      {generado && (
+        <section ref={bloque2} className="flex scroll-mt-4 flex-col gap-6 rounded-2xl border border-brand/25 bg-brand-soft/10 p-4"
+          aria-label="Bloque 2: generado por Red Human" data-bloque="2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-ink"><Sparkles className="h-4 w-4 text-brand" /> Generado por Red Human</p>
+              {empresaIA && <p className="text-xs text-ink-3">A nombre de <b className="text-ink">{empresaIA}</b>. Todo es editable.</p>}
+            </div>
+            {conIA && desactualizado && (
+              <Button type="button" size="sm" onClick={() => generar()} disabled={generando}>
+                <RefreshCw className="h-4 w-4" /> {generando ? "Generando…" : "Volver a generar"}
+              </Button>
+            )}
+          </div>
+          {conIA && desactualizado && (
+            <p className="-mt-3 flex items-center gap-1.5 text-xs text-warn">
+              <AlertTriangle className="h-3.5 w-3.5" /> Cambiaste los datos de arriba después de generar.
             </p>
           )}
-          {/* Avisos de cumplimiento: UNA sola vez, aquí; desaparecen al capturar el dato */}
-          {generado && avisos.length > 0 && (
-            <ul className="mt-3 space-y-1 rounded-lg bg-warn-soft/40 p-3 text-xs leading-relaxed text-ink-2">
-              {avisos.map((a, i) => (
-                <li key={i}>· {a}</li>
-              ))}
-            </ul>
+          {errorIA && <p className="-mt-3 text-xs text-bad">{errorIA}</p>}
+          {avisoConfirmar}
+
+          <Seccion titulo="Responsabilidades">
+            <ListaEditable label="Responsabilidades principales" items={value.responsabilidades} onChange={set("responsabilidades")}
+              placeholder="Una responsabilidad por renglón" ayuda="Son tareas del puesto, no requisitos." />
+          </Seccion>
+
+          {conGuiones && (
+            <Seccion titulo="Requisitos" ayuda="Requisito · Pregunta · Descarta si. Una pregunta por requisito indispensable (formulario web y chat).">
+              <EditorPreguntasFiltro modo="requisitos" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+            </Seccion>
           )}
-        </div>
+          {conGuiones && (
+            <Seccion titulo="Preguntas base" ayuda="Se hacen a todos y solo se registran (no descartan, salvo un requisito de edad o traslado).">
+              <EditorPreguntasFiltro modo="base" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+            </Seccion>
+          )}
+
+          {conGuiones && (
+            <Seccion titulo="Entrevista">
+              {enfoquePorRuta && (
+                <EntrevistaWhatsappBase
+                  value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
+                  onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
+                />
+              )}
+              <PlantillasConversacion value={value} onChange={onChange} />
+            </Seccion>
+          )}
+
+          <Seccion titulo="Textos por plataforma">
+            <Area label="WhatsApp" value={value.texto_whatsapp} onChange={set("texto_whatsapp")} rows={3} />
+            {(["portal", "occ", "linkedin"] as const).map((k) => (
+              <Area key={k} label={{ portal: "Portal Red Human", occ: "OCC Mundial", linkedin: "LinkedIn" }[k]}
+                value={value.publicaciones[k]?.page ?? (k === "occ" ? value.texto_bolsa : "")} onChange={(t) => setPub(k, t)} rows={4} />
+            ))}
+          </Seccion>
+        </section>
       )}
-
-      {/* 4. Revisar — plantillas de conversación de las actividades de la ruta (Vacantes) */}
-      {conGuiones && generado && <PlantillasConversacion value={value} onChange={onChange} />}
-
-      {/* 4. Configuración avanzada — acordeón CERRADO por defecto: todo lo que la IA genera sola */}
-      <section className="rounded-xl border border-border-soft">
-        <button
-          type="button"
-          onClick={() => setAvanzado((a) => !a)}
-          aria-expanded={avanzado}
-          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-        >
-          <span>
-            <span className="text-sm font-semibold text-ink">Configuración avanzada</span>
-            <span className="block text-xs text-ink-3">{resumenAvanzado}</span>
-          </span>
-          {avanzado ? <ChevronUp className="h-4 w-4 shrink-0 text-ink-3" /> : <ChevronDown className="h-4 w-4 shrink-0 text-ink-3" />}
-        </button>
-        <div className={cn("flex flex-col gap-6 border-t border-border-faint px-4 py-4", !avanzado && "hidden")}>
-          <Seccion titulo="Contenido generado">
-            <ListaEditable label="Responsabilidades principales" items={value.responsabilidades} onChange={set("responsabilidades")} placeholder="Una responsabilidad por renglón" />
-            <Area label="Resumen (portal)" value={value.resumen} onChange={set("resumen")} rows={2} />
-            <Area label="Perfil ideal" value={value.perfil_ideal} onChange={set("perfil_ideal")} rows={3} />
-            <ListaEditable label="Palabras clave" items={value.palabras_clave} onChange={set("palabras_clave")} />
-          </Seccion>
-          <Seccion titulo="Textos de publicación">
-            <Area label="Texto para WhatsApp" value={value.texto_whatsapp} onChange={set("texto_whatsapp")} rows={3} />
-            <Area label="Texto para bolsa de trabajo" value={value.texto_bolsa} onChange={set("texto_bolsa")} rows={4} />
-          </Seccion>
-        </div>
-      </section>
     </div>
   );
+}
+
+/** Cambio 36: lo que falta se dice EN LÍNEA, junto al campo (sin avisos de «Cumplimiento»). */
+function ErrorLinea({ children, tono = "warn" }: { children: React.ReactNode; tono?: "warn" | "info" }) {
+  return <p className={cn("mt-1 text-[12px]", tono === "warn" ? "text-warn" : "text-ink-3")}>{children}</p>;
+}
+
+/** Huella del Bloque 1 (lo que captura RH + la ruta): si cambia después de generar → «Volver a generar». */
+function firmaBloque1(c: ContenidoVacante) {
+  return JSON.stringify([c.titulo, c.area, c.seniority, c.ubicacion_estado, c.ubicacion_municipio, c.modalidad, c.sueldo_desde,
+    c.sueldo_hasta, c.sueldo_periodicidad, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios]);
 }
 
 /** Cambio 37: los indispensables que NO capturó RH los propone Red Human — se marcan para que RH los confirme o quite. */
@@ -905,9 +924,12 @@ function PropuestosRedHuman({ requisitos, propuestos }: { requisitos: string[]; 
  *  Una por requisito indispensable (texto natural, tipo y regla de descarte) y las «Base» (edad, interés, sueldo,
  *  colonia, traslado), que no descartan. Una pregunta abierta nunca descarta. Lo que cambie en los indispensables se
  *  refleja al guardar (el servidor arma la pregunta de un requisito nuevo y quita la de uno que ya no está). */
-function EditorPreguntasFiltro({ requisitos, items, onChange }: { requisitos: string[]; items: PreguntaFiltroU[]; onChange: (x: PreguntaFiltroU[]) => void }) {
-  const vigentes = items.filter((q) => !q.indispensable || requisitos.some((r) => clave(r) === clave(q.requisito)));
-  const sinPregunta = requisitos.filter((r) => r.trim() && !items.some((q) => q.indispensable && clave(q.requisito) === clave(r)));
+function EditorPreguntasFiltro({ requisitos, items, onChange, modo }: {
+  requisitos: string[]; items: PreguntaFiltroU[]; onChange: (x: PreguntaFiltroU[]) => void; modo: "requisitos" | "base";
+}) {
+  const vigentes = items.filter((q) => (modo === "base" ? q.base && !q.indispensable
+    : q.indispensable && requisitos.some((r) => clave(r) === clave(q.requisito))));
+  const sinPregunta = modo === "requisitos" ? requisitos.filter((r) => r.trim() && !items.some((q) => q.indispensable && clave(q.requisito) === clave(r))) : [];
   const set = (id: string, cambios: Partial<PreguntaFiltroU>) =>
     onChange(items.map((q) => {
       if (q.id !== id) return q;
@@ -915,46 +937,58 @@ function EditorPreguntasFiltro({ requisitos, items, onChange }: { requisitos: st
       if (x.tipo === "abierta" || x.base && !x.indispensable) x.descarta = false;
       return x;
     }));
-  if (!vigentes.length && !sinPregunta.length) return null;
+  if (!vigentes.length && !sinPregunta.length) {
+    return <p className="text-xs text-ink-3">{modo === "requisitos" ? "Sin requisitos indispensables." : "Sin preguntas base."}</p>;
+  }
   return (
-    <div>
-      <p className="text-sm font-semibold text-ink">Preguntas filtro</p>
-      <p className="mt-0.5 text-xs text-ink-3">
-        Una sola lista para el formulario web y el chat. Cada requisito indispensable tiene su pregunta; las «Base» solo se
-        registran. Solo una respuesta verificable (Sí / No o un dato comparable) puede descartar.
-      </p>
-      <ul className="mt-2 flex flex-col gap-2">
-        {vigentes.map((q) => (
-          <li key={q.id} className="rounded-xl border border-border-soft bg-surface-2/50 p-3">
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-              <span className={cn("rounded-full px-2 py-0.5 font-medium",
-                q.base && !q.indispensable ? "bg-surface-3 text-ink-2" : q.propuesto ? "bg-brand-soft text-brand" : "bg-good-soft text-good")}>
-                {q.etiqueta ?? (q.base ? "Base" : "Requisito")}
-              </span>
-              <span className="text-ink-3">{q.requisito}</span>
-            </div>
-            <input value={q.pregunta} onChange={(e) => set(q.id, { pregunta: e.target.value })} aria-label={`Pregunta de ${q.requisito}`}
-              className="mt-2 min-h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-2">
-              <select value={q.tipo} disabled={q.base} onChange={(e) => set(q.id, { tipo: e.target.value as PreguntaFiltroU["tipo"] })}
-                className="h-9 rounded-lg border border-border-soft bg-surface px-2 disabled:opacity-60">
-                {TIPOS_PREGUNTA_FILTRO.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
-              </select>
-              <label className={cn("flex items-center gap-1.5", (q.tipo === "abierta" || (q.base && !q.indispensable)) && "opacity-50")}>
-                <input type="checkbox" checked={q.descarta} disabled={q.tipo === "abierta" || (q.base && !q.indispensable)}
-                  onChange={(e) => set(q.id, { descarta: e.target.checked })} className="h-3.5 w-3.5 rounded border-border-soft text-brand" />
-                Descarta
-              </label>
-              <span className="text-ink-3">{q.descarta ? q.regla : "No descarta"}</span>
-            </div>
-          </li>
-        ))}
-        {sinPregunta.map((r) => (
-          <li key={`nuevo-${r}`} className="rounded-xl border border-dashed border-border-soft px-3 py-2 text-xs text-ink-3">
-            <b className="text-ink-2">{r}</b>: Red Human arma su pregunta al guardar.
-          </li>
-        ))}
-      </ul>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[34rem] text-left text-sm">
+        <thead className="text-[11px] uppercase tracking-wide text-ink-3">
+          <tr>
+            <th className="w-1/4 py-1.5 pr-2 font-medium">{modo === "requisitos" ? "Requisito" : "Dato"}</th>
+            <th className="py-1.5 pr-2 font-medium">Pregunta</th>
+            <th className="w-1/4 py-1.5 font-medium">Descarta si</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vigentes.map((q) => (
+            <tr key={q.id} className="border-t border-border-faint align-top">
+              <td className="py-2 pr-2 text-[13px] text-ink-2">
+                {q.requisito}
+                {q.propuesto && <span className="mt-1 block w-fit rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-brand">Propuesto por Red Human</span>}
+                {q.base && <span className="mt-1 block w-fit rounded-full bg-surface-3 px-2 py-0.5 text-[10px] font-medium text-ink-2">Base</span>}
+              </td>
+              <td className="py-2 pr-2">
+                <input value={q.pregunta} onChange={(e) => set(q.id, { pregunta: e.target.value })} aria-label={`Pregunta de ${q.requisito}`}
+                  className="min-h-9 w-full rounded-lg border border-border-soft bg-surface px-2.5 text-sm outline-none focus:border-brand" />
+                {modo === "requisitos" && (
+                  <select value={q.tipo} onChange={(e) => set(q.id, { tipo: e.target.value as PreguntaFiltroU["tipo"] })}
+                    className="mt-1.5 h-8 rounded-lg border border-border-soft bg-surface px-2 text-xs" aria-label="Tipo de respuesta">
+                    {TIPOS_PREGUNTA_FILTRO.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
+                  </select>
+                )}
+              </td>
+              <td className="py-2 text-xs text-ink-2">
+                {modo === "requisitos" && q.tipo !== "abierta" ? (
+                  <label className="flex items-start gap-1.5">
+                    <input type="checkbox" checked={q.descarta} onChange={(e) => set(q.id, { descarta: e.target.checked })}
+                      className="mt-0.5 h-3.5 w-3.5 rounded border-border-soft text-brand" />
+                    <span>{q.descarta ? q.regla.replace(/^Descarta si /, "") : "No descarta"}</span>
+                  </label>
+                ) : (
+                  <span className="text-ink-3">{q.descarta ? q.regla.replace(/^Descarta si /, "") : "No descarta"}</span>
+                )}
+              </td>
+            </tr>
+          ))}
+          {sinPregunta.map((r) => (
+            <tr key={`nuevo-${r}`} className="border-t border-border-faint text-xs text-ink-3">
+              <td className="py-2 pr-2 text-ink-2">{r}</td>
+              <td className="py-2" colSpan={2}>Red Human arma su pregunta al guardar.</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

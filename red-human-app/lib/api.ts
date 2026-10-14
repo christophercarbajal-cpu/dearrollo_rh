@@ -912,6 +912,8 @@ export function crearVacante(
     avisos_cumplimiento?: string[];
     texto_whatsapp?: string;
     preguntas_filtro?: CriterioFiltro[];
+    /** Cambio 36: canales marcados en «Publicar en». */
+    canales?: string[];
     preguntas_filtro_whatsapp?: CriterioFiltro[];
     ubicacion_estado?: string;
     ubicacion_municipio?: string;
@@ -997,8 +999,43 @@ export function regenerarVacante(codigo: string, notas = "") {
   return post<Vacante & { ia: boolean }>(`/vacantes/${codigo}/regenerar`, { notas });
 }
 
-export function publicarVacante(codigo: string, plataformas: string[]) {
-  return post<Vacante>(`/vacantes/${codigo}/publicar`, { plataformas });
+/** Cambio 36: «Publicar» distribuye a TODOS los canales marcados (claves de CanalPublicacion.canal). */
+export function publicarVacante(codigo: string, canales: string[]) {
+  return post<Vacante>(`/vacantes/${codigo}/publicar`, { canales });
+}
+
+/** Cambio 36 — motor de publicación multicanal: un canal conectado y su estado en la vacante. */
+export interface CanalPublicacion {
+  canal: string;
+  nombre: string;
+  interno: boolean;
+  /** Modo Demo: el canal externo se simula (sin requests). */
+  simulado?: boolean;
+  estado: "publicada" | "error" | "pausada" | "cerrada" | "pendiente";
+  estadoTexto: string;
+  liga: string;
+  motivo?: string;
+}
+/** Canales conectados de la Cuenta (panel «Publicar en», todos marcados por defecto). */
+export function fetchCanalesPublicacion() {
+  return get<CanalPublicacion[]>("/vacantes/canales");
+}
+export function pausarVacante(codigo: string) {
+  return post<Vacante>(`/vacantes/${codigo}/pausar`, {});
+}
+export function reanudarVacante(codigo: string) {
+  return post<Vacante>(`/vacantes/${codigo}/reanudar`, {});
+}
+/** /aplicar: la vacante pública o el motivo por el que no recibe postulaciones (p. ej. «en pausa»). */
+export async function fetchVacantePublica(slug: string): Promise<{ vacante: Vacante | null; error: string }> {
+  try {
+    const r = await fetch(`${API}/vacantes/slug/${slug}`, { cache: "no-store" });
+    if (r.ok) return { vacante: (await r.json()) as Vacante, error: "" };
+    const j = await r.json().catch(() => ({}));
+    return { vacante: null, error: typeof j?.detail === "string" ? j.detail : "" };
+  } catch {
+    return { vacante: null, error: "" };
+  }
 }
 
 export function cerrarVacante(codigo: string) {
@@ -1464,9 +1501,12 @@ export function postular(datos: {
   consentimiento: boolean;
   respuestas?: { pregunta: string; respuesta: string }[];
   cv?: File | null;
+  /** Cambio 36: canal de la liga (`/aplicar/<slug>?canal=occ`). */
+  canal?: string;
 }) {
   const form = new FormData();
   form.append("vacante", datos.slug);
+  if (datos.canal) form.append("canal", datos.canal);
   form.append("nombre", datos.nombre);
   form.append("telefono", datos.telefono ?? "");
   form.append("correo", datos.correo ?? "");

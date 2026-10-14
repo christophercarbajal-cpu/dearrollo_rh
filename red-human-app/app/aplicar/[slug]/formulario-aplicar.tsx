@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MapPin,
@@ -21,7 +21,7 @@ import {
 import { Logo, Button, Card, Badge } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Dropzone, pesoLegible } from "@/components/dashboard/subida";
-import { fetchVacantePorSlug, postular } from "@/lib/api";
+import { fetchVacantePublica, postular } from "@/lib/api";
 import type { Vacante } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +37,10 @@ const PREGUNTAS_BASE = [
 
 export default function FormularioAplicar() {
   const params = useParams();
+  // Cambio 36: cada plataforma publica su liga con ?canal=<canal>; la postulación registra de dónde llegó
+  const canalLiga = useSearchParams()?.get("canal") ?? "";
+  // Cambio 36: vacante en pausa / cerrada → aviso en la liga (sin formulario)
+  const [aviso, setAviso] = useState("");
   const slug = String(params?.slug ?? "");
 
   const [vacante, setVacante] = useState<Vacante | null>(null);
@@ -53,8 +57,9 @@ export default function FormularioAplicar() {
   const [enviando, setEnviando] = useState(false);
 
   useEffect(() => {
-    fetchVacantePorSlug(slug).then((v) => {
+    fetchVacantePublica(slug).then(({ vacante: v, error }) => {
       setVacante(v);
+      setAviso(error);
       setCargando(false);
     });
   }, [slug]);
@@ -129,6 +134,7 @@ export default function FormularioAplicar() {
         consentimiento: consent,
         respuestas: preguntas.map((p) => ({ pregunta: p, respuesta: respuestas[p] ?? "" })),
         cv: pideCv ? cv : null,
+        canal: canalLiga,
       });
       setEnviando(false);
       if (!r.ok) {
@@ -174,7 +180,7 @@ export default function FormularioAplicar() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <Badge tone={vacante || cargando ? "good" : "warn"} dot>
-              {cargando ? "Cargando…" : vacante ? "Vacante abierta" : "Vista previa"}
+              {cargando ? "Cargando…" : vacante ? "Vacante abierta" : aviso ? "No disponible" : "Vista previa"}
             </Badge>
             <h1 className="font-display mt-3 text-3xl font-bold tracking-tight sm:text-4xl">{titulo}</h1>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-2">
@@ -206,7 +212,12 @@ export default function FormularioAplicar() {
           </Card>
         )}
 
-        {done ? (
+        {aviso ? (
+          <Card className="mt-6 p-6 text-center" role="status">
+            <p className="text-[15px] font-medium">{aviso}</p>
+            <p className="mt-1 text-sm text-ink-3">Vuelve a intentarlo más adelante o revisa otras vacantes en la bolsa de trabajo.</p>
+          </Card>
+        ) : done ? (
           <Exito titulo={titulo} conCv={pideCv && Boolean(cv)} canal={canal} />
         ) : (
           <Card className="mt-6 overflow-hidden">

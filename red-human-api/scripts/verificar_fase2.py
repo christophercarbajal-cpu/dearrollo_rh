@@ -28,6 +28,7 @@ os.environ["ANAM_API_KEY"] = ""
 os.environ["ADMIN_PASSWORD"] = "prueba-fase2"
 os.environ["SEMBRAR_DEMO"] = "true"  # los scripts de verificación sí usan los datos de ejemplo
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
@@ -132,7 +133,7 @@ with TestClient(app) as client:
 
     ruta_mas = _sproc.ruta_base("masivos_sin_documentos")
     for vv in (v1, v2):
-        _r = client.put(f"/procesos/vacantes/{vv.codigo}", json={"pasos": ruta_mas["pasos"], "etapas": ruta_mas["etapas"]})
+        _r = fijar_ruta(db, vv.codigo, json={"pasos": ruta_mas["pasos"], "etapas": ruta_mas["etapas"]})
         assert _r.status_code == 200, _r.text
     r1 = client.post("/candidatos/postular", data={"vacante": v1.slug, "nombre": "Prueba Fase Dos", "telefono": TEL, "consentimiento": "true"})
     check(r1.status_code == 201 and r1.json()["postulacionNueva"], "POST /postular vacante 1 → postulación nueva")

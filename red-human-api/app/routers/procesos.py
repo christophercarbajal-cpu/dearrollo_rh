@@ -262,6 +262,10 @@ def guardar_proceso_vacante(codigo: str, datos: dict, db: Session = Depends(get_
     except sproc.ErrorProceso as e:
         raise _error(e)
     if nuevo != (v.proceso or {}):
+        from .vacantes import MENSAJE_PROCESO_BLOQUEADO, con_candidatos
+
+        if con_candidatos(db, v):
+            raise HTTPException(409, MENSAJE_PROCESO_BLOQUEADO)  # Cambio 36: el proceso no cambia con candidatos
         v.proceso = nuevo
         registrar(db, u.nombre, "vacante_proceso_actualizado", "vacante", v.codigo,
                   {"version": nuevo.get("version"), "plantilla": nuevo.get("plantilla_nombre"), "personalizado": nuevo.get("personalizado"),

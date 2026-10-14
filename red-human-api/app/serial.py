@@ -94,6 +94,15 @@ def _sincronizacion(v) -> dict:
                 "minIndispensables": 0}
 
 
+def _distribucion(v) -> dict:
+    from .services import publicador
+
+    try:
+        return publicador.vista(v)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _filtro(v) -> list:
     from .services import preguntas_filtro as pfu
 
@@ -190,6 +199,8 @@ def vacante_dict(
         "preguntasRequisitos": _preguntas_requisitos(v),
         # Cambio 37: «Preguntas filtro» (entidad única) y los indispensables «Propuesto por Red Human»
         "filtro": _filtro(v),
+        # Cambio 36: estado de la publicación por canal (Publicada con liga ?canal= · Error: motivo · Pausada · Cerrada)
+        "distribucion": _distribucion(v),
         "indispensablesPropuestos": list(((v.guiones or {}).get("indispensables_propuestos")) or []),
         "ubicacionEstado": v.ubicacion_estado or "",
         "ubicacionMunicipio": v.ubicacion_municipio or "",
@@ -621,8 +632,8 @@ def etiqueta_tablero(p: Postulacion) -> Optional[dict]:
     clave = {"avanzar": "recomendable", "revision": "con_reservas", "no_avanzar": "no_recomendable"}.get(ev.get("recomendacion") or "")
     if not clave:
         return None
-    # C6 regla 6: el perfil Corporativo conserva sus etiquetas (Apto / Apto con observaciones / No apto)
-    texto = {"recomendable": "Apto", "con_reservas": "Apto con observaciones", "no_recomendable": "No apto"}[clave]
+    # Cambio 38: un solo vocabulario (Recomendable / Con reservas / No recomendable) también en el perfil Corporativo
+    texto = {"recomendable": "Recomendable", "con_reservas": "Con reservas", "no_recomendable": "No recomendable"}[clave]
     return {"clave": clave, "texto": texto, "faltan": []}
 
 

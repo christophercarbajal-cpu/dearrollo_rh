@@ -136,6 +136,8 @@ class Vacante(Base):
     avisos_cumplimiento: Mapped[list] = mapped_column(JSON, default=list)
     # {"occ": {titulo, copy, page, etiquetas}, "linkedin": {...}, "portal": {...}, "whatsapp": {...}}
     publicaciones: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Cambio 36 (2026-10-14): estado de la publicación POR CANAL {canal: {estado, liga, motivo, en}} (`services/publicador`)
+    distribucion: Mapped[dict] = mapped_column(JSON, default=dict)
 
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)

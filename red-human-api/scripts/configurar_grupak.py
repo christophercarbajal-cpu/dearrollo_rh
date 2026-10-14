@@ -25,6 +25,7 @@ Uso (desde red-human-api/, con el .env del ambiente):
 Opciones: --codigo VAC-#### (por defecto VAC-1156)
 """
 
+import asyncio
 import argparse
 import sys
 from pathlib import Path
@@ -200,7 +201,7 @@ def crear_ayudante(db, cu: Cuenta, cl: Cliente, u: Usuario, pl: PlantillaProceso
         generar_si_falta=False, publicar=True, plataformas=["Portal", "WhatsApp"],
     )
     try:
-        rvac.crear(datos, db, u, cu)
+        asyncio.run(rvac.crear(datos, db, u, cu))  # Cambio 36: el alta es asíncrona (publica en sus canales)
     except HTTPException as e:
         raise Abortar(f"Vacante «{d['titulo']}»: {e.detail}")
     v = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == d["titulo"]).order_by(Vacante.id.desc()).first()

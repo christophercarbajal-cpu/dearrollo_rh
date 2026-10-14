@@ -18,7 +18,10 @@ Reglas:
   «No apto» (No avanzar / No apto / Desfavorable), el resultado integral es «No apto» aunque el score sea alto.
 * Si falta alguna validación → «Pendiente» con el score PARCIAL de lo que ya hay. Un pendiente nunca vale cero:
   sin ninguna calificación el score es None.
-* Sin pendientes ni «No apto»: «Apto con observaciones» si alguna trae observaciones; si no, «Apto».
+* Sin pendientes ni «No recomendable»: «Con reservas» si alguna trae observaciones; si no, «Recomendable».
+* Cambio 38 (2026-10-14): UN solo vocabulario para la recomendación global en todos los perfiles — Recomendable / Con
+  reservas / No recomendable. «Apto / No apto» queda SOLO para el resultado de la Evaluación médica y del Estudio
+  socioeconómico (claves internas sin cambio: apto | con_observaciones | no_apto | pendiente).
 
 Proceso configurable (2026-10-06): si la postulación tiene proceso, las validaciones y cuáles son OBLIGATORIAS salen de
 sus pasos (Análisis de CV / Entrevista Red Human / cada evaluación del proceso); un paso omitido o cancelado con
@@ -34,19 +37,13 @@ RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
 
 ESTADOS_INTEGRAL = {
-    "apto": "Apto",
-    "con_observaciones": "Apto con observaciones",
-    "no_apto": "No apto",
-    "pendiente": "Pendiente",
-}
-# C6 (prueba del 11 de octubre, regla 6): SOLO el perfil OPERATIVO usa las etiquetas de la recomendación; el perfil
-# Corporativo queda sin cambios (Apto / Apto con observaciones / No apto). Las claves internas son las mismas.
-ESTADOS_INTEGRAL_OPERATIVO = {
     "apto": "Recomendable",
     "con_observaciones": "Con reservas",
     "no_apto": "No recomendable",
     "pendiente": "Pendiente",
 }
+# Cambio 38: el perfil Corporativo usa el MISMO vocabulario (reemplaza la regla 6 del C6)
+ESTADOS_INTEGRAL_OPERATIVO = ESTADOS_INTEGRAL
 
 
 def es_operativo(p: Postulacion) -> bool:

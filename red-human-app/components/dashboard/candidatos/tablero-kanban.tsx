@@ -37,11 +37,22 @@ export const COLOR_ETAPA: Record<EtapaCandidato, string> = {
 };
 
 const CANAL: Record<string, string> = { whatsapp: "WhatsApp", web: "Web", referido: "Referido", telegram: "Telegram" };
+/** Cambio 38: resultado del PREFILTRO (segunda prioridad de la etiqueta de la tarjeta). «Cumple perfil» ya no existe en
+ *  el tablero (el dato sigue en la ficha). */
 const FILTRO: Record<string, [string, string]> = {
-  cumple: ["Cumple perfil", "bg-kb-green-bg text-kb-green"],
+  cumple: ["Cumple", "bg-kb-green-bg text-kb-green"],
   revisar: ["Requiere revisión", "bg-kb-amber-bg text-kb-amber"],  // Cambio 37
   no_cumple: ["No cumple", "bg-kb-red-bg text-kb-red"],
 };
+
+/** Cambio 38 — la ÚNICA etiqueta de la tarjeta (esquina superior derecha): 1) la recomendación final (Recomendable / Con
+ *  reservas / No recomendable); 2) si no hay, el resultado del prefiltro (Cumple / Requiere revisión / No cumple). */
+export function etiquetaTarjeta(c: Pick<Candidato, "card_label" | "filter_status">): { clave: string; texto: string; clase: string } {
+  if (c.card_label?.texto) return { clave: c.card_label.clave, texto: c.card_label.texto, clase: tonoEtiqueta(c.card_label.clave) };
+  const f = c.filter_status ? FILTRO[c.filter_status] : null;
+  if (f) return { clave: `prefiltro_${c.filter_status}`, texto: f[0], clase: f[1] };
+  return { clave: "sin_evaluar", texto: "Sin evaluar", clase: tonoEtiqueta(null) };
+}
 const ALERTA_PSICO: Record<string, string> = {
   sin_enviar: "Psicométrica sin enviar", sin_respuesta: "Psicométrica sin respuesta", error_envio: "Psicométrica: error de envío",
   falta_correo: "Falta correo para la prueba",
@@ -154,7 +165,7 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
     .join(" · ");
   // 2026-10-08: el MISMO % (obligatorios Aprobados) en Contratación y Onboarding que en la ficha y el tablero de Onboarding
   const pct = (c.etapa === "Contratación" || c.etapa === "Onboarding") && c.expediente_pct != null ? Math.max(0, Math.min(100, c.expediente_pct)) : null;
-  const filtro = c.filter_status ? FILTRO[c.filter_status] : null;
+  const unica = etiquetaTarjeta(c);
   const cerrada = c.activa === false;
   const motivo = c.motivoDescarte || c.motivoCierre || "";
 
@@ -177,9 +188,10 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
           <p className="line-clamp-2 text-[15px] font-semibold leading-[1.3]">{nombre}</p>
           {subtitulo && <p className="text-[13px] text-kb-ink-2">{subtitulo}</p>}
         </div>
-        {/* C11 (prueba del 11 de octubre): sin puntaje numérico — solo la etiqueta de la recomendación */}
-        <span className={cn("shrink-0 rounded-lg px-2 py-1 text-xs font-bold", tonoEtiqueta(etiqueta?.clave))}>
-          {etiqueta?.texto ?? "Sin evaluar"}
+        {/* Cambio 38: UNA sola etiqueta — recomendación final o, si no hay, el resultado del prefiltro */}
+        <span data-etiqueta-tarjeta={unica.clave} title={unica.clave === "prefiltro_no_cumple" && motivo ? motivo : undefined}
+          className={cn("shrink-0 rounded-lg px-2 py-1 text-xs font-bold", unica.clase)}>
+          {unica.texto}
         </span>
       </div>
 
@@ -219,7 +231,6 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
       )}
 
       <div className="flex flex-wrap items-center gap-1.5">
-        {filtro && <Chip clase={filtro[1]} title={c.filter_status === "no_cumple" && motivo ? motivo : undefined}>{filtro[0]}</Chip>}
         {cerrada && c.motivoCierre !== "descartado" && (
           <Chip clase="bg-kb-gray-bg text-kb-gray" title={motivo}>{c.motivoCierre === "prueba_reemplazada" ? textoMotivoCierre(c.motivoCierre) : "Cerrada"}</Chip>
         )}

@@ -599,7 +599,7 @@ export interface Vacante {
   sueldoHasta?: number | null;
   sueldoMoneda?: string;
   sueldoPeriodicidad?: string;
-  estado: "Publicada" | "Borrador" | "En revisión" | "Cerrada" | "Eliminada";
+  estado: "Publicada" | "Borrador" | "En revisión" | "Pausada" | "Cerrada" | "Eliminada";
   candidatos: number;
   nuevos: number;
   publicada: string;
@@ -640,6 +640,10 @@ export interface Vacante {
   /** Cambio 37: «Preguntas filtro» (entidad única) e indispensables «Propuesto por Red Human». */
   filtro?: import("./api").PreguntaFiltroU[];
   indispensablesPropuestos?: string[];
+  /** Cambio 36: estado de la publicación por canal y, en el detalle para RH, si el proceso quedó bloqueado. */
+  distribucion?: Record<string, import("./api").CanalPublicacion>;
+  procesoBloqueado?: string;
+  candidatosTotales?: number;
   /** Cambio 28: lo que la ruta exige y falta (vacío = se puede publicar) y etapas de «Se pide en:». */
   faltantesPublicacion?: string[];
   etapasDocumentos?: EtapaCandidato[];

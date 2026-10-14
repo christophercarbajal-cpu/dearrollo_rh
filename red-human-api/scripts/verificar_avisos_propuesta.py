@@ -31,6 +31,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "ANAM_AP
 os.environ["ADMIN_PASSWORD"] = "prueba-avisos"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.services.correo as correo_srv  # noqa: E402
@@ -110,7 +111,7 @@ with TestClient(app) as client:
         {"id": "condiciones", "tipo": "condiciones", "etapa": "Contratación"},
         {"id": "docs", "tipo": "documentos", "etapa": "Contratación", "depende_de": ["condiciones"]},
     ]
-    assert client.put(f"/procesos/vacantes/{v.codigo}", json={"pasos": PASOS}).status_code == 200
+    assert fijar_ruta(db, v.codigo, json={"pasos": PASOS}).status_code == 200
     tel = iter(range(5583000000, 5583999999))
 
     def nueva(nombre):

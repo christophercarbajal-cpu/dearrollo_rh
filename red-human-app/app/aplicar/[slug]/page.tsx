@@ -6,6 +6,7 @@
    no contesta) no se inyecta nada y la página sigue funcionando igual. El formulario (un solo paso) vive
    intacto en `formulario-aplicar.tsx`. Ver docs/arquitectura_bolsas_empleo.md (3.3-5). */
 
+import { Suspense } from "react";
 import FormularioAplicar from "./formulario-aplicar";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -38,7 +39,10 @@ export default async function Aplicar({ params }: { params: Promise<{ slug: stri
   return (
     <>
       {marcado && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdSeguro(marcado) }} />}
-      <FormularioAplicar />
+      {/* Cambio 36: el formulario lee ?canal= (useSearchParams) */}
+      <Suspense>
+        <FormularioAplicar />
+      </Suspense>
     </>
   );
 }

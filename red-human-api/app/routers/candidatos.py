@@ -847,6 +847,7 @@ async def postular(
     consentimiento: bool = Form(default=False),
     respuestas: str = Form(default="", description="JSON: [{pregunta, respuesta}]"),
     cv: Optional[UploadFile] = File(default=None, description="CV en PDF o imagen"),
+    canal: str = Form(default="", description="Cambio 36: canal de la liga (`/aplicar/<slug>?canal=occ`)"),
     tareas: BackgroundTasks = None,
     db: Session = Depends(get_db),
 ):
@@ -871,8 +872,15 @@ async def postular(
         vac = db.query(Vacante).filter(func.lower(Vacante.titulo) == vacante.replace("-", " ").lower()).first()
     if not vac:
         raise HTTPException(404, f"Vacante '{vacante}' no encontrada")
+    if vac.estado == "Pausada":
+        from .vacantes import MENSAJE_PAUSADA
+
+        raise HTTPException(410, MENSAJE_PAUSADA)  # Cambio 36
     if vac.estado != "Publicada":  # 2026-09-16: una liga vieja a una vacante eliminada/cerrada no abre postulaciones
         raise HTTPException(410, "Esta vacante ya no está disponible.")
+    from ..services import publicador as _pub
+
+    canal_origen = _pub.clave_canal(canal) or ""  # Cambio 36: de qué canal llegó (liga con ?canal=)
 
     from ..services import guiones as _sg
     from ..services import sincronizacion_vacante as _ssv
@@ -888,7 +896,8 @@ async def postular(
     c = None if permite_duplicados(db) else _duplicado(db, tel, correo, vac.cuenta_id)
     nuevo_candidato = c is None
     if c is None:
-        c = _crear_candidato(db, vac.cuenta_id, nombre.strip(), "Formulario", prueba, telefono=tel, correo=correo.strip())
+        fuente = _pub.CANALES[canal_origen]["nombre"] if canal_origen and canal_origen != "portal" else "Formulario"
+        c = _crear_candidato(db, vac.cuenta_id, nombre.strip(), fuente, prueba, telefono=tel, correo=correo.strip())
     else:
         if nombre.strip() and (not c.nombre or c.nombre.startswith("Candidato")):
             c.nombre = nombre.strip()
@@ -917,9 +926,12 @@ async def postular(
     # 2026-09-16 (prefiltro dual): las respuestas del formulario web se guardan para compararlas después
     # con lo que la persona diga por WhatsApp (antes se recibían y se tiraban).
     respuestas_web = _parsear_respuestas_web(respuestas)
-    if respuestas_web:
+    if respuestas_web or canal_origen:
         analisis_p = dict(p.analisis or {})
-        analisis_p["respuestas_web"] = respuestas_web
+        if respuestas_web:
+            analisis_p["respuestas_web"] = respuestas_web
+        if canal_origen:
+            analisis_p["canal_origen"] = canal_origen
         p.analisis = analisis_p
     registrar(
         db, c.codigo, "consentimiento_otorgado", "postulacion", p.codigo,

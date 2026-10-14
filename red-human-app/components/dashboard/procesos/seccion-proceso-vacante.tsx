@@ -6,7 +6,9 @@
    2026-10-07: «Batería psicométrica» a la vista — la vacante hereda la de la ruta y puede elegir otra del catálogo sin
    alterar la ruta (cambia solo la copia de la vacante).
    Retro 2026-10-09: toda vacante sigue una ruta — el selector ofrece las tres plantillas base (y las propias de la
-   Cuenta) o «Armar uno propio para esta vacante»; ya no existe «Sin proceso (flujo de siempre)». */
+   Cuenta) o «Armar uno propio para esta vacante»; ya no existe «Sin proceso (flujo de siempre)».
+   Cambio 36 («El proceso manda»): llega PRESELECCIONADO (la predeterminada de la Cuenta, para que el formulario reaccione a
+   sus actividades) y, si la vacante ya tiene candidatos, queda BLOQUEADO con el motivo (`bloqueado`). */
 
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
@@ -49,12 +51,14 @@ function ordenPlantilla(p: PlantillaProceso): number {
   return i === -1 ? ORDEN_BASE.length : i;
 }
 
-export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
+export function SeccionProcesoVacante({ value, onChange, codigoVacante, bloqueado = "" }: {
   value: EstadoProcesoVacante;
   onChange: (e: EstadoProcesoVacante) => void;
   codigoVacante?: string;
+  /** Cambio 36: motivo por el que no se puede cambiar (la vacante ya tiene candidatos). */
+  bloqueado?: string;
 }) {
-  const [abierto, setAbierto] = useState(false);
+  const [abierto, setAbierto] = useState(true);
   const [personalizar, setPersonalizar] = useState(false);
   const [plantillas, setPlantillas] = useState<PlantillaProceso[]>([]);
   const [opciones, setOpciones] = useState<OpcionesProceso | null>(null);
@@ -77,6 +81,13 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
     ? { plantillaId: predeterminada.id, pasos: predeterminada.pasos, etapas: predeterminada.etapas }
     : value;
   const plantilla = plantillas.find((p) => p.id === efectivo.plantillaId);
+  // Cambio 36: preseleccionado — el formulario conoce las actividades de la ruta desde el inicio (sin marcarla como
+  // «tocada»: si RH no la cambia, el servidor usa la predeterminada igual)
+  useEffect(() => {
+    if (!value.tocado && !value.pasos.length && predeterminada) {
+      onChange({ tocado: false, plantillaId: predeterminada.id, pasos: predeterminada.pasos, etapas: predeterminada.etapas });
+    }
+  }, [predeterminada, value.tocado, value.pasos.length, onChange]);
   const personalizado = Boolean(plantilla) && JSON.stringify(plantilla?.pasos) !== JSON.stringify(efectivo.pasos);
 
   function elegir(id: string) {
@@ -120,10 +131,14 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
             estas actividades. Ajustar la ruta aquí cambia únicamente esta vacante: la plantilla general de la Cuenta no se toca
             {codigoVacante && activos ? `, y los ${activos} candidato(s) activo(s) conservan la versión con la que entraron` : ""}.
           </p>
+          {bloqueado && (
+            <p className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-ink-2" role="status">{bloqueado}</p>
+          )}
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-ink-2">Plantilla</span>
             <select
               className={cn(inputRH, "pr-8")}
+              disabled={Boolean(bloqueado)}
               value={efectivo.pasos.length ? (efectivo.plantillaId ?? "manual") : ""}
               onChange={(e) => elegir(e.target.value)}
             >
@@ -138,12 +153,14 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
             <div className="flex flex-wrap items-center gap-2">
               {personalizado && <Badge tone="warn">Personalizado para esta vacante</Badge>}
               <span className="text-[12px] text-ink-3">{resumenPasos(efectivo.pasos)}</span>
-              <button type="button" onClick={() => setPersonalizar((x) => !x)} className="text-[12px] font-semibold text-brand hover:underline">
-                {personalizar ? "Ocultar pasos" : "Ajustar ruta de esta vacante"}
-              </button>
+              {!bloqueado && (
+                <button type="button" onClick={() => setPersonalizar((x) => !x)} className="text-[12px] font-semibold text-brand hover:underline">
+                  {personalizar ? "Ocultar pasos" : "Ajustar ruta de esta vacante"}
+                </button>
+              )}
             </div>
           )}
-          {pasoPsico && (
+          {pasoPsico && !bloqueado && (
             <div className="rounded-xl border border-border-soft p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -169,7 +186,7 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante }: {
               )}
             </div>
           )}
-          {(personalizar || (efectivo.plantillaId == null && value.tocado)) && opciones && (
+          {!bloqueado && (personalizar || (efectivo.plantillaId == null && value.tocado)) && opciones && (
             <EditorProceso
               pasos={efectivo.pasos}
               etapas={efectivo.etapas}

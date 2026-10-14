@@ -33,6 +33,7 @@ os.environ["SEMBRAR_DEMO"] = "true"
 
 import asyncio  # noqa: E402
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.services.correo as correo_srv  # noqa: E402
@@ -114,7 +115,7 @@ with TestClient(app) as client:
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "responsable": {"tipo": "usuario", "usuario_id": admin.id}},
     ]
     for x in vs:
-        assert client.put(f"/procesos/vacantes/{x.codigo}", json={"pasos": PASOS}).status_code == 200
+        assert fijar_ruta(db, x.codigo, json={"pasos": PASOS}).status_code == 200
     tel = iter(range(5587000000, 5587999999))
 
     def nueva(nombre, vac=None):

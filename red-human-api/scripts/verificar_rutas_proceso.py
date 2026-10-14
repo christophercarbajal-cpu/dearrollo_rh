@@ -36,6 +36,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "ANAM_AP
 os.environ["ADMIN_PASSWORD"] = "prueba-rutas"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.routers.contratacion as rcontratacion  # noqa: E402
@@ -211,7 +212,7 @@ with TestClient(app) as client:
     check(seg(P_CTA)["origen"] == "cuenta" and seg(P_CTA)["plantilla"] == "Masivos sin documentos iniciales",
           "con proceso predeterminado de la Cuenta → ese (nivel 2)")
     client.patch(f"/procesos/plantillas/{pls['masivos_sin_documentos']['id']}", json={"predeterminada": False})
-    r = client.put(f"/procesos/vacantes/{V_MAS}", json={"plantilla_id": pls["masivos_con_documentos"]["id"]})
+    r = fijar_ruta(db, V_MAS, json={"plantilla_id": pls["masivos_con_documentos"]["id"]})
     check(r.status_code == 200, "la vacante copia la ruta Masivos")
     P_VAC = nueva("Vero Vacante", V_MAS)
     check(seg(P_VAC)["origen"] == "vacante" and seg(P_VAC)["plantilla"] == "Masivos con documentos iniciales", "con proceso de la vacante → ese (nivel 1)")
@@ -259,7 +260,7 @@ with TestClient(app) as client:
 
     # ================= 4. Corporativos de punta a punta hasta el Alta =================
     print("\n--- 4. Corporativos: de Prefiltro al Alta ---")
-    r = client.put(f"/procesos/vacantes/{V_SIN}", json={"plantilla_id": pls["corporativo"]["id"]})
+    r = fijar_ruta(db, V_SIN, json={"plantilla_id": pls["corporativo"]["id"]})
     check(r.status_code == 200, "la vacante toma la ruta «Corporativos»")
     P = nueva("Diana Corporativa", V_SIN)  # ruta: Corporativos (de la vacante)
     s = seg(P)

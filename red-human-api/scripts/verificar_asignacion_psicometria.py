@@ -33,6 +33,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "ANAM_AP
 os.environ["ADMIN_PASSWORD"] = "prueba-asig-psico"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import settings  # noqa: E402
@@ -109,11 +110,11 @@ with TestClient(app) as client:
     r = client.patch(f"/procesos/plantillas/{pl['id']}", headers=H, json={"pasos": pasos})
     check(r.status_code == 200 and next(x for x in r.json()["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [BAT],
           "la ruta guarda la batería por defecto del catálogo")
-    r = client.put(f"/procesos/vacantes/{V1}", headers=H, json={"plantilla_id": pl["id"]})
+    r = fijar_ruta(db, V1, json={"plantilla_id": pl["id"]})
     check(next(x for x in r.json()["proceso"]["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [BAT], "vacante 1: hereda la batería de la ruta")
-    client.put(f"/procesos/vacantes/{V2}", headers=H, json={"plantilla_id": pl["id"]})
+    fijar_ruta(db, V2, json={"plantilla_id": pl["id"]})
     pasos_v2 = [dict(x, pruebas=[KOS, TER]) if x["tipo"] == "psicometrica" else x for x in client.get(f"/procesos/vacantes/{V2}", headers=H).json()["proceso"]["pasos"]]
-    r = client.put(f"/procesos/vacantes/{V2}", headers=H, json={"pasos": pasos_v2})
+    r = fijar_ruta(db, V2, json={"pasos": pasos_v2})
     check(next(x for x in r.json()["proceso"]["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [KOS, TER], "vacante 2: elige otra selección del catálogo")
     pl2 = next(x for x in client.get("/procesos/plantillas", headers=H).json() if x["id"] == pl["id"])
     check(next(x for x in pl2["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [BAT] and pl2["version"] == pl["version"] + 1,

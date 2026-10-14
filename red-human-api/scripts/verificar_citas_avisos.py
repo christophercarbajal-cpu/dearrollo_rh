@@ -33,6 +33,7 @@ for k in ("OPENAI_API_KEY", "WHATSAPP_PROVIDER", "META_WHATSAPP_TOKEN", "ANAM_AP
 os.environ["ADMIN_PASSWORD"] = "prueba-citas-avisos"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.models as modelos  # noqa: E402
@@ -106,7 +107,7 @@ with TestClient(app) as client:
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
     PASOS = [{"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
              {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]
-    assert client.put(f"/procesos/vacantes/{v.codigo}", json={"pasos": PASOS}).status_code == 200
+    assert fijar_ruta(db, v.codigo, json={"pasos": PASOS}).status_code == 200
     tel = iter(range(5588000000, 5588999999))
 
     def nueva(nombre):

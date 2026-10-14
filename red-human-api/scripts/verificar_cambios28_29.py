@@ -43,6 +43,7 @@ os.environ["TELEGRAM_BOT_USERNAME"] = "RedHumanPruebaBot"
 os.environ["ADMIN_PASSWORD"] = "prueba-c28"
 os.environ["SEMBRAR_DEMO"] = "true"
 
+from _ruta_prueba import fijar_ruta  # noqa: E402  (Cambio 36: ruta inicial de vacantes sembradas)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
@@ -198,21 +199,25 @@ with TestClient(app) as client:
     check(x["estado"] == "completada" and x["cumpleRegla"], "aprueba → la actividad se cumple y la ruta sigue sola")
 
     print("\n--- Bloque 2 · sincronización Proceso ↔ Vacante ---")
+    # Cambio 36 («El proceso manda»): la vacante NUNCA modifica el proceso (ya no se agrega «Documentos») y, con
+    # candidatos, la API ya no cambia su proceso; la ruta se fija como configuración para probar lo demás
     masivos = sproc.ruta_base("masivos_sin_documentos")["pasos"]
-    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": masivos},
-                                                   "documentos_solicitados": [{"nombre": "INE"}, {"nombre": "Licencia de conducir"}]})
+    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": masivos}})
+    check(r.status_code == 409, f"con candidatos el proceso de la vacante no se cambia por la API ({r.status_code})")
+    fijar_ruta(db, v.codigo, json={"pasos": masivos})
+    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}, {"nombre": "Licencia de conducir"}]})
     db.expire_all()
     v = db.get(Vacante, v.id)
     ids = [x["id"] for x in v.proceso["pasos"]]
-    check(r.status_code == 200 and "documentos-vacante" in ids and ids.index("documentos-vacante") == ids.index("prefiltro-whatsapp") + 1,
-          f"la vacante pide documentos y su ruta no tenía la actividad → se agrega sola después del prefiltro ({r.status_code})")
+    check(r.status_code == 200 and "documentos-vacante" not in ids and not any(x.get("documentos_vacante") for x in v.proceso["pasos"]),
+          f"la vacante pide documentos y su ruta no trae «Documentos» → la ruta NO cambia ({r.status_code})")
     con_docs = sproc.ruta_base("masivos_con_documentos")["pasos"]
-    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": con_docs}, "documentos_solicitados": []})
+    fijar_ruta(db, v.codigo, json={"pasos": con_docs})
+    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": []})
     db.expire_all()
     v = db.get(Vacante, v.id)
     check(r.status_code == 200 and any("Documentos" in f for f in r.json()["faltantesPublicacion"]),
-          f"ruta con «Documentos» y sin documentos en la vacante → falta para publicar ({r.json().get('faltantesPublicacion')} "
-          f"{v.documentos_solicitados} {[(x['id'], x['etapa'], x.get('documentos_vacante')) for x in v.proceso['pasos']]})")
+          f"ruta con «Documentos» y sin documentos en la vacante → falta para publicar ({r.json().get('faltantesPublicacion')})")
     v.estado = "En revisión"
     db.commit()
     r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
@@ -231,7 +236,8 @@ with TestClient(app) as client:
     corp = sproc.ruta_base("corporativo")["pasos"]
     corp = [{**x, "con_cv": False} if x["tipo"] == "solicitud_web" else x for x in corp] + [
         {"id": "analisis_cv", "tipo": "analisis_cv", "etapa": "Prefiltro"}]
-    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": corp}})
+    fijar_ruta(db, v.codigo, json={"pasos": corp})  # Cambio 36: con candidatos, la ruta se fija como configuración
+    r = client.patch(f"/vacantes/{v.codigo}", json={"descripcion": "Operar montacargas."})  # guardar sincroniza la ruta
     db.expire_all()
     v = db.get(Vacante, v.id)
     check(next(x for x in v.proceso["pasos"] if x["tipo"] == "solicitud_web")["con_cv"] is True and r.json()["exigeCv"],
@@ -243,7 +249,8 @@ with TestClient(app) as client:
 
     print("\n--- Bloque 2 · «Se pide en:» ---")
     con_docs = sproc.ruta_base("masivos_con_documentos")["pasos"]
-    r = client.patch(f"/vacantes/{v.codigo}", json={"proceso": {"pasos": con_docs}, "documentos_solicitados": [
+    fijar_ruta(db, v.codigo, json={"pasos": con_docs})  # Cambio 36: con candidatos, la ruta se fija como configuración
+    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": [
         {"nombre": "INE"}, {"nombre": "Comprobante de domicilio", "etapa": "Contratación"}]})
     db.expire_all()
     v = db.get(Vacante, v.id)

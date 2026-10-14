@@ -51,6 +51,7 @@ import {
   SeccionProcesoVacante, entradaProceso, procesoInicial, type EstadoProcesoVacante,
 } from "@/components/dashboard/procesos/seccion-proceso-vacante";
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
+import { PanelPublicarEn, usarCanales } from "@/components/dashboard/vacantes/publicar-en";
 import { Aviso, BotonCopiar } from "@/components/dashboard/subida";
 import type { Vacante } from "@/lib/data";
 import Link from "next/link";
@@ -67,6 +68,8 @@ import {
   fetchVistaPreviaVacante,
   publicarVacante,
   cerrarVacante,
+  pausarVacante,
+  reanudarVacante,
   regenerarVacante,
   generarVacanteIA,
   fetchClientes,
@@ -94,11 +97,12 @@ const estadoTone: Record<Vacante["estado"], "good" | "neutral" | "warn" | "bad">
   Publicada: "good",
   Borrador: "neutral",
   "En revisión": "warn",
+  Pausada: "warn",
   Cerrada: "bad",
   Eliminada: "bad",
 };
 
-const filtros = ["Todas", "Publicada", "Borrador", "En revisión"] as const;
+const filtros = ["Todas", "Publicada", "Pausada", "Borrador", "En revisión"] as const;
 
 /** Canales de publicación que RH elige (rejilla «Publicación · Canales»). `api` debe coincidir EXACTO
  * con `models.PLATAFORMAS` del backend (2026-09-26). Google Empleos, Jooble y Talent.com por ahora
@@ -702,10 +706,12 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
   useEffect(() => {
     fetchVacante(v.id).then((d) => {
       if (d) setContenido((c) => ({ ...c, guiones: guionesDesdeVacante(d) }));
+      if (d) setBloqueado(d.procesoBloqueado ?? ""); // Cambio 36: con candidatos, el proceso ya no se cambia
     });
   }, [v.id]);
+  const [bloqueado, setBloqueado] = useState(v.procesoBloqueado ?? "");
   // Ruta con la que se generan los guiones: la que RH esté ajustando o la copia de esta vacante
-  const rutaGeneracion = proceso.tocado ? entradaProceso(proceso) : v.proceso?.pasos?.length ? { pasos: v.proceso.pasos } : undefined;
+  const rutaGeneracion = proceso.tocado ? entradaProceso(proceso) : proceso.pasos.length ? { pasos: proceso.pasos } : undefined;
 
   async function guardar() {
     const faltan = faltantesDatosPrincipales(contenido);
@@ -733,7 +739,7 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
           mostrarCliente={v.mostrarClienteCandidato ?? true}
           conGuiones
           rutaGeneracion={rutaGeneracion}
-          slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} />}
+          slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} bloqueado={bloqueado} />}
         />
         {error && <Aviso tono="error" onCerrar={() => setError("")}>{error}</Aviso>}
         <div className="flex items-center gap-3 border-t border-border-faint pt-5">
@@ -843,7 +849,10 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
   const [intentoPublicar, setIntentoPublicar] = useState(0);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
-  const [destinos, setDestinos] = useState<string[]>(["WhatsApp", "Portal"]);
+  // Cambio 36: panel «Publicar en» — canales conectados de la Cuenta, todos marcados por defecto
+  const [canales, marcados, setMarcados] = usarCanales();
+  // «Publicar» solo existe después de generar (o con contenido ya hecho, p. ej. desde una plantilla)
+  const generado = Boolean(gen) || tieneContenidoManual(contenido);
 
   const faltaCliente = clientes.length > 0 && clienteId === "";
 
@@ -872,17 +881,9 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
     setError("");
     const manual = tieneContenidoManual(contenido);
     const r = await crearVacante({
-      ...contenidoComoPayload(contenido),
-      publicaciones: gen
-        ? {
-            whatsapp: { titulo: contenido.titulo, copy: contenido.texto_whatsapp, page: contenido.texto_whatsapp, etiquetas: [] },
-            occ: gen.occ,
-            linkedin: gen.linkedin,
-            portal: gen.portal,
-          }
-        : {},
+      ...contenidoComoPayload(contenido), // Cambio 36: los textos por plataforma viajan en `publicaciones`
       publicar,
-      plataformas: destinos, // se guarda también en borrador; el estado decide si se publica
+      canales: marcados, // Cambio 36: «Publicar» distribuye a todos los canales marcados
       // sin contenido capturado ni IA ni plantilla, la API genera el contenido al guardar
       generar_si_falta: !gen && !plantillaBase && !manual,
       cliente_id: clienteId || null,
@@ -1011,7 +1012,7 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
           faltaCliente={faltaCliente}
           conGuiones
           intentoPublicar={intentoPublicar}
-          rutaGeneracion={entradaProceso(proceso)}
+          rutaGeneracion={entradaProceso(proceso) ?? (proceso.pasos.length ? { pasos: proceso.pasos } : undefined)}
           slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} />}
           slotDatosPrincipales={
             clientes.length > 0 ? (
@@ -1094,116 +1095,24 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
 
         {error && <Aviso tono="error">{error}</Aviso>}
 
-        {gen && <ResultadoGeneracion gen={gen} />}
+        {/* Cambio 36: «Publicar en» al final de la página; botones fijos abajo (Publicar solo después de generar) */}
+        {generado && <PanelPublicarEn canales={canales} marcados={marcados} onChange={setMarcados} />}
 
-        {/* Publicación — al final del flujo (Parte 3, punto 10) */}
-        <div className="border-t border-border-faint pt-5">
-          <Eyebrow>Publicación · Canales</Eyebrow>
-          <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-            {PLATAFORMAS.map((p) => {
-              const activo = destinos.includes(p.api);
-              return (
-                <button
-                  key={p.clave}
-                  onClick={() => setDestinos((d) => (activo ? d.filter((x) => x !== p.api) : [...d, p.api]))}
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl border p-3 text-left transition",
-                    activo ? "border-brand bg-brand-soft/50" : "border-border-soft bg-surface hover:border-brand/40",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "grid h-5 w-5 shrink-0 place-items-center rounded-md border",
-                      activo ? "border-brand bg-brand text-brand-ink" : "border-border-soft",
-                    )}
-                  >
-                    {activo && <Check className="h-3.5 w-3.5" />}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{p.nombre}</p>
-                    <p className="truncate text-xs text-ink-3">{p.nota}</p>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 border-t border-border-faint pt-5">
+        <div className="sticky bottom-0 z-10 -mx-6 -mb-6 flex items-center gap-3 border-t border-border-faint bg-surface px-6 py-4">
           <Button variant="outline" className="flex-1" onClick={() => guardar(false)} disabled={guardando}>
             Guardar borrador
           </Button>
-          <Button className="flex-1" onClick={() => guardar(true)} disabled={guardando || destinos.length === 0}>
-            {guardando ? "Publicando…" : "Publicar vacante"}
-          </Button>
+          {generado && (
+            <Button className="flex-1" onClick={() => guardar(true)} disabled={guardando || marcados.length === 0}>
+              {guardando ? "Publicando…" : "Publicar"}
+            </Button>
+          )}
         </div>
       </div>
     </Panel>
   );
 }
 
-/* ---------------- Resultado del generador ---------------- */
-function ResultadoGeneracion({ gen }: { gen: VacanteGenerada }) {
-  const bloques: Record<string, BloquePlataforma> = useMemo(
-    () => ({
-      whatsapp: { titulo: "WhatsApp", copy: gen.texto_whatsapp, page: gen.texto_whatsapp, etiquetas: [] },
-      occ: gen.occ,
-      linkedin: gen.linkedin,
-      portal: gen.portal,
-    }),
-    [gen],
-  );
-
-  return (
-    <div className="flex flex-col gap-4">
-      <Aviso tono={gen.ia ? "ok" : "warn"}>
-        {gen.ia
-          ? "Publicación generada con IA y adaptada al formato de cada plataforma."
-          : "Publicación generada con plantilla (modo demo — agrega OPENAI_API_KEY en la API para IA real)."}
-      </Aviso>
-
-      {/* 2026-10-09: los avisos de cumplimiento y los prefiltros ya se ven UNA vez en el formulario (Generar · Revisar) */}
-      <ContenidoBase gen={gen} />
-      <PestanasPlataforma bloques={bloques} />
-    </div>
-  );
-}
-
-function ContenidoBase({ gen }: { gen: VacanteGenerada }) {
-  return (
-    <Card className="p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">Contenido base</span>
-        <div className="flex items-center gap-2">
-          <Badge tone="brand">{gen.seniority}</Badge>
-          <Badge tone="neutral">{gen.rango_salarial_sugerido}</Badge>
-        </div>
-      </div>
-
-      <p className="mt-3 text-[15px] font-medium leading-relaxed">{gen.resumen}</p>
-      <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-2">{gen.descripcion}</p>
-
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <ListaCorta titulo="Responsabilidades" items={gen.responsabilidades} />
-        <ListaCorta titulo="Indispensables" items={gen.requisitos_indispensables} />
-        <ListaCorta titulo="Deseables" items={gen.requisitos_deseables} />
-        <ListaCorta titulo="Ofrecemos" items={gen.beneficios} />
-      </div>
-
-      {gen.palabras_clave.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-1.5 border-t border-border-faint pt-3">
-          {gen.palabras_clave.map((p) => (
-            <span key={p} className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-ink-3">
-              {p}
-            </span>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/** Copy y page de cada plataforma, en pestañas — es lo que RH pega en OCC / LinkedIn. */
 function PestanasPlataforma({ bloques, liga }: { bloques: Record<string, BloquePlataforma>; liga?: string }) {
   const disponibles = BLOQUES_TEXTO.filter((p) => bloques[p.clave]?.page || bloques[p.clave]?.copy);
   const [activa, setActiva] = useState(disponibles[0]?.clave ?? "occ");
@@ -1616,7 +1525,7 @@ function DetalleVacante({
   onEliminada?: () => void;
 }) {
   const [ocupado, setOcupado] = useState("");
-  const [aviso, setAviso] = useState<{ tono: "ok" | "error"; texto: string } | null>(null);
+  const [aviso, setAviso] = useState<{ tono: "ok" | "error" | "warn"; texto: string } | null>(null);
   const puedeDecidir = usePuedeDecidir();
   // CRUD (2026-09-15): editar (formulario compartido en modo edición) y eliminar (baja lógica con confirmación)
   const [editando, setEditando] = useState(false);
@@ -1630,11 +1539,8 @@ function DetalleVacante({
     if (!r.ok) return setAviso({ tono: "error", texto: r.error });
     onEliminada?.();
   }
-  // solo canales del catálogo actual: valores viejos (OCC, LinkedIn) no se preseleccionan
-  const [destinos, setDestinos] = useState<string[]>(() => {
-    const vigentes = v.plataformas.filter((p) => PLATAFORMAS.some((c) => c.api === p));
-    return vigentes.length ? vigentes : ["Portal", "WhatsApp"];
-  });
+  // Cambio 36: «Publicar en» — canales conectados (marcados por defecto) y el estado de cada uno en esta vacante
+  const [canales, destinos, setDestinos] = usarCanales();
 
   const liga = v.slug && typeof window !== "undefined" ? `${window.location.origin}/aplicar/${v.slug}` : "";
   const bloques = (v.publicaciones ?? {}) as Record<string, BloquePlataforma>;
@@ -1651,7 +1557,20 @@ function DetalleVacante({
     setOcupado("publicar");
     const r = await publicarVacante(v.id, destinos);
     setOcupado("");
-    setAviso(r.ok ? { tono: "ok", texto: `Publicada en ${destinos.join(", ")}.` } : { tono: "error", texto: r.error });
+    const errores = r.ok ? Object.values(r.data.distribucion ?? {}).filter((c) => c.estado === "error") : [];
+    setAviso(!r.ok ? { tono: "error", texto: r.error }
+      : errores.length ? { tono: "warn", texto: `Publicada con errores: ${errores.map((c) => `${c.nombre} — ${c.motivo}`).join(" · ")}` }
+      : { tono: "ok", texto: "Publicada en todos los canales marcados." });
+    if (r.ok) onCambio(v.id);
+  }
+
+  /** Cambio 36 — Pausar (la liga avisa que está en pausa y se retira de las plataformas) / Reanudar. */
+  async function pausarReanudar() {
+    setOcupado("estatus");
+    const r = v.estado === "Pausada" ? await reanudarVacante(v.id) : await pausarVacante(v.id);
+    setOcupado("");
+    setAviso(r.ok ? { tono: "ok", texto: v.estado === "Pausada" ? "Vacante reanudada en sus canales." : "Vacante en pausa: su liga avisa que no recibe postulaciones." }
+      : { tono: "error", texto: r.error });
     if (r.ok) onCambio(v.id);
   }
 
@@ -1670,14 +1589,14 @@ function DetalleVacante({
   /** Switch de estatus: al cerrar, la vacante desaparece de /vacantes/publicas al instante (sin borrar su historial). */
   async function alternarEstatus() {
     setOcupado("estatus");
-    const r = v.estado === "Publicada" ? await cerrarVacante(v.id) : await publicarVacante(v.id, destinos);
+    const r = v.estado === "Publicada" || v.estado === "Pausada" ? await cerrarVacante(v.id) : await publicarVacante(v.id, destinos);
     setOcupado("");
     setAviso(
       r.ok
         ? {
             tono: "ok",
             texto:
-              v.estado === "Publicada"
+              v.estado === "Publicada" || v.estado === "Pausada"
                 ? "Vacante cerrada: ya no aparece en el portal público ni recibe nuevas postulaciones."
                 : "Vacante reabierta: vuelve a aparecer en el portal público.",
           }
@@ -1718,7 +1637,10 @@ function DetalleVacante({
     ...(puedeActuar ? [{ etiqueta: "Editar vacante", icono: <Pencil />, onClick: () => setEditando(true), disabled: Boolean(ocupado) }] : []),
     ...(puedeActuar && v.estado !== "Cerrada" ? [{ etiqueta: "Regenerar con IA", icono: <RefreshCw />, onClick: regenerar, disabled: Boolean(ocupado) }] : []),
     ...(puedeActuar && tieneContenido ? [{ etiqueta: "Guardar como plantilla", icono: <FileEdit />, onClick: () => setMostrarGuardarPlantilla(true) }] : []),
-    ...(puedeActuar && v.estado === "Publicada" ? [{ etiqueta: "Cerrar vacante", icono: <Ban />, onClick: alternarEstatus, disabled: Boolean(ocupado) }] : []),
+    ...(puedeActuar && (v.estado === "Publicada" || v.estado === "Pausada")
+      ? [{ etiqueta: v.estado === "Pausada" ? "Reanudar" : "Pausar", icono: <RotateCcw />, onClick: pausarReanudar, disabled: Boolean(ocupado) }] : []),
+    ...(puedeActuar && (v.estado === "Publicada" || v.estado === "Pausada")
+      ? [{ etiqueta: "Cerrar vacante (definitivo)", icono: <Ban />, onClick: alternarEstatus, disabled: Boolean(ocupado) }] : []),
     ...(puedeActuar && v.estado === "Cerrada" ? [{ etiqueta: "Reabrir vacante", icono: <RotateCcw />, onClick: alternarEstatus, disabled: Boolean(ocupado) }] : []),
     ...(puedeActuar ? [{ etiqueta: "Eliminar vacante", icono: <Trash2 />, peligrosa: true, onClick: () => setConfirmarEliminar(true), disabled: Boolean(ocupado) }] : []),
   ];
@@ -1797,25 +1719,9 @@ function DetalleVacante({
         {aviso && <Aviso tono={aviso.tono} onCerrar={() => setAviso(null)}>{aviso.texto}</Aviso>}
 
         {/* Acción principal: publicar (con destinos) mientras no esté publicada; publicada = indicador */}
-        {puedeActuar && v.estado !== "Publicada" && v.estado !== "Cerrada" && (
+        {puedeActuar && v.estado !== "Publicada" && v.estado !== "Cerrada" && v.estado !== "Pausada" && (
           <div className="flex flex-col gap-3 rounded-xl border border-dashed border-brand/40 bg-brand-soft/30 p-4">
-            <div className="flex flex-wrap gap-2">
-              {PLATAFORMAS.map((p) => {
-                const activo = destinos.includes(p.api);
-                return (
-                  <button
-                    key={p.clave}
-                    onClick={() => setDestinos((d) => (activo ? d.filter((x) => x !== p.api) : [...d, p.api]))}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-[13px] font-medium transition",
-                      activo ? "border-brand bg-brand-soft text-brand" : "border-border-soft text-ink-2 hover:border-brand/40",
-                    )}
-                  >
-                    {p.nombre}
-                  </button>
-                );
-              })}
-            </div>
+            <PanelPublicarEn canales={canales} marcados={destinos} onChange={setDestinos} distribucion={v.distribucion} />
             {intentoPub && Boolean(v.faltantesPublicacion?.length) && (
               <Aviso tono="warn">
                 Falta para publicar (lo pide la ruta): {v.faltantesPublicacion!.join(" ")} Usa «Editar vacante» para completarlo.
@@ -1832,6 +1738,13 @@ function DetalleVacante({
           <div className="flex items-center justify-center gap-2 rounded-xl border border-good/30 bg-good-soft px-4 py-2.5 text-sm font-semibold text-good">
             <Check className="h-4 w-4" /> Publicada · {ocupado === "estatus" ? "actualizando…" : "el candidato ya puede postularse"}
           </div>
+        )}
+        {v.estado === "Pausada" && (
+          <Aviso tono="warn">En pausa: la liga avisa que no recibe postulaciones y la vacante se retiró de sus canales. «…» → Reanudar.</Aviso>
+        )}
+        {/* Cambio 36: estado por canal (Publicada con liga ?canal= · Error: motivo · Pausada · Cerrada) */}
+        {v.estado !== "Borrador" && Object.keys(v.distribucion ?? {}).length > 0 && (
+          <PanelPublicarEn canales={Object.values(v.distribucion ?? {})} marcados={[]} onChange={() => undefined} distribucion={v.distribucion} deshabilitado />
         )}
 
         {mostrarGuardarPlantilla && (

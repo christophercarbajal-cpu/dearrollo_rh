@@ -19,6 +19,34 @@ export function rutaMasiva(ruta?: ProcesoEntrada): boolean {
   return tipos.has("entrevista_whatsapp") && !tipos.has("analisis_cv") && !tipos.has("entrevista_agente");
 }
 
+const ENTREVISTAS_IA = ["entrevista_whatsapp", "entrevista_agente", "llamada_agente"];
+const ENFOQUES = ["operativo", "profesional", "profesional_personal"];
+/** Cambio 43: valor por defecto del «Enfoque» de cada entrevista de Red Human. */
+export const ENFOQUE_DEFAULT: Record<string, string> = { entrevista_whatsapp: "operativo", entrevista_agente: "profesional", llamada_agente: "profesional" };
+
+function rutaMasivaPasos(pasos: { tipo: string; con_cv?: boolean }[]): boolean {
+  const tipos = new Set(pasos.map((p) => p.tipo));
+  const conCv = pasos.some((p) => p.tipo === "solicitud_web" && p.con_cv);
+  return tipos.has("entrevista_whatsapp") && !tipos.has("analisis_cv") && !tipos.has("entrevista_agente") && !conCv;
+}
+
+/** Cambio 43: enfoque efectivo de una actividad de entrevista (misma cascada que `proceso.enfoques_de_ruta`): el
+ *  «Enfoque» explícito → ruta Masivos = Operativo → el valor guardado antes (`tipo_entrevista`) → el de la actividad. */
+export function enfoquePaso(p: { tipo: string; enfoque?: string; tipo_entrevista?: string }, pasos: { tipo: string; con_cv?: boolean }[]): string {
+  if (p.enfoque && ENFOQUES.includes(p.enfoque)) return p.enfoque;
+  if (rutaMasivaPasos(pasos)) return "operativo";
+  if (p.tipo_entrevista && ENFOQUES.includes(p.tipo_entrevista)) return p.tipo_entrevista;
+  return ENFOQUE_DEFAULT[p.tipo] ?? "profesional";
+}
+
+/** Cambio 43: enfoque de la vacante = el de la (primera) entrevista de Red Human de su ruta. null = la ruta no tiene. */
+export function enfoqueDeRuta(ruta?: ProcesoEntrada): string | null {
+  if (!ruta || "quitar" in ruta) return null;
+  const pasos = ruta.pasos ?? [];
+  const p = pasos.find((x) => ENTREVISTAS_IA.includes(x.tipo) && !x.heredado);
+  return p ? enfoquePaso(p, pasos) : null;
+}
+
 export function PerfilOperativoCampo({ value, detectado, onChange }: {
   value: PerfilOperativo | null;
   detectado: string;

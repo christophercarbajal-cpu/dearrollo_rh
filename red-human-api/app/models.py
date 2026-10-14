@@ -1355,8 +1355,12 @@ def texto_sueldo(desde: Optional[int], hasta: Optional[int], moneda: str = "MXN"
 # Fase 4 (Punto 6): enfoque de la Entrevista IA por vacante. 2026-10-10 (Cambio 1, decisión del usuario): + «operativo»
 # (sugerido para Masivos) — guion ARMADO por secciones fijas + Biblioteca de Perfiles (services/entrevista_operativa.py).
 ENFOQUES_ENTREVISTA = ["profesional", "profesional_personal", "operativo"]
-TEXTO_ENFOQUE = {"profesional": "Profesional", "profesional_personal": "Profesional y personal",
-                 "operativo": "Operativo (sugerido para Masivos)"}
+TEXTO_ENFOQUE = {"profesional": "Profesional", "profesional_personal": "Profesional + personal",
+                 "operativo": "Operativo"}
+# Cambio 43 (2026-10-14): enfoque POR ACTIVIDAD de entrevista (`paso["enfoque"]`). Por defecto WhatsApp = Operativo; avatar y
+# llamada = Profesional. Operativo = entrevista base FIJA (sin guion de IA); Profesional(+ personal) = guion de IA ≤ 10 preguntas.
+ENFOQUE_DEFAULT_PASO = {"entrevista_whatsapp": "operativo", "entrevista_agente": "profesional", "llamada_agente": "profesional"}
+ENFOQUES_PROFESIONALES = ("profesional", "profesional_personal")
 
 
 class UsuarioCuenta(Base):

@@ -209,9 +209,13 @@ def normalizar_guion(g) -> dict:
     from . import entrevista_operativa as eop
 
     op = eop.normalizar_operativo(g.get("operativo"))
+    fija = g.get("fija") is True or bool(g.get("base_fija"))  # Cambio 43: enfoque Operativo = la entrevista base FIJA, tal cual (sin «abrir» sus preguntas)
     # 2026-10-11: el guion OPERATIVO lleva preguntas de sí/no con condicionales («[Solo si responde sí] …»): no se «abren»
     # y admite las 6 secciones completas
-    preguntas = [_texto(x, 300) for x in (g.get("preguntas") or []) if _texto(x)][:MAX_PREGUNTAS_OPERATIVO if op else MAX_PREGUNTAS]
+    preguntas = [_texto(x, 300) for x in (g.get("preguntas") or []) if _texto(x)][:MAX_PREGUNTAS_OPERATIVO if op or fija else MAX_PREGUNTAS]
+    if fija:
+        return {"enfoque": "operativo", "temas": [_texto(x, 160) for x in (g.get("temas") or []) if _texto(x)][:MAX_PREGUNTAS_OPERATIVO],
+                "preguntas": preguntas, "base_fija": True}
     if not op:
         preguntas = ia.abrir_preguntas(preguntas)
     temas = [_texto(x, 160) for x in (g.get("temas") or []) if _texto(x)][:MAX_PREGUNTAS]
@@ -391,7 +395,14 @@ def guardar_perfil_operativo(v, entrada, g: Optional[dict] = None) -> dict:
 # ============================================================ generación (Bloque 2)
 
 
-def ficha_guion(datos: dict, empresa: str = "") -> "ia.FichaGuion":
+def enfoques_de_pasos(pasos: Optional[list]) -> Dict[str, str]:
+    """Cambio 43: {sección de guion: enfoque} desde el «Enfoque» de cada actividad de entrevista de la ruta."""
+    from .proceso import enfoques_de_ruta
+
+    return {SECCION_DE_PASO[t]: e for t, e in enfoques_de_ruta(pasos or []).items() if t in SECCION_DE_PASO}
+
+
+def ficha_guion(datos: dict, empresa: str = "", pasos: Optional[list] = None) -> "ia.FichaGuion":
     from . import entrevista_operativa as eop
     from . import ia
 
@@ -407,7 +418,7 @@ def ficha_guion(datos: dict, empresa: str = "") -> "ia.FichaGuion":
                          modalidad=datos.get("modalidad") or "", horario=datos.get("horario") or "",
                          sueldo="" if (datos.get("sueldo") or "") == "A convenir" else (datos.get("sueldo") or ""),
                          empresa=empresa, enfoque_entrevista=datos.get("enfoque_entrevista") or "profesional",
-                         descripcion=datos.get("descripcion") or "")
+                         descripcion=datos.get("descripcion") or "", enfoques=enfoques_de_pasos(pasos))
 
 
 def generar(datos: dict, pasos: list, actuales: Optional[dict] = None, conservar: Optional[List[str]] = None,
@@ -426,7 +437,7 @@ def generar(datos: dict, pasos: list, actuales: Optional[dict] = None, conservar
     web_actual = actuales.get("prefiltro_web") if "prefiltro_web" not in claves else None
     from .proceso import es_corporativa, ruta_es_masiva
 
-    ficha = ficha_guion(datos, empresa)
+    ficha = ficha_guion(datos, empresa, pasos)
     ficha.ruta_masiva = ruta_es_masiva(pasos)  # Cambio 29: Masivos → prefiltro de WhatsApp FIJO (sin IA)
     ficha.ruta_corporativa = es_corporativa(pasos or [])  # Cambio 31: traslado solo si es indispensable
     crudo, con_ia = ia.generar_guiones(ficha, claves, web_actual=web_actual,
@@ -479,7 +490,7 @@ def asegurar(db: Session, v, clave: str, motivo: str = "") -> object:
     datos = datos_de_vacante(v)
     from . import ia
 
-    crudo, con_ia = ia.generar_guiones(ficha_guion(datos, nombre_empresa_candidato(v)), [clave],
+    crudo, con_ia = ia.generar_guiones(ficha_guion(datos, nombre_empresa_candidato(v), pasos), [clave],
                                        web_actual=contenido_de(v, "prefiltro_web") or None,
                                        hay_web="prefiltro_web" in aplican or clave == "prefiltro_web",
                                        hay_whatsapp=clave == "prefiltro_whatsapp")

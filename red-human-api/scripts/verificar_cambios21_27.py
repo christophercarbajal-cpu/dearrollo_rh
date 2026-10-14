@@ -604,7 +604,8 @@ with TestClient(app) as client:
     check("90 min" not in form and "90 min" not in seg and "no recomendable" not in seg.split("const traslado")[1][:600],
           "sin «más de 90 min = alerta»: el límite de traslado sale solo del indispensable")
     # Cambio 36: el proceso manda — ya no hay selector de enfoque; con ruta Masivos el formulario lo fija en Operativo
-    check('label="Enfoque de entrevista"' not in form and 'enfoque_entrevista: "operativo"' in form and "Usar Operativo" not in form,
+    # Cambio 43: el formulario toma el «Enfoque» de la actividad de entrevista de la ruta (Masivos = Operativo)
+    check('label="Enfoque de entrevista"' not in form and "enfoqueDeRuta(rutaGeneracion)" in form and "Usar Operativo" not in form,
           "el enfoque lo define la ruta (sin selector ni sugerencia por seniority)")
 
     print("\n--- Cambio 27 · selector de vacantes del tablero ---")

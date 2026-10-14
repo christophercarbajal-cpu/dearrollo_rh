@@ -240,6 +240,13 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             if t not in ENFOQUES_ENTREVISTA:
                 raise ErrorProceso(400, f"Enfoque de la Entrevista Red Human inválido. Usa uno de: {', '.join(ENFOQUES_ENTREVISTA)}.")
             paso["tipo_entrevista"] = t
+            # Cambio 43: «Enfoque» explícito de la actividad (Operativo | Profesional | Profesional + personal)
+            # (el valor por defecto —WhatsApp Operativo, avatar Profesional— lo pone el editor al agregar la actividad)
+            enf = crudo.get("enfoque")
+            if enf not in (None, ""):
+                if enf not in ENFOQUES_ENTREVISTA:
+                    raise ErrorProceso(400, f"Enfoque de la entrevista inválido. Usa uno de: {', '.join(ENFOQUES_ENTREVISTA)}.")
+                paso["enfoque"] = enf
         salida.append(paso)
 
     if estrictos is not None and sum(1 for x in salida if x["tipo"] == "solicitud_web" and not x.get("heredado")) > 1:
@@ -2667,19 +2674,44 @@ def ruta_es_masiva(ruta) -> bool:
     return "entrevista_whatsapp" in tipos and not tipos & {"analisis_cv", "entrevista_agente"} and not con_cv
 
 
+def _pasos_ruta(ruta) -> list:
+    return [x for x in ((ruta.get("pasos") or []) if isinstance(ruta, dict) else (ruta or [])) if isinstance(x, dict)]
+
+
+def enfoques_de_ruta(ruta) -> Dict[str, str]:
+    """Cambio 43: {tipo de actividad de entrevista IA: enfoque} de la ruta. El «Enfoque» explícito de la actividad manda;
+    sin él (rutas anteriores al Cambio 43) Masivos = Operativo; las demás NO aparecen (las decide la vacante, como antes)."""
+    masiva = ruta_es_masiva(ruta)
+    salida: Dict[str, str] = {}
+    for x in _pasos_ruta(ruta):
+        t = x.get("tipo")
+        if t not in TIPOS_PASO_ENTREVISTA_IA or x.get("heredado") or t in salida:
+            continue
+        if x.get("enfoque") in ENFOQUES_ENTREVISTA:
+            salida[t] = x["enfoque"]
+        elif masiva:
+            salida[t] = "operativo"
+    return salida
+
+
 def enfoque_de_ruta(ruta) -> Optional[str]:
-    """Cambio 27: la plantilla de ruta define el enfoque — Masivos = Operativo, sin importar el seniority. None = lo decide
-    la vacante (Corporativos)."""
+    """Enfoque de la vacante según su ruta. Cambio 43: el «Enfoque» explícito de la (primera) actividad de entrevista IA;
+    sin él, Cambio 27 — Masivos = Operativo. None = lo decide la vacante (rutas previas sin enfoque explícito)."""
+    for x in _pasos_ruta(ruta):
+        if x.get("tipo") in TIPOS_PASO_ENTREVISTA_IA and not x.get("heredado") and x.get("enfoque") in ENFOQUES_ENTREVISTA:
+            return x["enfoque"]
     return "operativo" if ruta_es_masiva(ruta) else None
 
 
 def enfoque_entrevista_agente(p: Optional[Postulacion], v, tipo: str = "entrevista_agente") -> str:
-    """Enfoque de la entrevista de la IA (`tipo` = su actividad). Cambio 27: una ruta Masivos lo define SIEMPRE (Operativo,
-    sin importar el seniority ni el «profesional» por defecto del paso); si no, el del paso del proceso si lo trae; si no,
-    el de la vacante."""
-    if p is not None and tiene_proceso(p) and enfoque_de_ruta(p.proceso):
-        return enfoque_de_ruta(p.proceso)
+    """Enfoque de la entrevista de la IA (`tipo` = su actividad). Cambio 43: el «Enfoque» explícito de la actividad manda.
+    Si no lo trae (rutas anteriores): Cambio 27 — una ruta Masivos = Operativo; si no, el del paso del proceso si lo trae;
+    si no, el de la vacante."""
     paso = paso_de_tipo(p, tipo) if p is not None and tiene_proceso(p) else None
+    if paso and paso.get("enfoque") in ENFOQUES_ENTREVISTA:
+        return paso["enfoque"]
+    if p is not None and tiene_proceso(p) and ruta_es_masiva(p.proceso):
+        return "operativo"
     if paso and (p.proceso or {}).get("origen") in ("cuenta", "base") and not paso.get("adhoc"):
         paso = None  # ruta de la Cuenta o de respaldo: el paso no trae enfoque propio
     if paso and paso.get("tipo_entrevista") in ENFOQUES_ENTREVISTA:

@@ -9,7 +9,7 @@ para que la plataforma siga funcionando de punta a punta.
 import json
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -96,7 +96,10 @@ class VacanteGenerada(BaseModel):
     requisitos_indispensables: List[str] = Field(description=(
         "MÁXIMO 5 requisitos sin los cuales la persona no puede ocupar el puesto. Nunca una tarea o responsabilidad (eso va "
         "en responsabilidades). Si el seniority es «Sin experiencia», PROHIBIDO un requisito de experiencia. Lo que la "
-        "descripción marque como «preferentemente» va a requisitos_deseables."))
+        "descripción marque como «preferentemente» va a requisitos_deseables. Requisitos IMPLÍCITOS (Cambio 43): si el "
+        "puesto es una profesión regulada (abogado, contador, médico, ingeniero, arquitecto, psicólogo…), propón «Cédula "
+        "profesional»; si el seniority es Senior o superior, propón «[n] años de experiencia en [área]» (Senior 5, "
+        "Jefatura 7, Dirección 10)."))
     # Cambio 37: los indispensables que NO capturó RH (los propone Red Human). Lo llena el sistema: déjalo vacío.
     indispensables_propuestos: List[str] = Field(default_factory=list, description="Déjalo vacío: lo llena el sistema.")
     requisitos_deseables: List[str] = Field(description="2 a 4 requisitos que suman pero no descartan.")
@@ -322,9 +325,36 @@ def indispensable_por_defecto(modalidad: str, ubicacion: str) -> str:
     return f"Disponibilidad para trabajar {mod}" + (f" en {lugar}" if lugar and not mod.startswith("remot") else "")
 
 
+# Cambio 43 (2026-10-14): requisitos IMPLÍCITOS que Red Human propone («Propuesto por Red Human», dentro del máximo de 5)
+_RE_PROFESION_REGULADA = re.compile(
+    r"\b(abogad\w*|licenciad\w* en derecho|juridic\w*|contador\w*|contadora|contaduria|contable publico|medic[oa]s?|"
+    r"doctor\w*|enfermer\w*|ingenier\w*|arquitect\w*|psicolog\w*|odontolog\w*|dentista|cirujan\w*|nutriolog\w*|"
+    r"quimic\w* farmac\w*|farmaceutic\w*|actuari\w*|veterinari\w*|notari\w*|corredor publico)\b")
+ANOS_POR_SENIORITY = {"senior": 5, "jefatura": 7, "direccion": 10}
+CEDULA_PROFESIONAL = "Cédula profesional"
+
+
+def es_profesion_regulada(titulo: str) -> bool:
+    return bool(_RE_PROFESION_REGULADA.search(_clave_texto(titulo)))
+
+
+def indispensables_implicitos(titulo: str, area: str = "", seniority: str = "") -> List[str]:
+    """Cambio 43: «Cédula profesional» si el puesto es una profesión regulada; «[n] años de experiencia en [área]» si el
+    seniority es Senior o superior (Senior 5 · Jefatura 7 · Dirección 10). Determinista."""
+    salida = []
+    if es_profesion_regulada(titulo):
+        salida.append(CEDULA_PROFESIONAL)
+    n = ANOS_POR_SENIORITY.get(_clave_texto(seniority).strip())
+    if n:
+        tema = " ".join(str(area or "").split()) or " ".join(str(titulo or "").split()) or "el puesto"
+        salida.append(f"{n} años de experiencia en {_minuscula_inicial(tema)}")
+    return salida
+
+
 def reglas_indispensables(capturados: List[str], generados: List[str], *, seniority: str = "", descripcion: str = "",
                           responsabilidades: Optional[List[str]] = None, deseables: Optional[List[str]] = None,
-                          modalidad: str = "", ubicacion: str = "") -> Tuple[List[str], List[str], List[str]]:
+                          modalidad: str = "", ubicacion: str = "", titulo: str = "",
+                          area: str = "") -> Tuple[List[str], List[str], List[str]]:
     """Cambio 37 — (indispensables, propuestos por Red Human, deseables extra). Lo capturado por RH se respeta literal.
     * máximo 5 indispensables (lo de RH nunca se recorta; lo propuesto solo completa hasta 5);
     * seniority «Sin experiencia» → PROHIBIDO proponer indispensables de experiencia;
@@ -344,10 +374,15 @@ def reglas_indispensables(capturados: List[str], generados: List[str], *, senior
                 and not (sin_exp and es_de_experiencia(r)) and k not in claves_des
                 and not any(p in k or k in p for p in claves_pref if len(p) > 6))
 
+    # Cambio 43: los implícitos van primero entre lo propuesto (salvo que RH ya capture uno equivalente)
+    implicitos = [x for x in indispensables_implicitos(titulo, area, seniority)
+                  if not (x == CEDULA_PROFESIONAL and any("cedula" in _clave_texto(c) for c in capt))
+                  and not (x != CEDULA_PROFESIONAL and any(es_de_experiencia(c) for c in capt)) and admisible(x)]
     if capt:
-        candidatos = [g for g in generados or [] if admisible(g)]
+        candidatos = implicitos + [g for g in generados or [] if admisible(g)
+                                   and not (implicitos and es_de_experiencia(g) and any(es_de_experiencia(i) for i in implicitos))]
     else:
-        candidatos = [c for c in condiciones_explicitas(descripcion) if admisible(c)]
+        candidatos = implicitos + [c for c in condiciones_explicitas(descripcion) if admisible(c)]
         if not candidatos:
             candidatos = [indispensable_por_defecto(modalidad, ubicacion)]
     vistos = {_clave_texto(x) for x in capt}
@@ -361,6 +396,19 @@ def reglas_indispensables(capturados: List[str], generados: List[str], *, senior
     return capt + propuestos, propuestos, preferentes
 
 
+_RE_MD_TITULO = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_RE_MD_VINETA = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+
+
+def sin_markdown(texto: str) -> str:
+    """Cambio 43: el texto de WhatsApp va SIN Markdown — sin «#», «**», «__» ni «`»; las viñetas pasan a «•»."""
+    t = _RE_MD_TITULO.sub("", str(texto or ""))
+    t = _RE_MD_VINETA.sub("• ", t)
+    t = re.sub(r"(\*\*|__)(.+?)\1", r"\2", t)
+    t = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", t)
+    return t.replace("**", "").replace("`", "").strip()
+
+
 def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> VacanteGenerada:
     """Garantía en Python (no depende del modelo) de las dos reglas no negociables de la Parte 3:
     (a) no inventar condiciones — beneficios = capturados; (b) respetar lo capturado — indispensables y
@@ -369,13 +417,15 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
     indisp, propuestos, extra_des = reglas_indispensables(
         ficha.requisitos_indispensables, salida.requisitos_indispensables, seniority=ficha.seniority or salida.seniority,
         descripcion=ficha.descripcion_breve, responsabilidades=list(salida.responsabilidades or []),
-        deseables=ficha.requisitos_deseables, modalidad=ficha.modalidad, ubicacion=ficha.ubicacion)
+        deseables=ficha.requisitos_deseables, modalidad=ficha.modalidad, ubicacion=ficha.ubicacion, titulo=ficha.titulo,
+        area=ficha.area)
     salida.requisitos_indispensables = indisp
     salida.indispensables_propuestos = propuestos
     salida.requisitos_deseables = _unir_capturado(
         ficha.requisitos_deseables, list(salida.requisitos_deseables or []) + extra_des, excluir=indisp
     )
     salida.beneficios = [b.strip() for b in ficha.beneficios if b.strip()]
+    salida.texto_whatsapp = sin_markdown(salida.texto_whatsapp)  # Cambio 43: WhatsApp sin Markdown
     if ficha.seniority:
         salida.seniority = ficha.seniority  # type: ignore[assignment]
     avisos = list(salida.avisos_cumplimiento)
@@ -2988,6 +3038,9 @@ class FichaGuion(BaseModel):
     ruta_corporativa: bool = False
     # Cambio 19 (2026-10-12): la descripción de la vacante — sus condiciones (p. ej. escolaridad) se REGISTRAN en el prefiltro
     descripcion: str = ""
+    # Cambio 43: enfoque POR SECCIÓN de guion ({entrevista_whatsapp|entrevista_avatar|llamada: enfoque}), del «Enfoque» de
+    # cada actividad de la ruta. Lo que no venga usa `enfoque_entrevista`.
+    enfoques: Dict[str, str] = Field(default_factory=dict)
 
 
 ESTILO_GUION = {
@@ -3439,13 +3492,18 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
     # ≤ 15 palabras, condicionales) y pasa por la REVISIÓN automática (regenera hasta 2 veces); UNA generación para todas
     # las secciones. Sin IA: el guion determinista (Biblioteca de Perfiles + piezas fijas).
     armados: dict = {}
-    if ficha.ruta_masiva and "entrevista_whatsapp" in guion_claves:
-        # Cambio 29: en Masivos la entrevista por WhatsApp es FIJA (services/entrevista_whatsapp_fija) — sin IA generativa
+    # Cambio 43: el «Enfoque» de cada actividad decide su guion. Operativo = la entrevista base FIJA
+    # (services/entrevista_whatsapp_fija: situación actual, historial de hasta 3 trabajos, confirmación) — NUNCA guion de IA.
+    enfoques = enfoques_de_guion(ficha, guion_claves)
+    operativas = [c for c in guion_claves if enfoques[c] == "operativo" and c in enfoques_explicitos(ficha)]
+    if operativas:
         from . import entrevista_whatsapp_fija as ewf
 
-        armados["entrevista_whatsapp"] = ewf.guion_visible()
-        guion_claves = [c for c in guion_claves if c != "entrevista_whatsapp"]
-    if enfoque == "operativo" and guion_claves:
+        for c in operativas:
+            armados[c] = ewf.guion_visible()
+        guion_claves = [c for c in guion_claves if c not in operativas]
+    # rutas anteriores al Cambio 43 (sin «Enfoque» en la actividad) con la VACANTE en Operativo: su guion operativo de siempre
+    if guion_claves and enfoque == "operativo":
         import copy as _copy
 
         from . import entrevista_operativa as eop
@@ -3453,10 +3511,11 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
         guion_op, ia_op = eop.generar_guion(ficha.titulo, ficha.perfil_operativo, ficha.requisitos_indispensables,
                                             ubicacion=ficha.ubicacion, horario=ficha.horario, responsabilidades=ficha.responsabilidades,
                                             modalidad=ficha.modalidad)
-        for c in guion_claves:
+        legado = [c for c in guion_claves if enfoques[c] == "operativo"]
+        for c in legado:
             armados[c] = _copy.deepcopy(guion_op)
-        con_ia = con_ia or ia_op
-        guion_claves = []
+        con_ia = con_ia or (ia_op and bool(legado))
+        guion_claves = [c for c in guion_claves if c not in legado]
     if ficha.ruta_masiva and "prefiltro_whatsapp" in claves and hay_whatsapp:
         # Cambio 29: en rutas Masivos (operativos) el prefiltro de WhatsApp es la BASE FIJA — cero IA generativa
         from . import prefiltro_operativo as pop
@@ -3486,7 +3545,7 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
                     "Es el PRIMER filtro: una pregunta por requisito indispensable (descarta=true), cerradas."))
         for c in guion_claves:
             pedido.append(f"{c}: guion con enfoque, temas y SOLO preguntas ABIERTAS (nunca de sí/no, nunca preguntas de "
-                          f"prefiltro). Estilo: {ESTILO_GUION[c]}")
+                          f"prefiltro). Estilo: {ESTILO_GUION[c]} {reglas_guion_profesional(enfoques[c])}")
         web_txt = ""
         if web_actual and "prefiltro_web" not in claves:
             web_txt = "\nPrefiltro web vigente (las reconfirmaciones salen de aquí):\n" + "\n".join(
@@ -3499,7 +3558,8 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
                     "Generas las plantillas de conversación de UNA vacante para Red Human (RH en México), en español mexicano. "
                     "Llena SOLO las secciones pedidas; deja vacías las demás. Usa EXCLUSIVAMENTE los datos de la vacante: nunca "
                     "inventes condiciones (sueldo, horario, ubicación, prestaciones). "
-                    f"Enfoque de las entrevistas: {enfoque} ({ENFOQUE_ENTREVISTA_TEMAS[enfoque]}). "
+                    + "".join(f"Enfoque de {c}: {TEXTO_ENFOQUE_GUION[enfoques[c]]} ({ENFOQUE_ENTREVISTA_TEMAS[enfoques[c]]}). "
+                              for c in guion_claves) +
                     f"PROHIBIDO preguntar sobre: {DATOS_SENSIBLES_PROHIBIDOS}.\nSecciones pedidas:\n- " + "\n- ".join(pedido)
                 ),
                 input=(
@@ -3555,10 +3615,149 @@ def generar_guiones(ficha: FichaGuion, claves: List[str], web_actual: Optional[L
     for c in guion_claves:
         g = getattr(crudo, c, None)
         if g is None or not g.preguntas:
-            g = guion_demo_seccion(c, ficha)
-        salida[c] = {"enfoque": g.enfoque, "temas": list(g.temas or []), "preguntas": abrir_preguntas(list(g.preguntas))}
+            g = guion_profesional_demo(ficha, enfoques[c])
+        preguntas = asegurar_guion_profesional(abrir_preguntas(list(g.preguntas)), enfoques[c], ficha)
+        salida[c] = {"enfoque": _sin_operativo(g.enfoque) or guion_profesional_demo(ficha, enfoques[c]).enfoque,
+                     "temas": list(dict.fromkeys(tema_de_pregunta(q) for q in preguntas)), "preguntas": preguntas}
     salida.update(armados)
     return salida, con_ia
+
+
+# ============================================================ Cambio 43: guion por enfoque (Profesional / + personal)
+
+MAX_PREGUNTAS_PROFESIONAL = 10
+TEXTO_ENFOQUE_GUION = {"operativo": "Operativo", "profesional": "Profesional", "profesional_personal": "Profesional + personal"}
+PREGUNTA_TRAYECTORIA = "Cuéntame brevemente tu trayectoria profesional y qué te trae a esta vacante."
+PREGUNTAS_MOTIVACION = [
+    "¿Qué es lo que más te motiva de tu profesión?",
+    "¿Qué te gustaría aprender o desarrollar en los próximos años?",
+    "Fuera del trabajo, ¿qué intereses o actividades disfrutas?",
+]
+# Historial trabajo por trabajo y preguntas de lugar: propias del enfoque operativo, PROHIBIDAS en el profesional
+_RE_HISTORIAL = re.compile(r"(ultimo trabajo|trabajo anterior|otro trabajo antes|en (que|cual) trabajo|donde trabajaste|laboraste|"
+                           r"por que saliste|por que renunciaste|te despidieron|trabajas actualmente|llevas sin trabajar|"
+                           r"cada (uno de tus )?(trabajo|empleo)s?|empleo anterior)")
+_RE_LUGAR = re.compile(r"(colonia|municipio|donde vives|en que (ciudad|lugar|zona)|traslad|de tu casa)")
+_RE_MOTIVACION = re.compile(r"(motiva|interes|disfrut|aprender|te gustaria|desarrollar|pasion|metas|objetivos personales|"
+                            r"fuera del trabajo)")
+
+
+def enfoques_explicitos(ficha: "FichaGuion") -> Dict[str, str]:
+    """Los enfoques que define la RUTA: el «Enfoque» de cada actividad y, en Masivos, la entrevista por WhatsApp Operativo."""
+    salida = dict(ficha.enfoques or {})
+    if ficha.ruta_masiva:
+        salida.setdefault("entrevista_whatsapp", "operativo")
+    return salida
+
+
+def enfoques_de_guion(ficha: "FichaGuion", claves: List[str]) -> Dict[str, str]:
+    """{sección de guion: enfoque válido}. El de la actividad de la ruta; si no, el de la vacante."""
+    explicitos = enfoques_explicitos(ficha)
+    return {c: _enfoque_valido(explicitos.get(c) or ficha.enfoque_entrevista) for c in claves}
+
+
+def tema_de_pregunta(q: str) -> str:
+    """Tema (para el entrevistador) de una pregunta del guion profesional."""
+    k = _clave_texto(q)
+    if "trayectoria" in k:
+        return "Trayectoria profesional"
+    if _RE_MOTIVACION.search(k):
+        return "Intereses, motivaciones y visión de futuro"
+    return q.rstrip("?.").lstrip("¿")[:120]
+
+
+def reglas_guion_profesional(enfoque: str) -> str:
+    """Cambio 43: reglas del prompt según el enfoque (el operativo no llega aquí: es la base fija)."""
+    reglas = (f"MÁXIMO {MAX_PREGUNTAS_PROFESIONAL} preguntas en total. La PRIMERA es UNA sola pregunta general de trayectoria "
+              f"(«{PREGUNTA_TRAYECTORIA}»). Después, preguntas TÉCNICAS del puesto y de CASOS REALES («Platícame de un caso en "
+              "el que…») ligadas a sus responsabilidades y requisitos, distintas para cada puesto. PROHIBIDO: recorrer el "
+              "historial trabajo por trabajo (último trabajo, el anterior, por qué saliste de cada uno); preguntar «¿En qué "
+              "trabajo laboraste en [lugar]?» o cualquier pregunta sobre lugares, colonia o traslado; repetir preguntas; usar "
+              "la palabra «operativa» u «operativo».")
+    if enfoque == "profesional_personal":
+        reglas += (" Agrega al FINAL 2 o 3 preguntas sobre intereses y motivaciones (qué le motiva, qué quiere aprender, qué "
+                   f"disfruta), sin datos sensibles; el total sigue siendo máximo {MAX_PREGUNTAS_PROFESIONAL}.")
+    return reglas
+
+
+def _sin_operativo(texto: str) -> str:
+    t = " ".join(str(texto or "").split())
+    return "" if re.search(r"operativ", _clave_texto(t)) else t
+
+
+def _es_trayectoria(q: str) -> bool:
+    return "trayectoria" in _clave_texto(q)
+
+
+def asegurar_guion_profesional(preguntas: List[str], enfoque: str, ficha: Optional["FichaGuion"] = None) -> List[str]:
+    """Garantía en código del guion Profesional (+ personal): una sola pregunta de trayectoria (la primera), sin historial
+    trabajo por trabajo, sin lugares, sin repetidas, sin «operativa», máximo 10; en «+ personal», 2 o 3 de motivación."""
+    personal = enfoque == "profesional_personal"
+    vistas, tecnicas, motivacion = set(), [], []
+    trayectoria = ""
+    for q in preguntas or []:
+        t = " ".join(str(q or "").split())
+        k = _clave_texto(t).strip(" ¿?.")
+        if not t or k in vistas or _RE_HISTORIAL.search(k) or _RE_LUGAR.search(k) or "operativ" in k:
+            continue
+        vistas.add(k)
+        if _es_trayectoria(t):
+            trayectoria = trayectoria or t
+        elif _RE_MOTIVACION.search(k):
+            motivacion.append(t)
+        else:
+            tecnicas.append(t)
+    if len(tecnicas) < 3 and ficha is not None:
+        for q in guion_profesional_demo(ficha, "profesional").preguntas[1:]:
+            k = _clave_texto(q).strip(" ¿?.")
+            if k not in vistas and "operativ" not in k:
+                vistas.add(k)
+                tecnicas.append(q)
+            if len(tecnicas) >= 6:
+                break
+    if personal:
+        for q in PREGUNTAS_MOTIVACION:
+            if len(motivacion) >= 2:
+                break
+            if _clave_texto(q).strip(" ¿?.") not in vistas:
+                motivacion.append(q)
+        motivacion = motivacion[:3]
+    else:
+        tecnicas += motivacion  # en el profesional puro una pregunta de motivación cuenta como una más
+        motivacion = []
+    cupo = MAX_PREGUNTAS_PROFESIONAL - 1 - len(motivacion)
+    return [trayectoria or PREGUNTA_TRAYECTORIA] + tecnicas[:cupo] + motivacion
+
+
+def guion_profesional_demo(ficha: "FichaGuion", enfoque: str = "profesional") -> GuionEntrevista:
+    """Guion determinista (sin IA) del enfoque Profesional: trayectoria + casos reales y preguntas técnicas construidas con
+    las responsabilidades, los requisitos y el puesto REALES de la vacante (un abogado y un contador reciben preguntas
+    distintas)."""
+    puesto = " ".join((ficha.titulo or "este puesto").split())
+    p_min = _minuscula_inicial(puesto)
+    preguntas = [PREGUNTA_TRAYECTORIA]
+    for r in [x for x in ficha.responsabilidades if x.strip()][:3]:
+        preguntas.append(f"Platícame un caso real en el que te tocó {_minuscula_inicial(r.strip().rstrip('.'))}. "
+                         "¿Qué hiciste y cuál fue el resultado?")
+    for req in [x for x in ficha.requisitos_indispensables if x.strip()]:
+        k = _clave_texto(req)
+        if any(w in k for w in ("cedula", "disponibilidad", "anos de experiencia", "edad", "traslado", "licencia")):
+            continue
+        preguntas.append(f"¿Cómo has aplicado {_minuscula_inicial(req.strip().rstrip('.'))} en tu trabajo? Dame un ejemplo concreto.")
+        if len(preguntas) >= 6:
+            break
+    preguntas += [
+        f"¿Cuál ha sido el problema más complejo que resolviste como {p_min} y cómo lo abordaste?",
+        f"¿Qué herramientas, normas o metodologías usas en tu día a día como {p_min}?",
+        f"Cuéntame de una decisión difícil que tomaste como {p_min}: ¿qué consideraste?",
+        f"¿Cómo te mantienes actualizado en lo que exige el puesto de {p_min}?",
+    ]
+    if enfoque == "profesional_personal":
+        preguntas += PREGUNTAS_MOTIVACION[:2]
+    enfoque_txt = (f"Validar la experiencia técnica y los casos reales de {p_min}"
+                   + (", y sus intereses y motivaciones." if enfoque == "profesional_personal" else "."))
+    preguntas = asegurar_guion_profesional(preguntas, enfoque)
+    return GuionEntrevista(enfoque=enfoque_txt, temas=list(dict.fromkeys(tema_de_pregunta(q) for q in preguntas)), preguntas=preguntas)
 
 
 def documentos_de_descripcion(*textos) -> list:

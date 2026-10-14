@@ -267,6 +267,13 @@ def guardar_proceso_vacante(codigo: str, datos: dict, db: Session = Depends(get_
         if con_candidatos(db, v):
             raise HTTPException(409, MENSAJE_PROCESO_BLOQUEADO)  # Cambio 36: el proceso no cambia con candidatos
         v.proceso = nuevo
+        from .vacantes import _enfoque_por_ruta, _sincronizar_filtro
+
+        _enfoque_por_ruta(db, v)  # Cambio 43: el «Enfoque» de la entrevista vive en la actividad de la ruta
+        from ..services import preguntas_filtro as pfu
+
+        if pfu.aplica(v):  # y decide las preguntas base (colonia / sueldo afirmativo o expectativa)
+            _sincronizar_filtro(v)
         registrar(db, u.nombre, "vacante_proceso_actualizado", "vacante", v.codigo,
                   {"version": nuevo.get("version"), "plantilla": nuevo.get("plantilla_nombre"), "personalizado": nuevo.get("personalizado"),
                    "pasos": len(nuevo.get("pasos") or []), "correo_rh": u.correo})

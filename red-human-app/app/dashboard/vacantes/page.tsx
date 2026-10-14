@@ -53,6 +53,8 @@ import {
 import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { PanelPublicarEn, usarCanales } from "@/components/dashboard/vacantes/publicar-en";
 import { Aviso, BotonCopiar } from "@/components/dashboard/subida";
+import { BotonCopiarTexto, MarkdownVista } from "@/components/dashboard/vacantes/texto-plataforma";
+import { ligaCanal, markdownATexto } from "@/lib/markdown-texto";
 import type { Vacante } from "@/lib/data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -739,6 +741,7 @@ function EditarVacante({ v, onClose, onGuardada }: { v: Vacante; onClose: () => 
           mostrarCliente={v.mostrarClienteCandidato ?? true}
           conGuiones
           rutaGeneracion={rutaGeneracion}
+          slugVacante={v.slug}
           slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} codigoVacante={v.id} bloqueado={bloqueado} />}
         />
         {error && <Aviso tono="error" onCerrar={() => setError("")}>{error}</Aviso>}
@@ -1113,10 +1116,13 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
   );
 }
 
-function PestanasPlataforma({ bloques, liga }: { bloques: Record<string, BloquePlataforma>; liga?: string }) {
+function PestanasPlataforma({ bloques, slug }: { bloques: Record<string, BloquePlataforma>; slug?: string }) {
   const disponibles = BLOQUES_TEXTO.filter((p) => bloques[p.clave]?.page || bloques[p.clave]?.copy);
-  const [activa, setActiva] = useState(disponibles[0]?.clave ?? "occ");
+  const [activa, setActiva] = useState<string>(disponibles[0]?.clave ?? "occ");
   const bloque = bloques[activa];
+  // Cambio 43: Markdown pintado (WhatsApp siempre sin Markdown) y «Copiar» con la liga del canal (`?canal=occ`…)
+  const ligaDe = (canal: string) => (slug && typeof window !== "undefined" ? ligaCanal(window.location.origin, slug, canal) : "");
+  const limpiar = (t: string) => (activa === "whatsapp" ? markdownATexto(t) : t);
 
   if (!disponibles.length) return null;
 
@@ -1154,11 +1160,9 @@ function PestanasPlataforma({ bloques, liga }: { bloques: Record<string, BloqueP
               <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">
                 Copy · difusión ({bloque.copy.length} car.)
               </span>
-              <BotonCopiar texto={liga ? `${bloque.copy}\n\n👉 Postúlate aquí: ${liga}` : bloque.copy} />
+              <BotonCopiarTexto texto={limpiar(bloque.copy)} liga={ligaDe(activa)} />
             </div>
-            <pre className="mt-1.5 whitespace-pre-wrap break-words rounded-xl bg-surface-2 p-3 font-sans text-[13px] leading-relaxed text-ink-2">
-              {bloque.copy}
-            </pre>
+            <MarkdownVista texto={limpiar(bloque.copy)} className="mt-1.5 rounded-xl bg-surface-2 p-3" />
           </div>
 
           <div>
@@ -1166,11 +1170,10 @@ function PestanasPlataforma({ bloques, liga }: { bloques: Record<string, BloqueP
               <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">
                 Page · publicación completa
               </span>
-              <BotonCopiar texto={bloque.page} />
+              <BotonCopiarTexto texto={limpiar(bloque.page)} liga={ligaDe(activa)} />
             </div>
-            <pre className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-surface-2 p-3 font-sans text-[13px] leading-relaxed text-ink-2">
-              {bloque.page}
-            </pre>
+            <MarkdownVista texto={limpiar(bloque.page)} className="mt-1.5 max-h-72 overflow-y-auto rounded-xl bg-surface-2 p-3" />
+            {ligaDe(activa) && <p className="mt-1 truncate text-[11px] text-ink-3">Liga al copiar: {ligaDe(activa)}</p>}
           </div>
 
           {bloque.etiquetas?.length > 0 && (
@@ -1828,7 +1831,7 @@ function DetalleVacante({
 
         <Plegable titulo="Publicaciones" resumen={tieneContenido ? `${Object.keys(bloques).length} plataforma(s)${v.plataformas.length ? ` · distribuida en ${v.plataformas.join(", ")}` : ""}` : "Sin contenido generado"}>
           {tieneContenido ? (
-            <PestanasPlataforma bloques={bloques} liga={liga} />
+            <PestanasPlataforma bloques={bloques} slug={v.slug} />
           ) : (
             <p className="text-sm text-ink-3">Esta vacante todavía no tiene publicación por plataforma. Genérala con «Regenerar con IA».</p>
           )}

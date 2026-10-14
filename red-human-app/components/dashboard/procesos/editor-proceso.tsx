@@ -18,6 +18,7 @@ import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psi
 import { fetchCursos, fetchPruebasPsicometricas, type Curso, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica } from "@/lib/api";
 import type { EtapaCandidato, EtapasProceso, PasoProceso } from "@/lib/data";
 import { aplicarOrdenFijo, claveCatalogo, conFlechas, insertarSugerido } from "@/lib/orden-proceso";
+import { ENFOQUE_DEFAULT, enfoquePaso } from "@/components/dashboard/vacantes/perfil-operativo";
 import { cn } from "@/lib/utils";
 
 const selectRH = cn(inputRH, "h-10 pr-8");
@@ -60,7 +61,9 @@ export function pasoNuevo(t: OpcionTipoPaso, etapa: EtapaCandidato, pasos: PasoP
     responsable: { tipo: t.responsable },
     regla: { tipo: t.regla },
     plazo_dias: null,
-    ...(t.valor === "entrevista_humana" ? { tipo_entrevista: "general" } : ENTREVISTAS_IA.has(t.valor) ? { tipo_entrevista: "profesional" } : {}),
+    ...(t.valor === "entrevista_humana" ? { tipo_entrevista: "general" }
+      // Cambio 43: «Enfoque» por actividad — WhatsApp = Operativo; avatar y llamada = Profesional
+      : ENTREVISTAS_IA.has(t.valor) ? { tipo_entrevista: "profesional", enfoque: ENFOQUE_DEFAULT[t.valor] ?? "profesional" } : {}),
   }, t);
 }
 
@@ -170,7 +173,7 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
                       )}
                     </div>
                     {expandido && (
-                      <DetalleActividad catalogo={catalogo} cursos={cursos} p={p} opciones={opciones} soloLectura={soloLectura} onCambio={(c) => cambiarPaso(p.id, c)} />
+                      <DetalleActividad pasos={pasos} catalogo={catalogo} cursos={cursos} p={p} opciones={opciones} soloLectura={soloLectura} onCambio={(c) => cambiarPaso(p.id, c)} />
                     )}
                   </li>
                 );
@@ -200,8 +203,9 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
 }
 
 /** Solo lo PROPIO de cada actividad del catálogo. */
-function DetalleActividad({ p, catalogo = [], cursos = [], opciones, soloLectura, onCambio }: {
+function DetalleActividad({ p, pasos = [], catalogo = [], cursos = [], opciones, soloLectura, onCambio }: {
   p: PasoProceso;
+  pasos?: PasoProceso[];
   catalogo?: PruebaPsicometrica[];
   cursos?: Curso[];
   opciones: OpcionesProceso;
@@ -220,10 +224,14 @@ function DetalleActividad({ p, catalogo = [], cursos = [], opciones, soloLectura
       )}
       {ENTREVISTAS_IA.has(p.tipo) && (
         <label className="flex flex-col gap-1 text-xs text-ink-2">
-          Enfoque de la Entrevista Red Human
-          <select className={selectRH} value={p.tipo_entrevista ?? "profesional"} disabled={soloLectura} onChange={(ev) => onCambio({ tipo_entrevista: ev.target.value })}>
+          Enfoque
+          <select className={selectRH} value={enfoquePaso(p, pasos)} disabled={soloLectura} onChange={(ev) => onCambio({ enfoque: ev.target.value })}>
             {opciones.enfoquesEntrevistaAgente.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
           </select>
+          <span className="text-[11px] text-ink-3">
+            {enfoquePaso(p, pasos) === "operativo" ? "Entrevista base fija: situación actual e historial de hasta 3 trabajos."
+              : "Red Human genera un guion de hasta 10 preguntas técnicas y de casos reales."}
+          </span>
         </label>
       )}
       {p.tipo === "psicometrica" && p.modalidad !== "fisica" && (

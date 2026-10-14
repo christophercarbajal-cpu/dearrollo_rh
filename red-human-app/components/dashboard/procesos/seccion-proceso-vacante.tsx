@@ -17,6 +17,9 @@ import { inputRH } from "@/components/dashboard/modulos-rh";
 import { EditorProceso } from "@/components/dashboard/procesos/editor-proceso";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import { resumenPasos } from "@/components/dashboard/procesos/seccion-plantillas-proceso";
+import { enfoquePaso } from "@/components/dashboard/vacantes/perfil-operativo";
+
+const ENTREVISTAS_IA = ["entrevista_whatsapp", "entrevista_agente", "llamada_agente"];
 import {
   fetchOpcionesProceso, fetchPlantillasProceso, fetchProcesoVacante, fetchPruebasPsicometricas, type OpcionesProceso, type PlantillaProceso,
   type ProcesoEntrada, type PruebaPsicometrica,
@@ -160,6 +163,21 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante, bloquead
               )}
             </div>
           )}
+          {/* Cambio 43: «Enfoque» de cada entrevista de Red Human, a la vista (cambiarlo después de generar → «Volver a generar») */}
+          {!bloqueado && opciones && efectivo.pasos.filter((x) => ENTREVISTAS_IA.includes(x.tipo) && !x.heredado).map((x) => (
+            <label key={x.id} className="flex flex-col gap-1 rounded-xl border border-border-soft p-3">
+              <span className="text-xs font-medium text-ink-2">Enfoque · {x.nombre}</span>
+              <select className={cn(inputRH, "pr-8")} value={enfoquePaso(x, efectivo.pasos)}
+                onChange={(e) => onChange({ tocado: true, plantillaId: efectivo.plantillaId, etapas: efectivo.etapas,
+                  pasos: efectivo.pasos.map((y) => (y.id === x.id ? { ...y, enfoque: e.target.value } : y)) })}>
+                {opciones.enfoquesEntrevistaAgente.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
+              </select>
+              <span className="text-[11px] text-ink-3">
+                {enfoquePaso(x, efectivo.pasos) === "operativo" ? "Entrevista base fija (situación actual e historial de hasta 3 trabajos)."
+                  : "Guion de Red Human de hasta 10 preguntas técnicas y de casos reales."}
+              </span>
+            </label>
+          ))}
           {pasoPsico && !bloqueado && (
             <div className="rounded-xl border border-border-soft p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">

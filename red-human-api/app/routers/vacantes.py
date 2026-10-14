@@ -423,7 +423,8 @@ def generar(
                        ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
                        modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
                        naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
-                       previas=datos.filtro or (actuales.get("filtro") or []), propuestos=list(resultado.indispensables_propuestos))
+                       previas=datos.filtro or (actuales.get("filtro") or []), propuestos=list(resultado.indispensables_propuestos),
+                       enfoque=datos_g["enfoque_entrevista"], periodicidad=datos.sueldo_periodicidad or "")
     salida["filtro"] = filtro
     salida["preguntas_filtro"] = pfu.web(filtro)
     salida["preguntas_filtro_whatsapp"] = []

@@ -84,11 +84,12 @@ def guion_visible() -> dict:
 # ============================================================ ¿aplica?
 
 def aplica(e) -> bool:
-    """Entrevista por WhatsApp de una postulación con ruta Masivos."""
-    from .prefiltro_operativo import es_ruta_operativa
+    """Entrevista por WhatsApp con enfoque OPERATIVO (Cambio 43: el «Enfoque» de la actividad; sin él, ruta Masivos)."""
+    from .proceso import enfoques_de_ruta, tiene_proceso
 
     p = getattr(e, "postulacion", None)
-    return getattr(e, "tipo", "") == "whatsapp" and p is not None and es_ruta_operativa(p.proceso or {})
+    return (getattr(e, "tipo", "") == "whatsapp" and p is not None and tiene_proceso(p)
+            and enfoques_de_ruta(p.proceso).get("entrevista_whatsapp") == "operativo")
 
 
 # ============================================================ textos

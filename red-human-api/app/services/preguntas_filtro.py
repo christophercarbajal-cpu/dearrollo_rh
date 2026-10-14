@@ -239,9 +239,35 @@ def _texto_sueldo(sueldo: str) -> str:
     return q.replace("¿Te parece bien?", "¿Te interesa?") if q else ""
 
 
-def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Optional[set] = None) -> List[dict]:
-    """Las preguntas base, en orden: edad, interés, sueldo (solo con sueldo capturado), colonia y traslado. No descartan."""
+def es_profesional(enfoque: str) -> bool:
+    """Cambio 43: enfoques Profesional y Profesional + personal (el resto — Operativo o sin dato — conserva las base de siempre)."""
+    return (enfoque or "") in ("profesional", "profesional_personal")
+
+
+def pregunta_expectativa(periodicidad: str = "") -> str:
+    """Cambio 43: el sueldo en enfoques profesionales se pregunta como EXPECTATIVA."""
+    p = str(periodicidad or "").strip().lower()
+    return "¿Cuál es tu expectativa de sueldo " + {"semanal": "semanal", "quincenal": "quincenal", "anual": "anual"}.get(p, "mensual") + "?"
+
+
+def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Optional[set] = None, enfoque: str = "",
+          periodicidad: str = "") -> List[dict]:
+    """Las preguntas base, en orden: edad, interés, sueldo (solo con sueldo capturado), colonia y traslado. No descartan.
+    Cambio 43 — enfoque Operativo: colonia, traslado y sueldo AFIRMATIVO («El sueldo es… ¿Te interesa?»). Enfoques
+    Profesional (+ personal): SIN colonia, traslado solo si un indispensable lo pide (esa pregunta ya es la del requisito) y
+    el sueldo como EXPECTATIVA («¿Cuál es tu expectativa de sueldo mensual?»)."""
     ya = ya or set()
+    if es_profesional(enfoque):
+        titulo = (titulo or "").strip() or "esta vacante"
+        salida = []
+        if "edad" not in ya:
+            salida.append({"id": "base-edad", "requisito": "Edad", "pregunta": "¿Cuántos años tienes?", "tipo": "numero",
+                           "unidad": "años", "dato": "edad"})
+        salida.append({"id": "base-interes", "requisito": f"Interés en el puesto: {titulo}",
+                       "pregunta": f"El puesto es {titulo}. ¿Te interesa?", "tipo": "si_no", "dato": "interes"})
+        salida.append({"id": "base-sueldo", "requisito": "Expectativa de sueldo", "pregunta": pregunta_expectativa(periodicidad),
+                       "tipo": "numero", "unidad": "pesos", "dato": "sueldo", "expectativa": True})
+        return [{**q, "base": True, "descarta": False, "regla": REGLA_NO_DESCARTA, "opciones": []} for q in salida]
     titulo = (titulo or "").strip() or "esta vacante"
     salida = []
     if "edad" not in ya:
@@ -263,7 +289,7 @@ def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Opt
 
 def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubicacion: str = "", modalidad: str = "",
           seniority: str = "", naturales: Optional[Dict[str, str]] = None, previas: Optional[List[dict]] = None,
-          propuestos: Optional[List[str]] = None) -> List[dict]:
+          propuestos: Optional[List[str]] = None, enfoque: str = "", periodicidad: str = "") -> List[dict]:
     """La lista completa: una pregunta por indispensable (en su orden) y después las base. `naturales` = {requisito
     normalizado: pregunta propuesta por la IA}; `previas` = la lista guardada (se conservan los ajustes de RH)."""
     naturales = naturales or {}
@@ -278,7 +304,7 @@ def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubic
         if it["dato"] in ("edad", "traslado"):
             ya.add(it["dato"])
         salida.append(it)
-    salida += bases(titulo, sueldo, ubicacion, modalidad, ya)
+    salida += bases(titulo, sueldo, ubicacion, modalidad, ya, enfoque=enfoque, periodicidad=periodicidad)
     return [normalizar_item(q) for q in salida]
 
 
@@ -324,7 +350,8 @@ def kw_de_vacante(v) -> dict:
     from .prefiltro_conversacional import ubicacion_vacante
 
     return {"titulo": getattr(v, "titulo", "") or "", "sueldo": "" if (getattr(v, "sueldo", "") or "") == "A convenir" else (v.sueldo or ""),
-            "ubicacion": ubicacion_vacante(v), "modalidad": getattr(v, "modalidad", "") or "", "seniority": getattr(v, "seniority", "") or ""}
+            "ubicacion": ubicacion_vacante(v), "modalidad": getattr(v, "modalidad", "") or "", "seniority": getattr(v, "seniority", "") or "",
+            "enfoque": getattr(v, "enfoque_entrevista", "") or "", "periodicidad": getattr(v, "sueldo_periodicidad", "") or ""}
 
 
 def web(lista: List[dict]) -> List[dict]:
@@ -433,6 +460,11 @@ def criterios(v, corporativa: bool = False) -> List[dict]:
     salida = []
     for q in de_vacante(v):
         q = normalizar_item(q)
+        if q.get("expectativa") and q.get("base") and not q.get("indispensable"):
+            # Cambio 43: enfoques profesionales — el sueldo es la EXPECTATIVA (con la pregunta guardada)
+            salida.append({**dato_expectativa(v), "pregunta": q["pregunta"], "chat": q["pregunta"], "unificado": True, "base": True,
+                           "tipo": "numero"})
+            continue
         if corporativa and q.get("base") and not q.get("indispensable"):
             if q["dato"] == "zona" or q["dato"] == "traslado":
                 continue

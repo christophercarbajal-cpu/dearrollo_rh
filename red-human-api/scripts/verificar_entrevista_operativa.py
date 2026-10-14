@@ -129,8 +129,9 @@ with TestClient(app) as client:
     H = {"X-Cuenta-Id": str(cuenta.id)}
 
     opciones = client.get("/procesos/opciones", headers=H).json()
-    check(any(e["valor"] == "operativo" and "Masivos" in e["texto"] for e in opciones["enfoquesEntrevistaAgente"]),
-          "el enfoque se ofrece como «Operativo (sugerido para Masivos)»")
+    # Cambio 43: el «Enfoque» es un campo de la actividad: Operativo · Profesional · Profesional + personal
+    check(any(e["valor"] == "operativo" and e["texto"] == "Operativo" for e in opciones["enfoquesEntrevistaAgente"]),
+          "el enfoque se ofrece como «Operativo»")
     lib = client.get("/vacantes/perfiles-operativos", headers=H)
     check(lib.status_code == 200 and len(lib.json()["oficios"]) == 10 and [s["clave"] for s in lib.json()["secciones"]] ==
           ["trayectoria", "oficio", "indispensables", "situacion_actual", "motivacion", "logistica", "condiciones"], "GET /vacantes/perfiles-operativos")

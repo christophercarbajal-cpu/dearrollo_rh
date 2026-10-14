@@ -47,7 +47,9 @@ import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
 import type { EtapaCandidato, PasoProceso, Vacante } from "@/lib/data";
-import { rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
+import { enfoqueDeRuta, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
+import { TextoPlataforma } from "@/components/dashboard/vacantes/texto-plataforma";
+import { ligaCanal, markdownATexto, slugificar } from "@/lib/markdown-texto";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import {
   ETAPAS_PIPELINE,
@@ -607,6 +609,7 @@ export function FormularioContenidoVacante({
   slotProceso,
   rutaGeneracion,
   intentoPublicar = 0,
+  slugVacante = "",
 }: {
   value: ContenidoVacante;
   onChange: (c: ContenidoVacante) => void;
@@ -629,6 +632,8 @@ export function FormularioContenidoVacante({
   rutaGeneracion?: ProcesoEntrada;
   /** Cambio 37: sube cada vez que RH intenta publicar — entonces se muestra «Falta para publicar». */
   intentoPublicar?: number;
+  /** Cambio 43: slug de la vacante ya guardada (la liga de cada canal al copiar). Sin él, liga provisional con el puesto. */
+  slugVacante?: string;
 }) {
   const set = <K extends keyof ContenidoVacante>(k: K) => (v: ContenidoVacante[K]) => onChange({ ...value, [k]: v });
   const [generando, setGenerando] = useState(false);
@@ -646,11 +651,23 @@ export function FormularioContenidoVacante({
       setBajar(false);
     }
   }, [bajar, generado]);
-  // Cambio 27 (2026-10-12): la plantilla de ruta define el enfoque — Masivos = Operativo, sin importar el seniority
-  const enfoquePorRuta = conGuiones && rutaMasiva(rutaGeneracion);
+  // Cambio 43: el «Enfoque» vive en la actividad de entrevista de la ruta (WhatsApp = Operativo y avatar = Profesional por
+  // defecto; rutas previas: Masivos = Operativo). La vacante muestra SOLO UNA entrevista: Operativo = la base fija;
+  // Profesional (+ personal) = el guion de Red Human.
+  const enfoqueRuta = conGuiones ? enfoqueDeRuta(rutaGeneracion) : null;
+  const enfoquePorRuta = conGuiones && (enfoqueRuta ?? (rutaMasiva(rutaGeneracion) ? "operativo" : null)) === "operativo";
+  const enfoqueSincronizado = useRef(false);
   useEffect(() => {
-    if (enfoquePorRuta && value.enfoque_entrevista !== "operativo") onChange({ ...value, enfoque_entrevista: "operativo" });
-  }, [enfoquePorRuta, value, onChange]);
+    if (enfoqueRuta && value.enfoque_entrevista !== enfoqueRuta) {
+      const nuevo = { ...value, enfoque_entrevista: enfoqueRuta as EnfoqueEntrevista };
+      // al abrir una vacante ya generada, alinear el enfoque guardado con la ruta NO es «cambiaste los datos»
+      if (!enfoqueSincronizado.current) setFirmaGen((f) => (f !== null && f === firmaBloque1(value) ? firmaBloque1(nuevo) : f));
+      onChange(nuevo);
+    }
+    if (enfoqueRuta) enfoqueSincronizado.current = true;
+  }, [enfoqueRuta, value, onChange]);
+  const origen = typeof window !== "undefined" ? window.location.origin : "";
+  const ligaDe = (canal: string) => ligaCanal(origen, slugVacante || slugificar(value.titulo), canal);
   // Cambio 28: lo que la ruta exige a la vacante (documentos, 3 indispensables, CV); sin esto «Publicar» queda desactivado
   const reqRuta = requisitosDeRuta(rutaGeneracion && "pasos" in rutaGeneracion ? rutaGeneracion.pasos ?? [] : []);
   const avisosRuta = avisosPublicacion(value, reqRuta);
@@ -715,8 +732,11 @@ export function FormularioContenidoVacante({
       return;
     }
     const base = contenidoDesdeGenerado(value, r.data);
-    onChange(conGuiones ? aplicarGuionesGenerados(base, r.data) : base);
-    setFirmaGen(firmaBloque1(value));
+    const nuevo = conGuiones ? aplicarGuionesGenerados(base, r.data) : base;
+    onChange(nuevo);
+    // Cambio 43: la firma es la del contenido YA generado (lo que propone Red Human en el Bloque 1 —indispensables— no
+    // cuenta como «cambiaste los datos»): al volver a generar el aviso desaparece
+    setFirmaGen(firmaBloque1(nuevo));
     onGenerado?.(r.data);
     setGenerado(true);
     setMostrarFaltantes(true);
@@ -834,7 +854,7 @@ export function FormularioContenidoVacante({
       {generado && (
         <section ref={bloque2} className="flex scroll-mt-4 flex-col gap-6 rounded-2xl border border-brand/25 bg-brand-soft/10 p-4"
           aria-label="Bloque 2: generado por Red Human" data-bloque="2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3" data-desactualizado={desactualizado ? "si" : "no"}>
             <div>
               <p className="flex items-center gap-1.5 text-sm font-semibold text-ink"><Sparkles className="h-4 w-4 text-brand" /> Generado por Red Human</p>
               {empresaIA && <p className="text-xs text-ink-3">A nombre de <b className="text-ink">{empresaIA}</b>. Todo es editable.</p>}
@@ -870,22 +890,25 @@ export function FormularioContenidoVacante({
           )}
 
           {conGuiones && (
-            <Seccion titulo="Entrevista">
+            <Seccion titulo="Entrevista" ayuda={`Enfoque: ${TEXTO_ENFOQUE[value.enfoque_entrevista] ?? "Profesional"}. Se cambia en la actividad de entrevista del proceso.`}>
               {enfoquePorRuta && (
                 <EntrevistaWhatsappBase
                   value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
                   onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
                 />
               )}
-              <PlantillasConversacion value={value} onChange={onChange} />
+              {!enfoquePorRuta && <PlantillasConversacion value={value} onChange={onChange} />}
             </Seccion>
           )}
 
-          <Seccion titulo="Textos por plataforma">
-            <Area label="WhatsApp" value={value.texto_whatsapp} onChange={set("texto_whatsapp")} rows={3} />
+          <Seccion titulo="Textos por plataforma" ayuda="«Copiar» lleva el texto limpio y la liga de postulación de ese canal.">
+            {/* Cambio 43: Markdown pintado (sin #, ** ni símbolos crudos); WhatsApp siempre sin Markdown */}
+            <TextoPlataforma etiqueta="WhatsApp" canal="whatsapp" texto={value.texto_whatsapp} sinMarkdown
+              liga={ligaDe("whatsapp")} provisional={!slugVacante} onChange={(t) => set("texto_whatsapp")(markdownATexto(t))} />
             {(["portal", "occ", "linkedin"] as const).map((k) => (
-              <Area key={k} label={{ portal: "Portal Red Human", occ: "OCC Mundial", linkedin: "LinkedIn" }[k]}
-                value={value.publicaciones[k]?.page ?? (k === "occ" ? value.texto_bolsa : "")} onChange={(t) => setPub(k, t)} rows={4} />
+              <TextoPlataforma key={k} etiqueta={{ portal: "Portal Red Human", occ: "OCC Mundial", linkedin: "LinkedIn" }[k]} canal={k}
+                texto={value.publicaciones[k]?.page ?? (k === "occ" ? value.texto_bolsa : "")} liga={ligaDe(k)} provisional={!slugVacante}
+                onChange={(t) => setPub(k, t)} />
             ))}
           </Seccion>
         </section>
@@ -900,10 +923,13 @@ function ErrorLinea({ children, tono = "warn" }: { children: React.ReactNode; to
 }
 
 /** Huella del Bloque 1 (lo que captura RH + la ruta): si cambia después de generar → «Volver a generar». */
-function firmaBloque1(c: ContenidoVacante) {
+export function firmaBloque1(c: ContenidoVacante) {
+  // Cambio 43: el «Enfoque» de la entrevista (de la ruta) también cuenta: cambiarlo después de generar → «Volver a generar»
   return JSON.stringify([c.titulo, c.area, c.seniority, c.ubicacion_estado, c.ubicacion_municipio, c.modalidad, c.sueldo_desde,
-    c.sueldo_hasta, c.sueldo_periodicidad, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios]);
+    c.sueldo_hasta, c.sueldo_periodicidad, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios, c.enfoque_entrevista]);
 }
+
+const TEXTO_ENFOQUE: Record<string, string> = { operativo: "Operativo", profesional: "Profesional", profesional_personal: "Profesional + personal" };
 
 /** Cambio 37: los indispensables que NO capturó RH los propone Red Human — se marcan para que RH los confirme o quite. */
 function PropuestosRedHuman({ requisitos, propuestos }: { requisitos: string[]; propuestos: string[] }) {

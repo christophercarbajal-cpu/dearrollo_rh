@@ -58,6 +58,8 @@ export interface PasoProceso {
   regla: ReglaPaso;
   plazo_dias: number | null;
   tipo_entrevista?: string;
+  /** Cambio 43: «Enfoque» de una entrevista de Red Human (WhatsApp / avatar / llamada): operativo | profesional | profesional_personal. */
+  enfoque?: string;
   orden?: number;
   heredado?: boolean;
   /** 2026-10-06: actividad agregada solo a esta postulación (no viene de la plantilla ni de la vacante). */

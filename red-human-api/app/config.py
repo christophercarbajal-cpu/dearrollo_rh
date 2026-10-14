@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # META_PLANTILLA_AGENDA, que en Meta NO tiene variables (META_PLANTILLA_AGENDA_PARAMS vacío = 0 parámetros; solo si
     # se registra otra versión con variables se llenan en ese orden: nombre, vacante, empresa).
     meta_plantilla_inicio: str = "inicio_entrevista_rh"
+    # Cambio 37: «Hola, {{1}}. Soy Red Human, el agente virtual de {{2}}. Recibimos tu postulación para {{3}}. ¿Tienes 5
+    # minutos para responder unas preguntas?» — orden de las variables (nombre, empresa, puesto)
+    meta_plantilla_inicio_params: str = "nombre,empresa,puesto"
     meta_plantilla_agenda: str = "aviso_proceso_rh"
     meta_plantilla_agenda_params: str = ""
     # Cambio 30: «Oferta laboral» — «{{1}}, tenemos una oferta para ti. Revísala aquí: {{2}}» ({{1}} nombre, {{2}} liga).

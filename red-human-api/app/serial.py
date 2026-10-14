@@ -94,6 +94,15 @@ def _sincronizacion(v) -> dict:
                 "minIndispensables": 0}
 
 
+def _filtro(v) -> list:
+    from .services import preguntas_filtro as pfu
+
+    try:
+        return [pfu.normalizar_item(q) for q in pfu.de_vacante(v)] if pfu.aplica(v) else []
+    except Exception:  # noqa: BLE001 — nunca tumba el detalle de la vacante
+        return []
+
+
 def _pide_cv(v) -> bool:
     from sqlalchemy.orm import object_session
 
@@ -179,6 +188,9 @@ def vacante_dict(
         "documentosSolicitados": normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []),  # Cambio 25
         # Cambio 31: pregunta natural por requisito indispensable (lo guardado o la determinista)
         "preguntasRequisitos": _preguntas_requisitos(v),
+        # Cambio 37: «Preguntas filtro» (entidad única) y los indispensables «Propuesto por Red Human»
+        "filtro": _filtro(v),
+        "indispensablesPropuestos": list(((v.guiones or {}).get("indispensables_propuestos")) or []),
         "ubicacionEstado": v.ubicacion_estado or "",
         "ubicacionMunicipio": v.ubicacion_municipio or "",
         # Capacitación universal (2026-09-16): curso que se asigna como filtro al quedar apto

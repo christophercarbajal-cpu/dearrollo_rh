@@ -19,18 +19,19 @@ import unicodedata
 from typing import List, Optional, Tuple
 
 EDAD_MINIMA = 18
-# Cambio 31: repregunta SUAVE y sin ejemplos de formato («Claro. Solo para tenerlo en cuenta, …»), una sola vez
+# Cambio 31: repregunta sin ejemplos de formato, una sola vez. Cambio 37: «Claro. Solo para tenerlo en cuenta, …» es
+# EXCLUSIVA de la pregunta de sueldo; las demás repreguntan el dato concreto directo.
 REPREGUNTAS = {
-    "experiencia": "Claro. Solo para tenerlo en cuenta, ¿cuánto tiempo llevas en total?",
-    "licencia": "Claro. Solo para tenerlo en cuenta, ¿de qué tipo es tu licencia?",
-    "disponibilidad": "Claro. Solo para tenerlo en cuenta, ¿qué días o turnos puedes trabajar?",
-    "requisito": "Claro. Solo para tenerlo en cuenta, ¿dónde o de qué forma lo has hecho?",
-    "edad": "Claro. Solo para tenerlo en cuenta, ¿qué edad tienes?",
-    "interes": "Claro. Solo para tenerlo en cuenta, ¿te interesa el puesto?",
-    "puede_trasladarse": "Claro. Solo para tenerlo en cuenta, ¿puedes trasladarte hasta allá?",
-    "traslado": "Claro. Solo para tenerlo en cuenta, ¿cuántos minutos te tomaría llegar?",
+    "experiencia": "¿Cuánto tiempo llevas en total, aproximadamente?",
+    "licencia": "¿De qué tipo es tu licencia?",
+    "disponibilidad": "¿Qué días o turnos puedes trabajar?",
+    "requisito": "¿Dónde o de qué forma lo has hecho?",
+    "edad": "¿Qué edad tienes?",
+    "interes": "¿El puesto te interesa? Respóndeme sí o no.",
+    "puede_trasladarse": "¿Puedes trasladarte hasta allá? Respóndeme sí o no.",
+    "traslado": "¿Cuántos minutos te tomaría llegar?",
     "sueldo": "Claro. Solo para tenerlo en cuenta, ¿te interesa el sueldo?",
-    "zona": "Claro. Solo para tenerlo en cuenta, ¿en qué colonia y municipio vives?",
+    "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
 }
 DATOS_OPERATIVOS = ("experiencia", "licencia", "transportes", "disponibilidad", "requisito", "edad", "interes", "puede_trasladarse")
 
@@ -89,7 +90,13 @@ def maximo_transportes(req: str) -> Optional[int]:
 
 
 def cantidad_de(t: str) -> Optional[int]:
-    """Cantidad de una respuesta libre («2», «dos camiones», «solo uno», «ninguno, llego caminando»)."""
+    """Cantidad de una respuesta libre («2», «dos camiones», «solo uno», «ninguno, llego caminando»). Cambio 37: «en
+    carro», «moto», «caminando» = 0 transportes; «uno» = 1."""
+    from .preguntas_filtro import transportes_de
+
+    n = transportes_de(t)
+    if n is not None:
+        return n
     t = _n(t)
     m = re.search(r"\b(\d+)\b", t)
     if m:

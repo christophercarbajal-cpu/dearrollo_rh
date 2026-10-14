@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Candidato, Cuenta, Usuario, UsuarioCuenta  # noqa: E402
+from app.models import Candidato, Cuenta, Postulacion, Usuario, UsuarioCuenta  # noqa: E402
 
 OK = 0
 
@@ -70,7 +70,11 @@ with TestClient(app) as client:
     check(r3.status_code in (200, 201), f"formulario público con el mismo teléfono/correo → {r3.status_code} (permitido)")
     check(db.query(Candidato).filter(Candidato.telefono == "5511112222").count() == 3, "3 personas con el mismo teléfono en la base (Modo Prueba)")
     r = client.get("/candidatos")
-    check(len([p for p in r.json() if p["telefono"] == "5511112222"]) == 3, "las 3 aparecen en el Kanban")
+    # Cambio 37: en Modo Prueba una postulación nueva del mismo número a la MISMA vacante reemplaza a la anterior
+    # («Prueba reemplazada»); la de otra vacante sigue
+    check(len([p for p in r.json() if p["telefono"] == "5511112222"]) == 2, "las 2 vigentes aparecen en el Kanban")
+    p_r1 = db.query(Postulacion).filter_by(codigo=r1.json()["id"]).one()
+    check(not p_r1.activa and p_r1.motivo_cierre == "prueba_reemplazada", "la anterior a la misma vacante queda «Prueba reemplazada»")
 
     print("\n--- Modo Prueba APAGADO: vuelve la deduplicación normal ---")
     client.patch("/configuracion", json={"modo_prueba": False})

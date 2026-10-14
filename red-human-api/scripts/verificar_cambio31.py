@@ -151,7 +151,9 @@ with TestClient(app) as client:
     check(crit[0]["chat"] == "Cuéntame, ¿cuántos años llevas en almacén?" and crit[0]["dato"] == "experiencia",
           f"el motor (Masivos) usa la pregunta natural tal cual → «{crit[0]['chat']}»")
     tsx = leer("components/dashboard/vacantes/formulario-contenido.tsx")
-    check("preguntas_requisitos" in tsx and "Cómo pregunta Red Human cada requisito" in tsx, "el formulario muestra y guarda las preguntas")
+    # Cambio 37: la pregunta de cada requisito vive en la lista única «Preguntas filtro» (se guarda como `filtro`)
+    check("EditorPreguntasFiltro" in tsx and "Preguntas filtro" in tsx and "filtro: c.filtro" in tsx,
+          "el formulario muestra y guarda las preguntas (en «Preguntas filtro», Cambio 37)")
 
     # ================= Bloque 2 · presentación unificada y salto post-plantilla =================
     print("\n--- Bloque 2 · presentación «Soy Red Human, el agente virtual de [empresa].» ---")
@@ -230,7 +232,9 @@ with TestClient(app) as client:
     chats += list(pconv.REPREGUNTA_DATO.values()) + list(pop.REPREGUNTAS.values())
     check(not any(x in t for t in chats for x in ("Para confirmar", "Primero confírmame", "Por ejemplo", "15 mil")),
           "ninguna pregunta ni repregunta dice «Para confirmar», «Primero confírmame» ni «Por ejemplo»")
-    check(all(t.startswith("Claro. Solo para tenerlo en cuenta,") for t in pop.REPREGUNTAS.values()), "las repreguntas son suaves")
+    # Cambio 37: «Claro. Solo para tenerlo en cuenta…» es EXCLUSIVA de la pregunta de sueldo
+    check(all(t.startswith("Claro. Solo para tenerlo en cuenta,") == (k == "sueldo") for k, t in pop.REPREGUNTAS.items()),
+          "las repreguntas piden el dato directo; «Claro. Solo para tenerlo en cuenta…» solo en sueldo (Cambio 37)")
     dv = pconv.dato_expectativa(vm)
     check(dv["repregunta"] == "Claro. Solo para tenerlo en cuenta, ¿con qué cantidad al mes te sentirías cómodo?", f"repregunta de sueldo → «{dv['repregunta']}»")
 

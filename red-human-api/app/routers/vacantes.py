@@ -59,7 +59,9 @@ def _embudo(db: Session, v: Vacante) -> dict:
     """Conteo por etapa y por clasificación del agente — alimenta la tarjeta de la vacante.
     2026-09-20 (B4): sale de `services.conteos` (postulaciones activas, personas no eliminadas, incluye
     Modo Prueba) — la MISMA base que el Kanban y el pipeline global, así los contadores coinciden."""
-    return {"etapas": conteos.por_etapa(db, v.cuenta_id, v.id), "estados": conteos.por_estado(db, v.cuenta_id, v.id)}
+    return {"etapas": conteos.por_etapa(db, v.cuenta_id, v.id), "estados": conteos.por_estado(db, v.cuenta_id, v.id),
+            # Cambio 37: «[n] descartados · [n] en revisión» (debajo de los contadores, con liga a la lista)
+            "descartados": conteos.descartados(db, v.cuenta_id, v.id), "enRevision": conteos.en_revision(db, v.cuenta_id, v.id)}
 
 
 def _conteos(db: Session, v: Vacante):
@@ -107,6 +109,14 @@ def _sincronizar_ruta(db: Session, v: Vacante, publicar: bool = False) -> None:
         faltan = ssv.faltantes_publicacion(db, v)
         if faltan:
             raise HTTPException(409, "No se puede publicar: " + " ".join(faltan))
+
+
+def _sincronizar_filtro(v: Vacante, entrada=None, propuestos: Optional[List[str]] = None) -> None:
+    """Cambio 37: «Preguntas filtro» — la entidad única se recalcula contra los indispensables vigentes (conserva lo que
+    RH ajustó) y DERIVA el formulario web; el prefiltro de WhatsApp separado deja de existir."""
+    from ..services import preguntas_filtro as pfu
+
+    pfu.sincronizar(v, entrada=entrada, propuestos=propuestos)
 
 
 def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
@@ -275,6 +285,9 @@ class GenerarIn(BaseModel):
     documentos_solicitados: List[dict] = []
     # Cambio 31: pregunta natural por indispensable [{requisito, pregunta}] (la propone /generar; RH puede ajustarla)
     preguntas_requisitos: List[dict] = []
+    # Cambio 37: «Preguntas filtro» (entidad única) que RH ya ajustó y los indispensables «Propuesto por Red Human»
+    filtro: Optional[List[dict]] = None
+    indispensables_propuestos: Optional[List[str]] = None
     perfil_operativo: Optional[dict] = None  # 2026-10-10: oficio de la Biblioteca (ajustado para esta vacante), enfoque operativo
 
     def ubicacion_texto(self) -> str:
@@ -378,13 +391,23 @@ def generar(
             datos_g["perfil_operativo"] = eop.normalizar_perfil(datos.perfil_operativo)
         except ValueError as e:
             raise HTTPException(400, str(e))
+    # Cambio 37: los prefiltros son UNA sola entidad («Preguntas filtro»): aquí solo se generan los guiones de entrevista
+    guion_claves = [c for c in sgui.secciones_aplicables(sgui.tipos_de_ruta(pasos_ruta)) if sgui.SECCIONES[c]["clase"] == "guion"]
     try:
-        g = sgui.generar(datos_g, pasos_ruta, vigentes, conservar=datos.conservar, empresa=empresa)
+        g = sgui.generar(datos_g, pasos_ruta, vigentes, conservar=datos.conservar, empresa=empresa, solo=guion_claves or ["-"])
     except sgui.ErrorGuion as e:
         raise HTTPException(e.status, e.mensaje)
-    salida["preguntas_filtro"] = g["secciones"].get("prefiltro_web", vigentes["prefiltro_web"] if "prefiltro_web" in g["conservadas"] else [])
-    salida["preguntas_filtro_whatsapp"] = g["secciones"].get(
-        "prefiltro_whatsapp", vigentes["prefiltro_whatsapp"] if "prefiltro_whatsapp" in g["conservadas"] else [])
+    from ..services import preguntas_filtro as pfu
+
+    filtro = pfu.armar(list(resultado.requisitos_indispensables), titulo=datos.titulo.strip(),
+                       sueldo="" if (datos.sueldo_texto() or "A convenir") == "A convenir" else datos.sueldo_texto(),
+                       ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
+                       modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
+                       naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
+                       previas=datos.filtro or (actuales.get("filtro") or []), propuestos=list(resultado.indispensables_propuestos))
+    salida["filtro"] = filtro
+    salida["preguntas_filtro"] = pfu.web(filtro)
+    salida["preguntas_filtro_whatsapp"] = []
     salida["guiones"] = {"secciones": {k: c for k, c in g["secciones"].items() if sgui.SECCIONES[k]["clase"] == "guion"},
                          "meta": g["meta"], "aplican": g["aplican"], "conservadas": g["conservadas"], "generadas": g["generadas"],
                          "huella": g["huella"], "ia": g["ia"]}
@@ -426,6 +449,9 @@ def _aplicar_generado(v: Vacante, g: ia.VacanteGenerada) -> None:
     from ..services import guiones as _sg
 
     _sg.guardar_preguntas_requisitos(v, [x.model_dump() for x in g.preguntas_requisitos])  # Cambio 31
+    gg = dict(v.guiones or {})
+    gg["indispensables_propuestos"] = list(g.indispensables_propuestos or [])  # Cambio 37
+    v.guiones = gg
     v.palabras_clave = v.palabras_clave or g.palabras_clave
     v.seniority = v.seniority or g.seniority
     v.avisos_cumplimiento = g.avisos_cumplimiento
@@ -551,22 +577,34 @@ def crear(
     con_ia = None
     v.proceso = _proceso_nuevo(db, cuenta.id, datos.proceso)
     _enfoque_por_ruta(db, v)
+    # Cambio 37: «Preguntas filtro» (entidad única) salvo que un cliente anterior mande las listas viejas por separado
+    unificado = datos.filtro is not None or not (datos.preguntas_filtro or datos.preguntas_filtro_whatsapp)
     if datos.generar_si_falta and not datos.publicaciones and not datos.responsabilidades:
         from ..services import guiones as sgui
 
         entrada_generador = GenerarIn(**datos.model_dump(include=set(GenerarIn.model_fields) - {"proceso", "guiones_actuales", "conservar"}))
         generado, con_ia = _generar(entrada_generador, v.empresa, pide_cv=sgui.pide_cv(sgui.pasos_de_vacante(db, v)))
         _aplicar_generado(v, generado)
-    _guardar_guiones(v, datos.guiones, u.nombre, web=v.preguntas_filtro, whatsapp=v.preguntas_filtro_whatsapp)
+    if unificado:
+        _guardar_guiones(v, datos.guiones, u.nombre)
+    else:
+        _guardar_guiones(v, datos.guiones, u.nombre, web=v.preguntas_filtro, whatsapp=v.preguntas_filtro_whatsapp)
     if con_ia is not None:
         from ..services import guiones as sgui
 
-        sgui.generar_para_vacante(db, v, u.nombre)  # conserva lo que RH ya escribió; genera lo que falte de la ruta
-    _validar_minimo_prefiltro(db, v, explicito=datos.guiones is not None)
-    _sincronizar_ruta(db, v, publicar=datos.publicar)
+        # conserva lo que RH ya escribió; genera lo que falte de la ruta (con la entidad única, solo los guiones)
+        guion_claves = [c for c in sgui.secciones_aplicables(sgui.tipos_de_ruta(sgui.pasos_de_vacante(db, v)))
+                        if sgui.SECCIONES[c]["clase"] == "guion"]
+        sgui.generar_para_vacante(db, v, u.nombre, solo=(guion_claves or ["-"]) if unificado else None)
     from ..services import guiones as _sg
 
-    _sg.guardar_preguntas_requisitos(v, datos.preguntas_requisitos)  # Cambio 31
+    if unificado:
+        _sincronizar_filtro(v, entrada=datos.filtro or [],
+                            propuestos=datos.indispensables_propuestos if datos.indispensables_propuestos is not None else None)
+    _validar_minimo_prefiltro(db, v, explicito=datos.guiones is not None)
+    _sincronizar_ruta(db, v, publicar=datos.publicar)
+    if not unificado:
+        _sg.guardar_preguntas_requisitos(v, datos.preguntas_requisitos)  # Cambio 31
     db.add(v)
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
@@ -783,6 +821,8 @@ class ActualizarIn(BaseModel):
     preguntas_filtro_whatsapp: Optional[List[dict]] = None  # Fase 4
     documentos_solicitados: Optional[List[dict]] = None  # Cambio 25
     preguntas_requisitos: Optional[List[dict]] = None  # Cambio 31
+    filtro: Optional[List[dict]] = None  # Cambio 37: «Preguntas filtro» (entidad única)
+    indispensables_propuestos: Optional[List[str]] = None  # Cambio 37
     ubicacion_estado: Optional[str] = None  # Fase 4
     ubicacion_municipio: Optional[str] = None
     curso_filtro: Optional[str] = None  # Capacitación universal: código CUR-#### ("" = quitar)
@@ -819,6 +859,10 @@ def actualizar(
     entrada_guiones = cambios.pop("guiones", None)
     web_nuevo = cambios.pop("preguntas_filtro", None)
     whatsapp_nuevo = cambios.pop("preguntas_filtro_whatsapp", None)
+    filtro_nuevo = cambios.pop("filtro", None)  # Cambio 37
+    propuestos_nuevos = cambios.pop("indispensables_propuestos", None)
+    if filtro_nuevo is not None:
+        web_nuevo = whatsapp_nuevo = None  # la entidad única manda; las listas viejas se derivan de ella
     if colaboradores_validos is not None:
         cambios["colaboradores_ids"] = colaboradores_validos
     if datos.estado is not None and datos.estado not in ESTADOS:
@@ -866,14 +910,28 @@ def actualizar(
         setattr(v, campo, valor)
     if "proceso" in cambios or "enfoque_entrevista" in cambios:
         _enfoque_por_ruta(db, v)
+    from ..services import preguntas_filtro as _pfu
+
+    if (web_nuevo is not None or whatsapp_nuevo is not None) and _pfu.aplica(v):
+        # un cliente anterior edita las listas viejas por separado: la vacante vuelve al prefiltro de siempre
+        g_leg = dict(v.guiones or {})
+        g_leg.pop(_pfu.CLAVE, None)
+        v.guiones = g_leg
     if entrada_guiones is not None or web_nuevo is not None or whatsapp_nuevo is not None:
         _guardar_guiones(v, entrada_guiones, u.nombre, web=web_nuevo, whatsapp=whatsapp_nuevo)
         cambios.update({k: True for k, x in (("guiones", entrada_guiones), ("preguntas_filtro", web_nuevo),
                                              ("preguntas_filtro_whatsapp", whatsapp_nuevo)) if x is not None})
+    if filtro_nuevo is not None or (_pfu.aplica(v) and any(k in cambios for k in (
+            "requisitos", "titulo", "sueldo", "sueldo_desde", "sueldo_hasta", "sueldo_periodicidad", "modalidad", "ubicacion",
+            "ubicacion_estado", "ubicacion_municipio", "seniority"))) or (propuestos_nuevos is not None and _pfu.aplica(v)):
+        if any(k in cambios for k in ("sueldo_desde", "sueldo_hasta", "sueldo_moneda", "sueldo_periodicidad")):
+            v.sueldo = texto_sueldo(v.sueldo_desde, v.sueldo_hasta, v.sueldo_moneda, v.sueldo_periodicidad)
+        _sincronizar_filtro(v, entrada=filtro_nuevo, propuestos=propuestos_nuevos)
+        cambios["filtro"] = True
     if web_nuevo is not None or "proceso" in cambios:
         _validar_minimo_prefiltro(db, v, explicito=web_nuevo is not None)
     _sincronizar_ruta(db, v, publicar=v.estado == "Publicada" and cambios.get("estado") == "Publicada")
-    if preguntas_req is not None or "requisitos" in cambios:
+    if (preguntas_req is not None or "requisitos" in cambios) and not _pfu.aplica(v):
         from ..services import guiones as _sg
 
         _sg.guardar_preguntas_requisitos(v, preguntas_req)  # Cambio 31
@@ -925,7 +983,15 @@ def regenerar(
     _aplicar_generado(v, generado)
     from ..services import guiones as sgui
 
-    g = sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=datos.sobrescribir_guiones)
+    from ..services import preguntas_filtro as _pfu
+
+    unificado = _pfu.aplica(v)
+    guion_claves = [c for c in sgui.secciones_aplicables(sgui.tipos_de_ruta(sgui.pasos_de_vacante(db, v)))
+                    if sgui.SECCIONES[c]["clase"] == "guion"]
+    g = sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=datos.sobrescribir_guiones,
+                                  solo=(guion_claves or ["-"]) if unificado else None)
+    if unificado:
+        _sincronizar_filtro(v, propuestos=list(generado.indispensables_propuestos or []))
     registrar(db, u.nombre, "vacante_regenerada", "vacante", v.codigo,
               {"ia": con_ia, "notas": datos.notas, "guiones": g["generadas"], "guiones_conservados": g["conservadas"]})
     db.commit()

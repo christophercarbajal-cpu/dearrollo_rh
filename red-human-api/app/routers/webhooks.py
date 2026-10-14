@@ -340,9 +340,28 @@ async def _resolver_postulacion(
             fijar_conversacion(elegida)
             return elegida, "postulacion_elegida"
 
+    # 0.5 Cambio 37: la respuesta a la plantilla de inicio es de SU postulación (la conversación queda ligada a la vacante
+    # de la plantilla): se elige antes que cualquier otra y sin preguntar «¿Sobre qué vacante me escribes?».
+    plantilla = _con_plantilla_pendiente(activas, conv)
+    if plantilla is not None:
+        fijar_conversacion(plantilla)
+        return plantilla, "respuesta_plantilla"
+
     # 1. La conversación en curso sigue esperando respuesta → seguir ahí.
     if conv and conv.espera_respuesta:
         return conv, "conversacion"
+
+    # 1.5 Cambio 37: la conversación más reciente terminó en DESCARTE → se queda en esa vacante (nunca cambia sola de
+    # vacante): el candidato puede refutar el descarte. Solo una selección EXPLÍCITA de otra vacante la mueve.
+    descartada = _conversacion_descartada(personas)
+    if descartada is not None and (conv is None or descartada.id >= conv.id):
+        misma = next((p for p in reversed(activas) if p.vacante_id == descartada.vacante_id), None)
+        if misma is not None:
+            # una postulación NUEVA a la misma vacante (reinicio de prueba, reactivación): no es cambio de vacante
+            fijar_conversacion(misma)
+            return misma, "misma_vacante"
+        if _vacante_explicita(db, cuenta_id, texto, id_seleccionado) is None:
+            return descartada, "post_descarte"
 
     # 2. Sin puntero útil: ¿cuántas esperan respuesta?
     if len(esperando) == 1:
@@ -354,6 +373,10 @@ async def _resolver_postulacion(
     # 3. Nada espera respuesta. ¿Eligió explícitamente una vacante (lista/código)? → nueva
     # postulación (o la activa que ya tenga para esa vacante).
     vac = _vacante_explicita(db, cuenta_id, texto, id_seleccionado)
+    ya_activa = next((p for p in activas if vac is not None and p.vacante_id == vac.id), None)
+    if ya_activa is not None:
+        fijar_conversacion(ya_activa)
+        return ya_activa, "postulacion_elegida"
     if vac and not any(p.vacante_id == vac.id for p in activas):
         # la postulación nace en la Cuenta de la vacante, con la fila de la persona de ESA Cuenta
         persona = _persona_para_cuenta(db, c, personas, vac.cuenta_id, prueba)
@@ -375,6 +398,66 @@ async def _resolver_postulacion(
     p = crear_postulacion(db, c, None, c.cuenta_id, _origen(), es_prueba=prueba)
     fijar_conversacion(p)
     return p, "postulacion_nueva"
+
+
+def _con_plantilla_pendiente(activas: List[Postulacion], conv: Optional[Postulacion]) -> Optional[Postulacion]:
+    """Cambio 37: la postulación activa con la plantilla de inicio ENVIADA y sin responder más reciente — siempre que el
+    candidato no haya escrito después en otra conversación (entonces la plantilla ya quedó atrás)."""
+    from ..services import plantillas_meta
+
+    def enviada(p: Postulacion) -> Optional[datetime]:
+        e = plantillas_meta.estado(p)
+        if not e.get("enviada_en") or e.get("respondida_en") or not e.get("entregada", True):
+            return None
+        try:
+            return _utc(datetime.fromisoformat(e["enviada_en"]))
+        except (TypeError, ValueError):
+            return None
+
+    candidatas = [(enviada(p), p) for p in activas if p.vacante_id]
+    candidatas = [(t, p) for t, p in candidatas if t is not None]
+    if not candidatas:
+        return None
+    t, p = max(candidatas, key=lambda x: x[0])
+    if conv is not None and conv.id != p.id:
+        ultimo = max((_utc(m.creado_en) for m in conv.mensajes or [] if m.rol == "user" and m.creado_en), default=None)
+        if ultimo is not None and ultimo > t:
+            return None
+    return p
+
+
+def _conversacion_descartada(personas: List[Candidato]) -> Optional[Postulacion]:
+    """La postulación a la que apunta la conversación (la más reciente entre sus filas) si quedó DESCARTADA."""
+    from ..services.prefiltro_conversacional import descartada
+
+    ultima = None
+    for per in personas:
+        cand = per.postulacion_conversacion
+        if cand is not None and (ultima is None or cand.id > ultima.id):
+            ultima = cand
+    return ultima if descartada(ultima) else None
+
+
+async def _atender_post_descarte(db: Session, p: Postulacion, texto: str, telefono: str, wa_id: str = "") -> dict:
+    """Cambio 37: mensaje sobre una postulación DESCARTADA. Nunca cambia de vacante: si el candidato refuta el descarte
+    («pero sí tengo») la postulación vuelve a estar activa con «Requiere revisión» y RH decide; si no, se le explica."""
+    from ..services import prefiltro_conversacional as pconv
+
+    guardar_mensaje(db, p, "user", texto, "whatsapp", wa_id=wa_id)
+    if pconv.es_refutacion(texto):
+        respuesta = pconv.refutar_descarte(db, p, texto)
+        accion = "descarte_refutado"
+    else:
+        respuesta = pconv.texto_post_descarte(p)
+        accion = "post_descarte"
+    from ..services.mensajeria import de_cuenta
+
+    with de_cuenta(p.cuenta_id):
+        envio = await enviar_mensaje(telefono, respuesta)
+    guardar_mensaje(db, p, "assistant", respuesta, "whatsapp", envio)
+    db.commit()
+    return {"ok": True, "accion": accion, "candidato": p.candidato.codigo if p.candidato else "", "postulacion": p.codigo,
+            "respuesta": respuesta}
 
 
 PREGUNTA_VACANTE = "¿Sobre qué vacante me escribes?"
@@ -832,6 +915,9 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     if p is None:
         db.commit()
         return {"ok": True, "accion": ruteo, "candidato": c.codigo}
+    if ruteo == "post_descarte":
+        # Cambio 37: la conversación sigue en la vacante del descarte (refutación → «Requiere revisión»)
+        return await _atender_post_descarte(db, p, texto, telefono, msg.get("wa_id", ""))
     c = p.candidato or c  # la fila de la persona en la Cuenta de la postulación elegida
     cuenta = next((x for x in alcance if x.id == p.cuenta_id), cuenta)
     print(f"[agente] Postulación {p.codigo} ({ruteo}) — candidato={c.codigo} {c.nombre}, consentimiento={p.consentimiento}, vacante_id={p.vacante_id}, cuenta={p.cuenta_id}")

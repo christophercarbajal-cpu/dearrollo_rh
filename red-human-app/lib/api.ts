@@ -573,10 +573,6 @@ export const TITULOS_GUION: Record<ClaveGuion, string> = {
   entrevista_avatar: "Entrevista con avatar — guion",
   llamada: "Llamada — guion",
 };
-/** 2026-10-11 (tarde): el prefiltro web necesita al menos 3 preguntas clave (la API lo exige igual). */
-export const MIN_PREFILTRO_WEB = 3;
-export const MENSAJE_MIN_PREFILTRO =
-  "Para el prefiltro necesitamos al menos 3 requisitos clave. Agrega uno: horario, experiencia o condición del trabajo";
 
 export interface GuionConversacion {
   enfoque: string;
@@ -707,12 +703,43 @@ export interface VacanteGenerada {
   documentos_solicitados?: DocumentoSolicitado[];
   /** Cambio 31: pregunta natural por requisito indispensable. */
   preguntas_requisitos?: PreguntaRequisito[];
+  /** Cambio 37: «Preguntas filtro» (entidad única) y los indispensables «Propuesto por Red Human». */
+  filtro?: PreguntaFiltroU[];
+  indispensables_propuestos?: string[];
 }
 
 /** Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. `cantidad` = archivos que exige (las fotos
  *  del auto son 4); `foto` = la revisa RH a ojo (no se valida como documento oficial). */
 /** Cambio 31: cómo pregunta Red Human cada requisito indispensable (lenguaje natural, se usa tal cual). */
 export interface PreguntaRequisito { requisito: string; pregunta: string }
+
+/** Cambio 37 (2026-10-14): «Preguntas filtro» — UNA sola entidad por vacante (reemplaza Prefiltro · Web, Prefiltro ·
+ *  WhatsApp y «Cómo pregunta Red Human…»). Una pregunta por indispensable (texto natural, tipo y regla de descarte) y las
+ *  base (edad, interés, sueldo, colonia y traslado), que no descartan salvo el traslado/edad que pide un requisito. */
+export type TipoPreguntaFiltro = "si_no" | "numero" | "opcion" | "abierta";
+export interface PreguntaFiltroU {
+  id: string;
+  requisito: string;
+  pregunta: string;
+  tipo: TipoPreguntaFiltro;
+  /** escolaridad | experiencia | transportes | licencia | disponibilidad | edad | traslado | blanda | requisito | interes | sueldo | zona */
+  dato?: string;
+  descarta: boolean;
+  regla: string;
+  base: boolean;
+  indispensable?: boolean;
+  propuesto?: boolean;
+  /** «Base» · «Propuesto por Red Human» · «Requisito» (la calcula el servidor). */
+  etiqueta?: string;
+  opciones?: string[];
+  unidad?: string;
+}
+export const TIPOS_PREGUNTA_FILTRO: { valor: TipoPreguntaFiltro; texto: string }[] = [
+  { valor: "si_no", texto: "Sí / No" },
+  { valor: "numero", texto: "Número" },
+  { valor: "opcion", texto: "Opción" },
+  { valor: "abierta", texto: "Abierta (no descarta)" },
+];
 export interface DocumentoSolicitado {
   /** Cambio 34: id del catálogo único («otro» = nombre libre de RH). */
   id?: string; nombre: string; cantidad: number; foto: boolean; /** Cambio 28: «Se pide en:» */ etapa?: EtapaCandidato;
@@ -790,6 +817,8 @@ export interface DatosVacante extends SueldoEstructurado {
   /** Enfoque operativo: oficio de la Biblioteca ajustado para esta vacante (sin él, se detecta por el puesto). */
   perfil_operativo?: PerfilOperativo | null;
   guiones_actuales?: { preguntas_filtro?: CriterioFiltro[]; preguntas_filtro_whatsapp?: CriterioFiltro[]; secciones?: Partial<Record<ClaveGuion, GuionConversacion>> };
+  /** Cambio 37: «Preguntas filtro» que RH ya ajustó (se conservan al volver a generar). */
+  filtro?: PreguntaFiltroU[];
   /** Secciones con ediciones de RH que NO se regeneran. */
   conservar?: ClaveGuion[];
   /** Cambio 25: «Documentos y fotos que se piden». */
@@ -3914,6 +3943,15 @@ export function reactivarPostulacion(codigoPostulacion: string, motivo: string) 
 }
 /** Motivos de cierre que se pueden reactivar (descartados o sin respuesta). */
 export const MOTIVOS_REACTIVABLES = ["descartado", "sin_interes", "prefiltro_no_aprobado", "prueba_expirada"];
+/** Texto visible del motivo de cierre de una postulación (Cambio 37: «Prueba reemplazada»). */
+export const TEXTO_MOTIVO_CIERRE: Record<string, string> = {
+  descartado: "Descartado", prefiltro_no_aprobado: "Descartado", contratado: "Contratado", reinicio_prueba: "Prueba reiniciada",
+  prueba_expirada: "Prueba expirada", sin_interes: "Sin interés", vacante_eliminada: "Vacante eliminada", eliminado: "Eliminado",
+  no_ingreso: "No ingresó", prueba_reemplazada: "Prueba reemplazada",
+};
+export function textoMotivoCierre(m?: string | null): string {
+  return m ? TEXTO_MOTIVO_CIERRE[m] ?? m : "—";
+}
 export function omitirPasoProceso(codigoPostulacion: string, pasoId: string, motivo: string) {
   return post<RespuestaPaso>(`/procesos/postulaciones/${codigoPostulacion}/pasos/${pasoId}/omitir`, { motivo });
 }

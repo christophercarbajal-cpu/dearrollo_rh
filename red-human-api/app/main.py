@@ -139,6 +139,19 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[documentos] ⚠️ migración del catálogo de documentos no aplicada: {ex}", flush=True)
+        # Cambio 37 (2026-10-14): «Preguntas filtro» — cada vacante recibe su entidad ÚNICA (una pregunta por indispensable
+        # + las base) y el formulario web se deriva de ella. Una sola vez (marca en bitácora), NO fatal.
+        try:
+            from .services import preguntas_filtro as _spf
+
+            with db.begin_nested():
+                c37 = _spf.migrar(db, aplicar=True)
+            db.commit()
+            if c37.get("vacantes"):
+                print(f"[vacantes] Cambio 37: «Preguntas filtro» en {c37['vacantes']} vacante(s)", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[vacantes] ⚠️ migración de «Preguntas filtro» no aplicada: {ex}", flush=True)
         # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato; quien YA tenía
         # condiciones guardadas la conserva cumplida («aceptada · legado»). Una sola vez, NO fatal.
         try:

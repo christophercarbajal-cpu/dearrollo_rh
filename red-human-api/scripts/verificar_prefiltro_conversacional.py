@@ -275,7 +275,8 @@ with TestClient(app) as client:
           "«No entiendo» → reformula la MISMA pregunta (no la toma como «No»)")
     check(recargar(pt.codigo).activa, "…y no cierra la postulación")
     salida = tg(text="Solo puedo en la mañana")
-    check(len(salida) == 1 and salida[0].startswith("Claro. Solo para tenerlo en cuenta,") and "rolar turnos" in salida[0],
+    # Cambio 37: la aclaración pide el dato directo («Claro. Solo para tenerlo en cuenta…» es solo del sueldo)
+    check(len(salida) == 1 and not salida[0].startswith("Claro. Solo para tenerlo en cuenta") and "rolar turnos" in salida[0],
           "respuesta ambigua → pide aclaración antes de decidir")
     check(recargar(pt.codigo).activa, "…y todavía no decide")
     salida = tg(text="/start")
@@ -290,7 +291,8 @@ with TestClient(app) as client:
     check(salida == [esperado], "mensaje de cierre con el requisito exacto, por Telegram")
     check(not pt.activa and pt.motivo_cierre == "descartado" and pt.estado == "no_cumple",
           "el agente decide: «Descartado» (mismo cierre que el descarte de RH)")
-    check(pt.analisis["prefiltro_web"]["motivo"] == "No cumple el requisito indispensable: Disponibilidad para rolar turnos"
+    # Cambio 37: el motivo lleva además la respuesta del candidato
+    check(pt.analisis["prefiltro_web"]["motivo"].startswith("No cumple el requisito indispensable: Disponibilidad para rolar turnos")
           and any(h.get("evento") == "descartado" for h in pt.historial), "motivo exacto en el prefiltro y en el historial")
     check(not any("¿" in t for t in salida), "no se pregunta nada más después de un indispensable incumplido")
 

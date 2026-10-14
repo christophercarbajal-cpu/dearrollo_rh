@@ -627,6 +627,9 @@ export interface Vacante {
     respuesta_esperada: string;
     descarta: boolean;
     opciones?: string[];
+    /** Cambio 37: el formulario web también pregunta números (con su unidad) y opciones. */
+    unidad?: string;
+    base?: boolean;
   }[];
   /** Fase 4: prefiltro por WhatsApp independiente (vacío = usa `criterios`) y ubicación estructurada. */
   criteriosWhatsapp?: { pregunta: string; tipo: string; valida: string; respuesta_esperada: string; descarta: boolean; opciones?: string[] }[];
@@ -634,6 +637,9 @@ export interface Vacante {
   documentosSolicitados?: { nombre: string; cantidad: number; foto: boolean; etapa?: EtapaCandidato }[];
   /** Cambio 31: pregunta natural por requisito indispensable (el bot la usa tal cual). */
   preguntasRequisitos?: { requisito: string; pregunta: string }[];
+  /** Cambio 37: «Preguntas filtro» (entidad única) e indispensables «Propuesto por Red Human». */
+  filtro?: import("./api").PreguntaFiltroU[];
+  indispensablesPropuestos?: string[];
   /** Cambio 28: lo que la ruta exige y falta (vacío = se puede publicar) y etapas de «Se pide en:». */
   faltantesPublicacion?: string[];
   etapasDocumentos?: EtapaCandidato[];
@@ -661,7 +667,8 @@ export interface Vacante {
   /** CRUD: baja lógica */
   eliminadaEn?: string | null;
   eliminadaPor?: string;
-  embudo?: { etapas?: Record<string, number>; estados?: Record<string, number> };
+  /** Cambio 37: `descartados` (cerradas por descarte) y `enRevision` («Requiere revisión») de la vacante. */
+  embudo?: { etapas?: Record<string, number>; estados?: Record<string, number>; descartados?: number; enRevision?: number };
   creada?: string;
   /** Fecha ISO de primera publicación. Null si la vacante nunca se ha publicado o existia
    * antes del deploy de Fase C y aún no ha pasado por publicar(). */

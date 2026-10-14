@@ -115,6 +115,24 @@ def por_estado(db: Session, cuenta_id: int, vacante_id: Optional[int] = None) ->
     return {estado: int(n) for estado, n in filas}
 
 
+MOTIVOS_DESCARTE = ("descartado", "prefiltro_no_aprobado")
+
+
+def descartados(db: Session, cuenta_id: int, vacante_id: Optional[int] = None) -> int:
+    """Cambio 37: postulaciones DESCARTADAS de la vacante (cerradas por RH o por el prefiltro), persona no eliminada."""
+    q = (db.query(Postulacion).join(Candidato, Postulacion.candidato_id == Candidato.id)
+         .filter(Postulacion.cuenta_id == cuenta_id, Candidato.eliminado_en.is_(None), Postulacion.activa.is_(False),
+                 Postulacion.motivo_cierre.in_(MOTIVOS_DESCARTE)))
+    if vacante_id is not None:
+        q = q.filter(Postulacion.vacante_id == vacante_id)
+    return q.count()
+
+
+def en_revision(db: Session, cuenta_id: int, vacante_id: Optional[int] = None) -> int:
+    """Cambio 37: postulaciones ACTIVAS en «Requiere revisión» (estado «revision»), misma base que el Kanban."""
+    return postulaciones_visibles(db, cuenta_id, vacante_id).filter(Postulacion.estado == "revision").count()
+
+
 def total(db: Session, cuenta_id: int, vacante_id: Optional[int] = None) -> int:
     return postulaciones_visibles(db, cuenta_id, vacante_id).count()
 

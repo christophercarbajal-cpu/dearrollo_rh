@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, ArrowRight, Clock } from "lucide-react";
-import { nombreEtapa, type MetricaEtapaTablero } from "@/lib/api";
+import { nombreEtapa, textoMotivoCierre, type MetricaEtapaTablero } from "@/lib/api";
 import type { Candidato, EtapaCandidato } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -39,7 +39,7 @@ export const COLOR_ETAPA: Record<EtapaCandidato, string> = {
 const CANAL: Record<string, string> = { whatsapp: "WhatsApp", web: "Web", referido: "Referido", telegram: "Telegram" };
 const FILTRO: Record<string, [string, string]> = {
   cumple: ["Cumple perfil", "bg-kb-green-bg text-kb-green"],
-  revisar: ["Revisar", "bg-kb-amber-bg text-kb-amber"],
+  revisar: ["Requiere revisión", "bg-kb-amber-bg text-kb-amber"],  // Cambio 37
   no_cumple: ["No cumple", "bg-kb-red-bg text-kb-red"],
 };
 const ALERTA_PSICO: Record<string, string> = {
@@ -220,7 +220,9 @@ export function TarjetaCandidato({ c, onAbrir, onIntentoArrastre }: {
 
       <div className="flex flex-wrap items-center gap-1.5">
         {filtro && <Chip clase={filtro[1]} title={c.filter_status === "no_cumple" && motivo ? motivo : undefined}>{filtro[0]}</Chip>}
-        {cerrada && c.motivoCierre !== "descartado" && <Chip clase="bg-kb-gray-bg text-kb-gray" title={motivo}>Cerrada</Chip>}
+        {cerrada && c.motivoCierre !== "descartado" && (
+          <Chip clase="bg-kb-gray-bg text-kb-gray" title={motivo}>{c.motivoCierre === "prueba_reemplazada" ? textoMotivoCierre(c.motivoCierre) : "Cerrada"}</Chip>
+        )}
         {/* ruta automática (2026-10-08): una obligatoria «No aprobada» detiene la ruta; RH confirma el descarte en la ficha */}
         {!cerrada && c.suggested_discard && (
           <Chip clase="bg-kb-red-bg text-kb-red" title={c.suggested_discard.motivo}>Descarte sugerido</Chip>

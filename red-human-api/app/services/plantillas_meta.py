@@ -43,6 +43,43 @@ def es_confirmacion_inicio(texto: str) -> bool:
     return bool(t) and (t.startswith("si, empezar") or t.startswith("si empezar") or bool(_RE_CONFIRMA.match(t)))
 
 
+_RE_APLAZA = re.compile(r"^(no|ahorita no|ahora no|por ahora no|en este momento no|despues|mas tarde|luego|al rato|mañana|manana|"
+                        r"no puedo|no tengo tiempo|estoy ocupad[oa])\b")
+
+
+def es_aplazamiento(texto: str) -> bool:
+    """Cambio 37: respuesta negativa a «¿Tienes 5 minutos para responder unas preguntas?»."""
+    return bool(_RE_APLAZA.match(_n(texto)))
+
+
+# Cambio 37: «Hola, [nombre]. Soy Red Human, el agente virtual de [empresa]. Recibimos tu postulación para [puesto]. ¿Tienes
+# 5 minutos para responder unas preguntas?» — las variables de la plantilla en Meta van en el orden de
+# META_PLANTILLA_INICIO_PARAMS (default «nombre,empresa,puesto»).
+TEXTO_INICIO = ("Hola, {nombre}. Soy Red Human, el agente virtual de {empresa}. Recibimos tu postulación para {puesto}. ¿Tienes 5 "
+                "minutos para responder unas preguntas?")
+
+
+def valores_inicio(p: Postulacion) -> dict:
+    from ..routers.candidatos import nombre_ficha
+    from ..serial import nombre_empresa_candidato
+
+    nombre = (nombre_ficha(p) or p.nombre or "").split(" ")[0]
+    v = p.vacante
+    return {"nombre": nombre if nombre and not nombre.startswith("Candidato") else "candidato(a)",
+            "empresa": (nombre_empresa_candidato(v) if v is not None else "") or "Red Human",
+            "puesto": (v.titulo if v is not None else "") or "la vacante"}
+
+
+def parametros_inicio(p: Postulacion) -> list:
+    valores = valores_inicio(p)
+    claves = [k.strip().lower() for k in (settings.meta_plantilla_inicio_params or "nombre,empresa,puesto").split(",") if k.strip()]
+    return [valores.get(k) or "-" for k in claves if k in valores]
+
+
+def texto_inicio(p: Postulacion) -> str:
+    return TEXTO_INICIO.format(**valores_inicio(p))
+
+
 def estado(p: Postulacion) -> dict:
     return dict(((p.analisis or {}).get(CLAVE)) or {})
 
@@ -101,6 +138,14 @@ async def revisar_inicio_prefiltro(db: Session, p: Optional[Postulacion]) -> Opt
         registrar(db, ACTOR, "plantilla_inicio_fallida", "postulacion", p.codigo, {"motivo": "excepcion", "detalle": envio["detalle"]})
     e = estado(p)
     e["entregada"] = bool(envio.get("enviado"))
+    if envio.get("enviado"):
+        # Cambio 37: la conversación queda LIGADA a la vacante de la plantilla (su respuesta es de esta postulación) y el
+        # bot ya se presentó en la plantilla
+        from ..routers.candidatos import fijar_conversacion
+        from .prefiltro_conversacional import marcar_presentado
+
+        fijar_conversacion(p)
+        marcar_presentado(p)
     if not envio.get("enviado"):
         e["error"] = str(envio.get("detalle") or "")[:300]
         print(f"[whatsapp][HSM] {p.codigo}: «{nombre_plantilla_inicio()}» a {destino} NO salió — {e['error']}", flush=True)

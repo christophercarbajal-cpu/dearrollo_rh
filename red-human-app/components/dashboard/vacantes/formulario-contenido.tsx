@@ -22,6 +22,11 @@
    la ruta, editables) → Guardar. «Volver a generar» nunca pisa ediciones de RH sin preguntar; los avisos de
    cumplimiento salen UNA vez (en el bloque de Generar) y desaparecen al capturar el dato.
 
+   Cambio 37 (2026-10-14): UNA sola lista «Preguntas filtro» (reemplaza Prefiltro · Web, Prefiltro · WhatsApp y «Cómo
+   pregunta Red Human cada requisito»), debajo de los indispensables; los indispensables que propone Red Human llevan la
+   etiqueta «Propuesto por Red Human»; «Falta para publicar» solo aparece tras «Generar con Red Human» o al intentar
+   publicar (`intentoPublicar`).
+
    Dos reglas NO NEGOCIABLES (también garantizadas en el servidor, ia._asegurar_capturado):
    - Red Human no inventa condiciones reales (sueldo, periodicidad, ubicación, modalidad, horario,
      prestaciones): lo que RH no capturó queda vacío/pendiente, nunca rellenado.
@@ -48,13 +53,13 @@ import {
   type MetaGuion,
   type ProcesoEntrada,
   type PreguntaRequisito,
+  type PreguntaFiltroU,
+  TIPOS_PREGUNTA_FILTRO,
   type EntrevistaBaseConfig,
   MONEDAS_SUELDO,
   PERIODICIDADES_SUELDO,
   SENIORITIES,
   type CriterioFiltro,
-  MIN_PREFILTRO_WEB,
-  MENSAJE_MIN_PREFILTRO,
   type EnfoqueEntrevista,
   type PeriodicidadSueldo,
   type Plantilla,
@@ -90,6 +95,10 @@ export interface ContenidoVacante {
   documentos_solicitados: DocumentoSolicitado[];
   /** Cambio 31: pregunta natural por requisito indispensable (la propone «Generar»; RH la puede ajustar). */
   preguntas_requisitos: PreguntaRequisito[];
+  /** Cambio 37: «Preguntas filtro» — la entidad única (una por indispensable + las base). */
+  filtro: PreguntaFiltroU[];
+  /** Cambio 37: indispensables que propuso Red Human (no los capturó RH). */
+  indispensables_propuestos: string[];
   /* --- 5. selección --- */
   /** Preguntas del prefiltro de la POSTULACIÓN WEB (/aplicar). */
   preguntas_filtro: CriterioFiltro[];
@@ -147,6 +156,8 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   beneficios: [],
   documentos_solicitados: [],
   preguntas_requisitos: [],
+  filtro: [],
+  indispensables_propuestos: [],
   preguntas_filtro: [],
   preguntas_filtro_whatsapp: [],
   enfoque_entrevista: "profesional",
@@ -160,12 +171,6 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
 };
 
 export const MODALIDADES = ["Presencial", "Híbrido", "Remoto"];
-export const TIPOS_CRITERIO: { valor: CriterioFiltro["tipo"]; texto: string }[] = [
-  { valor: "si_no", texto: "Sí / No" },
-  { valor: "numero", texto: "Número" },
-  { valor: "opcion", texto: "Opción" },
-  { valor: "texto_corto", texto: "Texto corto" },
-];
 
 const SEPARADOR_REQUISITOS = " · ";
 
@@ -225,6 +230,8 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     beneficios: [...(p.beneficios ?? [])],
     documentos_solicitados: [...(p.documentosSolicitados ?? [])],
     preguntas_requisitos: [],
+    filtro: [],
+    indispensables_propuestos: [],
     preguntas_filtro: [...(p.preguntasFiltro ?? [])],
     preguntas_filtro_whatsapp: [...(p.preguntasFiltroWhatsapp ?? [])],
     enfoque_entrevista: p.enfoqueEntrevista ?? "profesional",
@@ -284,6 +291,8 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     beneficios: [...(v.beneficios ?? [])],
     documentos_solicitados: [...(v.documentosSolicitados ?? [])],
     preguntas_requisitos: [...(v.preguntasRequisitos ?? [])],
+    filtro: [...(v.filtro ?? [])],
+    indispensables_propuestos: [...(v.indispensablesPropuestos ?? [])],
     preguntas_filtro: [...((v.criterios ?? []) as CriterioFiltro[])],
     preguntas_filtro_whatsapp: [...((v.criteriosWhatsapp ?? []) as CriterioFiltro[])],
     enfoque_entrevista: v.enfoqueEntrevista ?? "profesional",
@@ -311,6 +320,8 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     // Cambio 25: lo capturado manda; si no hay, los documentos que menciona la descripción
     documentos_solicitados: base.documentos_solicitados.length ? base.documentos_solicitados : g.documentos_solicitados ?? [],
     preguntas_requisitos: g.preguntas_requisitos ?? base.preguntas_requisitos,
+    filtro: g.filtro ?? base.filtro,
+    indispensables_propuestos: g.indispensables_propuestos ?? base.indispensables_propuestos,
     preguntas_filtro: base.preguntas_filtro.length ? base.preguntas_filtro : g.preguntas_filtro ?? [],
     preguntas_filtro_whatsapp: base.preguntas_filtro_whatsapp.length ? base.preguntas_filtro_whatsapp : g.preguntas_filtro_whatsapp ?? [],
     resumen: base.resumen || g.resumen,
@@ -380,7 +391,7 @@ export function avisosVigentes(c: ContenidoVacante): string[] {
 
 /** true si ya hay contenido (capturado o generado) — la API no debe volver a generarlo al guardar. */
 export function tieneContenidoManual(c: ContenidoVacante): boolean {
-  return Boolean(c.responsabilidades.length || c.preguntas_filtro.length);
+  return Boolean(c.responsabilidades.length || c.preguntas_filtro.length || c.filtro.length);
 }
 
 /** Datos principales obligatorios (Parte 3): se exigen para generar y para publicar. */
@@ -419,9 +430,9 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     requisitos_deseables: c.requisitos_deseables,
     beneficios: c.beneficios,
     documentos_solicitados: c.documentos_solicitados,
-    preguntas_requisitos: c.preguntas_requisitos,
-    preguntas_filtro: c.preguntas_filtro,
-    preguntas_filtro_whatsapp: c.preguntas_filtro_whatsapp,
+    // Cambio 37: la entidad única «Preguntas filtro» (el servidor deriva el formulario web y la pregunta de cada requisito)
+    filtro: c.filtro,
+    indispensables_propuestos: c.indispensables_propuestos.filter((x) => c.requisitos.some((r) => clave(r) === clave(x))),
     enfoque_entrevista: c.enfoque_entrevista,
     resumen: c.resumen,
     perfil_ideal: c.perfil_ideal,
@@ -491,84 +502,6 @@ function SelectorUbicacion({
   );
 }
 
-function CriteriosEditor({ items, onChange, cerradas = false }: { items: CriterioFiltro[]; onChange: (c: CriterioFiltro[]) => void; cerradas?: boolean }) {
-  const set = (i: number, cambios: Partial<CriterioFiltro>) => onChange(items.map((x, j) => (j === i ? { ...x, ...cambios } : x)));
-  // 2026-10-09: en las plantillas de conversación los prefiltros son SOLO cerrados (sin «Texto corto»)
-  const tipos = cerradas ? TIPOS_CRITERIO.filter((t) => t.valor !== "texto_corto") : TIPOS_CRITERIO;
-  return (
-    <div className="flex flex-col gap-2">
-      {items.map((c, i) => c.tipo === "dato" ? (
-        // 2026-10-11 (tarde): datos fijos del prefiltro de WhatsApp (orden estricto; la escolaridad descarta si no cumple)
-        <div key={i} className="rounded-xl border border-border-soft bg-surface-2/50 px-3 py-2.5">
-          <p className="text-sm text-ink">{c.pregunta}</p>
-          <p className="mt-0.5 text-[11px] text-ink-3">
-            {c.dato === "escolaridad"
-              ? c.descarta ? `Dato fijo · descarta si no cumple: ${c.valida}` : "Dato fijo · solo se registra"
-              : c.dato === "traslado" ? "Dato fijo · solo se registra (el límite de traslado sale de los indispensables)"
-              : c.dato === "sueldo" ? "Dato fijo · se registra si le parece bien (nunca descarta)" : "Dato fijo · solo se registra"}
-          </p>
-        </div>
-      ) : (
-        <div key={i} className="rounded-xl border border-border-soft bg-surface-2/50 p-3">
-          <div className="flex items-start gap-2">
-            <input
-              value={c.pregunta}
-              onChange={(e) => set(i, { pregunta: e.target.value })}
-              placeholder="Pregunta cerrada al candidato"
-              className="h-10 flex-1 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-            <button type="button" aria-label="Quitar criterio" onClick={() => onChange(items.filter((_, j) => j !== i))} className="mt-2.5 text-ink-3 hover:text-bad">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <select
-              value={c.tipo}
-              onChange={(e) => set(i, { tipo: e.target.value as CriterioFiltro["tipo"] })}
-              className="h-10 rounded-xl border border-border-soft bg-surface px-2.5 text-sm outline-none focus:border-brand"
-            >
-              {tipos.map((t) => (
-                <option key={t.valor} value={t.valor}>
-                  {t.texto}
-                </option>
-              ))}
-            </select>
-            <input
-              value={c.respuesta_esperada}
-              onChange={(e) => set(i, { respuesta_esperada: e.target.value })}
-              placeholder="Respuesta que cumple (ej. Sí, ≥ 2 años)"
-              className="h-10 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand"
-            />
-            <label className="flex h-10 items-center gap-2 rounded-xl border border-border-soft bg-surface px-3 text-xs text-ink-2">
-              <input type="checkbox" checked={c.descarta} onChange={(e) => set(i, { descarta: e.target.checked })} className="h-3.5 w-3.5 rounded border-border-soft text-brand" />
-              Eliminatoria (descarta si no cumple)
-            </label>
-          </div>
-          {(c.tipo === "numero" || c.tipo === "opcion") && (
-            <input
-              value={(c.opciones ?? []).join(" | ")}
-              onChange={(e) => set(i, { opciones: e.target.value.split("|").map((x) => x.trim()).filter(Boolean) })}
-              placeholder="Opciones separadas por | (ej. Menos de 1 año | 1 a 2 años | Más de 2 años)"
-              className="mt-2 h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand"
-            />
-          )}
-          {c.valida && <p className="mt-1.5 text-[11px] text-ink-3">Valida: {c.valida}</p>}
-          {c.reconfirma && <p className="text-[11px] text-ink-3">Reconfirma con un dato concreto lo que contestó en el formulario web.</p>}
-        </div>
-      ))}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="self-start"
-        onClick={() => onChange([...items, { pregunta: "", tipo: "si_no", valida: "", respuesta_esperada: "Sí", descarta: false }])}
-      >
-        + Agregar pregunta
-      </Button>
-    </div>
-  );
-}
-
 /** Guion de entrevista o llamada: enfoque + preguntas ABIERTAS (los temas se derivan de las preguntas). */
 function GuionEditor({ valor, onChange }: { valor: GuionConversacion | undefined; onChange: (g: GuionConversacion) => void }) {
   const g = valor ?? { enfoque: "", temas: [], preguntas: [] };
@@ -612,7 +545,8 @@ function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; 
       ...cambios,
       guiones: { ...g, secciones: secciones ?? g.secciones, editadas: g.editadas.includes(clave) ? g.editadas : [...g.editadas, clave] },
     });
-  const orden = ORDEN_GUIONES.filter((k) => g.aplican.includes(k));
+  // Cambio 37: los prefiltros viven en «Preguntas filtro» (debajo de los indispensables); aquí solo los guiones
+  const orden = ORDEN_GUIONES.filter((k) => g.aplican.includes(k) && !k.startsWith("prefiltro"));
   return (
     <section className="rounded-xl border border-border-soft">
       <div className="flex items-center gap-2 border-b border-border-faint px-4 py-3">
@@ -622,7 +556,7 @@ function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; 
       </div>
       <div className="flex flex-col gap-5 px-4 py-4">
         {orden.length === 0 && (
-          <p className="text-sm text-ink-3">La ruta de esta vacante no tiene prefiltros, entrevistas de Red Human ni llamada: no hay guiones que revisar.</p>
+          <p className="text-sm text-ink-3">La ruta de esta vacante no tiene entrevistas de Red Human ni llamada: no hay guiones que revisar.</p>
         )}
         {orden.map((k) => {
           const editada = g.editadas.includes(k);
@@ -632,23 +566,8 @@ function PlantillasConversacion({ value, onChange }: { value: ContenidoVacante; 
                 <Eyebrow>{TITULOS_GUION[k]}</Eyebrow>
                 {editada && <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-medium text-warn">Editado por RH</span>}
               </div>
-              <p className="text-[11px] text-ink-3">
-                {k.startsWith("prefiltro")
-                  ? "Solo preguntas cerradas (Sí / No, número u opción). Las eliminatorias son los requisitos indispensables."
-                  : "Solo preguntas abiertas. Red Human las hace en este orden con el candidato."}
-              </p>
-              {k === "prefiltro_web" && value.preguntas_filtro.filter((q) => q.pregunta.trim()).length < MIN_PREFILTRO_WEB && (
-                <p className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-[12px] text-warn">{MENSAJE_MIN_PREFILTRO}.</p>
-              )}
-              {k === "prefiltro_web" && (
-                <CriteriosEditor cerradas items={value.preguntas_filtro} onChange={(x) => marcar(k, { preguntas_filtro: x })} />
-              )}
-              {k === "prefiltro_whatsapp" && (
-                <CriteriosEditor cerradas items={value.preguntas_filtro_whatsapp} onChange={(x) => marcar(k, { preguntas_filtro_whatsapp: x })} />
-              )}
-              {!k.startsWith("prefiltro") && (
-                <GuionEditor valor={g.secciones[k]} onChange={(guion) => marcar(k, {}, { ...g.secciones, [k]: guion })} />
-              )}
+              <p className="text-[11px] text-ink-3">Solo preguntas abiertas. Red Human las hace en este orden con el candidato.</p>
+              <GuionEditor valor={g.secciones[k]} onChange={(guion) => marcar(k, {}, { ...g.secciones, [k]: guion })} />
             </div>
           );
         })}
@@ -676,6 +595,7 @@ export function FormularioContenidoVacante({
   conGuiones = false,
   slotProceso,
   rutaGeneracion,
+  intentoPublicar = 0,
 }: {
   value: ContenidoVacante;
   onChange: (c: ContenidoVacante) => void;
@@ -696,6 +616,8 @@ export function FormularioContenidoVacante({
   slotProceso?: React.ReactNode;
   /** La ruta elegida (sin ella, la API usa la predeterminada de la Cuenta). */
   rutaGeneracion?: ProcesoEntrada;
+  /** Cambio 37: sube cada vez que RH intenta publicar — entonces se muestra «Falta para publicar». */
+  intentoPublicar?: number;
 }) {
   const set = <K extends keyof ContenidoVacante>(k: K) => (v: ContenidoVacante[K]) => onChange({ ...value, [k]: v });
   const [generando, setGenerando] = useState(false);
@@ -714,6 +636,11 @@ export function FormularioContenidoVacante({
   // Cambio 28: lo que la ruta exige a la vacante (documentos, 3 indispensables, CV); sin esto «Publicar» queda desactivado
   const reqRuta = requisitosDeRuta(rutaGeneracion && "pasos" in rutaGeneracion ? rutaGeneracion.pasos ?? [] : []);
   const avisosRuta = avisosPublicacion(value, reqRuta);
+  // Cambio 37: «Falta para publicar» DIFERIDO — solo tras «Generar con Red Human» o al intentar publicar
+  const [mostrarFaltantes, setMostrarFaltantes] = useState(false);
+  useEffect(() => {
+    if (intentoPublicar > 0) setMostrarFaltantes(true);
+  }, [intentoPublicar]);
   const desactualizado = conGuiones && generado && (firmaGen !== null ? firmaGen !== firmaGeneracion(value, rutaGeneracion) : value.guiones.desactualizado);
 
   async function generar(decision?: "conservar" | "sobrescribir") {
@@ -756,7 +683,8 @@ export function FormularioContenidoVacante({
       ...(conGuiones
         ? {
             proceso: rutaGeneracion,
-            guiones_actuales: { preguntas_filtro: value.preguntas_filtro, preguntas_filtro_whatsapp: value.preguntas_filtro_whatsapp, secciones: value.guiones.secciones },
+            guiones_actuales: { secciones: value.guiones.secciones },
+            filtro: value.filtro,
             conservar: decision === "conservar" ? editadas : [],
           }
         : {}),
@@ -771,16 +699,17 @@ export function FormularioContenidoVacante({
     setFirmaGen(firmaGeneracion(value, rutaGeneracion));
     onGenerado?.(r.data);
     setGenerado(true);
+    setMostrarFaltantes(true);
     if (r.data.empresa) setEmpresaIA(r.data.empresa);
   }
 
   const sueldo = { desde: value.sueldo_desde, hasta: value.sueldo_hasta, moneda: value.sueldo_moneda, periodicidad: value.sueldo_periodicidad };
 
-  const nPrefiltro = value.preguntas_filtro.length + value.preguntas_filtro_whatsapp.length;
+  const nPrefiltro = value.filtro.length;
   const resumenAvanzado = generado
     ? [
         value.responsabilidades.length ? `${value.responsabilidades.length} responsabilidades` : "",
-        nPrefiltro ? `${nPrefiltro} preguntas de prefiltro` : "",
+        nPrefiltro ? `${nPrefiltro} preguntas filtro` : "",
         value.perfil_ideal ? "perfil ideal" : "",
         value.texto_whatsapp || value.texto_bolsa ? "textos de publicación" : "",
       ].filter(Boolean).join(" · ")
@@ -827,28 +756,15 @@ export function FormularioContenidoVacante({
           placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
         />
         <ListaEditable label={reqRuta.minIndispensables ? `Requisitos indispensables * (mínimo ${reqRuta.minIndispensables})` : "Requisitos indispensables"}
-          items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida" />
+          items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Carrera técnica concluida"
+          ayuda="Máximo 5. Solo condiciones que se puedan verificar (no tareas del puesto)." />
+        <PropuestosRedHuman requisitos={value.requisitos} propuestos={value.indispensables_propuestos} />
         <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" />
         <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Solo se publican las que captures aquí." />
-        {value.preguntas_requisitos.length > 0 && (
-          <div>
-            <p className="text-sm font-semibold text-ink">Cómo pregunta Red Human cada requisito</p>
-            <p className="mt-0.5 text-xs text-ink-3">Lenguaje natural; el agente la usa tal cual en el chat.</p>
-            <ul className="mt-2 flex flex-col gap-2">
-              {value.preguntas_requisitos.map((q, i) => (
-                <li key={q.requisito} className="flex flex-col gap-1">
-                  <span className="text-[11px] text-ink-3">{q.requisito}</span>
-                  <input value={q.pregunta}
-                    onChange={(e) => onChange({ ...value, preguntas_requisitos: value.preguntas_requisitos.map((x, k) => (k === i ? { ...x, pregunta: e.target.value } : x)) })}
-                    className="min-h-10 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        {conGuiones && <EditorPreguntasFiltro requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />}
         <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
           obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
-        {avisosRuta.length > 0 && (
+        {mostrarFaltantes && avisosRuta.length > 0 && (
           <div className="rounded-xl border border-warn/40 bg-warn-soft px-3.5 py-2.5 text-xs text-ink-2" role="alert">
             <p className="font-semibold text-ink">Falta para publicar (lo pide la ruta):</p>
             <ul className="mt-1 list-disc pl-4">{avisosRuta.map((a) => <li key={a}>{a}</li>)}</ul>
@@ -960,22 +876,85 @@ export function FormularioContenidoVacante({
             <Area label="Perfil ideal" value={value.perfil_ideal} onChange={set("perfil_ideal")} rows={3} />
             <ListaEditable label="Palabras clave" items={value.palabras_clave} onChange={set("palabras_clave")} />
           </Seccion>
-          {!conGuiones && (
-            <>
-              <Seccion titulo="Prefiltro · postulación web" ayuda="Preguntas del formulario público; Red Human las propone desde los requisitos indispensables.">
-                <CriteriosEditor items={value.preguntas_filtro} onChange={set("preguntas_filtro")} />
-              </Seccion>
-              <Seccion titulo="Prefiltro · WhatsApp" ayuda="Puntos críticos que Red Human confirma por chat (experiencia, ubicación…). Vacío = el agente usa las de la web.">
-                <CriteriosEditor items={value.preguntas_filtro_whatsapp} onChange={set("preguntas_filtro_whatsapp")} />
-              </Seccion>
-            </>
-          )}
           <Seccion titulo="Textos de publicación">
             <Area label="Texto para WhatsApp" value={value.texto_whatsapp} onChange={set("texto_whatsapp")} rows={3} />
             <Area label="Texto para bolsa de trabajo" value={value.texto_bolsa} onChange={set("texto_bolsa")} rows={4} />
           </Seccion>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** Cambio 37: los indispensables que NO capturó RH los propone Red Human — se marcan para que RH los confirme o quite. */
+function PropuestosRedHuman({ requisitos, propuestos }: { requisitos: string[]; propuestos: string[] }) {
+  const vigentes = propuestos.filter((p) => requisitos.some((r) => clave(r) === clave(p)));
+  if (!vigentes.length) return null;
+  return (
+    <div className="-mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
+      {vigentes.map((p) => (
+        <span key={p} className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand-soft/60 px-2 py-0.5 text-brand">
+          <Sparkles className="h-3 w-3" /> {p} · Propuesto por Red Human
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Cambio 37 (2026-10-14): «Preguntas filtro» — la ÚNICA lista de preguntas de la vacante (formulario web y chat).
+ *  Una por requisito indispensable (texto natural, tipo y regla de descarte) y las «Base» (edad, interés, sueldo,
+ *  colonia, traslado), que no descartan. Una pregunta abierta nunca descarta. Lo que cambie en los indispensables se
+ *  refleja al guardar (el servidor arma la pregunta de un requisito nuevo y quita la de uno que ya no está). */
+function EditorPreguntasFiltro({ requisitos, items, onChange }: { requisitos: string[]; items: PreguntaFiltroU[]; onChange: (x: PreguntaFiltroU[]) => void }) {
+  const vigentes = items.filter((q) => !q.indispensable || requisitos.some((r) => clave(r) === clave(q.requisito)));
+  const sinPregunta = requisitos.filter((r) => r.trim() && !items.some((q) => q.indispensable && clave(q.requisito) === clave(r)));
+  const set = (id: string, cambios: Partial<PreguntaFiltroU>) =>
+    onChange(items.map((q) => {
+      if (q.id !== id) return q;
+      const x = { ...q, ...cambios };
+      if (x.tipo === "abierta" || x.base && !x.indispensable) x.descarta = false;
+      return x;
+    }));
+  if (!vigentes.length && !sinPregunta.length) return null;
+  return (
+    <div>
+      <p className="text-sm font-semibold text-ink">Preguntas filtro</p>
+      <p className="mt-0.5 text-xs text-ink-3">
+        Una sola lista para el formulario web y el chat. Cada requisito indispensable tiene su pregunta; las «Base» solo se
+        registran. Solo una respuesta verificable (Sí / No o un dato comparable) puede descartar.
+      </p>
+      <ul className="mt-2 flex flex-col gap-2">
+        {vigentes.map((q) => (
+          <li key={q.id} className="rounded-xl border border-border-soft bg-surface-2/50 p-3">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className={cn("rounded-full px-2 py-0.5 font-medium",
+                q.base && !q.indispensable ? "bg-surface-3 text-ink-2" : q.propuesto ? "bg-brand-soft text-brand" : "bg-good-soft text-good")}>
+                {q.etiqueta ?? (q.base ? "Base" : "Requisito")}
+              </span>
+              <span className="text-ink-3">{q.requisito}</span>
+            </div>
+            <input value={q.pregunta} onChange={(e) => set(q.id, { pregunta: e.target.value })} aria-label={`Pregunta de ${q.requisito}`}
+              className="mt-2 min-h-10 w-full rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-2">
+              <select value={q.tipo} disabled={q.base} onChange={(e) => set(q.id, { tipo: e.target.value as PreguntaFiltroU["tipo"] })}
+                className="h-9 rounded-lg border border-border-soft bg-surface px-2 disabled:opacity-60">
+                {TIPOS_PREGUNTA_FILTRO.map((t) => <option key={t.valor} value={t.valor}>{t.texto}</option>)}
+              </select>
+              <label className={cn("flex items-center gap-1.5", (q.tipo === "abierta" || (q.base && !q.indispensable)) && "opacity-50")}>
+                <input type="checkbox" checked={q.descarta} disabled={q.tipo === "abierta" || (q.base && !q.indispensable)}
+                  onChange={(e) => set(q.id, { descarta: e.target.checked })} className="h-3.5 w-3.5 rounded border-border-soft text-brand" />
+                Descarta
+              </label>
+              <span className="text-ink-3">{q.descarta ? q.regla : "No descarta"}</span>
+            </div>
+          </li>
+        ))}
+        {sinPregunta.map((r) => (
+          <li key={`nuevo-${r}`} className="rounded-xl border border-dashed border-border-soft px-3 py-2 text-xs text-ink-3">
+            <b className="text-ink-2">{r}</b>: Red Human arma su pregunta al guardar.
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -993,7 +972,8 @@ export function requisitosDeRuta(pasos: PasoProceso[]) {
   return {
     documentosObligatorios: docs.some((x) => x.id !== "documentos-vacante" && orden(x.etapa) < orden("Contratación")),
     etapasDocumentos,
-    minIndispensables: pasos.some((x) => x.tipo === "prefiltro_web" || x.tipo === "prefiltro_whatsapp") ? 3 : 0,
+    // Cambio 37: con prefiltro basta 1 indispensable (antes 3)
+    minIndispensables: pasos.some((x) => x.tipo === "prefiltro_web" || x.tipo === "prefiltro_whatsapp") ? 1 : 0,
     exigeCv: pasos.some((x) => x.tipo === "analisis_cv"),
   };
 }
@@ -1001,7 +981,7 @@ export function requisitosDeRuta(pasos: PasoProceso[]) {
 export function avisosPublicacion(c: Pick<ContenidoVacante, "requisitos" | "documentos_solicitados">, r: ReturnType<typeof requisitosDeRuta>): string[] {
   const avisos: string[] = [];
   const n = c.requisitos.filter((x) => x.trim()).length;
-  if (r.minIndispensables && n < r.minIndispensables) avisos.push(`Captura al menos ${r.minIndispensables} requisitos indispensables (hoy ${n}): la ruta incluye prefiltro.`);
+  if (r.minIndispensables && n < r.minIndispensables) avisos.push(`Captura al menos ${r.minIndispensables} requisito indispensable (hoy ${n}): la ruta incluye prefiltro.`);
   if (r.documentosObligatorios && !c.documentos_solicitados.length) avisos.push("Indica qué documentos se piden: la ruta incluye «Documentos».");
   return avisos;
 }

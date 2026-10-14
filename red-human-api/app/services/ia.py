@@ -93,7 +93,12 @@ class VacanteGenerada(BaseModel):
     descripcion: str = Field(description="Descripción del puesto en 2-3 párrafos cortos, español mexicano, sin exagerar.")
     perfil_ideal: str = Field(description="En 2-3 frases, a quién le queda esta vacante (experiencia, actitudes, contexto).")
     responsabilidades: List[str] = Field(description="5 a 7 actividades principales del puesto, en infinitivo.")
-    requisitos_indispensables: List[str] = Field(description="4 a 6 requisitos sin los cuales la persona no puede ocupar el puesto.")
+    requisitos_indispensables: List[str] = Field(description=(
+        "MÁXIMO 5 requisitos sin los cuales la persona no puede ocupar el puesto. Nunca una tarea o responsabilidad (eso va "
+        "en responsabilidades). Si el seniority es «Sin experiencia», PROHIBIDO un requisito de experiencia. Lo que la "
+        "descripción marque como «preferentemente» va a requisitos_deseables."))
+    # Cambio 37: los indispensables que NO capturó RH (los propone Red Human). Lo llena el sistema: déjalo vacío.
+    indispensables_propuestos: List[str] = Field(default_factory=list, description="Déjalo vacío: lo llena el sistema.")
     requisitos_deseables: List[str] = Field(description="2 a 4 requisitos que suman pero no descartan.")
     beneficios: List[str] = Field(description="Prestaciones y beneficios; SOLO los que se puedan sostener con los datos dados.")
     palabras_clave: List[str] = Field(description="8 a 12 términos con los que los candidatos en México buscan este puesto.")
@@ -171,19 +176,19 @@ _REGLAS = (
     "falten, pero nunca reclasificar, reescribir ni quitar los capturados. La descripción breve capturada es "
     "la guía obligatoria de la descripción completa (mismo sentido, sin contradecirla). El seniority es el "
     "capturado: úsalo tal cual en todos los títulos.\n"
+    "2b. REQUISITOS INDISPENSABLES (Cambio 37): MÁXIMO 5 en total. Nunca una tarea o responsabilidad («Atender clientes», "
+    "«Realizar inventarios» van en responsabilidades). Si el seniority es «Sin experiencia», PROHIBIDO un indispensable de "
+    "experiencia. Lo que la descripción marque como «preferentemente» / «de preferencia» / «deseable» va a "
+    "requisitos_deseables. Si RH no capturó indispensables, propón SOLO condiciones explícitas de la descripción "
+    "(licencia, horario, turnos).\n"
     "3. Cumplimiento LFT (art. 3 y 133): prohibido pedir o insinuar edad, sexo, estado civil, embarazo, religión, "
     "apariencia, origen étnico, condición de salud u orientación. Si el usuario los incluyó en los requisitos, "
     "reescríbelos en términos de competencias y regístralo en avisos_cumplimiento.\n"
     "4. Usa lenguaje incluyente con la forma «(a)» del español mexicano (Cajero(a), Repartidor(a)).\n"
-    "5. PREFILTRO WEB (`preguntas_filtro`): salen PRINCIPALMENTE de los requisitos indispensables (primero los "
-    "capturados por RH) y marcan descarta=true SOLO cuando el requisito sea realmente indispensable. REGLA ESTRICTA: "
-    "TODAS son preguntas CERRADAS que se responden únicamente con Sí / No (tipo 'si_no'); está PROHIBIDO "
-    "el texto libre (no uses «Describe», «Explica», «Cuéntanos», «Menciona», «Detalla», «¿Qué…?», «¿Cómo…?»). Un "
-    "requisito numérico se pregunta como umbral cerrado («¿Tienes al menos 2 años de experiencia en caja?»).\n"
-    "5b. PREFILTRO WHATSAPP (`preguntas_filtro_whatsapp`): SOLO 2 o 3 puntos críticos (experiencia, ubicación/"
-    "traslado, disponibilidad o el requisito eliminatorio principal) redactados como en una conversación de "
-    "WhatsApp. REGLA ESTRICTA: UNA pregunta por criterio — prohibidas las preguntas compuestas (nunca «¿cuántos "
-    "años tienes de experiencia y has usado SAP?»: son dos preguntas). Aquí sí se permiten respuestas abiertas.\n"
+    "5. PREGUNTAS FILTRO (`preguntas_requisitos`, Cambio 37): UNA pregunta por requisito indispensable, en lenguaje natural "
+    "y pidiendo el DATO concreto («¿Cuántos años de experiencia tienes en derecho corporativo?», «¿Tienes licencia de "
+    "manejo tipo B?»). PROHIBIDO copiar el requisito como pregunta («¿Cumples con…?») y frases como «¿Cuál es tu caso?» o "
+    "«Para confirmar». `preguntas_filtro` y `preguntas_filtro_whatsapp` déjalas vacías: el sistema arma la lista única.\n"
     "6. Cada plataforma tiene su propio tono y formato: no repitas el mismo texto en las tres.\n"
     "7. Todo lo que escribas en `copy` y `page` lo lee el candidato. Nunca uses etiquetas internas como "
     "«indicado por RH», «según RH» o «no especificado»: escribe el sueldo directo («$10,500 mensuales») solo "
@@ -234,15 +239,141 @@ def _unir_capturado(capturados: List[str], generados: List[str], excluir: Option
     return salida
 
 
+# ============================================================ Cambio 37: reglas de los requisitos indispensables
+
+MAX_INDISPENSABLES = 5
+_RE_PREFERENTE = re.compile(r"\b(preferentemente|de preferencia|preferible\w*|deseable\w*|se valora\w*|valorable|es un plus|plus)\b",
+                            re.IGNORECASE)
+# Verbos con los que SÍ empieza un requisito («Saber leer y escribir», «Contar con licencia»); cualquier otro infinitivo al
+# inicio describe una TAREA («Atender clientes», «Realizar inventarios») y nunca es indispensable
+_VERBOS_REQUISITO = {"tener", "contar", "saber", "manejar", "poder", "vivir", "ser", "estar", "hablar", "dominar", "conocer",
+                     "radicar", "residir", "disponer", "leer", "escribir"}
+_RE_LICENCIA_DESC = re.compile(r"licencia(?:\s+de\s+(?:manejo|conducir|chofer))?(?:\s+(?:tipo|clase))?\s+([a-e])\b|"
+                               r"licencia\s+de\s+(?:manejo|conducir|chofer)(?:\s+vigente)?", re.IGNORECASE)
+_RE_HORARIO_DESC = re.compile(r"\b(?:horario|turno)s?\s*(?:de|:)?\s*((?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|\d)"
+                              r"[^.;\n]{2,60})", re.IGNORECASE)
+_RE_TURNOS_DESC = re.compile(r"\b(rolar turnos|turnos rotativos|rotar turnos|turno nocturno|fines de semana|tiempo completo)\b", re.IGNORECASE)
+
+
+def es_tarea(req: str, responsabilidades: Optional[List[str]] = None) -> bool:
+    """Una tarea o responsabilidad del puesto NO puede ser requisito indispensable (Cambio 37)."""
+    k = _clave_texto(req).strip(" .")
+    if not k:
+        return False
+    for r in responsabilidades or []:
+        rk = _clave_texto(r).strip(" .")
+        if rk and (k == rk or (len(k) > 15 and (k in rk or rk in k))):
+            return True
+    primera = k.split()[0]
+    return bool(re.fullmatch(r"[a-z]+(ar|er|ir)(se)?", primera)) and primera not in _VERBOS_REQUISITO
+
+
+def es_de_experiencia(req: str) -> bool:
+    return "experiencia" in _clave_texto(req) or bool(_RE_ANOS.search(req or ""))
+
+
+def _oraciones(texto: str) -> List[str]:
+    return [x.strip() for x in re.split(r"[.;\n•]+", texto or "") if x.strip()]
+
+
+def preferentes_de(texto: str) -> List[str]:
+    """«Preferentemente con experiencia en almacén» → «Experiencia en almacén» (va a Requisitos deseables)."""
+    salida = []
+    for o in _oraciones(texto):
+        for m in _RE_PREFERENTE.finditer(o):
+            resto = o[m.end():].strip(" ,:")
+            resto = re.sub(r"^(?:que\s+)?(?:con|tener|tenga|cuente con|contar con|haber)\s+", "", resto, flags=re.IGNORECASE).strip(" ,.")
+            resto = re.split(r",|\by\s+(?:que|se)\b", resto)[0].strip(" .")
+            if 3 <= len(resto) <= 80:
+                salida.append(resto[:1].upper() + resto[1:])
+    return salida
+
+
+def condiciones_explicitas(texto: str) -> List[str]:
+    """Condiciones EXPLÍCITAS de la descripción que pueden ser indispensables (licencia, horario, turnos, escolaridad).
+    Nunca lo marcado como «preferentemente» (eso es deseable). Determinista: nada que el texto no diga."""
+    salida: List[str] = []
+    for o in _oraciones(texto):
+        if _RE_PREFERENTE.search(o):
+            continue
+        m = _RE_LICENCIA_DESC.search(o)
+        if m:
+            salida.append(f"Licencia de manejo tipo {m.group(1).upper()}" if m.group(1) else "Licencia de manejo vigente")
+        h = _RE_HORARIO_DESC.search(o)
+        if h:
+            salida.append(f"Disponibilidad para el horario: {h.group(1).strip(' ,.')}")
+        elif _RE_TURNOS_DESC.search(o):
+            salida.append(f"Disponibilidad para {_RE_TURNOS_DESC.search(o).group(1).lower()}")
+        n = _RE_NIVEL_DESC.search(o)
+        if n and n.group(2):  # solo un nivel con «terminada/concluida» explícito
+            salida.append(n.group(0)[:1].upper() + n.group(0)[1:])
+    vistos, unicas = set(), []
+    for r in salida:
+        if _clave_texto(r) not in vistos:
+            vistos.add(_clave_texto(r))
+            unicas.append(r)
+    return unicas
+
+
+def indispensable_por_defecto(modalidad: str, ubicacion: str) -> str:
+    """«Disponibilidad para trabajar [modalidad] en [ubicación]» (Cambio 37), sin inventar lo que RH no capturó."""
+    mod = (modalidad or "presencial").strip().lower()
+    lugar = (ubicacion or "").strip()
+    return f"Disponibilidad para trabajar {mod}" + (f" en {lugar}" if lugar and not mod.startswith("remot") else "")
+
+
+def reglas_indispensables(capturados: List[str], generados: List[str], *, seniority: str = "", descripcion: str = "",
+                          responsabilidades: Optional[List[str]] = None, deseables: Optional[List[str]] = None,
+                          modalidad: str = "", ubicacion: str = "") -> Tuple[List[str], List[str], List[str]]:
+    """Cambio 37 — (indispensables, propuestos por Red Human, deseables extra). Lo capturado por RH se respeta literal.
+    * máximo 5 indispensables (lo de RH nunca se recorta; lo propuesto solo completa hasta 5);
+    * seniority «Sin experiencia» → PROHIBIDO proponer indispensables de experiencia;
+    * una tarea o responsabilidad nunca es indispensable; lo «preferentemente…» va a deseables;
+    * sin indispensables de RH → SOLO las condiciones explícitas de la descripción; si no hay, el de disponibilidad."""
+    sin_exp = (seniority or "").strip().lower() == "sin experiencia"
+    capt = [x.strip() for x in capturados or [] if x.strip()]
+    preferentes = preferentes_de(descripcion)
+    claves_pref = {_clave_texto(x) for x in preferentes}
+    claves_des = {_clave_texto(x) for x in deseables or []}
+
+    from .preguntas_filtro import _RE_RASGO
+
+    def admisible(r: str) -> bool:
+        k = _clave_texto(r)
+        return (bool(k) and not es_tarea(r, responsabilidades) and not es_autopercepcion(r) and not _RE_RASGO.search(k)
+                and not (sin_exp and es_de_experiencia(r)) and k not in claves_des
+                and not any(p in k or k in p for p in claves_pref if len(p) > 6))
+
+    if capt:
+        candidatos = [g for g in generados or [] if admisible(g)]
+    else:
+        candidatos = [c for c in condiciones_explicitas(descripcion) if admisible(c)]
+        if not candidatos:
+            candidatos = [indispensable_por_defecto(modalidad, ubicacion)]
+    vistos = {_clave_texto(x) for x in capt}
+    propuestos: List[str] = []
+    for g in candidatos:
+        if len(capt) + len(propuestos) >= MAX_INDISPENSABLES:
+            break
+        if _clave_texto(g) not in vistos:
+            vistos.add(_clave_texto(g))
+            propuestos.append(g.strip())
+    return capt + propuestos, propuestos, preferentes
+
+
 def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> VacanteGenerada:
     """Garantía en Python (no depende del modelo) de las dos reglas no negociables de la Parte 3:
     (a) no inventar condiciones — beneficios = capturados; (b) respetar lo capturado — indispensables y
-    deseables literal, en su categoría y primero; seniority = el elegido."""
-    salida.requisitos_indispensables = _unir_capturado(
-        ficha.requisitos_indispensables, salida.requisitos_indispensables, excluir=ficha.requisitos_deseables
-    )
+    deseables literal, en su categoría y primero; seniority = el elegido. Cambio 37: reglas de los indispensables
+    (`reglas_indispensables`)."""
+    indisp, propuestos, extra_des = reglas_indispensables(
+        ficha.requisitos_indispensables, salida.requisitos_indispensables, seniority=ficha.seniority or salida.seniority,
+        descripcion=ficha.descripcion_breve, responsabilidades=list(salida.responsabilidades or []),
+        deseables=ficha.requisitos_deseables, modalidad=ficha.modalidad, ubicacion=ficha.ubicacion)
+    salida.requisitos_indispensables = indisp
+    salida.indispensables_propuestos = propuestos
     salida.requisitos_deseables = _unir_capturado(
-        ficha.requisitos_deseables, salida.requisitos_deseables, excluir=ficha.requisitos_indispensables
+        ficha.requisitos_deseables, list(salida.requisitos_deseables or []) + extra_des, excluir=indisp
     )
     salida.beneficios = [b.strip() for b in ficha.beneficios if b.strip()]
     if ficha.seniority:
@@ -1557,8 +1688,9 @@ TONO_CORPORATIVO = (
     "respuesta», «Qué interesante»); (c) PROHIBIDO frases de formulario («Para confirmar:», «Primero confírmame:», «Para no "
     "equivocarme») y ejemplos de formato («Por ejemplo, «15 mil al mes»»): pregunta directo; (d) la escolaridad se pregunta "
     "EXACTAMENTE «" + "¿Cuál es tu último grado de estudios?" + "»; (e) EVASIVAS («lo que ofrezcan», «depende», «lo que sea»): "
-    "repregunta UNA SOLA VEZ con suavidad («Claro. Solo para tenerlo en cuenta, ¿con qué cantidad…?»); si vuelve a evadir, "
-    "registra lo que dijo (p. ej. «Flexible») y AVANZA sin insistir."
+    "repregunta UNA SOLA VEZ pidiendo el dato concreto (la frase «Claro. Solo para tenerlo en cuenta, …» es SOLO para el "
+    "sueldo: «Claro. Solo para tenerlo en cuenta, ¿con qué cantidad…?»); si vuelve a evadir, registra lo que dijo (p. ej. "
+    "«Flexible») y AVANZA sin insistir. Una respuesta completa NUNCA se repregunta."
 )
 _RE_ELOGIO = re.compile(r"^\s*[¡!]?\s*(excelente|muy bien|perfecto|genial|fant[aá]stico|maravilloso|qu[eé] bien|qu[eé] interesante|"
                         r"buen[ií]simo|incre[ií]ble|s[uú]per|estupendo|buena respuesta|muy buena respuesta|me encanta)\b"

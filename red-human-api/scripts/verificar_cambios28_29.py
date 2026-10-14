@@ -217,10 +217,12 @@ with TestClient(app) as client:
     db.commit()
     r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
     check(r.status_code == 409 and "Documentos" in r.json()["detail"], f"«Publicar» se bloquea con la alerta ({r.status_code})")
-    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}], "requisitos": "Secundaria terminada"})
-    check(any("3 requisitos indispensables" in f for f in r.json()["faltantesPublicacion"]), "con prefiltro, la vacante exige 3 indispensables")
-    r = client.patch(f"/vacantes/{v.codigo}", json={"requisitos": "Secundaria terminada · Turnos rotativos · Experiencia en almacén"})
-    check(r.json()["faltantesPublicacion"] == [], "completos los datos, ya no falta nada")
+    # Cambio 37: con prefiltro basta 1 indispensable (antes 3)
+    r = client.patch(f"/vacantes/{v.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}], "requisitos": ""})
+    check(any("1 requisito indispensable" in f for f in r.json()["faltantesPublicacion"]),
+          "con prefiltro, la vacante exige al menos 1 indispensable (Cambio 37)")
+    r = client.patch(f"/vacantes/{v.codigo}", json={"requisitos": "Secundaria terminada"})
+    check(r.json()["faltantesPublicacion"] == [], "completos los datos (1 indispensable), ya no falta nada")
     r = client.post(f"/vacantes/{v.codigo}/publicar", json={"plataformas": ["Portal"]})
     check(r.status_code == 200 and r.json()["estado"] == "Publicada", f"y se publica ({r.status_code} {r.text[:200]})")
 
@@ -311,7 +313,9 @@ with TestClient(app) as client:
     r = chat(q1, "Terminé la secundaria")
     check("llevas en almacén" in r, f"siguiente indispensable con dato concreto (pregunta natural, Cambio 31) → «{r}»")
     r = chat(q1, "sí")
-    check(r.startswith("Claro. Solo para tenerlo en cuenta,") and "cuánto tiempo" in r, "un «sí» a secas no es un dato: se pide el dato concreto")
+    # Cambio 37: la repregunta pide el dato directo («Claro. Solo para tenerlo en cuenta…» es solo del sueldo)
+    check("cuánto tiempo" in r.lower() and not r.startswith("Claro. Solo para tenerlo en cuenta"),
+          "un «sí» a secas no es un dato: se pide el dato concreto")
     r = chat(q1, "2 años")
     check("rolar turnos" in r, f"→ «{r}»")
     r = chat(q1, "Puedo mañana y tarde")

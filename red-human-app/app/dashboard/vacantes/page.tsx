@@ -839,6 +839,8 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
   // Bloques de publicación por plataforma (occ/linkedin/portal) que solo produce el generador:
   // se conservan aparte del contenido editable para mandarlos en `publicaciones`.
   const [gen, setGen] = useState<VacanteGenerada | null>(null);
+  // Cambio 37: «Falta para publicar» solo aparece después de intentar publicar (o de generar con Red Human)
+  const [intentoPublicar, setIntentoPublicar] = useState(0);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const [destinos, setDestinos] = useState<string[]>(["WhatsApp", "Portal"]);
@@ -852,13 +854,14 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
     }
     // Publicar exige los datos principales completos; un borrador puede quedar incompleto.
     if (publicar) {
+      setIntentoPublicar((n) => n + 1);
       const faltan = faltantesDatosPrincipales(contenido);
       if (faltaCliente) faltan.splice(3, 0, "Cliente (o «La Cuenta recluta directo»)");
       if (faltan.length) {
         setError(`Para publicar, completa los datos principales: ${faltan.join(", ")}.`);
         return;
       }
-      // Cambio 28: lo que la ruta exige a la vacante (3 indispensables con prefiltro, documentos con «Documentos»)
+      // Cambio 28/37: lo que la ruta exige a la vacante (1 indispensable con prefiltro, documentos con «Documentos»)
       const avisos = avisosPublicacion(contenido, requisitosDeRuta(proceso.pasos));
       if (avisos.length) {
         setError(`Para publicar: ${avisos.join(" ")}`);
@@ -1007,6 +1010,7 @@ function CrearVacante({ onClose, onGuardado }: { onClose: () => void; onGuardado
           mostrarCliente={mostrarCliente}
           faltaCliente={faltaCliente}
           conGuiones
+          intentoPublicar={intentoPublicar}
           rutaGeneracion={entradaProceso(proceso)}
           slotProceso={<SeccionProcesoVacante value={proceso} onChange={setProceso} />}
           slotDatosPrincipales={
@@ -1277,6 +1281,32 @@ function PestanasPlataforma({ bloques, liga }: { bloques: Record<string, BloqueP
           )}
         </div>
       )}
+    </Card>
+  );
+}
+
+/** Cambio 37: «Preguntas filtro» (entidad única) en el detalle: pregunta, etiqueta (Base / Propuesto por Red Human) y regla. */
+function PreguntasFiltroResumen({ items }: { items: NonNullable<Vacante["filtro"]> }) {
+  return (
+    <Card className="p-4">
+      <ul className="space-y-2">
+        {items.map((q, i) => (
+          <li key={q.id} className="flex items-start gap-2.5">
+            <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-brand-soft font-mono text-[10px] font-bold text-brand">
+              {i + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-ink-2">{q.pregunta}</p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] text-ink-3">
+                <span className="rounded bg-surface-2 px-1.5 py-0.5">{q.etiqueta ?? (q.base ? "Base" : "Requisito")}</span>
+                <span>{q.requisito}</span>
+                {q.descarta ? <span className="rounded bg-bad-soft px-1.5 py-0.5 text-bad">{q.regla}</span>
+                  : <span className="rounded bg-surface-2 px-1.5 py-0.5">no descarta</span>}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
@@ -1610,7 +1640,14 @@ function DetalleVacante({
   const bloques = (v.publicaciones ?? {}) as Record<string, BloquePlataforma>;
   const tieneContenido = Object.keys(bloques).length > 0;
 
+  // Cambio 37: lo que falta para publicar se muestra al INTENTAR publicar (no de entrada)
+  const [intentoPub, setIntentoPub] = useState(false);
+
   async function publicar() {
+    if (v.faltantesPublicacion?.length) {
+      setIntentoPub(true);
+      return;
+    }
     setOcupado("publicar");
     const r = await publicarVacante(v.id, destinos);
     setOcupado("");
@@ -1685,7 +1722,7 @@ function DetalleVacante({
     ...(puedeActuar && v.estado === "Cerrada" ? [{ etiqueta: "Reabrir vacante", icono: <RotateCcw />, onClick: alternarEstatus, disabled: Boolean(ocupado) }] : []),
     ...(puedeActuar ? [{ etiqueta: "Eliminar vacante", icono: <Trash2 />, peligrosa: true, onClick: () => setConfirmarEliminar(true), disabled: Boolean(ocupado) }] : []),
   ];
-  const nPrefiltro = (v.criterios?.length ?? 0) + (v.criteriosWhatsapp?.length ?? 0);
+  const nPrefiltro = v.filtro?.length || (v.criterios?.length ?? 0) + (v.criteriosWhatsapp?.length ?? 0);
 
   return (
     <Panel titulo={v.titulo} eyebrow={v.id} onClose={onClose} ancho="max-w-3xl">
@@ -1733,6 +1770,18 @@ function DetalleVacante({
         <p className="-mt-1 text-[11px] text-ink-3">
           {Object.values(embudo).reduce((a, b) => a + b, 0)} candidatos activos en total · misma cuenta que el tablero de Candidatos.
         </p>
+        {/* Cambio 37: descartados y «Requiere revisión», con liga a la lista */}
+        <p className="-mt-2 text-[12px] text-ink-2">
+          <Link href={`/dashboard/candidatos?${new URLSearchParams({ vacante: v.id, descartados: "true" }).toString()}`}
+            className="font-medium hover:text-brand hover:underline">
+            {v.embudo?.descartados ?? 0} descartados
+          </Link>
+          {" · "}
+          <Link href={`/dashboard/candidatos?${new URLSearchParams({ vacante: v.id, estado: "revision" }).toString()}`}
+            className="font-medium hover:text-brand hover:underline">
+            {v.embudo?.enRevision ?? 0} en revisión
+          </Link>
+        </p>
 
         {liga && (
           <div className="flex items-center gap-2 rounded-xl border border-border-soft bg-surface-2 px-3.5 py-2.5">
@@ -1767,12 +1816,12 @@ function DetalleVacante({
                 );
               })}
             </div>
-            {Boolean(v.faltantesPublicacion?.length) && (
+            {intentoPub && Boolean(v.faltantesPublicacion?.length) && (
               <Aviso tono="warn">
-                No se puede publicar todavía (lo pide la ruta): {v.faltantesPublicacion!.join(" ")} Usa «Editar vacante» para completarlo.
+                Falta para publicar (lo pide la ruta): {v.faltantesPublicacion!.join(" ")} Usa «Editar vacante» para completarlo.
               </Aviso>
             )}
-            <Button className="w-full" onClick={publicar} disabled={Boolean(ocupado) || !destinos.length || !tieneContenido || Boolean(v.faltantesPublicacion?.length)}>
+            <Button className="w-full" onClick={publicar} disabled={Boolean(ocupado) || !destinos.length || !tieneContenido}>
               <Send className="h-4 w-4" />
               {ocupado === "publicar" ? "Publicando…" : "Publicar"}
             </Button>
@@ -1834,10 +1883,13 @@ function DetalleVacante({
           <ListaResumen titulo="Prestaciones" items={v.beneficios ?? []} />
         </Plegable>
 
-        <Plegable titulo="Prefiltros" resumen={`${nPrefiltro ? `${v.criterios?.length ?? 0} web · ${v.criteriosWhatsapp?.length ?? 0} WhatsApp` : "Sin preguntas todavía"}${v.cursoFiltroTitulo ? ` · curso: ${v.cursoFiltroTitulo}` : ""}`}>
+        <Plegable titulo={v.filtro?.length ? "Preguntas filtro" : "Prefiltros"} resumen={`${v.filtro?.length ? `${v.filtro.length} preguntas · ${v.filtro.filter((q) => q.descarta).length} descartan`
+          : nPrefiltro ? `${v.criterios?.length ?? 0} web · ${v.criteriosWhatsapp?.length ?? 0} WhatsApp` : "Sin preguntas todavía"}${v.cursoFiltroTitulo ? ` · curso: ${v.cursoFiltroTitulo}` : ""}`}>
           {live && puedeDecidir && <CursoFiltro v={v} onCambio={() => onCambio(v.id)} />}
-          {(v.criterios?.length ?? 0) > 0 && <Criterios criterios={v.criterios as CriterioFiltro[]} />}
-          {(v.criteriosWhatsapp?.length ?? 0) > 0 ? (
+          {/* Cambio 37: UNA sola lista (formulario web y chat) */}
+          {v.filtro?.length ? <PreguntasFiltroResumen items={v.filtro} /> : null}
+          {!v.filtro?.length && (v.criterios?.length ?? 0) > 0 && <Criterios criterios={v.criterios as CriterioFiltro[]} />}
+          {v.filtro?.length ? null : (v.criteriosWhatsapp?.length ?? 0) > 0 ? (
             <Criterios criterios={v.criteriosWhatsapp as CriterioFiltro[]} titulo="Criterios de prefiltro · WhatsApp (puntos críticos)" />
           ) : (v.criterios?.length ?? 0) > 0 ? (
             <p className="text-[12px] text-ink-3">WhatsApp: el agente confirma con las mismas preguntas de la web (no hay puntos críticos propios).</p>

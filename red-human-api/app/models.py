@@ -288,7 +288,8 @@ NIVELES_RECORDATORIO = {1: "ligero", 2: "intermedio", 3: "definitivo"}
 # Cómo nació la postulación — alimenta "por fuente" en /metricas.
 ORIGENES_POSTULACION = ["formulario", "whatsapp", "telegram", "rh_directo", "cv_masivo", "reinicio_prueba", "migracion"]
 # Por qué se cerró (activa=False). "" mientras sigue en curso.
-MOTIVOS_CIERRE = ["descartado", "contratado", "reinicio_prueba", "prueba_expirada", "sin_interes", "vacante_eliminada", "eliminado"]
+MOTIVOS_CIERRE = ["descartado", "contratado", "reinicio_prueba", "prueba_expirada", "sin_interes", "vacante_eliminada", "eliminado",
+                  "prueba_reemplazada"]  # Cambio 37: Modo Prueba — una postulación nueva del mismo número a la misma vacante
 
 
 class Postulacion(Base):

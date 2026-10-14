@@ -160,27 +160,26 @@ with TestClient(app) as client:
           "no se genera nada para actividades que no están en la ruta")
     web_g, wa_g = g["preguntas_filtro"], g["preguntas_filtro_whatsapp"]
     # 2026-10-11 (tarde): los 4 datos fijos de WhatsApp (tipo «dato») no son preguntas de evaluación
-    check(web_g and all(q["tipo"] in ("si_no", "numero", "opcion") and q.get("opciones") for q in web_g + wa_g if q["tipo"] != "dato"),
-          "prefiltros web y WhatsApp: solo preguntas cerradas")
+    # Cambio 37: el formulario web se deriva de «Preguntas filtro» (Sí/No, número con su unidad u opción); WhatsApp ya no
+    # tiene lista aparte
+    check(web_g and wa_g == [] and all(q["tipo"] in ("si_no", "numero", "opcion") and (q.get("opciones") or q["tipo"] == "numero")
+                                       for q in web_g), "prefiltros web y WhatsApp: solo preguntas cerradas")
     indisp = [q for q in web_g if q["descarta"]]
     check(sorted(q["valida"] for q in indisp) == sorted(FICHA["requisitos_indispensables"]),
           "eliminatorias del web = exactamente los requisitos indispensables")
-    # Cambio 19: 1) indispensables («Descarta si…») → 2) condiciones de la descripción («Se registra») → 3) colonia,
-    # traslado, transporte y sueldo («Se registra»)
-    reglas = [("descarta" if q.get("descarta") else "registra") for q in wa_g]
-    check(reglas == sorted(reglas) and wa_g[0]["regla"].startswith("Descarta si") and all(q.get("regla") for q in wa_g),
-          "WhatsApp (Cambio 19): primero los indispensables con «Descarta si…», después lo que «Se registra»")
-    check([q.get("dato") for q in wa_g if q.get("dato") in ("zona", "traslado", "transporte")] == ["zona", "transporte"]
-          and wa_g[-1].get("dato") in ("transporte", "sueldo"), "corporativo sin indispensable de traslado (Cambio 31): colonia → transporte (→ sueldo), sin traslado")
-    check(any("inventarios" in q["valida"].lower() and q["regla"] == "Se registra" for q in wa_g),
-          "el deseable («Manejo de inventarios») se pregunta y solo se registra")
-    wa_r = [q for q in wa_g if q.get("reconfirma")]
-    check(len(wa_r) == len(indisp) and all(q.get("reconfirma") and q["tipo"] in ("numero", "opcion", "si_no") and "cuál de estas" not in q["pregunta"] for q in wa_r)
-          and not any("inventarios" in q["valida"].lower() for q in wa_r),
-          "WhatsApp: reconfirma CADA indispensable con un dato concreto y no repite lo no indispensable")
-    exp = next(q for q in wa_r if "montacargas" in q["valida"] and "años" in q["valida"])
-    check(exp["tipo"] == "numero" and "cuánto tiempo" in exp["pregunta"].lower() and exp.get("minimo") == 2,
-          f"web «¿tienes al menos 2 años…?» → WhatsApp «¿cuánto tiempo…?» con rangos: {exp['pregunta']}")
+    # Cambio 37: «Preguntas filtro» = UNA lista — primero una pregunta por indispensable (con su regla de descarte), después
+    # las base (edad, interés, sueldo, colonia, traslado), que no descartan
+    filtro_g = g["filtro"]
+    orden = ["indisp" if q.get("indispensable") else "base" for q in filtro_g]
+    check(orden == sorted(orden, key=lambda x: x != "indisp") and all(q["regla"].startswith("Descarta si") for q in filtro_g if q["descarta"])
+          and all(not q["descarta"] for q in filtro_g if q["base"] and not q.get("indispensable")),
+          "Preguntas filtro: primero los indispensables con «Descarta si…», después las base que no descartan")
+    check(sorted(q["requisito"] for q in filtro_g if q.get("indispensable")) == sorted(FICHA["requisitos_indispensables"])
+          and not any("inventarios" in q["requisito"].lower() for q in filtro_g),
+          "una pregunta por indispensable (lo deseable no entra a las preguntas filtro)")
+    exp = next(q for q in filtro_g if "montacargas" in q["requisito"] and "años" in q["requisito"])
+    check(exp["tipo"] == "numero" and "cuántos años" in exp["pregunta"].lower() and "Para confirmar" not in exp["pregunta"],
+          f"experiencia con mínimo → número en lenguaje natural: {exp['pregunta']}")
     textos_prefiltro = {q["pregunta"] for q in web_g + wa_g}
     guiones_g = g["guiones"]["secciones"]
     check(all(not ABIERTA_NO.match(q) and q not in textos_prefiltro for c in guiones_g.values() for q in c["preguntas"]),
@@ -190,9 +189,9 @@ with TestClient(app) as client:
     r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"pasos": [
         {"id": "pw", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"}]}})
     solo_wa = r.json()
-    check(solo_wa["guiones"]["aplican"] == ["prefiltro_whatsapp"] and solo_wa["preguntas_filtro"] == []
-          and all(q["descarta"] and not q.get("reconfirma") for q in solo_wa["preguntas_filtro_whatsapp"] if q["tipo"] != "dato" and not q.get("registra")),
-          "ruta solo con prefiltro por WhatsApp: es el primer filtro (eliminatorias cerradas), sin web")
+    check(solo_wa["guiones"]["aplican"] == ["prefiltro_whatsapp"] and solo_wa["preguntas_filtro_whatsapp"] == []
+          and all(q["descarta"] for q in solo_wa["filtro"] if q.get("indispensable") and q["tipo"] != "abierta"),
+          "ruta solo con prefiltro por WhatsApp: la misma lista única (eliminatorias = los indispensables)")
 
     editado = {"enfoque": "Mío", "temas": ["Montacargas"], "preguntas": ["Cuéntame de tu turno más pesado."]}
     r = client.post("/vacantes/generar", headers=H, json={**FICHA, "proceso": {"pasos": pasos_corp}, "conservar": ["entrevista_whatsapp"],
@@ -204,7 +203,7 @@ with TestClient(app) as client:
     secciones_alta = dict(guiones_g)
     secciones_alta["entrevista_avatar"] = {**guiones_g["entrevista_avatar"], "preguntas": guiones_g["entrevista_avatar"]["preguntas"] + ["Cuéntame qué te gustaría aprender aquí."]}
     r = client.post("/vacantes", headers=H, json={**FICHA, "generar_si_falta": False, "proceso": {"pasos": pasos_corp},
-                                                 "preguntas_filtro": web_g, "preguntas_filtro_whatsapp": wa_g,
+                                                 "filtro": g["filtro"],  # Cambio 37: la entidad única
                                                  "guiones": {"secciones": secciones_alta, "meta": g["guiones"]["meta"]}})
     VAC2 = r.json()["id"]
     det2 = r.json()
@@ -323,11 +322,18 @@ with TestClient(app) as client:
     r = client.post("/vacantes", headers=H, json={**FICHA, "titulo": "Ayudante sin guion", "generar_si_falta": False,
                                                  "proceso": {"pasos": [{"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     v5 = db.query(Vacante).filter(Vacante.codigo == r.json()["id"]).one()
+    # Cambio 37: una vacante nueva ya trae «Preguntas filtro»; para probar el JIT se simula una vacante ANTERIOR sin lista
+    from app.services import preguntas_filtro as _pfu
+
+    check(_pfu.aplica(v5) and v5.preguntas_filtro_whatsapp == [], "vacante nueva: «Preguntas filtro» (sin prefiltro de WhatsApp aparte)")
+    g5 = dict(v5.guiones or {})
+    g5.pop(_pfu.CLAVE, None)
+    v5.guiones, v5.preguntas_filtro = g5, []
     c5 = _crear_candidato(db, cuenta.id, "Leo Antiguo", "whatsapp", False, telefono="5512340005")
     p5 = crear_postulacion(db, c5, v5, cuenta.id, "whatsapp")
     p5.consentimiento = True
     db.commit()
-    check(not v5.preguntas_filtro_whatsapp, "candidato antiguo: su vacante no tiene guion de prefiltro")
+    check(not v5.preguntas_filtro_whatsapp and not _pfu.aplica(v5), "candidato antiguo: su vacante no tiene guion de prefiltro")
     asyncio.run(procesar_prefiltro(db, p5, "Hola", "whatsapp"))
     db.refresh(v5)
     check(len(v5.preguntas_filtro_whatsapp) >= 1 and all(q["tipo"] in ("si_no", "numero", "opcion", "dato") for q in v5.preguntas_filtro_whatsapp),

@@ -4,7 +4,7 @@
   del prefiltro (`sincronizar`, al guardar la vacante; misma regla que `documentos_vacante.con_documentos_vacante`).
 - La ruta trae «Documentos» antes de Contratación → «Documentos y fotos que se piden» es obligatorio.
 - La ruta trae «Análisis de CV» → el CV es obligatorio en la solicitud web (`con_cv` y `/candidatos/postular`).
-- La ruta trae prefiltro (web o WhatsApp) → la vacante exige al menos 3 indispensables.
+- La ruta trae prefiltro (web o WhatsApp) → la vacante exige al menos 1 indispensable (Cambio 37; antes 3).
 Lo que falte NO impide guardar: desactiva «Publicar» (`faltantes_publicacion`; `POST /vacantes/{codigo}/publicar` → 409).
 """
 
@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-MIN_INDISPENSABLES = 3
+MIN_INDISPENSABLES = 1  # Cambio 37 (antes 3)
 TIPOS_PREFILTRO = ("prefiltro_web", "prefiltro_whatsapp")
 
 
@@ -52,7 +52,7 @@ def faltantes_publicacion(db: Optional[Session], v, pasos: Optional[list] = None
         pasos = sgui.pasos_de_vacante(db, v)
     faltan: List[str] = []
     if tiene_prefiltro(pasos) and len(indispensables(v)) < MIN_INDISPENSABLES:
-        faltan.append(f"La ruta incluye prefiltro: captura al menos {MIN_INDISPENSABLES} requisitos indispensables "
+        faltan.append(f"La ruta incluye prefiltro: captura al menos {MIN_INDISPENSABLES} requisito indispensable "
                       f"(hoy {len(indispensables(v))}).")
     docs = sdv.de_vacante(v)
     if tiene_documentos_previos([x for x in pasos if not x.get("documentos_vacante")]) and not docs:

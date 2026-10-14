@@ -49,8 +49,15 @@ P = ia.PreguntaFiltro
 
 print("\n--- 1. Prompt de generación ---")
 fuente = _insp.getsource(ia)
-check("PREFILTRO WEB" in fuente and "Sí / No (tipo 'si_no')" in fuente and "PROHIBIDO" in fuente and "«Describe», «Explica», «Cuéntanos»" in fuente, "regla 5: prefiltro web cerrado, texto libre prohibido explícitamente")
-check("PREFILTRO WHATSAPP" in fuente and "UNA pregunta por criterio" in fuente and "prohibidas las preguntas compuestas" in fuente and "sí se permiten respuestas abiertas" in fuente, "regla 5b: WhatsApp una pregunta por criterio, abiertas permitidas")
+# Cambio 37: las tres listas se unificaron en «Preguntas filtro» (una pregunta natural por indispensable, sin copiar el
+# requisito ni «¿Cuál es tu caso?»); el formulario web se deriva y sigue siendo cerrado (Sí/No, número u opción)
+check("PREGUNTAS FILTRO" in fuente and "UNA pregunta por requisito indispensable" in fuente and "PROHIBIDO copiar el requisito" in fuente
+      and "¿Cuál es tu caso?" in fuente, "regla 5: «Preguntas filtro» — una pregunta natural por indispensable, frases prohibidas")
+from app.services import preguntas_filtro as _pfu  # noqa: E402
+
+_lista = _pfu.armar(["Secundaria terminada", "Manejo de efectivo"], titulo="Cajero", sueldo="$9,000 mensuales")
+check(all(q["tipo"] in ("si_no", "numero", "opcion") for q in _pfu.web(_lista)) and len(_pfu.web(_lista)) >= 3,
+      "regla 5b: el formulario web (derivado) solo trae preguntas cerradas o numéricas, mínimo 3")
 check("UN solo criterio por pregunta" in _insp.getsource(ia.prefiltro_turno), "el agente de WhatsApp también recibe la regla en cada turno")
 
 print("\n--- 2. Web: cierre garantizado en código ---")
@@ -114,8 +121,11 @@ with TestClient(app) as client:
     j = r.json()
     web_api = j.get("preguntas_filtro") or j.get("preguntasFiltro") or []
     wa_api = j.get("preguntas_filtro_whatsapp") or j.get("preguntasFiltroWhatsapp") or []
-    check(web_api and all(q["tipo"] == "si_no" and q["opciones"] == ["Sí", "No"] for q in web_api), "la API entrega el prefiltro web cerrado")
-    check(wa_api and all(q["pregunta"].count("?") == 1 for q in wa_api), "la API entrega el prefiltro WhatsApp con una pregunta por criterio")
+    # Cambio 37: el formulario web (derivado de «Preguntas filtro») es cerrado: Sí/No, número (dato comparable) u opción
+    check(web_api and all((q["tipo"] == "si_no" and q["opciones"] == ["Sí", "No"]) or (q["tipo"] == "opcion" and len(q["opciones"]) >= 2)
+                          or q["tipo"] == "numero" for q in web_api), "la API entrega el prefiltro web cerrado")
+    check(not wa_api and all(q["pregunta"].count("?") == 1 for q in j["filtro"]),
+          "WhatsApp ya no tiene lista aparte; «Preguntas filtro» trae una pregunta por criterio")
     db.close()
 
 print(f"\n🎉 Bloque 1 (prefiltros) verificado: {OK} comprobaciones OK.")

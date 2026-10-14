@@ -72,11 +72,20 @@ export default function FormularioAplicar() {
 
   /** Rangos por pregunta cuando el criterio es numérico (ej. años de experiencia); todo lo
    * demás (si_no, o preguntas sin criterio asociado como las de PREGUNTAS_BASE) sigue usando
-   * los botones fijos Sí / No (2026-10-11: «Parcial» ya no existe). */
+   * los botones fijos Sí / No (2026-10-11: «Parcial» ya no existe).
+   * Cambio 37 («Preguntas filtro»): un número sin rangos se captura con un campo numérico (con su unidad) y una
+   * pregunta de opción muestra sus opciones. */
   const opcionesPorPregunta = useMemo(() => {
     const m: Record<string, string[]> = {};
     for (const c of vacante?.criterios ?? []) {
-      if (c.tipo === "numero" && c.opciones?.length) m[c.pregunta] = c.opciones;
+      if ((c.tipo === "numero" || c.tipo === "opcion") && c.opciones?.length) m[c.pregunta] = c.opciones;
+    }
+    return m;
+  }, [vacante]);
+  const numericas = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of vacante?.criterios ?? []) {
+      if (c.tipo === "numero" && !c.opciones?.length) m[c.pregunta] = c.unidad ?? "";
     }
     return m;
   }, [vacante]);
@@ -320,6 +329,19 @@ export default function FormularioAplicar() {
                     <div className="flex flex-col gap-4">
                       {preguntas.map((q, i) => {
                         const opciones = opcionesPorPregunta[q] ?? ["Sí", "No"];
+                        if (q in numericas) {
+                          return (
+                            <label key={i} className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">{q}</span>
+                              <span className="flex items-center gap-2">
+                                <input type="number" inputMode="numeric" min={0} value={respuestas[q] ?? ""}
+                                  onChange={(e) => setRespuestas((r) => ({ ...r, [q]: e.target.value }))}
+                                  className="h-11 w-32 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
+                                {numericas[q] && <span className="text-sm text-ink-3">{numericas[q]}</span>}
+                              </span>
+                            </label>
+                          );
+                        }
                         return (
                           <div key={i}>
                             <p className="mb-2 text-sm font-medium">{q}</p>

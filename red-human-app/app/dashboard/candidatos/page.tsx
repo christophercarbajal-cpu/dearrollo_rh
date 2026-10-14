@@ -87,6 +87,7 @@ import {
   moverEtapaCandidato,
   reactivarPostulacion,
   MOTIVOS_REACTIVABLES,
+  textoMotivoCierre,
   aplicarProcesoVigente,
   reanalizarCvCandidato,
   recordatorioDocumentosCandidato,
@@ -152,7 +153,7 @@ const etapaColor: Record<EtapaCandidato, string> = {
 /* UX 2026-10-07: la etapa la define la RUTA (compuerta + avance automático del backend). La interfaz ya no ofrece
    mover de etapa a mano; la siguiente acción concreta vive en el botón principal del Resumen. */
 
-type FiltroEstado = "todos" | "en_proceso" | "aptos" | "contratados" | "descartados";
+type FiltroEstado = "todos" | "en_proceso" | "aptos" | "contratados" | "descartados" | "revision";
 
 const FILTROS_ESTADO: { key: FiltroEstado; label: string }[] = [
   { key: "todos", label: "Todos" },
@@ -160,6 +161,7 @@ const FILTROS_ESTADO: { key: FiltroEstado; label: string }[] = [
   { key: "aptos", label: "Aptos" },
   { key: "contratados", label: "Contratados" },
   { key: "descartados", label: "No cumple" },  // recomendación del prefiltro; descartar sigue siendo decisión de RH
+  { key: "revision", label: "Requiere revisión" },  // Cambio 37
 ];
 
 const ETAPAS_YA_CONTRATADO: EtapaCandidato[] = ["Contratación", "Onboarding"];
@@ -240,7 +242,9 @@ function coincideEstado(c: Candidato, filtro: FiltroEstado): boolean {
     case "contratados":
       return yaContratado;
     case "descartados":
-      return c.estado === "no_cumple";
+      return c.estado === "no_cumple" || c.motivoCierre === "descartado" || c.motivoCierre === "prefiltro_no_aprobado";
+    case "revision":
+      return c.activa !== false && c.estado === "revision";
     case "todos":
     default:
       return true;
@@ -320,6 +324,14 @@ function CandidatosContenido() {
           })
           .finally(() => setVacanteInicialLista(true));
       }
+    }
+
+    // Cambio 37: ligas «[n] descartados · [n] en revisión» del Resumen de la vacante
+    if (searchParams.get("descartados") === "true") {
+      setMostrarCerradas(true);
+      setFiltroEstado("descartados");
+    } else if (searchParams.get("estado") === "revision") {
+      setFiltroEstado("revision");
     }
 
     // 2026-10-01: una liga vieja con ?etapa=Evaluación (columna retirada) abre Filtro Red Human
@@ -1298,7 +1310,7 @@ function ModalCandidato({
                     title={`Cerrada: ${c.motivoCierre || "sin motivo"}. Mover de etapa la reabre.`}
                     className="rounded bg-ink-3/10 px-2 py-0.5 font-mono text-[10px] font-bold uppercase text-ink-3"
                   >
-                    Cerrada · {c.motivoCierre || "—"}
+                    Cerrada · {textoMotivoCierre(c.motivoCierre)}
                   </span>
                 )}
                 {c.enConversacion && c.yaAplicoAntes && (
@@ -1914,7 +1926,7 @@ function PestanaResumen({
                     <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-emerald-700">En curso</span>
                   ) : (
                     <span className="rounded bg-ink-3/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase text-ink-3">
-                      Cerrada · {h.motivoCierre || "—"}
+                      Cerrada · {textoMotivoCierre(h.motivoCierre)}
                     </span>
                   )}
                 </div>

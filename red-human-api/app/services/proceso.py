@@ -1064,6 +1064,13 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
     a = p.analisis or {}
     base = {"estado": "pendiente", "resultado": None, "cumple": False, "espera": "", "detalle": "",
             "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
+    pw_rev = a.get("prefiltro_web") if isinstance(a.get("prefiltro_web"), dict) else {}
+    if tipo in ("prefiltro_whatsapp", "prefiltro_web") and pw_rev.get("resultado") == "revision" and pw_rev.get("requiere_revision"):
+        # Cambio 37: «Requiere revisión» (un indispensable sin resolver tras su repregunta, o el candidato refutó el
+        # descarte): la ruta se detiene y RH decide — «Continuar por decisión de RH» o descartar
+        return {**base, "estado": "completada", "resultado": "con_observaciones", "cumple": False, "requiere_revision": True,
+                "detalle": pw_rev.get("motivo") or "Requiere revisión", "espera": "Requiere revisión de RH",
+                "revisadoPor": "Pendiente de revisión", "terminado_en": _aware_iso(pw_rev.get("en"))}
     if tipo == "prefiltro_web" and isinstance(a.get("prefiltro_web"), dict) and a["prefiltro_web"].get("resultado"):
         # Motor de ruta automatizado (2026-10-08): el prefiltro web ya se resolvió contra la vacante (o RH lo decidió)
         pw = a["prefiltro_web"]
@@ -1083,7 +1090,9 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
         rc = pconv.resumen(p)
         if rc is not None and rc["pendiente"]:
             # Cambio 29: la base fija siempre tiene preguntas — «En curso» solo cuando el bot ya empezó a preguntar
-            return {**base, "estado": "en_curso" if rc.get("iniciado") or not pconv.criterios_de(p.vacante, p)[0].get("base_operativa")
+            primero = pconv.criterios_de(p.vacante, p)[0]
+            # Cambio 37: con «Preguntas filtro» (siempre tiene preguntas) también «En curso» solo cuando el bot empezó
+            return {**base, "estado": "en_curso" if rc.get("iniciado") or not (primero.get("base_operativa") or primero.get("unificado"))
                     else "pendiente", "espera": f"Esperando respuesta del candidato: {rc['pendiente']}"}
     if tipo in ("prefiltro_whatsapp", "prefiltro_web"):
         web = bool(a.get("respuestas_web"))
@@ -1559,7 +1568,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
                          "detalle": f"{ESTADOS_PASO[clave]} por {d.get('por', '')}: {d.get('motivo', '')}".strip(": "),
                          "decision": d}
                     break
-        if decision.get("excepcion") and r["estado"] == "completada" and r.get("resultado") == "no_favorable":
+        if decision.get("excepcion") and r["estado"] == "completada" and (r.get("resultado") == "no_favorable" or r.get("requiere_revision")):
             # 2026-10-08: «Continuar por decisión de RH». El resultado reprobatorio y su score se CONSERVAN (la actividad
             # no se omite): solo cuenta como cumplida para la compuerta, con quién, cuándo y por qué.
             d = decision["excepcion"]
@@ -1677,6 +1686,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "aviso": r.get("aviso"),
             "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
             "excepcionRH": r.get("excepcion"),
+            "requiereRevision": bool(r.get("requiere_revision")) and not r.get("excepcion"),  # Cambio 37
             "faltaCorreo": bool(r.get("falta_correo")),
             "sinSolicitar": bool(r.get("sin_solicitar")),
             "documentosVacante": bool(paso.get("documentos_vacante")),  # Cambio 25
@@ -1923,7 +1933,8 @@ def _menu(paso: dict, x: dict, r: dict, ev: Optional[Evaluacion]) -> List[dict]:
         poner("registrar_resultado")
     if x.get("sincronizable"):
         poner("reintentar_sincronizacion")
-    if (estado == "completada" and x.get("resultado") == "no_favorable" and not x.get("excepcionRH") and not x.get("heredado")):
+    if (estado == "completada" and (x.get("resultado") == "no_favorable" or x.get("requiereRevision")) and not x.get("excepcionRH")
+            and not x.get("heredado")):
         poner("continuar_excepcion")
     if not x.get("heredado") and (estado in ("pendiente", "en_curso") or (estado == "completada" and x.get("resultado") == "no_favorable"
                                                                          and not x.get("excepcionRH"))):
@@ -1993,6 +2004,8 @@ def _estado_unificado(r: dict, regla: Optional[dict] = None) -> dict:
         clave = "error"
     elif resultado == "no_favorable":
         clave, texto = "no_aprobada", r.get("texto_no_aprobada")
+    elif r.get("requiere_revision"):
+        clave, texto, pendiente_aprobacion = "pendiente_revision", "Requiere revisión", True  # Cambio 37
     elif estado == "completada":
         if not r.get("cumple"):
             clave, pendiente_aprobacion = "pendiente_revision", True
@@ -2051,7 +2064,7 @@ def bloqueo_no_aprobada(p: Postulacion, pasos: Optional[List[dict]]) -> Optional
     if not pasos or not p.activa:
         return None
     actual = _indice(p.etapa)
-    x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and y["resultado"] == "no_favorable"
+    x = next((y for y in pasos if y["obligatorio"] and not y["heredado"] and (y["resultado"] == "no_favorable" or y.get("requiereRevision"))
               and y["estado"] == "completada" and not y.get("excepcionRH") and _indice(y["etapa"]) <= actual), None)
     if x is None:
         return None
@@ -2115,7 +2128,7 @@ def excepcion_rh(db: Session, p: Postulacion, paso_id: str, u, motivo: str, por_
     paso = _paso(p, paso_id)
     motivo = (motivo or "").strip()
     actual = next((x for x in estado_pasos(p) if x["id"] == paso_id), None)
-    if actual is None or actual["resultado"] != "no_favorable" or actual["estado"] != "completada":
+    if actual is None or not (actual["resultado"] == "no_favorable" or actual.get("requiereRevision")) or actual["estado"] != "completada":
         raise ErrorProceso(409, f"«{paso['nombre']}» no está «No aprobada»: no hay nada que liberar.")
     if actual.get("excepcionRH"):
         raise ErrorProceso(409, f"«{paso['nombre']}» ya continúa por decisión de RH.")

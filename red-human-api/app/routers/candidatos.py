@@ -380,6 +380,7 @@ def listar(
     candidato: Optional[str] = None,       # Todas las postulaciones de una persona (C-####)
     activa: Optional[bool] = None,         # filtro explícito: True = en curso, False = cerradas
     mostrar_cerradas: bool = False,        # B4: por defecto el Kanban solo muestra activas
+    descartados: bool = False,             # Cambio 37: solo las descartadas (liga «[n] descartados» de la vacante)
     db: Session = Depends(get_db),
     _: Usuario = Depends(usuario_actual),
     cuenta: Cuenta = Depends(cuenta_actual),
@@ -397,7 +398,11 @@ def listar(
     # que RH active "Mostrar cerradas" o pida un filtro `activa` explícito.
     # 2026-09-20 (B4): este filtro por defecto ES la base de `services.conteos.postulaciones_visibles` —
     # si se cambia aquí hay que cambiarlo allá (los contadores de vacante/pipeline deben coincidir con esta lista).
-    if activa is not None:
+    if descartados:
+        from ..services.conteos import MOTIVOS_DESCARTE
+
+        q = q.filter(Postulacion.activa.is_(False), Postulacion.motivo_cierre.in_(MOTIVOS_DESCARTE))
+    elif activa is not None:
         q = q.filter(Postulacion.activa.is_(activa))
     elif not mostrar_cerradas:
         q = q.filter(Postulacion.activa.is_(True))
@@ -808,22 +813,20 @@ async def subir_cv(
 async def _disparar_plantilla_inicio(db: Session, p: Postulacion) -> dict:
     """Rompe el hielo por WhatsApp justo después de guardar la postulación, usando la plantilla
     aprobada de Meta (nunca texto libre: la web no cuenta como 'el candidato escribió primero').
-    Es un mensaje saliente: NO mueve la conversación — si el candidato ya estaba a media
-    conversación sobre otra postulación, su respuesta sigue yendo a aquella; si esta es la
-    única que espera respuesta, el webhook la elige; si hay varias, le pregunta (B1)."""
+    Cambio 37: la respuesta a esta plantilla es de ESTA postulación — `plantillas_meta.revisar_inicio_prefiltro` liga la
+    conversación a su vacante y el webhook la elige antes que cualquier otra (nunca muestra «Elegir vacante»)."""
     if not p.telefono:
         return {"enviado": False, "detalle": "El candidato no dejó WhatsApp."}
-    from ..services.plantillas_meta import nombre_plantilla_inicio
+    from ..services.plantillas_meta import nombre_plantilla_inicio, parametros_inicio, texto_inicio
 
     PLANTILLA_INICIO_ENTREVISTA = nombre_plantilla_inicio()  # META_PLANTILLA_INICIO (default «inicio_entrevista_rh»)
-    primer_nombre = (p.nombre or "").split(" ")[0] or "candidato(a)"
+    # Cambio 37: «Hola, [nombre]. Soy Red Human, el agente virtual de [empresa]. Recibimos tu postulación para [puesto].
+    # ¿Tienes 5 minutos para responder unas preguntas?»
+    texto = texto_inicio(p)
     with de_cuenta(p.cuenta_id):
-        envio = await enviar_plantilla(
-            p.telefono, PLANTILLA_INICIO_ENTREVISTA, [primer_nombre],
-            texto=f"Hola {primer_nombre}, ¡gracias por tu interés! Empecemos con tu proceso.",
-        )
+        envio = await enviar_plantilla(p.telefono, PLANTILLA_INICIO_ENTREVISTA, parametros_inicio(p), texto=texto)
     texto_mensaje = (
-        f"[Plantilla de WhatsApp «{PLANTILLA_INICIO_ENTREVISTA}»] Hola {primer_nombre}, ¡gracias por tu interés! Empecemos con tu proceso."
+        f"[Plantilla de WhatsApp «{PLANTILLA_INICIO_ENTREVISTA}»] {texto}"
         if envio.get("enviado")
         else f"[Fallo de envío Meta] La plantilla «{PLANTILLA_INICIO_ENTREVISTA}» no pudo entregarse a {p.telefono}: {envio.get('detalle', 'sin detalle')}."
     )
@@ -896,6 +899,21 @@ async def postular(
 
     # Reaplicar (decisión 2026-09-11): activa para esta vacante → se reutiliza; cerrada → nueva.
     p, nueva_postulacion = postulacion_para_vacante(db, c, vac, vac.cuenta_id, "formulario", consentimiento=True)
+    if prueba and nueva_postulacion and tel:
+        # Cambio 37 (Modo Prueba): postulaciones ILIMITADAS del mismo número a la misma vacante — cada una es un candidato
+        # nuevo y las anteriores de ese número a esa vacante pasan a «Prueba reemplazada» (nada se borra)
+        anteriores = (db.query(Postulacion).join(Candidato, Postulacion.candidato_id == Candidato.id)
+                      .filter(Postulacion.vacante_id == vac.id, Postulacion.activa.is_(True), Postulacion.id != p.id,
+                              Candidato.telefono == tel).all())
+        for x in anteriores:
+            x.cerrar("prueba_reemplazada")
+            x.historial = list(x.historial or []) + [{
+                "evento": "prueba_reemplazada", "usuario": "sistema", "fecha": datetime.now(timezone.utc).isoformat(),
+                "texto": f"Prueba reemplazada: el mismo número se volvió a postular a esta vacante en Modo Prueba ({p.codigo}).",
+                "reemplazada_por": p.codigo}]
+            if x.candidato is not None and x.candidato.postulacion_conversacion_id == x.id:
+                x.candidato.postulacion_conversacion_id = None
+            registrar(db, "sistema", "postulacion_prueba_reemplazada", "postulacion", x.codigo, {"nueva": p.codigo, "vacante": vac.codigo})
     # 2026-09-16 (prefiltro dual): las respuestas del formulario web se guardan para compararlas después
     # con lo que la persona diga por WhatsApp (antes se recibían y se tiraban).
     respuestas_web = _parsear_respuestas_web(respuestas)
@@ -1627,6 +1645,10 @@ def _asegurar_guion_prefiltro(db: Session, p: Postulacion) -> None:
     v = p.vacante
     if v is None or p.prefiltro_completo:
         return
+    from ..services import preguntas_filtro as pfu
+
+    if pfu.aplica(v):
+        return  # Cambio 37: la entidad única «Preguntas filtro» ya tiene todo lo que pregunta el bot
     from ..services import guiones as sgui
 
     tipos = set(sgui.tipos_de_ruta((p.proceso or {}).get("pasos"))) or set(sgui.tipos_de_ruta(sgui.pasos_de_vacante(db, v)))

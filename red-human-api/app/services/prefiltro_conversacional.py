@@ -76,8 +76,17 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     """Criterios del prefiltro de la vacante, en el orden configurado. Con `p` se ajustan a SU ruta (Cambio 24: en la
     ruta corporativa no se pregunta colonia ni transporte y el sueldo es la expectativa) y se suman las brechas de SU
     Análisis de CV (Cambio 22). Cambio 29: en rutas Masivos (operativos) es la BASE FIJA de `prefiltro_operativo`."""
+    from . import preguntas_filtro as pfu
     from . import prefiltro_operativo as pop
 
+    if pfu.aplica(v):
+        # Cambio 37: la entidad ÚNICA «Preguntas filtro» de la vacante (todas las rutas; la corporativa ajusta sus base)
+        unificados = pfu.criterios(v, corporativa=p is not None and _es_corporativa(p))
+        brechas = criterios_brecha(unificados, p) if p is not None else []
+        for b in brechas:
+            if not b.get("por_brecha"):
+                b.update({"unificado": True, "tipo": "si_no", "dato": "registro", "indispensable": False})
+        return _con_brechas(unificados, brechas)
     if pop.aplica(v, p):
         return pop.criterios(v)
     salida: List[dict] = []
@@ -457,9 +466,9 @@ def medio_de(texto: str) -> Optional[str]:
 
 REPREGUNTA_DATO = {
     # Cambio 31: repreguntas SUAVES y sin ejemplos de formato
-    "escolaridad": "Claro. Solo para tenerlo en cuenta, ¿hasta qué grado llegaste en la escuela?",
+    "escolaridad": "¿Hasta qué grado llegaste en la escuela?",
     "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
-    "traslado": "Claro. Solo para tenerlo en cuenta, ¿cuántos minutos te tomaría llegar?",
+    "traslado": "¿Cuántos minutos te tomaría llegar?",
     "transporte": "¿Qué transporte usarías, por ejemplo camión, metro o auto?",
     "sueldo": "Solo para confirmar: ¿el sueldo te parece bien?",
 }
@@ -764,6 +773,17 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
         valor = web.get(_norm(c["pregunta"])) or web.get(_norm(c["criterio"]))
         if not valor:
             continue
+        if c.get("unificado"):
+            # Cambio 37: la respuesta del formulario a una pregunta de la entidad única (Sí/No, número u opción). Lo que no
+            # quedó claro lo pregunta el bot; un «No» explícito a un indispensable descarta igual que en el chat.
+            from . import preguntas_filtro as pfu
+
+            sentido, extra = pfu.valor_web(c, valor)
+            if sentido is None:
+                continue
+            respuestas[c["id"]] = {"respuesta": valor, "valor": sentido, "fuente": "web", "en": _ahora(), **extra}
+            pfu.registrar_datos(p, c, valor, extra)
+            continue
         v = _norm(valor)
         sentido = "si" if v.startswith("si") else "no" if v == "no" else None
         if sentido is None:
@@ -794,7 +814,7 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
             # pregunta del indispensable)
             base = respuestas.get(c["por_brecha"]) or {}
             return base.get("valor") == "si" and base.get("fuente") == "web"
-        if c.get("dato") or c.get("registra"):
+        if c.get("dato") or c.get("registra") or c.get("unificado"):
             return True  # los datos de WhatsApp y las condiciones de la descripción («Se registra») siempre se preguntan
         if c.get("reconfirma"):
             # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
@@ -803,7 +823,11 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         return c["indispensable"]  # retro 2026-10-09: el chat solo pregunta indispensables (lo demás se registra)
 
     siguiente = next((c for c in criterios if falta(c)), None)
-    return (None, None, siguiente) if siguiente else ("cumple", None, None)
+    if siguiente:
+        return None, None, siguiente
+    # Cambio 37: un indispensable que siguió sin resolverse tras su repregunta → «Requiere revisión» (RH decide)
+    revision = next((c for c in criterios if c.get("unificado") and c["indispensable"] and (respuestas.get(c["id"]) or {}).get("revision")), None)
+    return ("revision", revision, None) if revision else ("cumple", None, None)
 
 
 def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
@@ -821,6 +845,8 @@ def _criterios_resueltos(criterios: List[dict], e: dict) -> List[dict]:
             veredicto = "cumple" if r.get("valor") == c["esperada"] else "no_cumple"
         if c.get("reconfirma") and r:
             veredicto = "cumple" if r.get("valor") == "si" else "inconsistencia"
+        if r.get("revision"):
+            veredicto = "requiere_revision"  # Cambio 37
         if c.get("dato") and r:
             veredicto = ("no_concluyente" if r.get("valor") is None else "registrado") if not (c.get("reconfirma") or c["indispensable"]) else \
                 ("cumple" if r.get("valor") == "si" else "no_cumple" if r.get("valor") == "no" else "no_concluyente")
@@ -864,7 +890,8 @@ def _requisito(c: dict) -> str:
 
 
 def _resolver(db: Session, p: Postulacion, criterios: List[dict], e: dict, resultado: str, motivo: str) -> None:
-    """Escribe la decisión en la entidad, en `analisis.prefiltro_web` (lo que lee el paso de la ruta) y en el tablero."""
+    """Escribe la decisión en la entidad, en `analisis.prefiltro_web` (lo que lee el paso de la ruta) y en el tablero.
+    Cambio 37: «revision» = «Requiere revisión» (la ruta se detiene y RH decide: continuar o descartar)."""
     e["resultado"] = resultado
     e["motivo"] = motivo
     e["en"] = _ahora()
@@ -873,7 +900,7 @@ def _resolver(db: Session, p: Postulacion, criterios: List[dict], e: dict, resul
     a = dict(p.analisis or {})
     resueltos = _criterios_resueltos(criterios, e)
     a["prefiltro_web"] = {"resultado": resultado, "motivo": motivo, "criterios": resueltos, "en": e["en"], "decidido_por": "Red Human",
-                          "conversacional": True}
+                          "conversacional": True, **({"requiere_revision": True} if resultado == "revision" else {})}
     a["respuestas_prefiltro"] = [{"criterio": x["criterio"], "pregunta": x["pregunta"], "respuesta": x["respuesta"],
                                   "cumple": None if x["veredicto"] in ("registrado", "sin_respuesta") else x["veredicto"] == "cumple"}
                                  for x in resueltos if x["respuesta"]]
@@ -964,6 +991,9 @@ def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: di
     """Incumple un indispensable: cierra la postulación (No aprobado) con el motivo EXACTO. No hace commit. Regresa el
     texto del mensaje de cierre (lo envía quien llama, por el canal de la conversación)."""
     motivo = f"No cumple el requisito indispensable: {c['criterio']}"
+    respuesta = ((e.get("respuestas") or {}).get(c["id"]) or {}).get("respuesta", "")
+    if respuesta:
+        motivo += f" (respondió: «{str(respuesta)[:120]}»)"  # Cambio 37: el motivo del descarte queda con la respuesta
     _resolver(db, p, criterios, e, "no_cumple", motivo)
     sello = datetime.now(timezone.utc)
     p.historial = list(p.historial or []) + [{
@@ -973,6 +1003,82 @@ def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: di
     p.cerrar(MOTIVO_CIERRE)
     registrar(db, ACTOR, "postulacion_cerrada_prefiltro", "postulacion", p.codigo, {"motivo": motivo, "criterio": c["criterio"]})
     return _texto_cierre(c, empresa_de(p))
+
+
+def historial(p: Postulacion, evento: str, texto: str, **extra) -> None:
+    """Cambio 37: cada repregunta, «Requiere revisión» y descarte del prefiltro queda en el historial con su motivo."""
+    p.historial = list(p.historial or []) + [{"evento": evento, "usuario": ACTOR, "fecha": _ahora(), "texto": texto[:500], **extra}]
+
+
+def resolver_revision(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> str:
+    """Cambio 37: un indispensable quedó sin resolver tras su ÚNICA repregunta → «Requiere revisión». La postulación sigue
+    activa, el estado es «revision» y la ruta se detiene hasta que RH decida. Regresa el mensaje al candidato."""
+    respuesta = ((e.get("respuestas") or {}).get(c["id"]) or {}).get("respuesta", "")
+    motivo = f"Requiere revisión: «{c['criterio']}»" + (f" (respondió: «{str(respuesta)[:120]}»)" if respuesta else "")
+    _resolver(db, p, criterios, e, "revision", motivo)
+    historial(p, "requiere_revision", f"Prefiltro: {motivo}. RH decide si continúa o se descarta.", motivo=motivo, origen="prefiltro")
+    registrar(db, ACTOR, "prefiltro_requiere_revision", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": str(respuesta)[:200]})
+    from ..routers.candidatos import nombre_ficha
+
+    nombre = (nombre_ficha(p) or "").split(" ")[0]
+    emp = empresa_de(p)
+    return (f"Gracias{', ' + nombre if nombre and not nombre.startswith('Candidato') else ''}. Registré tus respuestas; una persona "
+            f"del equipo de RH{' de ' + emp if emp else ''} revisará tu postulación y te escribirá por este medio.")
+
+
+# ============================================================ después del descarte (Cambio 37)
+
+MOTIVOS_DESCARTE = (MOTIVO_CIERRE, MOTIVO_CIERRE_LEGADO)
+_RE_REFUTA = re.compile(r"^(pero|si (tengo|cuento|cumplo|termine|lo tengo|la tengo|soy|puedo|se)|claro que si|yo si|eso no es (cierto|verdad|asi)|"
+                        r"no es (cierto|verdad|asi)|te equivoc\w*|se equivoc\w*|esta mal|estas mal|en realidad|de hecho|"
+                        r"me equivoque|me confundi|perdon,? (si|me equivoque)|no,? si (tengo|cumplo|cuento))\b")
+_RE_REFUTA_EN = re.compile(r"\b(si tengo|si cuento|si cumplo|si termine|tengo \d+ anos?|si la tengo|si lo tengo|me equivoque|me confundi)\b")
+
+
+def es_refutacion(texto: str) -> bool:
+    """«pero sí tengo», «sí cuento con licencia», «me equivoqué, sí terminé la prepa», «eso no es cierto»."""
+    t = limpiar(texto)
+    return bool(t) and bool(_RE_REFUTA.match(t) or _RE_REFUTA_EN.search(t))
+
+
+def descartada(p: Optional[Postulacion]) -> bool:
+    return p is not None and not p.activa and (p.motivo_cierre or "") in MOTIVOS_DESCARTE
+
+
+TEXTO_ACLARACION = "Gracias por aclararlo. Una persona del equipo de RH{emp} revisará tu caso y te escribirá por este medio."
+
+
+def refutar_descarte(db: Session, p: Postulacion, texto: str) -> str:
+    """El candidato refuta el descarte: la postulación SIGUE en su vacante (nunca se cambia de vacante), se reabre con
+    estado «revision» («Requiere revisión») y la ruta queda detenida hasta que RH decida. No hace commit."""
+    p.activa = True
+    p.motivo_cierre = ""
+    p.cerrada_en = None
+    p.estado = "revision"
+    a = dict(p.analisis or {})
+    motivo = f"El candidato refutó el descarte: «{texto.strip()[:200]}»"
+    pw = dict(a.get("prefiltro_web") or {})
+    pw.update({"resultado": "revision", "requiere_revision": True, "motivo": motivo, "en": _ahora(), "refutado": True,
+               "motivo_descarte": (a.get("prefiltro_web") or {}).get("motivo", "")})
+    a["prefiltro_web"] = pw
+    a["prefiltro_resultado"] = "revision"
+    e = dict(a.get(ENTIDAD) or {})
+    if e:
+        e["resultado"] = "revision"
+        e["refutado"] = True
+        a[ENTIDAD] = e
+    p.analisis = a
+    flag_modified(p, "analisis")
+    historial(p, "descarte_refutado", f"{motivo}. Requiere revisión de RH.", motivo=motivo, origen="prefiltro")
+    registrar(db, ACTOR, "descarte_refutado", "postulacion", p.codigo, {"texto": texto[:300]})
+    emp = empresa_de(p)
+    return TEXTO_ACLARACION.format(emp=f" de {emp}" if emp else "")
+
+
+def texto_post_descarte(p: Postulacion) -> str:
+    puesto = p.vacante.titulo if p.vacante else "esta vacante"
+    return (f"Tu postulación a {puesto} no continúa en esta ocasión. Si crees que hubo un error, cuéntame qué requisito sí "
+            "cumples y una persona de RH lo revisará.")
 
 
 MARCA_LIBERACION = "prefiltro_revision_liberada_2026_10_10"
@@ -1065,6 +1171,10 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
         _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables de la vacante")
         db.commit()
         return "cumple"
+    if resultado == "revision":
+        resolver_revision(db, p, criterios, e, incumple)
+        db.commit()
+        return "revision"
     if not p.telefono:
         # sin teléfono no se le puede preguntar: lo pendiente pasa a «Puntos por validar» y el agente decide con lo demás
         while siguiente is not None:
@@ -1205,7 +1315,18 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     from . import plantillas_meta
 
     post_plantilla = False
-    if plantillas_meta.marcar_respuesta(db, p, texto) and plantillas_meta.es_confirmacion_inicio(texto):
+    respondio_plantilla = plantillas_meta.marcar_respuesta(db, p, texto)
+    if respondio_plantilla and not plantillas_meta.es_confirmacion_inicio(texto) and plantillas_meta.es_aplazamiento(texto):
+        # Cambio 37: «¿Tienes 5 minutos…?» → «ahorita no»: se respeta y se espera a que escriba (sin preguntar nada)
+        _guardar(p, e)
+        aviso = (f"Claro. Escríbeme cuando tengas 5 minutos y seguimos con tu postulación a "
+                 f"{p.vacante.titulo if p.vacante else 'la vacante'}.")
+        envio = await _enviar_whatsapp(p, aviso, canal)
+        guardar_mensaje(db, p, "assistant", aviso, canal, envio)
+        _actualizar_ultima_actividad(p)
+        db.commit()
+        return {"respuesta": aviso, "clasificacion": None, "ia": False, "whatsapp": envio, "prefiltro": None, "aplazada": True}
+    if respondio_plantilla and plantillas_meta.es_confirmacion_inicio(texto):
         # 2026-10-13: respuesta al botón de `inicio_entrevista_rh` («Sí, empezar ahora»): abre la ventana de 24 h y el bot
         # contesta YA con la primera pregunta (nunca se toma como respuesta a un criterio). Cambio 31: SIN presentarse —
         # la plantilla ya lo presentó.
@@ -1229,6 +1350,58 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if pendiente is not None and (reconexion or es_saludo(texto)):
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
         return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
+    if pendiente is not None and pendiente.get("unificado"):
+        # Cambio 37 — «Preguntas filtro»: descarta SOLO una respuesta clara que no cumple; afirmativa sin dato, parcial,
+        # ambigua o evasiva → UNA repregunta concreta y, si sigue sin resolverse, «Requiere revisión». Todo al historial.
+        from . import preguntas_filtro as pfu
+
+        fuente = canal_registro(canal)
+        unidad = dict(e.get("unidad_pendiente") or {})
+        texto_eval = texto
+        if pendiente["id"] in unidad:
+            t_u = _norm(texto)
+            if re.search(r"\bmes", t_u) or re.search(r"\bano", t_u):
+                texto_eval = f"{unidad.pop(pendiente['id'])} {'meses' if re.search(r'\bmes', t_u) else 'años'}"
+                e["unidad_pendiente"] = unidad
+        no_entiende = bool(_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto))
+        valor, extra = (None, {}) if no_entiende else pfu.clasificar(pendiente, texto_eval)
+        if extra.get("unidad") and pendiente["id"] not in unidad:
+            # «uno» en una pregunta de tiempo: «¿Un año o un mes?» (no cuenta como la repregunta)
+            unidad[pendiente["id"]] = extra["unidad"]
+            e["unidad_pendiente"] = unidad
+            historial(p, "prefiltro_repregunta", f"Repregunta en «{pendiente['criterio']}»: número sin unidad («{texto.strip()[:80]}»)",
+                      motivo="numero_sin_unidad", criterio=pendiente["criterio"])
+            return await responder(pfu.pregunta_unidad(extra["unidad"]), aclaracion=True)
+        if valor is None and not aclaraciones.get(pendiente["id"]):
+            aclaraciones[pendiente["id"]] = 1
+            e["aclaraciones"] = aclaraciones
+            motivo = ("no entendió la pregunta" if no_entiende else "respuesta parcial o ambigua" if extra.get("parcial")
+                      else "respuesta evasiva o vacía" if pfu.es_evasiva(texto) else "respuesta sin el dato concreto")
+            historial(p, "prefiltro_repregunta", f"Repregunta en «{pendiente['criterio']}»: {motivo} («{texto.strip()[:120]}»)",
+                      motivo=motivo, criterio=pendiente["criterio"])
+            registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
+                      {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": 1, "motivo": motivo})
+            q = pfu.repregunta(pendiente)
+            if no_entiende and pendiente.get("dato") != "sueldo":
+                q = f"Te lo pregunto de otra forma: {q}"
+            return await responder(q, aclaracion=True)
+        if valor is None and pendiente.get("expectativa"):
+            valor, extra = "si", {"flexible": True, "evasiva": texto.strip()[:200]}  # Cambio 31: expectativa «Flexible»
+        if valor is None:
+            # segunda vez sin resolver: «Requiere revisión» (nunca se toma como «No»)
+            e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["id"]: {
+                "respuesta": texto.strip()[:300], "valor": None, "fuente": fuente, "en": _ahora(), "revision": True}}
+            punto_por_validar(p, f"Requiere revisión: «{pendiente['criterio']}» — respondió «{texto.strip()[:120]}»")
+            historial(p, "prefiltro_sin_resolver", f"«{pendiente['criterio']}» sigue sin resolverse tras la repregunta: requiere "
+                      f"revisión («{texto.strip()[:120]}»)", motivo="sin_resolver", criterio=pendiente["criterio"])
+        else:
+            e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["id"]: {
+                "respuesta": texto_eval.strip()[:300], "valor": valor, "fuente": fuente, "en": _ahora(), **extra}}
+            pfu.registrar_datos(p, pendiente, texto_eval, extra)
+            if valor == "si" and es_duda(texto):
+                punto_por_validar(p, f"Respondió con duda en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
+        e["pendiente"] = None
+        pendiente = None
     if pendiente is not None and (_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto)):
         # retro 2026-10-09: «no entiendo» → la MISMA pregunta con otras palabras (cuenta como aclaración)
         n = aclaraciones.get(pendiente["id"], 0) + 1
@@ -1293,7 +1466,9 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         n_txt = numero_sin_unidad(pendiente, texto)
         unidad[pendiente["id"]] = n_txt
         e["unidad_pendiente"] = unidad
-        return await responder(f"Claro. Solo para tenerlo en cuenta, ¿son {n_txt} años o {n_txt} meses?", aclaracion=True)
+        from .preguntas_filtro import pregunta_unidad
+
+        return await responder(pregunta_unidad(n_txt), aclaracion=True)  # Cambio 37: «¿Un año o un mes?»
     if pendiente is not None:
         valor = clasificar_dato(pendiente, texto) if pendiente.get("reconfirma") else clasificar(pendiente, texto)
         if valor is None and (pendiente["indispensable"] or pendiente.get("reconfirma")):
@@ -1307,10 +1482,11 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                 e["aclaraciones"] = aclaraciones
                 registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                           {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": n})
-                # Cambio 31: repregunta SUAVE, sin frases de formulario ni ejemplos de formato
+                # Cambio 31: repregunta sin frases de formulario ni ejemplos de formato. Cambio 37: «Claro. Solo para
+                # tenerlo en cuenta…» solo en sueldo — aquí se pide el dato directo
                 q = pendiente["chat"].strip()
-                q = q[0] + q[1].lower() + q[2:] if q.startswith("¿") and len(q) > 2 else q[:1].lower() + q[1:]
-                return await responder(f"Claro. Solo para tenerlo en cuenta, {q}", aclaracion=True)
+                return await responder(f"¿Me confirmas con un sí o un no? {q}" if pendiente.get("tipo", "si_no") == "si_no"
+                                       else q, aclaracion=True)
         if pendiente["id"] not in (e.get("respuestas") or {}):
             e["respuestas"] = {**(e.get("respuestas") or {}),
                                pendiente["id"]: {"respuesta": texto.strip()[:300], "valor": valor, "fuente": canal_registro(canal), "en": _ahora()}}
@@ -1327,6 +1503,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if resultado == "no_cumple":
         mensaje = cerrar_no_aprobado(db, p, criterios, e, incumple)
         return await responder(mensaje, clasificacion_final="no_cumple")
+    if resultado == "revision":
+        # Cambio 37: un indispensable sin resolver tras su repregunta → «Requiere revisión»; la ruta se detiene para RH
+        mensaje = resolver_revision(db, p, criterios, e, incumple)
+        return await responder(mensaje, clasificacion_final="revision")
     if siguiente is not None:
         primera = not e.get("preguntadas")
         e["pendiente"] = siguiente["id"]

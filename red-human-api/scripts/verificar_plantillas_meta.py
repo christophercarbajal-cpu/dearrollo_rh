@@ -120,8 +120,9 @@ with TestClient(app) as client:
     check(r.status_code == 201, f"postulación web ({r.status_code})")
     p1 = db.query(Postulacion).filter_by(codigo=r.json()["postulacion"]).one()
     t = plantillas(desde, "inicio_entrevista_rh")
-    check(len(t) == 1 and t[0]["template"]["components"][0]["parameters"] == [{"type": "text", "text": "Luisa"}]
-          and t[0]["to"] == "525512770001", "sale `inicio_entrevista_rh` al número del candidato con {{1}} = su nombre")
+    # Cambio 37: «Hola, {{1}}. Soy Red Human, el agente virtual de {{2}}. Recibimos tu postulación para {{3}}…»
+    check(len(t) == 1 and [x["text"] for x in t[0]["template"]["components"][0]["parameters"]] == ["Luisa", "Almacenes PM", "Almacenista"]
+          and t[0]["to"] == "525512770001", "sale `inicio_entrevista_rh` al número del candidato con nombre, empresa y puesto")
     db.refresh(p1)
     check(plantillas_meta.estado(p1).get("enviada_en") and not pconv.estado(p1).get("pendiente"),
           "queda reclamada; el bot todavía no pregunta nada (espera la respuesta a la plantilla)")

@@ -83,47 +83,32 @@ with TestClient(app) as client:
     app.dependency_overrides[usuario_decisor] = lambda: admin
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
 
-    print("\n--- Prefiltro dual: la IA genera web + puntos críticos WhatsApp ---")
+    # Cambio 37 (2026-10-14): el prefiltro dual (web + puntos críticos de WhatsApp) se reemplazó por UNA sola entidad
+    # «Preguntas filtro»: una pregunta por indispensable + las base; el formulario web se deriva de ella (≥ 3)
+    print("\n--- Preguntas filtro (Cambio 37): una sola lista para la web y el chat ---")
     r = client.post("/vacantes/generar", json={"titulo": "Cajero(a) de sucursal", "area": "Operaciones", "seniority": "Junior", "ubicacion": "Zapopan, Jalisco",
                                                 "requisitos_indispensables": ["Secundaria terminada", "Manejo de efectivo", "Disponibilidad de fin de semana"],
-                                                # 2026-10-09: solo se genera lo que está en la ruta (aquí web + WhatsApp)
                                                 "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
-    check(r.status_code == 200 and len(r.json()["preguntas_filtro"]) >= 3, f"generar: prefiltro web con {len(r.json()['preguntas_filtro'])} preguntas")
-    wa_todo = r.json()["preguntas_filtro_whatsapp"]
-    # 2026-10-11 (tarde): primero los 4 datos (escolaridad exacta, colonia, traslado, transporte); la escolaridad
-    # reconfirma «Secundaria terminada», así que las reconfirmaciones sí/no son las de los otros 2 indispensables
-    # Cambio 19: primero los indispensables (la escolaridad exacta reconfirma «Secundaria terminada» y descarta), al final
-    # colonia → traslado → transporte (se registran)
-    check(wa_todo[0].get("dato") == "escolaridad" and wa_todo[0]["descarta"] and wa_todo[0]["regla"].startswith("Descarta si")
-          and [q.get("dato") for q in wa_todo[-3:]] == ["zona", "traslado", "transporte"],
-          "generar: WhatsApp empieza con el indispensable (escolaridad) y termina con colonia → traslado → transporte")
-    wa = [q for q in wa_todo if q.get("reconfirma")]
-    # 2026-10-09: con web + WhatsApp en la ruta, WhatsApp RECONFIRMA cada indispensable con un dato concreto (cerrado)
-    check(len(wa) == 2 and all(q["tipo"] in ("numero", "opcion", "si_no") and q.get("reconfirma") and "cuál de estas" not in q["pregunta"] for q in wa),
-          f"generar: prefiltro WhatsApp = {len(wa)} reconfirmaciones cerradas de los indispensables")
-    check(not {q["pregunta"] for q in r.json()["preguntas_filtro"]} & {w["pregunta"] for w in wa} and wa[0]["pregunta"].startswith("Para confirmar"),
-          "las de WhatsApp piden el dato concreto, no copian la lista web")
-    # 2026-10-11 (tarde): con la ubicación el prefiltro web llega a las 3 preguntas clave mínimas
+    check(r.status_code == 200 and len(r.json()["preguntas_filtro"]) >= 3, f"generar: formulario web con {len(r.json()['preguntas_filtro'])} preguntas")
+    filtro = r.json()["filtro"]
+    check(r.json()["preguntas_filtro_whatsapp"] == [] and len([q for q in filtro if q.get("indispensable")]) == 3,
+          "generar: sin prefiltro de WhatsApp aparte; una pregunta por indispensable en «Preguntas filtro»")
+    check(not any(q["pregunta"].startswith("Para confirmar") or "cuál de estas" in q["pregunta"] for q in filtro),
+          "las preguntas piden el dato en lenguaje natural (sin «Para confirmar»)")
     r = client.post("/vacantes", json={"titulo": "Cajero RF2", "descripcion": "x", "requisitos_indispensables": ["Manejo de efectivo", "Disponibilidad de fin de semana", "Mayor de edad"], "publicar": True, "generar_si_falta": True,
                                        "ubicacion_estado": "Jalisco", "ubicacion_municipio": "Zapopan",
                                        "proceso": {"pasos": [{"id": "pw", "tipo": "prefiltro_web", "etapa": "Prefiltro"}, {"id": "pwa", "tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}]}})
     VAC = r.json()["id"]
     client.post(f"/vacantes/{VAC}/publicar", json={"plataformas": ["WhatsApp", "Portal"]})
     v = client.get(f"/vacantes/{VAC}").json()
-    check(len(v["criteriosWhatsapp"]) >= 1 and len(v["criterios"]) >= 2, "al crear con generar_si_falta la vacante guarda ambas listas")
+    check(v["filtro"] and v["criteriosWhatsapp"] == [] and len(v["criterios"]) >= 3, "al crear con generar_si_falta la vacante guarda UNA sola lista")
     slug = v["slug"]
-    # 2026-10-11 (tarde): aquí se prueba la reconfirmación web ↔ chat; los 4 datos fijos (escolaridad, colonia, traslado,
-    # transporte) se prueban en verificar_prefiltro_traslado.py
-    vdb = db.query(Vacante).filter(Vacante.codigo == VAC).one()
-    vdb.preguntas_filtro_whatsapp = [q for q in vdb.preguntas_filtro_whatsapp or [] if q.get("tipo") != "dato"]
-    db.commit()
 
     print("\n--- Respuestas web guardadas y comparación Web vs WhatsApp ---")
     preg_web = v["criterios"][0]["pregunta"]
     r = client.post("/candidatos/postular", data={"vacante": slug, "nombre": "Ana Dual", "telefono": "5511110001", "consentimiento": "true",
-                                                  "respuestas": json.dumps([{"pregunta": preg_web, "respuesta": "Sí"}, {"pregunta": "¿Cuántos años de experiencia tienes?", "respuesta": "2-3 años"},
-                                                                           # Cambio 28: el 3er indispensable (publicar exige 3) ya viene contestado en el formulario
-                                                                           {"pregunta": v["criterios"][2]["pregunta"], "respuesta": "Sí"}])})
+                                                  "respuestas": json.dumps([{"pregunta": preg_web, "respuesta": "Sí"},
+                                                                           {"pregunta": v["criterios"][2]["pregunta"], "respuesta": "30"}])})
     check(r.status_code in (200, 201), "postulación web con respuestas")
     P = r.json()["postulacion"]
     p = db.query(Postulacion).filter_by(codigo=P).one()
@@ -134,26 +119,16 @@ with TestClient(app) as client:
     inc2 = comparar_web_vs_whatsapp({"respuestas_web": [{"pregunta": preg_web, "respuesta": "Sí"}], "respuestas_prefiltro": [{"criterio": v["criterios"][0]["valida"], "pregunta": preg_web, "respuesta": "Sí, claro", "cumple": True}]}, v["criterios"])
     check(inc2 == [], "respuestas consistentes → sin inconsistencias")
 
-    # retro 2026-10-09: prefiltro conversacional en todas las Cuentas — el «Sí» del formulario se reconfirma con un DATO
-    # concreto; si el dato lo contradice es «Inconsistencia» y RH revisa (nunca descarta)
+    # Cambio 37: lo que ya contestó en la web no se vuelve a preguntar; un «no» explícito a un indispensable descarta
     ENVIOS.clear()
     r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Hola"})
-    from app.services.ia import chat_natural  # 2026-10-11: el chat la dice como sí/no en lenguaje natural
-    check(r.status_code == 200 and chat_natural(v["criterios"][1]["pregunta"], v["criterios"][1].get("valida", "")) in r.json()["respuesta"],
+    check(r.status_code == 200 and v["criterios"][1]["pregunta"] in r.json()["respuesta"],
           "el chat pregunta primero el indispensable que el formulario no respondió")
-    r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "Sí"})
-    # Cambio 31: la reconfirmación es la pregunta NATURAL del requisito (nunca «Para confirmar…»)
-    check(r.json()["respuesta"].rstrip().endswith("?") and "Para confirmar" not in r.json()["respuesta"],
-          "el «Sí» del formulario se RECONFIRMA en el chat con la pregunta natural del requisito")
-    r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "No"})
+    r = client.post(f"/candidatos/{P}/prefiltro", json={"texto": "No, no tengo disponibilidad"})
     db.expire_all()
     p = db.query(Postulacion).filter_by(codigo=P).one()
-    # 2026-10-11 (descarte estricto): el dato concreto indica que NO cumple el indispensable → el agente DESCARTA de inmediato
     check(not p.activa and p.motivo_cierre == "descartado" and p.estado == "no_cumple",
-          "la reconfirmación indica que NO cumple el indispensable → el agente DESCARTA (no aprueba)")
-    check(len(p.analisis["inconsistencias"]) == 1 and p.analisis["inconsistencias"][0]["web"] == "Sí", "la inconsistencia quedó registrada (formulario vs chat)")
-    r2 = client.get(f"/candidatos/{P}")
-    check(len(r2.json()["inconsistencias"]) == 1, "la ficha expone la inconsistencia")
+          "un «no» explícito a un indispensable → el agente DESCARTA")
     check("necesitamos" in r.json()["respuesta"], "al candidato se le manda el mensaje de cierre con el requisito")
 
     print("\n--- Control manual de RH: mover libre + «Omitida manualmente» ---")

@@ -250,7 +250,7 @@ with TestClient(app) as client:
 
     A = postular("Rosa Pérez", vi, "5531900001")
     r = turno(A, "Hola")
-    check(r["respuesta"].startswith("Hola, Rosa. Soy Red Human, el agente virtual de RH") and "Primero confírmame" not in r["respuesta"]
+    check(r["respuesta"].startswith("Hola, Rosa. Soy Red Human, el agente virtual de") and "Primero confírmame" not in r["respuesta"]
           and "preguntas" not in r["respuesta"], f"saludo EXACTO y sin anunciar cuántas preguntas: {r['respuesta']!r}")
     turno(A, "En el Centro de Tultitlán")
     r = turno(A, "Como 3 horas")

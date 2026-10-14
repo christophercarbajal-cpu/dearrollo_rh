@@ -109,12 +109,20 @@ def transicion(p, primera: str) -> str:
     return f"Listo{', ' + d['nombre'] if d['nombre'] else ''}. Ahora unas preguntas sobre tu experiencia. {primera}"
 
 
-def cierre(p) -> str:
-    from . import ia
+def _sigue_entrevista_humana(p) -> bool:
+    pasos = (p.proceso or {}).get("pasos") or []
+    i = next((n for n, x in enumerate(pasos) if x.get("tipo") == "entrevista_whatsapp"), -1)
+    return any(x.get("tipo") == "entrevista_humana" for x in pasos[i + 1:])
 
+
+def cierre(p) -> str:
+    """Cierre EXACTO (2026-10-13, checklist Grupak): «Con esto terminamos, [nombre]. Gracias por tu tiempo. El equipo de
+    Recursos Humanos de [empresa] te contactará para agendar una entrevista.» Nunca dirección ni fecha: la cita la
+    programa RH después. Si la ruta no sigue con una entrevista humana, «…te contactará para continuar con tu proceso.»"""
     d = _datos(p)
-    return (f"{ia.DESPEDIDA_ENTREVISTA}. Gracias por tu tiempo{', ' + d['nombre'] if d['nombre'] else ''}. El equipo de "
-            f"{d['empresa']} revisará tus respuestas y te escribirá por este medio.")
+    siguiente = "para agendar una entrevista" if _sigue_entrevista_humana(p) else "para continuar con tu proceso"
+    return (f"Con esto terminamos{', ' + d['nombre'] if d['nombre'] else ''}. Gracias por tu tiempo. El equipo de Recursos "
+            f"Humanos de {d['empresa']} te contactará {siguiente}.")
 
 
 def _texto_sueldo(sueldo: str) -> str:
@@ -146,6 +154,7 @@ def texto_pregunta(pid: str, est: dict, p) -> str:
         "inicio": "¿Cuándo podrías empezar?",
         "rep_despido": "¿Por qué te despidieron?",
         "rep_renuncia": "¿Por qué renunciaste?",
+        "rep_experiencia": PREGUNTA_SIN_EXPERIENCIA,
     }[pid]
 
 
@@ -182,14 +191,17 @@ def siguiente(est: dict, p) -> Optional[str]:
     r = est.get("respuestas") or {}
     if "trabaja" not in q and "trabaja" not in r:
         return "trabaja"
-    if est.get("actual") is False and "sin_trabajo" not in q and "sin_trabajo" not in r:
+    if est.get("nunca_trabajo") and "rep_experiencia" not in r:
+        return "rep_experiencia"
+    if (est.get("actual") is False and not est.get("nunca_trabajo") and "rep_experiencia" not in r
+            and "sin_trabajo" not in q and "sin_trabajo" not in r):
         return "sin_trabajo"
     if not est.get("historial_cerrado"):
         k = int(est.get("k") or 0)
         trabajos = est.get("trabajos") or []
         trabajo = trabajos[k] if len(trabajos) > k else {}
         for campo in ("empresa", "puesto", "tareas", "duracion", "motivo"):
-            if campo in q or campo in trabajo:
+            if campo in q or campo in trabajo or (campo == "puesto" and trabajo.get("informal")):
                 continue
             return campo
         if trabajo.get("repregunta") and "repregunta_respuesta" not in trabajo:
@@ -205,6 +217,10 @@ def siguiente(est: dict, p) -> Optional[str]:
     return None
 
 
+# «Nunca he trabajado» (2026-10-13): antes de cerrar el historial se repregunta UNA vez por trabajos informales
+PREGUNTA_SIN_EXPERIENCIA = "¿Has hecho algún trabajo, aunque sea por tu cuenta o ayudando a alguien?"
+_RE_NUNCA_TRABAJO = re.compile(r"\b(nunca (he )?trabaj\w*|no he trabajado( nunca)?|nunca he tenido (un )?(trabajo|empleo)|no tengo experiencia"
+                               r"|sin experiencia|(es|seria|este seria|este es) mi primer (trabajo|empleo))\b")
 _RE_SIN_TRABAJO = re.compile(r"^(no|nunca|ninguno|ninguna|no he trabajado|nunca he trabajado|es mi primer trabajo|sin experiencia)\b")
 _RE_DESPIDO = re.compile(r"\b(me corrieron|me despidieron|despid\w*|me sacaron|me liquidaron|me dieron las gracias|me echaron|corrieron)\b")
 _RE_RENUNCIA = re.compile(r"\b(renunci\w*|me sali|me fui|deje el trabajo|lo deje)\b")
@@ -231,17 +247,38 @@ def registrar_respuesta(est: dict, pid: str, texto: str, p) -> None:
     if pid == "trabaja":
         r["trabaja"] = texto
         est["actual"] = si_no == "si"
+        if _RE_NUNCA_TRABAJO.search(_n(texto)):
+            est["actual"] = False
+            est["nunca_trabajo"] = True
         return
     if pid == "sin_trabajo":
         r["sin_trabajo"] = texto
+        if _RE_NUNCA_TRABAJO.search(_n(texto)):
+            est["nunca_trabajo"] = True
+        return
+    if pid == "rep_experiencia":
+        r["rep_experiencia"] = texto
+        est.pop("nunca_trabajo", None)
+        t = _n(texto)
+        if si_no == "no" or _RE_NUNCA_TRABAJO.search(t) or _RE_SIN_TRABAJO.match(t) and len(t.split()) <= 3:
+            est["historial_cerrado"] = True
+            est["sin_experiencia"] = True
+        else:
+            # trabajo informal: lo que contó es el «dónde»; sigue con qué hacía, cuánto tiempo y por qué dejó de hacerlo
+            trabajos.clear()
+            trabajos.append({"actual": False, "informal": True, "empresa": texto, "puesto": "Por su cuenta"})
+            est["k"] = 0
         return
     if pid in ("empresa", "puesto", "tareas", "duracion", "motivo"):
         while len(trabajos) <= k:
             trabajos.append({"actual": bool(est.get("actual")) and len(trabajos) == 0})
-        if pid == "empresa" and k == 0 and not est.get("actual") and _RE_SIN_TRABAJO.match(_n(texto)):
-            trabajos.pop()  # nunca ha trabajado: sin historial
-            est["historial_cerrado"] = True
-            est["sin_experiencia"] = True
+        if pid == "empresa" and k == 0 and not est.get("actual") and (_RE_SIN_TRABAJO.match(_n(texto)) or _RE_NUNCA_TRABAJO.search(_n(texto))):
+            trabajos.pop()  # dice que nunca ha trabajado: antes de cerrar el historial, UNA repregunta por trabajo informal
+            if "rep_experiencia" in r:
+                est["historial_cerrado"] = True
+                est["sin_experiencia"] = True
+            else:
+                est["nunca_trabajo"] = True
             return
         trabajos[k][pid] = texto
         if pid == "motivo":

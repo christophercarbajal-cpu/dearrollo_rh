@@ -508,7 +508,10 @@ async def finalizar_entrevista(db: Session, e: Entrevista, transcript: Optional[
         return _cerrar_sin_evaluar(db, e, p, "desconexion", turnos_candidato)
     # (c) contestó poco → la IA decide si alcanza; si no, «Entrevista parcial» sin score integral.
     faltante: List[str] = []
-    if turnos_utiles < TURNOS_ENTREVISTA_COMPLETA:
+    # La entrevista FIJA de Masivos que llegó a su cierre está completa aunque sea corta (quien nunca ha trabajado
+    # contesta pocas preguntas): se evalúa siempre (2026-10-13).
+    fija_terminada = bool(((e.guion or {}).get("fija") or {}).get("terminada_en"))
+    if turnos_utiles < TURNOS_ENTREVISTA_COMPLETA and not fija_terminada:
         suf, _ = ia.suficiencia_entrevista(v.titulo if v else "vacante general", temas, e.transcript or [])
         if not suf.suficiente:
             return _cerrar_sin_evaluar(

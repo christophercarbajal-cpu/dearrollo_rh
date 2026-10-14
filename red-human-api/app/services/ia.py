@@ -1319,11 +1319,12 @@ ESPERA_INICIO = "Tómate tu tiempo, avísame cuando quieras comenzar."
 
 
 def presentacion_bot(empresa: str = "") -> str:
-    """Cambio 31 (2026-10-13): la presentación EXACTA del bot en TODAS las rutas: «Soy Red Human, el agente virtual de RH
-    de [empresa].» La empresa es la de `serial.nombre_empresa_candidato` (el Cliente de la vacante si se muestra al
-    candidato; si no, la Cuenta) — la MISMA que usa el cierre."""
+    """La presentación EXACTA del bot en TODAS las rutas (2026-10-13, checklist Grupak; antes «…agente virtual de RH de
+    [empresa].»): «Soy Red Human, el agente virtual de [empresa].» La empresa es la de `serial.nombre_empresa_candidato`
+    (el Cliente de la vacante si se muestra al candidato; si no, la Cuenta) — la MISMA que usa el cierre. Se dice UNA sola
+    vez por postulación (`prefiltro_conversacional.ya_presentado`)."""
     empresa = " ".join(str(empresa or "").split())
-    return f"Soy Red Human, el agente virtual de RH de {empresa}." if empresa else "Soy Red Human, el agente virtual de RH."
+    return f"Soy Red Human, el agente virtual de {empresa}." if empresa else "Soy Red Human, el agente virtual de RH."
 
 
 def mensaje_inicial_entrevista(titulo_vacante: str, empresa: str = "") -> str:

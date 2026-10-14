@@ -998,6 +998,10 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
                 aviso = _texto_aviso_privacidad(c.nombre if not c.nombre.startswith("Candidato") else "", vacante)
                 envio_aviso = await enviar_mensaje(telefono, aviso)
                 guardar_mensaje(db, p, "assistant", aviso, "whatsapp", envio_aviso)
+                if vacante is not None:
+                    from ..services.prefiltro_conversacional import marcar_presentado
+
+                    marcar_presentado(p)  # 2026-10-13: el aviso ya presentó al bot; el saludo del prefiltro no lo repite
                 db.commit()
                 return {"ok": True, "accion": "aviso_privacidad_enviado", "candidato": c.codigo, "postulacion": p.codigo}
 

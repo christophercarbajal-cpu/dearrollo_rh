@@ -175,7 +175,7 @@ with TestClient(app) as client:
     txt = enviados(CHAT, n)
     check(r.get("estadoStart") == "cv_terminado" and txt and txt[0].startswith("Hola, Luis. Ya terminamos de analizar tu CV"),
           f"«Análisis de CV terminado»: {txt[:1]}")
-    check(len(txt) >= 2 and "Soy Red Human, el agente virtual de RH" in txt[1], "…y en seguida empieza el prefiltro (saludo + primera pregunta)")
+    check(len(txt) >= 2 and "Soy Red Human, el agente virtual de" in txt[1], "…y en seguida empieza el prefiltro (saludo + primera pregunta)")
     db.refresh(p1)
     check(r.get("postulacion") in (None, p1.codigo) and pconv.estado(p1).get("pendiente"),
           "responde sobre la postulación de la liga aunque haya otra abierta")

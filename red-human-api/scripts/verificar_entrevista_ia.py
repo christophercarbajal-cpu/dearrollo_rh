@@ -121,11 +121,11 @@ with TestClient(app) as client:
     r = client.post(f"/entrevistas/publica/{TOKEN}/consentimiento", json={"acepta": True})
     check(r.status_code == 200, "consentimiento")
     r = client.post(f"/entrevistas/publica/{TOKEN}/sesion")
-    # Cambio 31: presentación unificada «Soy Red Human, el agente virtual de RH de [empresa].»
+    # Cambio 31: presentación unificada «Soy Red Human, el agente virtual de [empresa].»
     from app.serial import nombre_empresa_candidato as _nec
 
     _emp = _nec(db.query(__import__("app.models", fromlist=["Entrevista"]).Entrevista).filter_by(token=TOKEN).one().postulacion.vacante)
-    INTRO = (f"Hola. Soy Red Human, el agente virtual de RH de {_emp}. Gracias por participar en el proceso para Cajero Sol. "
+    INTRO = (f"Hola. Soy Red Human, el agente virtual de {_emp}. Gracias por participar en el proceso para Cajero Sol. "
              "Vamos a conversar sobre tu experiencia, tus intereses y algunos aspectos relevantes para el puesto. ¿Comenzamos?")
     check(r.status_code == 200 and r.json()["modo"] == "texto" and r.json()["mensajes"][0]["texto"] == INTRO,
           "PARTE 2: POST /sesion responde con la introducción EXACTA (Red Human + nombre real de la vacante)")

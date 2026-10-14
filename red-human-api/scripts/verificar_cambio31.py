@@ -5,7 +5,7 @@ Bot API SIMULADOS (sin red).
 
 Bloque 1: Open Graph de las ligas del candidato («[Tipo de liga] · [puesto]» + «[empresa]», sin textos comerciales) y
 una pregunta NATURAL por requisito indispensable (el generador la redacta; el bot la usa tal cual).
-Bloque 2: presentación «Soy Red Human, el agente virtual de RH de [empresa].» (Cliente visible o Cuenta) en todas las
+Bloque 2: presentación «Soy Red Human, el agente virtual de [empresa].» (Cliente visible o Cuenta) en todas las
 rutas; tras responder a la plantilla de WhatsApp, directo a la primera pregunta; el cierre usa la misma empresa.
 Bloque 3: tono corporativo (sin ejemplos de formato, sin «Para confirmar», agradecimientos breves y variados, sin
 elogios, escolaridad «¿Cuál es tu último grado de estudios?») y evasivas (una repregunta suave; la segunda se registra).
@@ -154,12 +154,12 @@ with TestClient(app) as client:
     check("preguntas_requisitos" in tsx and "Cómo pregunta Red Human cada requisito" in tsx, "el formulario muestra y guarda las preguntas")
 
     # ================= Bloque 2 · presentación unificada y salto post-plantilla =================
-    print("\n--- Bloque 2 · presentación «Soy Red Human, el agente virtual de RH de [empresa].» ---")
+    print("\n--- Bloque 2 · presentación «Soy Red Human, el agente virtual de [empresa].» ---")
     from app.models import Cliente
     from app.routers.webhooks import _texto_aviso_privacidad
     from app.services import plantillas_meta
 
-    check(ia.presentacion_bot("Despacho Legal MX") == "Soy Red Human, el agente virtual de RH de Despacho Legal MX.", "cadena exacta")
+    check(ia.presentacion_bot("Despacho Legal MX") == "Soy Red Human, el agente virtual de Despacho Legal MX.", "cadena exacta")
     cli = Cliente(cuenta_id=cuenta.id, nombre="Grupo Industrial interno", nombre_comercial="Grupo Industrial", estado="Activo")
     db.add(cli)
     db.flush()
@@ -187,15 +187,15 @@ with TestClient(app) as client:
 
     pa = nuevo("Ana Cliente", "5531310002", vc)
     r = chat(pa, "Hola")
-    check(emp_cli == "Grupo Industrial" and r == f"Hola, Ana. Soy Red Human, el agente virtual de RH de {emp_cli}. Cuéntame, ¿cuántos años llevas en almacén?",
+    check(emp_cli == "Grupo Industrial" and r == f"Hola, Ana. Soy Red Human, el agente virtual de {emp_cli}. Cuéntame, ¿cuántos años llevas en almacén?",
           f"saludo con el CLIENTE visible de la vacante → «{r}»")
     pd = nuevo("Diego Directo", "5531310003", vm)
     r = chat(pd, "Hola")
-    check(r.startswith("Hola, Diego. Soy Red Human, el agente virtual de RH de Despacho Legal MX. "), "sin Cliente: la Cuenta (directo)")
+    check(r.startswith("Hola, Diego. Soy Red Human, el agente virtual de Despacho Legal MX. "), "sin Cliente: la Cuenta (directo)")
     check(not any(x in r for x in ("asistente virtual", "Primero confírmame", "te acompaña")), "sin las frases anteriores")
     aviso = _texto_aviso_privacidad("Ana", vc)
-    check(f"Soy Red Human, el agente virtual de RH de {emp_cli}." in aviso, "el aviso de privacidad usa la misma presentación")
-    check(ia.mensaje_inicial_entrevista("Almacenista", emp_cli).startswith(f"Hola. Soy Red Human, el agente virtual de RH de {emp_cli}."),
+    check(f"Soy Red Human, el agente virtual de {emp_cli}." in aviso, "el aviso de privacidad usa la misma presentación")
+    check(ia.mensaje_inicial_entrevista("Almacenista", emp_cli).startswith(f"Hola. Soy Red Human, el agente virtual de {emp_cli}."),
           "la entrevista con avatar se presenta igual")
 
     print("\n--- Bloque 2 · respuesta a la plantilla: sin presentación, directo a la primera pregunta ---")
@@ -213,7 +213,7 @@ with TestClient(app) as client:
     from app.services import entrevista_whatsapp_fija as ewf
 
     db.refresh(pa)
-    check(f"El equipo de {emp_cli} revisará" in ewf.cierre(pa), "cierre de la entrevista fija con la misma empresa")
+    check(f"Recursos Humanos de {emp_cli} te contactará" in ewf.cierre(pa), "cierre de la entrevista fija con la misma empresa")
     src = (RAIZ / "app/services/prefiltro_conversacional.py").read_text(encoding="utf-8")
     check("una persona del equipo de RH{' de ' + _emp if _emp else ''}" in src, "cierre del prefiltro aprobado con la misma empresa")
 

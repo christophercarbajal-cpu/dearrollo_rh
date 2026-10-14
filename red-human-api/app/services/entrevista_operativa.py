@@ -962,6 +962,8 @@ def bloque_prompt(guion: dict, previas: List[dict], transcript: Optional[List[di
         "tema ni pasar a la siguiente.\n"
         "MEMORIA: si en lo que ya contó dio evidencia de un indispensable (p. ej. «cargaba cajas» cuando se pide cargar "
         "cajas), NO hagas esa pregunta de evidencia.\n"
+        "SIN EXPERIENCIA: si dice que nunca ha trabajado, antes de seguir pregunta UNA vez «¿Has hecho algún trabajo, aunque "
+        "sea por tu cuenta o ayudando a alguien?» y, si dice que sí, sigue con ese trabajo como su experiencia.\n"
         "MOTIVO DE SALIDA (una sola repregunta): despido → «¿Por qué te despidieron?»; problemas o conflicto → «¿Con quién "
         "tuviste problemas?»; renuncia sin motivo → «¿Por qué renunciaste?»; respuesta vaga → «¿Por qué decidiste salir?».\n"
         "NO digas «gracias» en cada mensaje (como mucho uno de cada 3 o 4, con variantes) y NUNCA anuncies cuántas preguntas "

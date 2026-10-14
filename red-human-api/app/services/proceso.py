@@ -2668,6 +2668,11 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
         if p.etapa in ETAPAS_SIN_AVANCE_AUTOMATICO or not encendido:
             break
         sig, falta = etapa_lista(p)
+        if not falta and ruta_termina_en_filtro_humano(p):
+            # 2026-10-13 (Grupak): la ruta termina en Filtro humano (sin Contratación ni Onboarding) y la entrevista
+            # humana quedó aprobada por una persona → la postulación cierra como «Contratado».
+            contratar_directo(db, p)
+            break
         if not sig or falta or sig == "Onboarding":
             break
         from ..routers.candidatos import EtapaIn, aplicar_movimiento
@@ -2684,6 +2689,29 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
             break
         movidas.append(sig)
     return movidas
+
+
+def ruta_termina_en_filtro_humano(p: Postulacion) -> bool:
+    """La postulación está en Filtro humano, esa etapa trae una Entrevista humana y NINGUNA etapa posterior tiene
+    actividades (p. ej. «Operativo básico»: sin Contratación ni Onboarding)."""
+    if p.etapa != "Entrevista Humana":
+        return False
+    pasos = (p.proceso or {}).get("pasos") or []
+    i = _indice(p.etapa)
+    return (any(x.get("etapa") == p.etapa and x.get("tipo") == "entrevista_humana" for x in pasos)
+            and not any(_indice(x.get("etapa") or "") > i for x in pasos))
+
+
+def contratar_directo(db: Session, p: Postulacion) -> None:
+    """Cierre «Contratado» de una ruta sin Contratación: la decisión ya la tomó la persona que aprobó la entrevista humana
+    (human-in-the-loop). No crea colaborador (no hay expediente ni condiciones); queda en historial y bitácora."""
+    p.historial = list(p.historial or []) + [{
+        "evento": "contratado_directo", "usuario": ACTOR_AUTOMATICO, "fecha": datetime.now(timezone.utc).isoformat(),
+        "etapa": p.etapa, "texto": "Contratado — la ruta termina con la entrevista humana aprobada",
+    }]
+    p.cerrar("contratado")
+    registrar(db, ACTOR_AUTOMATICO, "contratado_directo", "postulacion", p.codigo, {"etapa": p.etapa})
+    db.commit()
 
 
 def _documentos_firmados(p: Postulacion) -> bool:

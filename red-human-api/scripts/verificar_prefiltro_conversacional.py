@@ -220,7 +220,7 @@ with TestClient(app) as client:
 
     salida = wa("Hola, ya llené el formulario")
     # Cambio 19: saludo exacto «Hola, [nombre]. Soy Red Human… Primero confírmame: [indispensable]» (sin contar preguntas)
-    check(len(salida) == 1 and salida[0].endswith("¿Terminaste la secundaria?") and salida[0].startswith("Hola, Ana. Soy Red Human, el agente virtual de RH"),
+    check(len(salida) == 1 and salida[0].endswith("¿Terminaste la secundaria?") and salida[0].startswith("Hola, Ana. Soy Red Human, el agente virtual de"),
           "el bot pregunta SOLO lo que falta, una pregunta por mensaje (turnos ya venía del formulario)")
     salida = wa("hola")
     check(len(salida) == 1 and salida[0].endswith("\n\n¿Terminaste la secundaria?") and salida[0].startswith("Retomemos"),

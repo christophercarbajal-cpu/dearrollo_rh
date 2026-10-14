@@ -306,7 +306,7 @@ with TestClient(app) as client:
 
     q1 = postular_op("Laura Operativa", "5512990001")
     r = chat(q1, "Hola")
-    check(r.startswith("Hola, Laura. Soy Red Human, el agente virtual de RH de Operaciones MX. ")
+    check(r.startswith("Hola, Laura. Soy Red Human, el agente virtual de Operaciones MX. ")
           and r.endswith("¿Cuál es tu último grado de estudios?"), f"saludo exacto + primera pregunta indispensable → «{r[:90]}…»")
     r = chat(q1, "Terminé la secundaria")
     check("llevas en almacén" in r, f"siguiente indispensable con dato concreto (pregunta natural, Cambio 31) → «{r}»")
@@ -422,8 +422,8 @@ with TestClient(app) as client:
     r = chat(q4, "Sí")
     check(r == "¿Cuándo podrías empezar?", "→ inicio")
     r = chat(q4, "El lunes")
-    check(r == f"Con esto terminamos la entrevista. Gracias por tu tiempo, Mario. El equipo de {empresa} revisará tus respuestas y te "
-              "escribirá por este medio.", f"cierre exacto → «{r}»")
+    check(r == f"Con esto terminamos, Mario. Gracias por tu tiempo. El equipo de Recursos Humanos de {empresa} te contactará para "
+              "agendar una entrevista.", f"cierre exacto → «{r}»")
     db.refresh(q4)
     textos = [m["texto"] for m in (next(x for x in q4.entrevistas if x.tipo == "whatsapp").transcript or []) if m.get("rol") == "assistant"]
     check(all(cuenta.nombre not in t for t in textos) and sum(empresa in t for t in textos) >= 2,

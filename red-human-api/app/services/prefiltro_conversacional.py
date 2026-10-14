@@ -1094,6 +1094,23 @@ def empresa_de(p: Postulacion) -> str:
     return nombre_empresa_candidato(p.vacante) if p.vacante is not None else ""
 
 
+CLAVE_PRESENTADO = "bot_presentado"
+
+
+def ya_presentado(p: Postulacion) -> bool:
+    """2026-10-13: el bot se presenta UNA sola vez por postulación (aviso de privacidad, plantilla de inicio o saludo)."""
+    return bool((p.analisis or {}).get(CLAVE_PRESENTADO))
+
+
+def marcar_presentado(p: Postulacion) -> None:
+    from sqlalchemy.orm.attributes import flag_modified
+
+    a = dict(p.analisis or {})
+    a.setdefault(CLAVE_PRESENTADO, _ahora())
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
 def saludo(p: Postulacion, pregunta: str, presentar: bool = True) -> str:
     """Cambio 31 (2026-10-13): «Hola, [nombre]. Soy Red Human, el agente virtual de RH de [empresa]. [primera pregunta]»
     (reemplaza «el asistente virtual que te acompaña… Primero confírmame:»). `presentar=False` (el candidato respondió a la
@@ -1107,8 +1124,12 @@ def saludo(p: Postulacion, pregunta: str, presentar: bool = True) -> str:
     q = q[:1].upper() + q[1:] if q[:1] != "¿" else "¿" + q[1:2].upper() + q[2:]
     if not presentar:
         return q
+    if ya_presentado(p):
+        # ya se presentó (p. ej. en el aviso de privacidad): solo el nombre y la pregunta, nunca dos veces
+        return f"Hola{', ' + nombre if nombre else ''}. {q}" if nombre else q
     from .ia import presentacion_bot
 
+    marcar_presentado(p)
     return f"Hola{', ' + nombre if nombre else ''}. {presentacion_bot(empresa_de(p))} {q}"
 
 

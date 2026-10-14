@@ -90,6 +90,14 @@ def _empresa(p: Postulacion) -> str:
     return nombre_empresa_candidato(p.vacante) if p.vacante else ""
 
 
+def _cierre_fijo_avisa(p: Postulacion) -> bool:
+    """2026-10-13 (Grupak): en rutas operativas el cierre fijo de la Entrevista Red Human por WhatsApp YA dice el
+    siguiente paso («…te contactará para agendar una entrevista.»): no se manda un segundo aviso de estado."""
+    from .prefiltro_operativo import es_ruta_operativa
+
+    return es_ruta_operativa(p.proceso or {})
+
+
 def texto_siguiente(x: Optional[dict]) -> str:
     if not x:
         return ""
@@ -172,7 +180,8 @@ async def revisar(db: Session, p: Optional[Postulacion]) -> Optional[str]:
         if entro_contratacion:
             texto, motivo = texto_fin_seleccion(p), "fin_seleccion"
         else:
-            avisables = [x for x in nuevas if x["tipo"] in TIPOS_AVISO and x.get("cumpleRegla") and x.get("resultado") != "no_favorable"]
+            avisables = [x for x in nuevas if x["tipo"] in TIPOS_AVISO and x.get("cumpleRegla") and x.get("resultado") != "no_favorable"
+                         and not (x["tipo"] == "entrevista_whatsapp" and _cierre_fijo_avisa(p))]
             sig = _siguiente_paso(p, pasos) if avisables else None
             if avisables and sig is not None:
                 hecho = HECHO.get(avisables[-1]["tipo"], f"«{avisables[-1]['nombre']}»")

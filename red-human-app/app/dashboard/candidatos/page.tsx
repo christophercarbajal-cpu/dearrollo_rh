@@ -230,7 +230,8 @@ function fechaCorta(iso: string | null | undefined): string | null {
  * de la vacante decía 3, 5, 12… Las cerradas siguen fuera hasta activar «Mostrar cerradas» (eso lo filtra
  * la API, no esta función); el chip «No cumple» sigue disponible para revisarlas aparte. */
 function coincideEstado(c: Candidato, filtro: FiltroEstado): boolean {
-  const yaContratado = ETAPAS_YA_CONTRATADO.includes(c.etapa);
+  // 2026-10-13: una ruta sin Contratación cierra como «contratado» en Filtro humano
+  const yaContratado = ETAPAS_YA_CONTRATADO.includes(c.etapa) || c.motivoCierre === "contratado";
   switch (filtro) {
     case "en_proceso":
       return !yaContratado && (c.estado === "revision" || c.estado === "pendiente");

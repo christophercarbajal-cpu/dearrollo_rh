@@ -188,13 +188,12 @@ with TestClient(app) as client:
     print("\n--- 2. Referencias laborales: solicitar → entregar → revisar ---")
     s = seg(P)
     x = paso(s, "refs")
-    check(x["accion"]["texto"] == "Solicitar referencias" and s["siguienteAccion"]["accion"]["clave"] == "iniciar_evaluacion"
-          and "Solicitar referencias" in s["siguienteAccion"]["texto"],
-          "sin enviar: la acción PRINCIPAL es «Solicitar referencias»")
-    tel_p = post(P).telefono
-    ENVIOS.clear()
+    # Cambio 42: al avanzar a Filtro humano el motor de ruta solicitó las referencias SOLO (sin botón «Solicitar referencias»)
+    check(x["estado"] == "en_curso" and (x["accion"] or {}).get("texto") != "Solicitar referencias"
+          and "Solicitar referencias" not in (s["siguienteAccion"].get("texto") or ""),
+          "la solicitud de referencias salió sola al llegar a su etapa (sin botón «Solicitar referencias»)")
     r = client.post(f"/procesos/postulaciones/{P}/pasos/refs/iniciar", json={})
-    check(r.status_code == 200 and r.json()["iniciada"] and any(z[1] == tel_p for z in ENVIOS), "solicitud enviada al candidato")
+    check(r.status_code == 200 and r.json().get("yaExistia"), "«Iniciar» no la duplica")
     x = paso(seg(P), "refs")
     check(x["estadoUnificado"] == "esperando_referencias" and x["estadoUnificadoTexto"] == "Esperando referencias del candidato",
           "estado «Esperando referencias del candidato»")

@@ -21,7 +21,8 @@ import {
 import { Logo, Button, Card, Badge } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Dropzone, pesoLegible } from "@/components/dashboard/subida";
-import { fetchVacantePublica, postular } from "@/lib/api";
+import { fetchVacantePublica, postular, type ExpedientePublico } from "@/lib/api";
+import { CargaDocumentos } from "@/components/documentos/carga-documentos";
 import type { Vacante } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +50,8 @@ export default function FormularioAplicar() {
   const [step, setStep] = useState(0);
   const [done, setDone] = useState(false);
   const [canal, setCanal] = useState<CanalExito>({ canal: "whatsapp", telegram: "", whatsapp: "" });
+  // Cambio 42: «Documentos» sigue inmediatamente a «Solicitud web» → se suben aquí mismo, archivo por archivo
+  const [docsWeb, setDocsWeb] = useState<({ token: string } & Partial<ExpedientePublico>) | null>(null);
   const [consent, setConsent] = useState(false);
   const [cv, setCv] = useState<File | null>(null);
   const [datos, setDatos] = useState({ nombre: "", correo: "", telefono: "" });
@@ -149,6 +152,7 @@ export default function FormularioAplicar() {
         telegram: d?.telegram ?? "",
         whatsapp: d?.whatsappLiga ?? "",
       });
+      if (d?.documentos?.token) setDocsWeb(d.documentos);
       setDone(true);
     } catch (err) {
       setEnviando(false);
@@ -218,7 +222,23 @@ export default function FormularioAplicar() {
             <p className="mt-1 text-sm text-ink-3">Vuelve a intentarlo más adelante o revisa otras vacantes en la bolsa de trabajo.</p>
           </Card>
         ) : done ? (
-          <Exito titulo={titulo} conCv={pideCv && Boolean(cv)} canal={canal} />
+          <>
+            {docsWeb && (
+              <Card className="mt-8 p-5 sm:p-6">
+                <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">{docsWeb.empresa || "Tus documentos"}</p>
+                <h2 className="font-display mt-1 text-xl font-bold">Sube tus documentos</h2>
+                <p className="mt-1 text-sm text-ink-2">
+                  Cada archivo se guarda al subirlo. Si no los tienes a la mano, te mandaremos la liga por WhatsApp para terminar después.
+                </p>
+                <div className="mt-4">
+                  <CargaDocumentos token={docsWeb.token}
+                    vista={{ documentos: docsWeb.documentos ?? [], completo: docsWeb.completo, mensajeFinal: docsWeb.mensajeFinal }}
+                    onCambio={(v) => setDocsWeb((x) => (x ? { ...x, ...v } : x))} />
+                </div>
+              </Card>
+            )}
+            <Exito titulo={titulo} conCv={pideCv && Boolean(cv)} canal={canal} />
+          </>
         ) : (
           <Card className="mt-6 overflow-hidden">
             {/* Progreso */}

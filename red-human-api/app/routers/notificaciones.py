@@ -153,3 +153,13 @@ def historial(
         }
         for f in filas
     ]
+
+
+@router.get("/rh")
+def campana_rh(db: Session = Depends(get_db), u: Usuario = Depends(usuario_actual), cuenta: Cuenta = Depends(cuenta_actual)):
+    """Cambio 42 — campana: candidatos detenidos por una acción humana en las vacantes de las que eres responsable
+    (el Administrador también ve las vacantes sin responsable). 1 candidato → abre su ficha en la actividad; varios de la
+    misma vacante y acción → abre el tablero de la vacante filtrado por esa acción."""
+    from ..services import campana_rh
+
+    return campana_rh.pendientes(db, cuenta.id, u)

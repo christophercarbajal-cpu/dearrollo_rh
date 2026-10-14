@@ -1,6 +1,7 @@
-"""Motor de ruta AUTOMATIZADO (2026-10-08) — SOLO las Cuentas de `models.CUENTAS_RUTA_AUTOMATICA` (hoy «demo-grupak»).
-
-Las demás Cuentas conservan su avance manual: nada de este módulo corre para ellas (`ruta_automatica(p.cuenta)`).
+"""Motor de ruta AUTOMATIZADO (2026-10-08). Cambio 42 (2026-10-14): corre para TODAS las Cuentas — al completarse una
+actividad, la siguiente inicia SOLA (en la misma etapa o en la siguiente). Solo se detiene en un bloqueador válido:
+descarte, entrevista «No recomendable», una acción humana (aprobar documentos, agendar/registrar la entrevista humana,
+enviar la oferta, firmar el contrato, «Otra actividad») o el candidato que no responde (con recordatorios).
 
 Un ciclo (`procesar`) por postulación:
   1. Resuelve el PREFILTRO WEB contra la vacante (`resolver_prefiltro_web`): todas las respuestas esperadas → Cumple;
@@ -32,7 +33,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from ..models import CUENTAS_RUTA_AUTOMATICA, Cuenta, Postulacion, registrar, ruta_automatica
+from ..models import Cuenta, Postulacion, registrar
 from . import proceso as sproc
 
 ACTOR = "Red Human (automático)"
@@ -285,6 +286,8 @@ async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
         if (x["tipo"] not in DISPARADORES or x["heredado"] or not x["disponible"] or x["estado"] != "pendiente"
                 or x["id"] in envios or x.get("evaluacion")):
             continue
+        if sproc._indice(x["etapa"]) < sproc._indice(p.etapa) or not x["obligatorio"]:
+            continue  # Cambio 42: nunca una actividad de una etapa ya superada ni una opcional (no frena la ruta; RH la inicia)
         if x["tipo"] == "documentos" and not x.get("sinSolicitar"):
             continue  # documentos ya pedidos (o sin expediente todavía): RH valida
         if x["tipo"] == "documentos" and x.get("documentosVacante"):
@@ -312,8 +315,8 @@ async def disparar(db: Session, p: Postulacion, pasos: List[dict]) -> List[str]:
 
 async def procesar(db: Session, p: Postulacion) -> List[str]:
     """Un ciclo completo del motor para la postulación. Regresa las etapas a las que avanzó (como
-    `avanzar_si_corresponde`). No hace nada fuera de `CUENTAS_RUTA_AUTOMATICA`."""
-    if p is None or not ruta_automatica(p.cuenta) or not p.activa or not sproc.tiene_proceso(p):
+    `avanzar_si_corresponde`). Cambio 42: todas las Cuentas."""
+    if p is None or not p.activa or not sproc.tiene_proceso(p):
         return []
     if ((p.analisis or {}).get("motor_ruta") or {}).get("pausado"):
         # p. ej. candidatos sembrados de la demo: se ven sus estados, pero el motor no dispara ni mueve nada
@@ -339,14 +342,14 @@ async def procesar(db: Session, p: Postulacion) -> List[str]:
 
 
 async def barrido() -> dict:
-    """Job (cada 5 min): un ciclo para cada postulación ACTIVA de las Cuentas con ruta automática. Cada postulación en
+    """Job (cada 5 min): un ciclo para cada postulación ACTIVA de las Cuentas activas (Cambio 42: todas). Cada postulación en
     su propia sesión: una que truene no frena a las demás."""
     from ..database import SessionLocal
 
     db = SessionLocal()
     try:
         ids = [x for (x,) in db.query(Postulacion.id).join(Cuenta, Postulacion.cuenta_id == Cuenta.id)
-               .filter(Cuenta.slug.in_(CUENTAS_RUTA_AUTOMATICA), Postulacion.activa.is_(True)).all()]
+               .filter(Cuenta.estado == "Activa", Postulacion.activa.is_(True)).all()]
     finally:
         db.close()
     resumen = {"revisadas": 0, "errores": 0}

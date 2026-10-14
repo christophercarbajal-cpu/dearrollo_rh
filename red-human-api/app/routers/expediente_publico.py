@@ -34,22 +34,14 @@ def publica(token: str, db: Session = Depends(get_db)):
     from ..services import documentos_vacante as sdv
 
     e = _por_token(db, token)
-    # Cambio 25: un renglón por documento PEDIDO (antes de Contratación solo los de la vacante), con cuántos archivos exige
-    # (fotos del auto = 4), cuántos lleva y, si RH pidió corrección, el motivo. Nunca «No aplica» ni internos de RH.
-    docs = sdv.docs_en_juego(e)
-    return {
-        "candidato": e.candidato.nombre if e.candidato else "",
-        "puesto": e.puesto,
-        "estado": e.estado,
-        "documentos": [
-            {"tipo": d.tipo, "estado": d.estado, "obligatorio": d.obligatorio, "cantidad": int(d.cantidad or 1), "esFoto": bool(d.es_foto),
-             "recibidos": sdv.conteo(db, d), "estadoRevision": _estado_publico(d),
-             "correccion": d.correccion_motivo if d.estado == "rechazado" and d.correccion_en else ""}
-            for d in docs
-        ],
-        # 2026-09-19: la carta de intención se descarga desde la misma liga (la comparte RH por WhatsApp)
-        "cartaDisponible": bool(e.puesto and e.sueldo),
-    }
+    # Cambio 25: un renglón por documento PEDIDO, con cuántos archivos exige (fotos del auto = 4) y, si RH pidió corrección,
+    # el motivo. Cambio 42: SOLO los faltantes, la empresa de la vacante en la cabecera, casillas Frente/Reverso para los
+    # documentos de dos caras y, al completar los obligatorios, el mensaje final (la actividad queda «Por revisar»).
+    vista = sdv.vista_publica(db, e)
+    for d, doc in zip(vista["documentos"], sdv.faltantes(e)):
+        d["estadoRevision"] = _estado_publico(doc)
+    # 2026-09-19: la carta de intención se descarga desde la misma liga (la comparte RH por WhatsApp)
+    return {**vista, "cartaDisponible": bool(e.puesto and e.sueldo)}
 
 
 def _estado_publico(d) -> str:
@@ -73,7 +65,16 @@ def carta_publica(token: str, db: Session = Depends(get_db)):
 
 @router.post("/publica/{token}/documentos")
 async def subir(
-    token: str, tipo: str = Form(...), archivo: UploadFile = File(...), db: Session = Depends(get_db)
+    token: str, tipo: str = Form(...), archivo: UploadFile = File(...), cara: str = Form(default=""), db: Session = Depends(get_db)
 ):
+    """Archivo por archivo (se guarda al subirlo). Cambio 42: `cara` = «Frente» | «Reverso» en documentos de dos caras.
+    Al completar los obligatorios, la ruta sigue sola (la actividad queda «Por revisar» para RH)."""
+    from ..services import documentos_vacante as sdv
+    from ..services import proceso as sproc
+
     e = _por_token(db, token)
-    return await subir_documento_interno(db, e, tipo, archivo, subido_por="candidato")
+    r = await subir_documento_interno(db, e, tipo, archivo, subido_por="candidato", cara=cara)
+    if e.postulacion is not None:
+        await sproc.avanzar_seguro(db, e.postulacion)
+        db.commit()
+    return {**r, **sdv.vista_publica(db, e)}

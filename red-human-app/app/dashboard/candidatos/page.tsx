@@ -281,6 +281,9 @@ function CandidatosContenido() {
   // Fase C: Vistas, URL params y filtros avanzados
   const [vista, setVista] = useState<"pipeline" | "lista">("pipeline");
   const [columnaResaltada, setColumnaResaltada] = useState<string | null>(null);
+  // Cambio 42: ?accion= (campana agrupada) filtra por la acción humana que detiene a la postulación; ?abrir= abre la ficha
+  const [filtroAccion, setFiltroAccion] = useState<string | null>(null);
+  const abrirPendiente = useRef<string | null>(null);
   const [filtrosAvanzados, setFiltrosAvanzados] = useState(false);
   const [fCliente, setFCliente] = useState<number | "">("");
   const [fResponsable, setFResponsable] = useState<number | "">("");
@@ -350,6 +353,25 @@ function CandidatosContenido() {
       }, 200);
     }
 
+    setFiltroAccion(searchParams.get("accion"));
+    const abrirParam = searchParams.get("abrir");
+    if (abrirParam) abrirPendiente.current = abrirParam;
+    // la campana individual abre la ficha EN la actividad (renglón `paso-<id>` del Resumen)
+    const actividadParam = searchParams.get("actividad");
+    if (abrirParam && actividadParam) {
+      let intentos = 0;
+      const buscar = () => {
+        const el = document.getElementById(`paso-${actividadParam}`);
+        if (el) {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+          el.classList.add("ring-2", "ring-brand", "rounded-lg");
+          return;
+        }
+        if (++intentos < 20) setTimeout(buscar, 300);
+      };
+      setTimeout(buscar, 600);
+    }
+
     const guardada = localStorage.getItem("rh-candidatos-vista");
     if (guardada === "pipeline" || guardada === "lista") {
       setVista(guardada);
@@ -385,7 +407,9 @@ function CandidatosContenido() {
 
   useEffect(() => {
     if (!vacanteInicialLista) return;
-    recargar();
+    const abrirCodigo = abrirPendiente.current ?? undefined;
+    abrirPendiente.current = null;
+    recargar(abrirCodigo);
     fetchVacantes().then((v) => v && setVacantes(v));
     fetchClientes("Activo").then((cl) => setClientes(cl ?? []));
     fetchEntrevistadores().then((u) => setUsuarios(u ?? []));
@@ -432,6 +456,7 @@ function CandidatosContenido() {
     return datos.filter((c) => {
       if (filtroVacante && c.vacanteId !== filtroVacante) return false;
       if (columnaResaltada && c.etapa !== columnaResaltada) return false;  // B4: ?etapa= es un filtro exacto
+      if (filtroAccion && c.accion_rh?.clave !== filtroAccion) return false;  // Cambio 42: campana agrupada
       if (!coincideEstado(c, filtroEstado)) return false;
       if (
         busqueda.trim() &&
@@ -469,6 +494,7 @@ function CandidatosContenido() {
     });
   }, [
     columnaResaltada,
+    filtroAccion,
     datos,
     filtroVacante,
     filtroEstado,
@@ -490,7 +516,7 @@ function CandidatosContenido() {
     return (prueba ? datosBase.filter(prueba) : datosBase).sort((a, b) => ordenarTablero(a, b, orden));
   }, [datosBase, alerta, orden]);
   const filtrando = Boolean(
-    busqueda.trim() || alerta || filtroEstado !== "todos" || columnaResaltada || mostrarCerradas ||
+    busqueda.trim() || alerta || filtroEstado !== "todos" || columnaResaltada || filtroAccion || mostrarCerradas ||
       fCliente !== "" || fResponsable !== "" || fFuente || fConsentimiento !== "todos" || fApto !== "todos" ||
       fScoreMin !== "" || fScoreMax !== "" || fDuplicados,
   );
@@ -819,6 +845,17 @@ function CandidatosContenido() {
       )}
 
       {/* Avisos */}
+      {filtroAccion && (
+        <div className="mt-3 flex items-center justify-between rounded-xl border border-brand/40 bg-brand-soft/40 px-4 py-2 text-xs text-brand">
+          <span>
+            Requieren acción: <strong>{datosFiltrados[0]?.accion_rh?.texto ?? filtroAccion.replace(/_/g, " ")}</strong>
+            {filtroVacante ? <> · vacante <strong>{filtroVacante}</strong></> : null} · {datosFiltrados.length} candidato(s)
+          </span>
+          <button onClick={() => setFiltroAccion(null)} className="flex items-center gap-1 font-semibold hover:underline">
+            <X className="h-3.5 w-3.5" /> Quitar filtro
+          </button>
+        </div>
+      )}
       {columnaResaltada && (
         <div className="mt-3 flex items-center justify-between rounded-xl border border-brand/40 bg-brand-soft/40 px-4 py-2 text-xs text-brand">
           <span>
@@ -1325,6 +1362,12 @@ function ModalCandidato({
               <p className="truncate text-xs sm:text-sm text-ink-2">
                 {c.puesto || "Sin vacante asignada"} · <b className="text-ink font-semibold">{c.fuente}</b>
               </p>
+              {/* Cambio 42: etapa y actividad ACTUALES reales (nunca «Prefiltro: En curso» si no hay prefiltro o ya pasó) */}
+              {c.estado_actual && (
+                <p className="truncate text-xs text-ink-3" title={c.estado_actual}>
+                  {c.estado_actual}
+                </p>
+              )}
               {/* 2026-10-07: correo y teléfono editables en cualquier etapa (todas las Cuentas) */}
               <ContactoCandidato c={c} editable={live && puedeDecidir} onCambio={onCambio} />
             </div>
@@ -1811,11 +1854,11 @@ function PestanaResumen({
       </div>}
 
       {/* C. Prefiltro — SOLO filtro de entrada (Cumple / No cumple), sin score (2026-09-13) */}
-      {seccion === "evaluacion" && <div>
+      {seccion === "evaluacion" && c.tienePrefiltro !== false && <div>
         <Eyebrow>Prefiltro de entrada</Eyebrow>
         <Card className="mt-2 p-4">
           {!c.prefiltroResumen?.resultado ? (
-            <p className="text-sm text-ink-3">Prefiltro en curso — todavía no hay criterios evaluados.</p>
+            <p className="text-sm text-ink-3">{c.etapa === "Prefiltro" ? "Prefiltro en curso — todavía no hay criterios evaluados." : "Sin criterios de prefiltro evaluados."}</p>
           ) : c.prefiltroResumen.resultado === "no_cumple" ? (
             <div>
               <p className="text-sm font-semibold text-warn">

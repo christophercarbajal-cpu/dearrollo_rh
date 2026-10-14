@@ -103,6 +103,15 @@ def _distribucion(v) -> dict:
         return {}
 
 
+def _progreso_expediente(e) -> int:
+    from .services import documentos_vacante as sdv
+
+    try:
+        return sdv.progreso(e)
+    except Exception:  # noqa: BLE001
+        return e.progreso
+
+
 def _filtro(v) -> list:
     from .services import preguntas_filtro as pfu
 
@@ -401,6 +410,15 @@ def _sintesis_global(p: Postulacion) -> dict:
     from .services.entrevista_operativa import texto_inconsistencia
 
     inconsistencias_txt = [texto_inconsistencia(i) for i in (a.get("inconsistencias") or []) if isinstance(i, dict)]
+    # Cambio 42: contradicción EXPLÍCITA entre el CV y lo que respondió → «Puntos por validar» (nunca frena la ruta)
+    contradicciones_cv = [f for f in _comparativo(p) if f.get("inconsistencia")]
+    inconsistencias_txt += [f"Inconsistencia: {f['requisito']} — respondió «{f['respuesta'][:80]}»; el CV: {f['cvDice'][:120]}"
+                            for f in contradicciones_cv]
+    # una brecha que solo dice que el CV no trae el dato es omisión («No lo menciona el CV»), no un punto por validar
+    from .services.prefiltro_conversacional import es_omision
+
+    ya_citadas = {f["cvDice"] for f in contradicciones_cv}
+    brechas_validar = [b for b in (a.get("brechas") or []) if b not in ya_citadas and not es_omision(str(b))]
     # Cambio 19: sin umbrales fijos (ya no hay alerta de traslado por minutos); las condiciones de la vacante que no cumple
     puntos_por_validar = _dedupe_cap(
         [*inconsistencias_txt,
@@ -408,7 +426,7 @@ def _sintesis_global(p: Postulacion) -> dict:
          *[str(x) for x in (a.get("puntos_validar_prefiltro") or [])],  # 2026-10-10: lo que el prefiltro no pudo concluir
          *(eval_ia.get("riesgos") or []),
          *[f"No se cubrió en la entrevista: {t}" for t in (eval_ia.get("faltante") or [])],
-         *(a.get("brechas") or []),
+         *brechas_validar,
          *(["Requiere otra entrevista" + (f": {ultima_eh.comentarios[:200]}" if ultima_eh.comentarios else "")]
            if ultima_eh and ultima_eh.conclusion == "requiere_otra_entrevista" else [])],
         4,
@@ -708,12 +726,34 @@ def campos_tablero(p: Postulacion, siguiente: Optional[dict], pasos: Optional[li
         "stage_entered_at": iso(p.etapa_desde or p.creado_en),
         "has_consent": bool(p.consentimiento),
         # 2026-10-08: el MISMO % (obligatorios Aprobados) en tablero, Onboarding y ficha
-        "expediente_pct": exp.progreso if exp is not None and p.etapa in ("Contratación", "Onboarding") else None,
+        # Cambio 42: también antes de Contratación si se pidieron documentos (sobre los de la vacante)
+        "expediente_pct": _progreso_expediente(exp) if exp is not None else None,
         # flujo simple de psicometría (solo CUENTAS_PSICOMETRIA_SIMPLE): sin_enviar | sin_respuesta | error_envio | None
         "psychometric_alert": alerta,
         # ruta automática (2026-10-08): {paso, nombre, motivo} cuando un obligatorio quedó «No aprobada»; RH confirma
         "suggested_discard": _descarte_sugerido(p, pasos),
+        # Cambio 42: acción humana que detiene a la postulación (campana de RH) y la línea de estado real
+        "accion_rh": _accion_rh(p, pasos),
+        "estado_actual": _linea_estado(p, pasos),
     }
+
+
+def _accion_rh(p: Postulacion, pasos: Optional[list]) -> Optional[dict]:
+    from .services import proceso as sproc
+
+    try:
+        return sproc.accion_humana(p, pasos) if pasos is not None and sproc.tiene_proceso(p) else None
+    except Exception:  # noqa: BLE001 — una tarjeta nunca tumba el tablero
+        return None
+
+
+def _linea_estado(p: Postulacion, pasos: Optional[list]) -> str:
+    from .services import proceso as sproc
+
+    try:
+        return sproc.linea_estado(p, pasos) if pasos is not None and sproc.tiene_proceso(p) else sproc.nombre_etapa(p.etapa)
+    except Exception:  # noqa: BLE001
+        return sproc.nombre_etapa(p.etapa)
 
 
 def _descarte_sugerido(p: Postulacion, pasos: Optional[list]) -> Optional[dict]:
@@ -775,6 +815,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "score": p.score,
         # 2026-10-11: ¿la ruta de esta postulación pide CV? Sin CV, la ficha no muestra score de CV
         "pideCv": _pide_cv(p),
+        # Cambio 42: sin prefiltro en la ruta la ficha nunca dice «Prefiltro en curso»
+        "tienePrefiltro": any(x.get("tipo") in ("prefiltro_web", "prefiltro_whatsapp") for x in ((p.proceso or {}).get("pasos") or [])) if p.proceso else True,
         # Cambio 30: oferta laboral (estado, fechas y liga) — también la del botón «Generar carta oferta»
         "oferta": _oferta(p),
         # Cambio 33: Onboarding — «Listo para pasar a colaborador», documentos pendientes
@@ -1226,7 +1268,7 @@ def expediente_dict(e: Expediente) -> dict:
         "contrato": e.contrato,
         "altaAdministrativa": e.alta_administrativa,
         "equipoAccesos": e.equipo_accesos,
-        "progreso": e.progreso,
+        "progreso": _progreso_expediente(e),  # Cambio 42: sobre los documentos requeridos (antes de Contratación, los de la vacante)
         "tono": (e.id or 0) % 4,
         "estado": estado,
         "documentos": [documento_dict(d, por_doc.get(d.id, [])) for d in e.documentos],

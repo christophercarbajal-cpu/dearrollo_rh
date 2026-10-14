@@ -287,7 +287,7 @@ def _resolver_estado(v: ia.DocumentoValidado, con_ia: bool) -> tuple[str, str]:
     return "recibido", v.observaciones
 
 
-async def subir_documento_interno(db: Session, e: Expediente, tipo: str, archivo: UploadFile, subido_por: str) -> dict:
+async def subir_documento_interno(db: Session, e: Expediente, tipo: str, archivo: UploadFile, subido_por: str, cara: str = "") -> dict:
     """Lógica compartida entre el endpoint autenticado de RH (subir_documento) y la liga
     pública del candidato (routers/expediente_publico.py) — el "ya fue dado de alta" se queda
     duro para los dos, sin forzar_prueba: no es fricción de secuencia, es una guarda de
@@ -300,7 +300,40 @@ async def subir_documento_interno(db: Session, e: Expediente, tipo: str, archivo
     if doc.estado == "no_aplica" and subido_por == "candidato":
         raise HTTPException(409, f"«{doc.tipo}» no se requiere en tu expediente.")
     validado = await fs.validar(archivo, f"documento «{doc.tipo}»")
+    from ..models import caras_documento
+
+    caras = caras_documento(doc.tipo)
+    if cara and caras:
+        cara = next((c for c in caras if c.lower() == cara.strip().lower()), "")
+        if not cara:
+            raise HTTPException(400, f"«{doc.tipo}» se sube por caras: {' y '.join(caras)}.")
+        return _registrar_cara(db, e, doc, validado, subido_por, cara, caras)
     return _registrar_documento(db, e, doc, validado, subido_por, original=archivo.filename or "")
+
+
+def _registrar_cara(db: Session, e: Expediente, doc: Documento, validado, subido_por: str, cara: str, caras: list) -> dict:
+    """Cambio 42: documentos de DOS caras (INE, licencia) desde la liga del candidato — cada cara es su propio archivo y el
+    documento queda «Por revisar» (RH lo aprueba) cuando llegan las dos."""
+    from ..services import documentos_vacante as sdv
+
+    ruta = fs.guardar(validado, f"expedientes/{e.id}", f"{doc.tipo.replace(' ', '_')}_{cara}_{secrets.token_hex(4)}")
+    sdv.registrar_archivo(db, e, doc, ruta, validado, _canal_recepcion(subido_por), subido_por, cara=cara)
+    hechas = sdv.caras_recibidas(db, doc)
+    completo = all(c in hechas for c in caras)
+    doc.archivo, doc.nombre_archivo, doc.mime, doc.tamano = ruta, validado.nombre, validado.mime, validado.tamano
+    doc.subido_en = datetime.now(timezone.utc)
+    doc.validacion = {}
+    prueba = modo_prueba_activo(db)
+    doc.estado = ("recibido" if prueba else "revision") if completo else "pendiente"
+    doc.revisado_por = "Modo Prueba" if (prueba and completo) else ""
+    doc.notas_ia = " · ".join(f"{c} {'recibido' if c in hechas else 'pendiente'}" for c in caras)
+    if completo:
+        doc.recibido_en, doc.recibido_canal = doc.subido_en, _canal_recepcion(subido_por)
+    _sincronizar_estado(e)
+    registrar(db, "agente-ia", "documento_recibido", "documento", f"{e.id}:{doc.tipo}", {"cara": cara, "caras": hechas, "subido_por": subido_por})
+    db.commit()
+    return {"ia": False, "documento": {"tipo": doc.tipo, "estado": doc.estado, "notas": doc.notas_ia, "caras": hechas},
+            "expediente": expediente_dict(e)}
 
 
 async def adjuntar_documento_bytes(

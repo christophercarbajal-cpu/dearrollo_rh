@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # Cambio 36 (publicador multicanal): un canal EXTERNO está «conectado» solo si tiene su conector configurado — URL del
     # conector (integración propia o un servicio intermediario) y su token. Solo en el .env del servidor.
+    # Cambio 42: minutos después de dejar la página de la solicitud sin subir todos los documentos para mandar la liga por
+    # WhatsApp («[nombre], cuando tengas tus documentos, súbelos aquí: [liga]»)
+    documentos_web_recordatorio_min: int = 30
     publicador_occ_url: str = ""
     publicador_occ_token: str = ""
     publicador_linkedin_url: str = ""

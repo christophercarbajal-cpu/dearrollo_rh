@@ -300,6 +300,14 @@ async def lifespan(app: FastAPI):
         id="sincronizacion_psicometrias", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=300,
     )
+    # Cambio 42: la liga de documentos por WhatsApp a quien dejó la página de la solicitud sin subir todo (una vez)
+    from .services.documentos_vacante import job_recordar_web
+
+    scheduler.add_job(
+        job_recordar_web, "interval", minutes=10,
+        id="documentos_web_recordatorio", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
     scheduler.start()
     try:
         yield

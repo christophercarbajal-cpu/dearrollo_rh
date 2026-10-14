@@ -982,13 +982,17 @@ async def postular(
         else:
             await plantillas_meta.inicio_en_segundo_plano(p.id)
     # 2026-10-08 (motor de ruta automatizado, SOLO CUENTAS_RUTA_AUTOMATICA): el prefiltro web se resuelve contra la
-    # vacante al instante y, si cumple, la ruta sigue sola (dispara lo que se habilite).
-    from ..models import ruta_automatica
+    # vacante al instante y, si cumple, la ruta sigue sola (dispara lo que se habilite). Cambio 42: todas las Cuentas.
+    from ..services import documentos_vacante as _sdv
 
-    if ruta_automatica(p.cuenta):
-        await sproc.avanzar_seguro(db, p)
+    documentos_web = None
+    if _sdv.siguen_a_solicitud(p):
+        # Cambio 42: «Documentos» sigue a la solicitud (sin prefiltro en medio) → se suben en la MISMA página web
+        documentos_web = await _sdv.preparar_web(db, p)
+    await sproc.avanzar_seguro(db, p)
 
     return {
+        "documentos": documentos_web,
         "ok": True,
         "candidato": c.codigo,
         "postulacion": p.codigo,

@@ -1528,6 +1528,8 @@ export function postular(datos: {
     /** https://t.me/<bot>?start=vac_<VAC-####> */
     telegramLiga?: string;
     whatsappLiga?: string;
+    /** Cambio 42: carga de documentos en la misma página (token de la liga + solo faltantes). */
+    documentos?: ({ token: string; liga: string } & Partial<ExpedientePublico>) | null;
   }>("/candidatos/postular", form);
 }
 
@@ -2141,6 +2143,8 @@ export interface DocumentoExpedientePublico {
   recibidos?: number;
   estadoRevision?: string;
   correccion?: string;
+  /** Cambio 42: documentos de dos caras (INE, licencia) → una casilla obligatoria por cara. */
+  caras?: { cara: string; recibida: boolean }[];
 }
 
 export interface ExpedientePublico {
@@ -2150,6 +2154,11 @@ export interface ExpedientePublico {
   documentos: DocumentoExpedientePublico[];
   /** 2026-09-19: la carta de intención se puede descargar desde la liga pública. */
   cartaDisponible?: boolean;
+  /** Cambio 42: empresa de la vacante (cabecera), obligatorios completos y mensaje final. */
+  nombre?: string;
+  empresa?: string;
+  completo?: boolean;
+  mensajeFinal?: string;
 }
 
 export function urlCartaIntencionPublica(token: string) {
@@ -2160,11 +2169,12 @@ export function fetchExpedientePublico(token: string) {
   return get<ExpedientePublico>(`/expedientes/publica/${token}`);
 }
 
-export function subirDocumentoPublico(token: string, tipo: string, archivo: File) {
+export function subirDocumentoPublico(token: string, tipo: string, archivo: File, cara = "") {
   const form = new FormData();
   form.append("tipo", tipo);
   form.append("archivo", archivo);
-  return subir<{ ia: boolean; documento: { tipo: string; estado: string; notas: string }; expediente: NuevoIngreso }>(
+  if (cara) form.append("cara", cara);
+  return subir<{ ia: boolean; documento: { tipo: string; estado: string; notas: string }; expediente: NuevoIngreso } & Partial<ExpedientePublico>>(
     `/expedientes/publica/${token}/documentos`,
     form,
   );
@@ -2417,6 +2427,22 @@ export interface ActividadAgente {
 /** 2026-09-15: contador real del sidebar («Agente activo»). */
 export function fetchActividadAgente() {
   return get<ActividadAgente>("/candidatos/agente/actividad");
+}
+
+/** Cambio 42 — campana de RH: candidatos detenidos por una acción humana, agrupados por vacante y acción. */
+export interface GrupoCampana {
+  vacante: string;
+  puesto: string;
+  accion: string;
+  accionTexto: string;
+  total: number;
+  texto: string;
+  /** 1 candidato → ficha en la actividad; varios → tablero de la vacante filtrado por la acción. */
+  liga: string;
+  candidatos: string[];
+}
+export function fetchCampanaRH() {
+  return get<{ total: number; grupos: GrupoCampana[] }>("/notificaciones/rh");
 }
 
 /** Perfil completo del colaborador (panel de Colaboradores). */

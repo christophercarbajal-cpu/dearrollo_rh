@@ -154,12 +154,10 @@ with TestClient(app) as client:
     check("zona" not in datos and "transporte" not in datos, f"ruta corporativa: sin colonia ni transporte ({datos})")
     exp = next(c for c in cs if c.get("dato") == "sueldo")
     check(exp.get("expectativa") and exp["chat"] == "¿Cuánto esperas ganar al mes?", f"el sueldo pregunta la expectativa: {exp['chat']}")
-    brecha = next((c for c in cs if c.get("por_brecha")), None)
-    check(brecha is not None and brecha["indispensable"] and "licencia" in brecha["criterio"].lower(),
-          "la brecha del CV en un indispensable se vuelve pregunta del prefiltro (y descarta)")
-    check(any(c.get("brecha") and c.get("registra") and "inglés intermedio" in c["chat"] for c in cs),
-          "una brecha que no es indispensable se pregunta y solo se registra")
-    check(cs.index(brecha) < cs.index(exp), "las brechas de indispensables van con los indispensables, antes de los datos")
+    # Cambio 42: el Análisis de CV ya no agrega preguntas (omisión = «No lo menciona el CV»; contradicción → Puntos por validar)
+    check(not any(c.get("por_brecha") or c.get("brecha") for c in cs), "Cambio 42: las brechas del CV ya NO se vuelven preguntas del prefiltro")
+    lic = next(c for c in cs if c["indispensable"] and "licencia" in c["criterio"].lower())
+    check(cs.index(lic) < cs.index(exp), "los indispensables van antes de los datos")
     check(all("?" in c["chat"] and not c["chat"].startswith("¿Cumples con") for c in cs), "todas en lenguaje natural")
     check(pconv.monto_de("20 mil") == 20000 and pconv.monto_de("$15,500 al mes") == 15500 and pconv.monto_de("18k") == 18000
           and pconv.monto_de("lo que sea") is None, "la expectativa se lee en cifras")
@@ -194,10 +192,18 @@ with TestClient(app) as client:
             break
         c = next(x for x in pconv.criterios_de(v, p1) if x["id"] == e["pendiente"])
         vistos.append(c["id"])
-        responder(p1, "No, no tengo" if c.get("por_brecha") else "Sí")
+        responder(p1, "Sí")
     db.refresh(p1)
-    check(any(x.startswith("cv-") for x in vistos) and not p1.activa and p1.motivo_cierre == "descartado",
-          "reprobar el indispensable de la brecha del CV DESCARTA")
+    # Cambio 42: «No acredita licencia» es OMISIÓN del CV → «No lo menciona el CV»; el «Sí» del formulario no se vuelve a
+    # preguntar y la ruta no se detiene
+    check(lic["id"] not in vistos and pconv.estado(p1).get("resultado") == "cumple" and p1.activa,
+          "una omisión del CV no se pregunta en el chat ni frena el prefiltro")
+    fila = next(f for f in pconv.comparativo_indispensables(p1) if "licencia" in f["requisito"].lower())
+    check(fila["cv"] == "No lo menciona el CV" and not fila["inconsistencia"], f"la ficha dice «No lo menciona el CV» ({fila['cv']})")
+    p1.estado = "no_cumple"
+    p1.cerrar("descartado")  # RH lo descarta (mismo cierre que POST /decision)
+    db.commit()
+    db.refresh(p1)
     n = len(LLAMADAS)
     asyncio.run(webhooks_telegram.procesar_update(start(CHAT, liga(p1))))
     txt = enviados(CHAT, n)
@@ -250,14 +256,15 @@ with TestClient(app) as client:
     ficha = postulacion_dict(p4, detalle=True)
     comp = {f["requisito"]: f for f in ficha["comparativoIndispensables"]}
     lic = next(f for k, f in comp.items() if "icencia" in k)
-    check(lic["cv"] == "No acreditado" and lic["cumple"] is True and lic["inconsistencia"],
-          "comparativo: licencia — CV no acreditado vs «Sí» → Inconsistencia")
+    check(lic["cv"] == "No lo menciona el CV" and lic["cumple"] is True and not lic["inconsistencia"],
+          "Cambio 42: «No acredita licencia» es omisión del CV → «No lo menciona el CV» (no es inconsistencia)")
     ven = next(f for k, f in comp.items() if "ventas" in k.lower())
     check(ven["cv"] == "Acreditado" and ven["cumple"] is True and not ven["inconsistencia"], "experiencia: acreditada y confirmada")
     check(ficha["prefiltroDatos"]["sueldoExpectativa"] == 20000 and ficha["prefiltroDatos"]["sueldoSobreTope"], "la ficha muestra la expectativa")
     ultimo = respuestas[-1]["respuesta"]
-    check(ultimo.endswith(agenda_chat.PREGUNTA_AHORA) and "¿Te confirmo" not in ultimo,
-          f"entrevista con avatar: «¿La quieres hacer ahora?» (sin proponer horario): {ultimo!r}")
+    # Cambio 42: la siguiente actividad inicia SOLA — la liga de la sala sale en el mismo turno (sin proponer horario)
+    check("/entrevista/" in ultimo and "¿Te confirmo" not in ultimo,
+          f"entrevista con avatar: inicia sola con su liga (sin proponer horario): {ultimo!r}")
     r = responder(p4, "Ahorita no puedo")
     db.refresh(p4)
     check("Tienes 3 días para hacerla" in r["respuesta"] and "/entrevista/" in r["respuesta"] and p4.videollamada_liga,

@@ -101,7 +101,6 @@ with TestClient(app) as client:
     _v1.proceso = _sproc.proceso_para_vacante(db, ca.id, {}, {"pasos": [
         {"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
         {"id": "ea", "tipo": "entrevista_agente", "etapa": "Entrevista IA", "obligatorio": True},
-        {"id": "ewa", "tipo": "entrevista_whatsapp", "etapa": "Entrevista IA", "obligatorio": True},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "obligatorio": True}]})
     # Cambio 27: creada sin ruta tomó la predeterminada (Masivos → enfoque Operativo); con esta ruta (avatar) RH elige el suyo
     _v1.enfoque_entrevista = "profesional"
@@ -148,10 +147,10 @@ with TestClient(app) as client:
     check(bool(r.json()["evaluacion"]) and r.json()["evaluacion"].get("recomendacion"), "la evaluación quedó guardada (recomendación + match)")
     db.expire_all()
     p1 = db.query(Postulacion).get(p1.id)
-    check(p1.etapa == "Entrevista IA", "la postulación se queda en Filtro Red Human con su resultado integral")
+    check(p1.etapa == "Entrevista Humana", f"Cambio 42: con la Entrevista Red Human evaluada la ruta avanza SOLA a Filtro humano ({p1.etapa})")
     r = client.get(f"/candidatos/{P1}")
     ficha = r.json()
-    check(ficha["entrevistaStatus"]["estado"] == "evaluada" and ficha["evaluacionIntegral"] is True, "la ficha muestra la Entrevista Red Human evaluada y la Evaluación integral")
+    check(ficha["entrevistaStatus"]["estado"] == "evaluada" and ficha["evaluacionIntegral"] is True, f"la ficha muestra la Entrevista Red Human evaluada y la Evaluación integral ({ficha['entrevistaStatus']} {ficha['evaluacionIntegral']})")
 
     # cierre por inactividad
     v2 = nueva_vacante(client, "Almacenista Bug2")

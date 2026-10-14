@@ -291,9 +291,13 @@ def _coincide(c: dict, textos: List[str]) -> Optional[str]:
 
 
 def criterios_brecha(salida: List[dict], p: Optional[Postulacion]) -> List[dict]:
-    """Cambio 22: cada brecha del Análisis de CV se vuelve una pregunta del prefiltro. Si es un indispensable de la vacante
-    se pregunta en el chat (aunque el formulario dijera «Sí») y reprobarlo DESCARTA; si no coincide con ninguno, solo se
-    registra (nunca descarta)."""
+    """Cambio 22 → Cambio 42: el Análisis de CV ya NO agrega preguntas al prefiltro ni frena la ruta. Una omisión del CV es
+    «No lo menciona el CV» y una contradicción real va a «Puntos por validar» (`comparativo_indispensables`); ninguna de
+    las dos pone la tarjeta en «Requiere revisión»."""
+    return []
+
+
+def _criterios_brecha_anterior(salida: List[dict], p: Optional[Postulacion]) -> List[dict]:
     a = (p.analisis or {}) if p is not None else {}
     if a.get("ia") is False:
         return []  # análisis demo (sin IA): sus brechas no son reales
@@ -331,9 +335,21 @@ def _con_brechas(criterios: List[dict], brechas: List[dict]) -> List[dict]:
     return criterios[:corte] + indisp + otras + criterios[corte:]
 
 
+# Cambio 42: una brecha que solo dice que el CV no trae el dato es OMISIÓN («No lo menciona el CV»), nunca inconsistencia
+_RE_OMISION = re.compile(r"^(no (lo )?(menciona|indica|especifica|acredita|muestra|demuestra|incluye|detalla|refiere)|sin (mencion|evidencia|"
+                         r"informacion|dato|datos|referencia)|falta(n)? (informacion|evidencia|datos?)|no se (menciona|acredita|especifica|"
+                         r"indica|incluye)|no hay (informacion|evidencia|mencion)|no aparece|no esta claro|no queda claro)")
+NO_LO_MENCIONA = "No lo menciona el CV"
+
+
+def es_omision(brecha: str) -> bool:
+    return bool(_RE_OMISION.match(_norm(brecha)))
+
+
 def comparativo_indispensables(p: Postulacion) -> List[dict]:
-    """Cambio 22 (ficha de RH): por cada indispensable, lo que dice el CV (acreditado / no) contra lo que respondió el
-    candidato; «Inconsistencia» si difieren."""
+    """Cambio 22 (ficha de RH): por cada indispensable, lo que dice el CV contra lo que respondió el candidato. Cambio 42:
+    «Inconsistencia» SOLO con una contradicción explícita (el CV dice otra cosa); si el CV no trae el dato →
+    «No lo menciona el CV» (no es inconsistencia). Nada de esto frena la ruta ni pone «Requiere revisión»."""
     if p is None or p.vacante is None:
         return []
     a = p.analisis or {}
@@ -349,17 +365,23 @@ def comparativo_indispensables(p: Postulacion) -> List[dict]:
     for c in criterios:
         if c.get("reconfirma") or c.get("por_brecha") or not (c["indispensable"] or (c.get("dato") == "escolaridad" and c.get("nivel_requerido") is not None and not c.get("registra"))):
             continue
-        cv = None
+        texto_cv, contradice = None, ""
         if hay_cv:
-            cv = False if _coincide(c, brechas) else (True if _coincide(c, acreditados) else False)
+            brecha = _coincide(c, brechas)
+            if brecha and not es_omision(brecha):
+                texto_cv, contradice = f"Contradice: {_texto_brecha(brecha) or brecha}", brecha
+            elif _coincide(c, acreditados):
+                texto_cv = "Acreditado"
+            else:
+                texto_cv = NO_LO_MENCIONA
         # la respuesta más reciente: la del chat por la brecha, la reconfirmación o la del indispensable
         r = (respuestas.get(f"cv-{c['id']}") or next((respuestas[x["id"]] for x in criterios if x.get("reconfirma") == c["id"] and x["id"] in respuestas), None)
              or respuestas.get(c["id"]) or {})
         valor = r.get("valor")
         cumple = None if valor is None else valor == c["esperada"]
-        filas.append({"requisito": c["criterio"], "cv": None if cv is None else ("Acreditado" if cv else "No acreditado"),
+        filas.append({"requisito": c["criterio"], "cv": texto_cv, "omision": texto_cv == NO_LO_MENCIONA,
                       "respuesta": r.get("respuesta", ""), "fuente": r.get("fuente", ""), "cumple": cumple,
-                      "inconsistencia": cv is not None and cumple is not None and cv != cumple})
+                      "inconsistencia": bool(contradice) and cumple is True, "cvDice": contradice})
     return filas
 
 

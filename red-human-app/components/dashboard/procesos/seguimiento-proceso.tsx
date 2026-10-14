@@ -383,8 +383,6 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
     } else if ((sig.tipo === "paso" || sig.tipo === "abrir") && sig.accion) {
       const enviarPsico = simple && pasoSig?.tipo === "psicometrica" && sig.accion.clave === "iniciar_evaluacion";
       principal = { texto: pasoSig?.tipo === "alta" ? "Dar de alta como colaborador" : enviarPsico ? "Enviar prueba" : sig.texto, onClick: () => ejecutar(pasoSig, sig.accion), icono: <Play className="h-4 w-4" /> };
-    } else if (sig.tipo === "avanzar" && sig.etapa) {
-      principal = { texto: `Continuar a ${nombreEtapa(sig.etapa)}`, onClick: () => continuar(sig.etapa!), icono: <ArrowRight className="h-4 w-4" /> };
     } else if (sig.tipo === "esperar" && sig.accion && pasoSig?.pendienteAprobacion) {
       principal = { texto: `Aprobar: ${pasoSig.nombre}`, onClick: () => ejecutar(pasoSig, sig.accion), icono: <CheckCircle2 className="h-4 w-4" /> };
     }
@@ -538,7 +536,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                   const ps = simple && p.psicometria && p.estado !== "omitida" && p.estado !== "cancelada" && !p.heredado ? p.psicometria : null;
                   const menu = live && !soloEstado(p) ? accionesDe(p) : [];
                   return (
-                    <li key={p.id} className="border-t border-border-faint first:border-t-0">
+                    <li key={p.id} id={`paso-${p.id}`} className="border-t border-border-faint first:border-t-0">
                       <div className="flex items-center gap-2 pr-2 hover:bg-surface-2/60">
                         <button
                           className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-4 text-left"
@@ -1028,7 +1026,7 @@ function ComparativoIndispensables({ c }: { c: Candidato }) {
             {filas.map((f, i) => (
               <tr key={i} className="border-t border-border-faint align-top">
                 <td className="py-1.5 pr-3 text-ink-2">{f.requisito}</td>
-                <td className={cn("py-1.5 pr-3 font-semibold", f.cv === "Acreditado" ? "text-good" : f.cv ? "text-warn" : "text-ink-3")}>
+                <td className={cn("py-1.5 pr-3 font-semibold", f.cv === "Acreditado" ? "text-good" : f.omision ? "text-ink-3" : f.cv ? "text-warn" : "text-ink-3")}>
                   {f.cv ?? "Sin CV"}
                 </td>
                 <td className="py-1.5 pr-3 text-ink-2">

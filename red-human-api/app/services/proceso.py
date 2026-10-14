@@ -1350,8 +1350,16 @@ def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
     faltan = [d.tipo for d in revisar if not d.aprobado]
     if faltan:
         recibidos = sum(1 for d in revisar if d.entregado)
-        return {**base, "estado": "en_curso" if recibidos else "pendiente", "espera": _texto_falta(faltan),
-                "detalle": f"{len(revisar) - len(faltan)}/{len(revisar)} aprobados"}
+        por_revisar = [d.tipo for d in revisar if d.entregado and not d.aprobado]
+        salida = {**base, "estado": "en_curso" if recibidos else "pendiente", "espera": _texto_falta(faltan),
+                  "detalle": f"{len(revisar) - len(faltan)}/{len(revisar)} aprobados", "por_revisar": bool(por_revisar)}
+        if por_revisar and all(d.entregado for d in revisar):
+            # Cambio 42: el candidato ya subió todo → «Por revisar» (acción humana: aprobar los documentos)
+            salida.update({"estado": "en_curso", "espera": "Documentos por aprobar",
+                           "cuello": {"clave": "pendiente_revision", "texto": "Por revisar", "quien": None}})
+        elif not recibidos and any(d.solicitado_en for d in revisar):
+            salida["cuello"] = {"clave": "esperando_candidato", "texto": "Esperando al candidato", "quien": None}
+        return salida
     revisores = sorted({d.revisado_por for d in revisar if d.revisado_por})
     return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"{len(revisar)}/{len(revisar)} aprobados",
             "revisadoPor": f"Revisado por: {', '.join(revisores)}" if revisores else "Revisado por: RH"}
@@ -1685,6 +1693,7 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             # C8: estado del aviso al entrevistador / evaluador, aparte del estado de la actividad
             "aviso": r.get("aviso"),
             "revisarPrefiltro": bool(r.get("revisar_prefiltro")),
+            "porRevisar": bool(r.get("por_revisar")),  # Cambio 42: documentos subidos por aprobar
             "excepcionRH": r.get("excepcion"),
             "requiereRevision": bool(r.get("requiere_revision")) and not r.get("excepcion"),  # Cambio 37
             "faltaCorreo": bool(r.get("falta_correo")),
@@ -1702,7 +1711,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "esperando": {k: v for k, v in (r.get("cuello") or {}).items() if k in ("clave", "texto", "quien")} or None,
             "envios": {d: {k: v for k, v in x.items() if k != "porMotivo"} for d, x in (r.get("envios") or {}).items()},
             **_estado_unificado(r, paso["regla"]),
-            "accion": _accion(paso, r, disponible),
+            # Cambio 42: ¿el motor de ruta ya intentó iniciarla sola? (sin botón manual salvo error)
+            "accion": _accion(paso, {**r, "motor_intentado": paso["id"] in (((p.analisis or {}).get("motor_ruta") or {}).get("envios") or {})},
+                              disponible),
             "_terminado_en": r.get("terminado_en"),
         })
         if not solo_evaluables:
@@ -2038,6 +2049,61 @@ def siguiente_actividad(p: Postulacion, evaluaciones=None, pasos: Optional[List[
     return {"id": x["id"], "nombre": x["nombre"], "estado": x["estadoUnificado"], "estadoTexto": x["estadoUnificadoTexto"]}
 
 
+# Cambio 42: bloqueadores que exigen a una PERSONA (lo que avisa la campana de RH). El resto avanza solo.
+ACCIONES_HUMANAS = {
+    "documentos_por_aprobar": "documentos por aprobar",
+    "agendar_entrevista": "entrevista humana por agendar",
+    "registrar_entrevista": "entrevista humana por registrar",
+    "enviar_oferta": "oferta por enviar",
+    "firmar_contrato": "contrato por firmar",
+    "otra_actividad": "actividad por marcar como realizada",
+}
+
+
+def accion_humana(p: Postulacion, pasos: Optional[List[dict]] = None) -> Optional[dict]:
+    """La acción humana que DETIENE a la postulación (o None): aprobar documentos, agendar / registrar la entrevista humana,
+    enviar la oferta, firmar el contrato u «Otra actividad». Solo actividades ya habilitadas de la etapa actual o anteriores."""
+    if p is None or not p.activa:
+        return None
+    pasos = [x for x in (pasos if pasos is not None else estado_pasos(p)) if not x["heredado"]]
+    actual = _indice(p.etapa)
+    for x in pasos:
+        if _indice(x["etapa"]) > actual or not x.get("disponible") or x["estado"] in ("omitida", "cancelada") or _satisfecho(x):
+            continue
+        tipo, eu = x["tipo"], x.get("estadoUnificado")
+        clave = None
+        if tipo in ("documentos", "solicitud_documentos") and x.get("porRevisar"):
+            clave = "documentos_por_aprobar"
+        elif tipo == "entrevista_humana" and eu == "pendiente_agendar":
+            clave = "agendar_entrevista"
+        elif tipo == "entrevista_humana" and eu in ("pendiente_resultado", "esperando_evaluador"):
+            clave = "registrar_entrevista"
+        elif tipo == "oferta" and x["estado"] == "pendiente":
+            clave = "enviar_oferta"
+        elif tipo == "carta_contrato" and x["estado"] in ("pendiente", "en_curso"):
+            clave = "firmar_contrato"
+        elif x.get("otraSimple") and x["estado"] != "completada":
+            clave = "otra_actividad"
+        if clave:
+            return {"clave": clave, "texto": ACCIONES_HUMANAS[clave], "paso": x["id"], "pasoNombre": x["nombre"]}
+    return None
+
+
+def linea_estado(p: Postulacion, pasos: Optional[List[dict]] = None) -> str:
+    """Cambio 42: la etapa y la actividad ACTUALES reales («Filtro Red Human · Entrevista Red Human por WhatsApp: En curso»).
+    Nunca una actividad de una etapa ya superada ni de una que la ruta no tiene."""
+    if p is None:
+        return ""
+    if not p.activa:
+        return f"{nombre_etapa(p.etapa)} · Postulación cerrada"
+    pasos = [x for x in (pasos if pasos is not None else estado_pasos(p)) if not x["heredado"]]
+    de_etapa = [x for x in pasos if x["etapa"] == p.etapa and not _satisfecho(x) and x["estado"] not in ("omitida", "cancelada")]
+    x = next((y for y in de_etapa if y["obligatorio"]), None) or (de_etapa[0] if de_etapa else None)
+    if x is None:
+        return f"{nombre_etapa(p.etapa)} · sin actividades pendientes"
+    return f"{nombre_etapa(p.etapa)} · {x['nombre']}: {x.get('estadoUnificadoTexto') or x.get('estadoTexto') or ''}".rstrip(": ")
+
+
 def descarte_sugerido(p: Postulacion, pasos: Optional[List[dict]]) -> Optional[dict]:
     """Ruta automática (2026-10-08): una actividad OBLIGATORIA calificada «No aprobada» (prefiltro con criterio
     excluyente, calificación bajo el mínimo, dictamen desfavorable) deja la postulación en «Descarte sugerido». NUNCA
@@ -2202,6 +2268,9 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
             return {"clave": "registrar_resultado", "texto": "Registrar revisión de referencias", "urgente": True}
         if r.get("evaluacion") and estado != "pendiente":
             return {"clave": "consultar_evaluacion", "texto": "Consultar", "evaluacion": r["evaluacion"]}
+        if (disponible and estado == "pendiente" and not r.get("error") and r.get("motor_intentado")
+                and (es_psicometria_digital(paso) or tipo == "referencias")):
+            return None  # Cambio 42: ya la inició sola el motor de ruta (sin botón manual); con error, RH la reintenta
         if disponible:
             # psicometría: abre la vista limpia con la batería de la ruta/vacante y «Asignar y enviar»
             texto = ("Asignar y enviar" if es_psicometria_digital(paso) else
@@ -2218,13 +2287,16 @@ def _accion(paso: dict, r: dict, disponible: bool) -> Optional[dict]:
     previo = _indice(paso["etapa"]) < _indice("Contratación")
     if tipo in ("documentos", "solicitud_documentos") and previo:
         destino = "documentos"  # antes de Contratación los documentos se ven y validan en «CV y documentos»
+    # Cambio 42: ya no existe «Enviar liga de documentos» — la liga sale sola; «Reenviar liga» solo si ya se mandó (o el
+    # envío automático falló) y «Validar documentos» solo cuando hay algo que aprobar (bloqueador humano)
     if tipo == "solicitud_documentos" and disponible and estado != "completada":
-        # la misma acción ejecuta y refresca la vista: el estado, el resultado y la siguiente acción se recalculan
-        return {"clave": "solicitar_documentos", "texto": "Enviar liga de documentos" if estado == "pendiente" else "Reenviar liga"}
+        return {"clave": "solicitar_documentos", "texto": "Reenviar liga"} if (estado != "pendiente" or r.get("error")) else None
     if tipo == "documentos" and r.get("sin_solicitar") and disponible and estado != "completada":
-        return {"clave": "solicitar_documentos", "texto": "Enviar liga de documentos" if previo else "Solicitar documentos faltantes"}
+        return {"clave": "solicitar_documentos", "texto": "Reenviar liga"} if r.get("error") else None
     if tipo == "documentos" and previo and disponible and estado != "completada":
-        return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
+        if r.get("por_revisar"):
+            return {"clave": "validar_documentos", "texto": "Validar documentos", "pestana": "documentos"}
+        return {"clave": "solicitar_documentos", "texto": "Reenviar liga"}
     if estado == "completada" or not disponible:
         return {"clave": "consultar", "texto": "Consultar", "pestana": destino} if estado != "pendiente" else None
     if tipo == "induccion" and paso.get("modalidad_capacitacion") == "presencial":  # Cambio 30: cita con instructor
@@ -2448,7 +2520,8 @@ def _siguiente_accion(p: Postulacion, pasos: List[dict], sig: Optional[str], fal
         if p.etapa == "Contratación" and sig == "Onboarding":
             return {"tipo": "abrir", "texto": "Enviar a Onboarding", "accion": {"clave": "abrir", "pestana": "contratacion"},
                     "detalle": "Revisa el resumen e inicia el Onboarding desde el expediente."}
-        return {"tipo": "avanzar", "etapa": sig, "texto": f"Avanzar a {nombre_etapa(sig)}",
+        # Cambio 42: no hay botón «Continuar a…» — la ruta avanza sola; esto solo describe lo que está por pasar
+        return {"tipo": "avanzar", "etapa": sig, "texto": f"Avanza solo a {nombre_etapa(sig)}",
                 "detalle": "Todos los pasos obligatorios de esta etapa cumplen su condición."}
     en_espera = [x for x in de_etapa if x["estado"] in ("en_curso", "completada") and not _satisfecho(x) and x["obligatorio"]]
     if en_espera:
@@ -2679,8 +2752,10 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
         encendido = cfg.get(p.etapa, {}).get("avance_automatico")  # 2026-10-09: siempre, salvo Contratación/Onboarding
         if p.etapa == "Contratación":
             # 2026-10-09: «Firmar documentos» completo (y nada obligatorio pendiente) → Onboarding solo, con la selección
-            # de la plantilla (decisión del usuario). Cualquier bloqueo queda en bitácora y RH sigue con «Iniciar Onboarding».
-            if _documentos_firmados(p) and not etapa_lista(p)[1]:
+            # de la plantilla (decisión del usuario). Cambio 42: también si la ruta no trae firma — nada obligatorio
+            # pendiente en Contratación basta. Un bloqueo queda en bitácora y RH sigue con «Iniciar Onboarding».
+            sig_c, falta_c = etapa_lista(p)
+            if sig_c == "Onboarding" and not falta_c and (_documentos_firmados(p) or paso_de_tipo(p, "carta_contrato") is None):
                 from ..routers.onboarding import iniciar_automatico
 
                 if await iniciar_automatico(db, p):
@@ -2759,12 +2834,10 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
         return []
     try:
         restaurar_tras_agregadas(db, p)  # C12: actividad agregada resuelta → vuelve a su columna original
-        if ruta_automatica(p.cuenta):
-            from . import motor_ruta
+        # Cambio 42: avance automático en TODAS las Cuentas — la siguiente actividad inicia sola (motor de ruta)
+        from . import motor_ruta
 
-            salida = await motor_ruta.procesar(db, p)
-        else:
-            salida = await avanzar_si_corresponde(db, p)
+        salida = await motor_ruta.procesar(db, p)
         # Cambio 25: la actividad «Documentos» de la vacante se habilitó → el agente manda la liga (una vez)
         from . import documentos_vacante
 

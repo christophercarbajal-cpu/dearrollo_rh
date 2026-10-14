@@ -307,9 +307,9 @@ with TestClient(app) as client:
     check(r.status_code == 409 and "Documentos de ingreso" in r.json()["detail"] and "Contrato y firma" in r.json()["detail"],
           "Contratación: faltan «Documentos de ingreso» y «Contrato y firma» (obligatorios) → 409")
     s = seg(P)
-    check(paso(s, "documentos-ingreso")["accion"]["clave"] == "solicitar_documentos"
-          and paso(s, "documentos-ingreso")["accion"]["texto"] == "Solicitar documentos faltantes",
-          "Documentos de ingreso: sin nada pedido, la acción es «Solicitar documentos faltantes»")
+    # Cambio 42: ya no hay botón para pedir documentos — la liga la manda sola el motor de ruta («Reenviar liga» solo con error)
+    check(paso(s, "documentos-ingreso")["accion"] is None or paso(s, "documentos-ingreso")["accion"]["texto"] == "Reenviar liga",
+          f"Documentos de ingreso: sin botón «Solicitar documentos» ({paso(s, 'documentos-ingreso')['accion']})")
     check(not paso(s, "carta-contrato")["disponible"], "Contrato y firma espera a los documentos de ingreso")
     r = client.post(f"/contratacion/expedientes/{EXP}/carta-intencion/enviar", json={"canal": "correo"})
     check(paso(seg(P), "carta-contrato")["estado"] != "completada", "enviar solo la carta no completa «Contrato y firma»")
@@ -346,9 +346,9 @@ with TestClient(app) as client:
     p.prefiltro_completo, p.estado = True, "cumple"
     db.commit()
     s = seg(PM)
-    check(paso(s, "documentos-iniciales")["accion"]["clave"] == "solicitar_documentos"
-          and paso(s, "documentos-iniciales")["accion"]["texto"] == "Enviar liga de documentos",
-          "con el prefiltro listo la acción de «Documentos iniciales» es «Enviar liga de documentos»")
+    # Cambio 42: ya no existe «Enviar liga de documentos» — la liga la manda sola la ruta (RH solo la reenvía si falló)
+    check((paso(s, "documentos-iniciales")["accion"] or {}).get("texto") != "Enviar liga de documentos",
+          "con el prefiltro listo «Documentos iniciales» no ofrece «Enviar liga de documentos»")
     r = client.post(f"/candidatos/{PM}/solicitar-documentos", json={})
     check(r.status_code == 200 and post(PM).etapa == "Prefiltro" and post(PM).expediente is not None,
           "la liga abre el expediente con anticipación y NO cambia la etapa")
@@ -359,9 +359,9 @@ with TestClient(app) as client:
     r = client.post(f"/expedientes/publica/{tok}/documentos", data={"tipo": "Identificación oficial"}, files={"archivo": ("ine.pdf", PDF, "application/pdf")})
     check(r.status_code in (200, 201), f"el candidato sube su identificación por la liga ({r.status_code})")
     s = seg(PM)
-    check(paso(s, "documentos-iniciales")["estado"] == "en_curso" and "ine (frente y reverso)" in paso(s, "documentos-iniciales")["espera"].lower()
+    check(paso(s, "documentos-iniciales")["estado"] == "en_curso" and paso(s, "documentos-iniciales")["espera"] == "Documentos por aprobar" and paso(s, "documentos-iniciales")["estadoUnificadoTexto"] == "Por revisar"
           and paso(s, "documentos-iniciales")["accion"]["clave"] == "validar_documentos",
-          "Documentos iniciales: en curso, dice exactamente qué falta aprobar y la acción pasa a «Validar documentos»")
+          "Cambio 42: todo entregado → «Por revisar» (documentos por aprobar) y la acción pasa a «Validar documentos»")
     client.post(f"/contratacion/expedientes/{post(PM).expediente.id}/documentos/estado", json={"tipo": "Identificación oficial", "estado": "aprobado"})
     check(paso(seg(PM), "documentos-iniciales")["estado"] == "completada", "documento aprobado → Documentos iniciales completado")
     asyncio.run(sproc.avanzar_si_corresponde(db, post(PM)))

@@ -360,11 +360,15 @@ export interface Candidato {
   /** Cambio 22: por indispensable, lo que acredita el CV contra lo que respondió el candidato. */
   comparativoIndispensables?: {
     requisito: string;
-    cv: "Acreditado" | "No acreditado" | null;
+    /** Cambio 42: «Acreditado» · «No lo menciona el CV» (omisión, no es inconsistencia) · «Contradice: …». */
+    cv: string | null;
+    omision?: boolean;
     respuesta: string;
     fuente: string;
     cumple: boolean | null;
+    /** Solo con contradicción EXPLÍCITA del CV; va a «Puntos por validar» y nunca frena la ruta. */
     inconsistencia: boolean;
+    cvDice?: string;
   }[];
   pideCv?: boolean;
   experiencia: string;
@@ -420,6 +424,12 @@ export interface Candidato {
   psychometric_alert?: "sin_enviar" | "sin_respuesta" | "error_envio" | "falta_correo" | null;
   /** Ruta automática: actividad obligatoria «No aprobada» → RH confirma el descarte. */
   suggested_discard?: DescarteSugerido | null;
+  /** Cambio 42: acción humana que detiene a la postulación (campana de RH). */
+  accion_rh?: { clave: string; texto: string; paso: string; pasoNombre: string } | null;
+  /** Cambio 42: etapa y actividad actuales reales («Filtro humano · Entrevista humana: Pendiente de agendar»). */
+  estado_actual?: string;
+  /** Cambio 42: la ruta trae prefiltro (web o WhatsApp). */
+  tienePrefiltro?: boolean;
   /** C12: «Actividad agregada: [nombre] pendiente». */
   added_activity?: string | null;
   /** C12: la actividad agregada pendiente (ficha). */

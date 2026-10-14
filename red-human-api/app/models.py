@@ -729,7 +729,8 @@ class SugerenciaMovilidad(Base):
 # descripción: se convierten al nombre del catálogo al guardar y en la migración (`scripts/migrar_catalogo_documentos.py`).
 ID_DOCUMENTO_OTRO = "otro"
 CATALOGO_DOCUMENTOS = [
-    {"id": "ine", "nombre": "INE (frente y reverso)", "cantidad": 1, "foto": False,
+    # Cambio 42: documentos de DOS caras — la liga del candidato pide dos casillas obligatorias (Frente y Reverso)
+    {"id": "ine", "nombre": "INE (frente y reverso)", "cantidad": 1, "foto": False, "caras": ("Frente", "Reverso"),
      "alias": ("ine", "ife", "identificacion oficial", "identificacion", "credencial de elector", "credencial para votar")},
     {"id": "curp", "nombre": "CURP", "cantidad": 1, "foto": False, "alias": ("curp",)},
     {"id": "acta_nacimiento", "nombre": "Acta de nacimiento", "cantidad": 1, "foto": False, "alias": ("acta de nacimiento",)},
@@ -743,7 +744,7 @@ CATALOGO_DOCUMENTOS = [
      "alias": ("semanas cotizadas", "semanas cotizadas imss", "reporte de semanas cotizadas")},
     {"id": "cuenta_bancaria", "nombre": "Cuenta bancaria / CLABE", "cantidad": 1, "foto": False,
      "alias": ("cuenta bancaria", "clabe", "estado de cuenta", "cuenta bancaria clabe")},
-    {"id": "licencia", "nombre": "Licencia de conducir", "cantidad": 1, "foto": False,
+    {"id": "licencia", "nombre": "Licencia de conducir", "cantidad": 1, "foto": False, "caras": ("Frente", "Reverso"),
      "alias": ("licencia de conducir", "licencia de manejo", "licencia federal", "licencia federal de conducir", "licencia vigente")},
     {"id": "carta_recomendacion", "nombre": "Carta de recomendación laboral", "cantidad": 1, "foto": False,
      "alias": ("carta de recomendacion", "cartas de recomendacion")},
@@ -795,6 +796,12 @@ def documento_catalogo(valor) -> dict:
     if d is not None:
         return {k: d[k] for k in ("id", "nombre", "cantidad", "foto")}
     return {"id": ID_DOCUMENTO_OTRO, "nombre": nombre, "cantidad": 1, "foto": False}
+
+
+def caras_documento(valor) -> List[str]:
+    """Cambio 42: las caras que pide la liga del candidato para un documento de dos caras (INE, licencia); [] = un archivo."""
+    d = documento_catalogo(valor)
+    return list(_DOC_POR_ID.get(d["id"], {}).get("caras") or ())
 
 
 def clave_documento(valor) -> str:
@@ -1098,6 +1105,7 @@ class ArchivoDocumento(Base):
     canal: Mapped[str] = mapped_column(String(20), default="")  # liga | whatsapp | rh
     subido_por: Mapped[str] = mapped_column(String(150), default="")
     convertido_de: Mapped[str] = mapped_column(String(20), default="")  # «heic» si se convirtió a JPG
+    cara: Mapped[str] = mapped_column(String(20), default="")  # Cambio 42: «Frente» | «Reverso» (documentos de dos caras)
     vigente: Mapped[bool] = mapped_column(Boolean, default=True)
     subido_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
 

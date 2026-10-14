@@ -325,8 +325,9 @@ with TestClient(app) as client:
     t2 = next(x for x in lista if x["id"] == p2.codigo)
     check(t1["card_label"] == {"clave": "recomendable", "texto": "Recomendable", "faltan": []},
           "C11: la tarjeta muestra solo la etiqueta «Recomendable»")
-    check(t2["card_label"]["texto"] == "No recomendable" and "✗ Experiencia en puesto similar" in t2["card_label"]["faltan"],
-          "C11: …y los requisitos que faltan (✗ / ?)")
+    db.refresh(p2)
+    check((t2["card_label"] or {}).get("texto") == "No recomendable" and "✗ Experiencia en puesto similar" in (t2["card_label"] or {}).get("faltan", []),
+          f"C11: …y los requisitos que faltan (✗ / ?) ({t2['card_label']} {t2['etapa']} {[(x.codigo, x.tipo, x.estado) for x in p2.entrevistas]})")
     integral = client.get(f"/candidatos/{p2.codigo}", headers=H).json()["resultadoIntegral"]
     check(integral["texto"] in ("Pendiente", "Con reservas", "Recomendable", "No recomendable") and "No apto" not in integral["texto"],
           f"C6: la evaluación integral usa las etiquetas nuevas («{integral['texto']}»)")

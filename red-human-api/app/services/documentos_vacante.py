@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (DOCUMENTOS_SUGERIDOS_VACANTE, ESTADOS_DOCUMENTOS_EXPEDIENTE, ArchivoDocumento, Documento, Expediente,
-                      Postulacion, clave_documento, normalizar_documentos_vacante, registrar)
+                      Postulacion, caras_documento, clave_documento, normalizar_documentos_vacante, registrar)
 
 ID_PASO = "documentos-vacante"
 ACTOR = "Red Human"
@@ -171,18 +171,23 @@ def multiple(doc: Documento) -> bool:
 
 
 def registrar_archivo(db: Session, e: Expediente, doc: Documento, ruta: str, validado, canal: str, subido_por: str,
-                      convertido_de: str = "") -> Optional[ArchivoDocumento]:
+                      convertido_de: str = "", cara: str = "") -> Optional[ArchivoDocumento]:
     """Guarda el archivo como su PROPIO registro. Un documento de un solo archivo lo reemplaza (el anterior queda como no
-    vigente); uno de N archivos conserva los últimos N."""
+    vigente); uno de N archivos conserva los últimos N. Cambio 42: con `cara` (Frente / Reverso) solo reemplaza esa cara."""
     if not _tablas():
         return None
     try:
         reg = ArchivoDocumento(documento_id=doc.id, expediente_id=e.id, archivo=ruta, nombre_archivo=validado.nombre,
                                mime=validado.mime, tamano=validado.tamano, canal=canal, subido_por=subido_por[:150],
-                               convertido_de=convertido_de, vigente=True, subido_en=datetime.now(timezone.utc))
+                               convertido_de=convertido_de, cara=cara, vigente=True, subido_en=datetime.now(timezone.utc))
         db.add(reg)
         db.flush()
         vigentes = archivos(db, doc)
+        if cara:
+            for viejo in vigentes:
+                if viejo.id != reg.id and (viejo.cara == cara or not viejo.cara):
+                    viejo.vigente = False
+            return reg
         tope = max(1, int(doc.cantidad or 1))
         for viejo in vigentes[:-tope] if len(vigentes) > tope else []:
             viejo.vigente = False
@@ -192,6 +197,8 @@ def registrar_archivo(db: Session, e: Expediente, doc: Documento, ruta: str, val
 
 
 def conteo(db: Session, doc: Documento) -> int:
+    if caras_documento(doc.tipo) and caras_recibidas(db, doc):
+        return len(caras_recibidas(db, doc))
     n = len(archivos(db, doc))
     if n or not doc.archivo or archivos(db, doc, solo_vigentes=False):
         return n
@@ -199,15 +206,166 @@ def conteo(db: Session, doc: Documento) -> int:
 
 
 def docs_en_juego(e: Expediente) -> List[Documento]:
-    """Antes de Contratación: los documentos que se le pidieron al candidato (o que ya entregó); si a nada se le ha
-    mandado la liga, todos los aplicables. En Contratación/Onboarding: todo el expediente. Los internos de RH y los
-    «No aplica» nunca cuentan."""
+    """Antes de Contratación: los documentos que pide la VACANTE (Cambio 42); si la vacante no define ninguno, los que se
+    le pidieron al candidato (o que ya entregó) y, si a nada se le ha mandado la liga, todos los aplicables. En
+    Contratación/Onboarding: todo el expediente. Los internos de RH y los «No aplica» nunca cuentan."""
     docs = [d for d in (e.documentos or []) if not d.interno and d.estado != "no_aplica"]
     p = e.postulacion
     if p is None or p.etapa in ("Contratación", "Onboarding"):
         return docs  # el expediente de ingreso completo
-    pedidos =[d for d in docs if d.solicitado_en or d.entregado or d.correccion_en or d.archivo]
+    vac = {clave_documento(d["nombre"]) for d in de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)} if p.vacante else set()
+    de_la_vacante = [d for d in docs if clave_documento(d.tipo) in vac]
+    if de_la_vacante:
+        return de_la_vacante
+    pedidos = [d for d in docs if d.solicitado_en or d.entregado or d.correccion_en or d.archivo]
     return pedidos or docs
+
+
+def progreso(e: Optional[Expediente]) -> int:
+    """Cambio 42: % del expediente sobre los documentos REQUERIDOS (antes de Contratación, los de la vacante; en
+    Contratación/Onboarding, los obligatorios del expediente — `Expediente.progreso`)."""
+    if e is None:
+        return 0
+    p = e.postulacion
+    if p is None or p.etapa in ("Contratación", "Onboarding"):
+        return e.progreso
+    docs = [d for d in docs_en_juego(e) if d.obligatorio]
+    return round(100 * sum(1 for d in docs if d.aprobado) / len(docs)) if docs else 0
+
+
+def caras_recibidas(db: Session, doc: Documento) -> List[str]:
+    """Caras ya subidas (vigentes) de un documento de dos caras."""
+    return sorted({a.cara for a in archivos(db, doc) if a.cara})
+
+
+def faltantes(e: Expediente) -> List[Documento]:
+    """Cambio 42: lo que el candidato todavía debe subir (la liga muestra SOLO esto)."""
+    return [d for d in docs_en_juego(e) if not d.entregado and not d.aprobado]
+
+
+def documento_publico(db: Session, d: Documento) -> dict:
+    caras = caras_documento(d.tipo)
+    hechas = caras_recibidas(db, d) if caras else []
+    return {"tipo": d.tipo, "estado": d.estado, "obligatorio": d.obligatorio, "cantidad": len(caras) or int(d.cantidad or 1),
+            "esFoto": bool(d.es_foto), "recibidos": len(hechas) if caras else conteo(db, d),
+            "caras": [{"cara": c, "recibida": c in hechas} for c in caras],
+            "correccion": d.correccion_motivo if d.estado == "rechazado" and d.correccion_en else ""}
+
+
+TEXTO_LISTO = "Listo, {nombre}. Ya recibimos tus documentos. Te avisaremos por WhatsApp el siguiente paso."
+
+
+def vista_publica(db: Session, e: Expediente) -> dict:
+    """La liga del candidato: empresa de la vacante en la cabecera, SOLO los faltantes y, al completar los obligatorios,
+    el mensaje final (la actividad queda «Por revisar»)."""
+    from ..serial import nombre_empresa_candidato
+
+    p = e.postulacion
+    nombre = ((e.candidato.nombre if e.candidato else "") or "").split(" ")[0]
+    en_juego = docs_en_juego(e)
+    pendientes = faltantes(e)
+    completo = bool(en_juego) and not [d for d in pendientes if d.obligatorio]
+    return {"candidato": e.candidato.nombre if e.candidato else "", "nombre": nombre,
+            "empresa": nombre_empresa_candidato(p.vacante) if p is not None and p.vacante is not None else "",
+            "puesto": e.puesto or (p.vacante.titulo if p is not None and p.vacante is not None else ""),
+            "estado": e.estado, "documentos": [documento_publico(db, d) for d in pendientes],
+            "completo": completo, "mensajeFinal": TEXTO_LISTO.format(nombre=nombre or "").replace("Listo, .", "Listo.") if completo else ""}
+
+
+def siguen_a_solicitud(p: Optional[Postulacion]) -> bool:
+    """Cambio 42: «Documentos» sigue INMEDIATAMENTE a «Solicitud web» (sin prefiltro en medio) → la carga de documentos
+    continúa en la misma página web al terminar la solicitud."""
+    pasos = [x for x in ((p.proceso or {}).get("pasos") or []) if not x.get("heredado")] if p is not None else []
+    i = next((k for k, x in enumerate(pasos) if x["tipo"] == "solicitud_web"), None)
+    if i is None:
+        return False
+    siguiente = next((x for x in pasos[i + 1:] if x["tipo"] != "analisis_cv"), None)
+    from .proceso import _indice
+
+    return bool(siguiente and siguiente["tipo"] == "documentos" and _indice(siguiente.get("etapa") or "Prefiltro") < _indice("Contratación"))
+
+
+async def preparar_web(db: Session, p: Postulacion) -> Optional[dict]:
+    """Abre el expediente y deja listos los documentos de la vacante para subirlos en la MISMA página de la solicitud.
+    No manda nada por WhatsApp: si el candidato cierra la página sin terminar, `recordar_web` le manda la liga después."""
+    from types import SimpleNamespace
+
+    from ..routers.candidatos import _abrir_expediente
+
+    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
+    if not docs or not p.consentimiento:
+        return None
+    if p.expediente is None:
+        exp = _abrir_expediente(db, p, SimpleNamespace(nombre=ACTOR, correo="", id=None))
+        registrar(db, ACTOR, "expediente_anticipado", "postulacion", p.codigo, {"expediente": exp.id, "etapa": p.etapa, "motivo": "documentos_web"})
+    pedidos = asegurar_documentos(db, p.expediente, docs)
+    ahora = datetime.now(timezone.utc)
+    for d in pedidos:
+        if not d.solicitado_en:
+            d.solicitado_en, d.solicitado_canal = ahora, "web"
+    url = liga(p)
+    analisis = dict(p.analisis or {})
+    analisis["documentos_vacante"] = {**(analisis.get("documentos_vacante") or {}), "solicitado_en": ahora.isoformat(), "canal": "web",
+                                      "web_en": ahora.isoformat(), "entregado": True}
+    p.analisis = analisis
+    registrar(db, ACTOR, "documentos_vacante_en_web", "postulacion", p.codigo, {"documentos": [d["nombre"] for d in docs]})
+    db.commit()
+    return {"token": p.expediente.token, "liga": url, **vista_publica(db, p.expediente)}
+
+
+TEXTO_RECUPERACION = "{nombre}, cuando tengas tus documentos, súbelos aquí: {liga}"
+
+
+async def recordar_web(db: Session, minutos: Optional[int] = None) -> List[str]:
+    """Cambio 42: quien empezó a subir sus documentos en la página de la solicitud y la cerró sin terminar recibe UNA vez por
+    WhatsApp «[nombre], cuando tengas tus documentos, súbelos aquí: [liga]» (la liga muestra solo los faltantes)."""
+    from datetime import timedelta
+
+    from .motor_ruta import _avisar
+
+    espera = timedelta(minutes=minutos if minutos is not None else settings.documentos_web_recordatorio_min)
+    hechos: List[str] = []
+    for p in db.query(Postulacion).filter(Postulacion.activa.is_(True)).all():
+        dv = (p.analisis or {}).get("documentos_vacante") or {}
+        if not dv.get("web_en") or dv.get("recordatorio_web_en") or p.expediente is None or _pausado(p):
+            continue
+        try:
+            desde = datetime.fromisoformat(dv["web_en"])
+        except (TypeError, ValueError):
+            continue
+        if desde.tzinfo is None:
+            desde = desde.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - desde < espera:
+            continue
+        pendientes = [d for d in faltantes(p.expediente) if d.obligatorio]
+        analisis = dict(p.analisis or {})
+        analisis["documentos_vacante"] = {**dv, "recordatorio_web_en": datetime.now(timezone.utc).isoformat()}
+        p.analisis = analisis
+        db.commit()  # reclamado antes de enviar: nunca sale dos veces
+        if not pendientes:
+            continue
+        nombre = (p.nombre or "").split(" ")[0] if p.nombre and not p.nombre.startswith("Candidato") else ""
+        texto = TEXTO_RECUPERACION.format(nombre=nombre or "Hola", liga=liga(p))
+        paso = paso_de(p)
+        entregado, detalle = await _avisar(db, p, texto, "Tus documentos", liga(p), motivo="documentos", paso_id=paso["id"] if paso else "")
+        registrar(db, ACTOR, "documentos_web_recordatorio", "postulacion", p.codigo,
+                  {"faltan": [d.tipo for d in pendientes], "entregado": entregado, "detalle": detalle[:200]})
+        db.commit()
+        hechos.append(p.codigo)
+    return hechos
+
+
+async def job_recordar_web() -> None:
+    from ..database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        await recordar_web(db)
+    except Exception as ex:  # noqa: BLE001
+        db.rollback()
+        print(f"[documentos] recordatorio de la web: {ex}", flush=True)
+    finally:
+        db.close()
 
 
 def estado_expediente(e: Optional[Expediente]) -> dict:

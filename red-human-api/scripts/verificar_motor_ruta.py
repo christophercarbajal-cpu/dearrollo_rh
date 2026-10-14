@@ -207,16 +207,15 @@ with TestClient(app) as client:
     check(client.post(f"/procesos/postulaciones/{PC}/prefiltro/aprobar", headers=HG, json={}).status_code == 410,
           "«Aprobar prefiltro» ya no existe (410)")
 
-    print("\n--- 5. Aislamiento: otra Cuenta con la MISMA ruta ---")
+    print("\n--- 5. Cambio 42: otra Cuenta con la MISMA ruta también avanza sola ---")
     PM = postular("manual-sa", "Mario Manual", "5512347004", "mario@correo.mx", respuestas("Sí", "Sí", "Sí"))
     db.expire_all()
     pm = db.query(Postulacion).filter(Postulacion.codigo == PM).first()
-    check("prefiltro_web" not in (pm.analisis or {}) and "motor_ruta" not in (pm.analisis or {}), "no se resuelve el prefiltro ni se dispara nada")
-    check(pm.etapa == "Prefiltro" and not pm.entrevistas and not db.query(Evaluacion).filter(Evaluacion.postulacion_id == pm.id).count(),
-          "se queda en Prefiltro con su avance manual")
+    # Cambio 42: el avance automático ya NO está aislado a la Cuenta demo — el motor corre en TODAS las Cuentas
+    check("prefiltro_web" in (pm.analisis or {}), "Cambio 42: en otra Cuenta el motor también resuelve el prefiltro web")
+    check(pm.etapa != "Prefiltro" or pm.prefiltro_completo, f"y la ruta avanza sola ({pm.etapa})")
     s = seg(PM, HM)
-    check(not s["rutaAutomatica"] and s["descarteSugerido"] is None, "sin ruta automática ni descarte sugerido")
-    check(paso(s, "entrevista-lider")["espera"].startswith("Se habilita en"), "conserva la habilitación por columna")
+    check(s["descarteSugerido"] is None, "sin descarte sugerido (todo «Sí»)")
 
     print("\n--- 6. Vocabulario único de estados ---")
     VALIDOS = {"sin_iniciar", "esperando_candidato", "esperando_referencias", "esperando_consentimiento", "esperando_evaluador",

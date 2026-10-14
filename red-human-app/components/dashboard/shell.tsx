@@ -31,7 +31,7 @@ import { Logo, Avatar, Button } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import { useSesion } from "@/components/sesion";
-import { fetchActividadAgente, type ActividadAgente } from "@/lib/api";
+import { fetchActividadAgente, fetchCampanaRH, type ActividadAgente, type GrupoCampana } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
 import { BarraAgente } from "@/components/dashboard/agente/barra";
 import { PanelAgente } from "@/components/dashboard/agente/panel";
@@ -193,6 +193,73 @@ function SelectorCuenta({ variant = "sidebar" }: { variant?: "sidebar" | "topbar
               <span className={c.id === cuentaActualId ? "" : "pl-3.5"}>{c.nombre || c.nombreComercial}</span>
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Cambio 42: campana REAL — candidatos detenidos por una acción humana en tus vacantes (GET /notificaciones/rh).
+ * 1 candidato → abre su ficha en la actividad; varios de la misma vacante y acción → tablero filtrado. */
+function CampanaRH() {
+  const [datos, setDatos] = useState<{ total: number; grupos: GrupoCampana[] } | null>(null);
+  const [abierta, setAbierta] = useState(false);
+  const caja = useRef<HTMLDivElement>(null);
+  const { cuentaActualId } = useSesion();
+  const cargar = useCallback(async () => {
+    const r = await fetchCampanaRH();
+    if (r) setDatos(r);
+  }, []);
+  useEffect(() => {
+    cargar();
+  }, [cargar, cuentaActualId]);
+  usePolling(cargar, 30000);
+  useEffect(() => {
+    if (!abierta) return;
+    const fuera = (ev: MouseEvent) => {
+      if (caja.current && !caja.current.contains(ev.target as Node)) setAbierta(false);
+    };
+    const esc = (ev: KeyboardEvent) => ev.key === "Escape" && setAbierta(false);
+    document.addEventListener("mousedown", fuera);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", fuera);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [abierta]);
+  const grupos = datos?.grupos ?? [];
+  const total = datos?.total ?? 0;
+  return (
+    <div ref={caja} className="relative">
+      <button
+        onClick={() => setAbierta((x) => !x)}
+        className="relative grid h-10 w-10 place-items-center rounded-xl text-ink-2 hover:bg-surface-2"
+        aria-label={total ? `Notificaciones: ${total} pendientes` : "Notificaciones"}
+      >
+        <Bell className="h-5 w-5" />
+        {total > 0 && (
+          <span className="absolute right-1 top-1 grid min-w-[18px] place-items-center rounded-full bg-brand px-1 text-[10px] font-bold leading-[18px] text-white">
+            {total > 99 ? "99+" : total}
+          </span>
+        )}
+      </button>
+      {abierta && (
+        <div className="fixed inset-x-3 top-16 z-50 max-h-[70vh] overflow-y-auto rounded-2xl border border-line bg-surface p-2 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-96">
+          <p className="px-2 pb-1 pt-1 font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">Requieren tu acción</p>
+          {grupos.length === 0 ? (
+            <p className="px-2 py-3 text-sm text-ink-2">Sin pendientes. La ruta avanza sola.</p>
+          ) : (
+            grupos.map((g) => (
+              <Link
+                key={`${g.vacante}-${g.accion}`}
+                href={g.liga}
+                onClick={() => setAbierta(false)}
+                className="block rounded-xl px-2 py-2 text-sm text-ink hover:bg-surface-2"
+              >
+                {g.texto}
+              </Link>
+            ))
+          )}
         </div>
       )}
     </div>
@@ -385,9 +452,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             {/* Selector de Cuenta en topbar (solo si el usuario tiene más de una) */}
             <SelectorCuenta variant="topbar" />
             <ThemeToggle />
-            <button className="relative hidden h-10 w-10 place-items-center rounded-xl text-ink-2 hover:bg-surface-2 sm:grid" aria-label="Notificaciones">
-              <Bell className="h-5 w-5" />
-            </button>
+            <CampanaRH />
             <UsuarioBarra />
           </div>
         </div>

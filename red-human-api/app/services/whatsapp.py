@@ -260,22 +260,76 @@ def error_legible(detalle: str) -> str:
     return t[:200]
 
 
+# Cambio 46: la plantilla no existe, sigue en revisión o está pausada en Meta → NO es un fallo definitivo: el aviso queda
+# «Pendiente de plantilla» y se reintenta solo (`services/reintento_plantillas.py`).
+CODIGOS_PLANTILLA_PENDIENTE = {"132001", "132015"}
+_RE_PLANTILLA_PENDIENTE = re.compile(r"template.*(does not exist|not exist|not found|pending|in review|under review|not approved|paused)",
+                                     re.IGNORECASE)
+TEXTO_PENDIENTE_PLANTILLA = "Pendiente de plantilla: la plantilla de WhatsApp sigue en revisión en Meta; se reintentará automáticamente"
+
+
+def es_plantilla_pendiente(resultado: dict) -> bool:
+    """¿El rechazo de Meta es porque la plantilla aún no está activa (y no por el número, el token o los datos)?"""
+    if not resultado or resultado.get("enviado"):
+        return False
+    codigo = str(resultado.get("codigo") or "").strip()
+    if codigo in CODIGOS_PLANTILLA_PENDIENTE:
+        return True
+    detalle = str(resultado.get("detalle") or "")
+    m = re.match(r"^\s*(\d{2,6})\b", detalle)
+    if m and m.group(1) in CODIGOS_PLANTILLA_PENDIENTE:
+        return True
+    return bool(_RE_PLANTILLA_PENDIENTE.search(detalle))
+
+
+async def _texto_libre_meta(telefono: str, texto: str) -> dict:
+    """Texto libre DIRECTO a Meta (sin el respaldo META_PLANTILLA_AVISO de `enviar_mensaje`): solo pasa si el destinatario
+    escribió en las últimas 24 h."""
+    return await _meta_post({
+        "messaging_product": "whatsapp", "recipient_type": "individual", "to": numero_e164(telefono),
+        "type": "text", "text": {"preview_url": True, "body": texto},
+    })
+
+
 async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: List[str], texto: str,
                                      cuenta_id: Optional[int] = None) -> dict:
-    """Cambio 35: aviso a un EVALUADOR (entrevistador, médico, instructor) SIEMPRE con plantilla de Meta categoría
-    «Utilidad», con EXACTAMENTE 6 variables [evaluador, candidato, puesto, fecha y hora, lugar, liga]. Nunca cae a texto
-    libre: si Meta la rechaza, el error (legible) viaja al seguimiento. Por Telegram (sin plantillas) sale `texto`."""
+    """Aviso a un EVALUADOR (entrevistador, médico, instructor) en CASCADA (Cambio 46, reemplaza «siempre plantilla» del
+    Cambio 35):
+
+    1. Texto libre (pasa si el evaluador escribió en las últimas 24 h).
+    2. Si Meta lo rechaza, la plantilla «Utilidad» de 6 variables [evaluador, candidato, puesto, fecha y hora, lugar, liga]
+       en es_MX.
+    3. Si la plantilla no existe o sigue en revisión (132001…) el resultado sale con `estado="pendiente"` (Pendiente de
+       plantilla, NUNCA fallido) y `reintento` con lo necesario para volver a intentarlo. Cualquier otro rechazo
+       (número inválido, token) es definitivo: `error` legible.
+
+    Por Telegram (sin plantillas) sale `texto`."""
     if _por_telegram(telefono, cuenta_id):
         return await telegram.enviar_texto(telefono, texto)
     if settings.whatsapp_provider != "meta":
         return await enviar_mensaje(telefono, texto)
     if len(parametros) != 6:
         raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
-    resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma)
+    libre = await _texto_libre_meta(telefono, texto) if (texto or "").strip() else _resultado(False, "sin texto")
+    if libre.get("enviado"):
+        libre["formato"] = "texto"
+        return libre
+    params = [str(x or "-") for x in parametros]
+    resultado = await enviar_plantilla(telefono, plantilla, params, settings.meta_plantilla_evaluador_idioma or "es_MX")
     resultado["plantilla"] = plantilla
-    if not resultado.get("enviado"):
-        resultado["error"] = error_legible(resultado.get("detalle", ""))
-        print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» no salió: {resultado.get('detalle')}")
+    resultado["texto_libre"] = str(libre.get("detalle") or "")
+    if resultado.get("enviado"):
+        return resultado
+    if es_plantilla_pendiente(resultado):
+        resultado["estado"] = "pendiente"
+        resultado["pendiente_plantilla"] = True
+        resultado["error"] = TEXTO_PENDIENTE_PLANTILLA
+        resultado["reintento"] = {"telefono": telefono, "plantilla": plantilla, "parametros": params, "texto": texto}
+        print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» todavía no está activa ({resultado.get('detalle')}); "
+              "queda pendiente y se reintentará", flush=True)
+        return resultado
+    resultado["error"] = error_legible(resultado.get("detalle", ""))
+    print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» no salió: {resultado.get('detalle')}")
     return resultado
 
 

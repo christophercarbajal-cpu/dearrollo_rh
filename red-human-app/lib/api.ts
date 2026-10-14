@@ -3616,10 +3616,10 @@ export type AccionEvaluacion =
 /** Liga externa de una evaluación (2026-10-01): existe aunque su envío falle; Abrir / Copiar / Enviar o reenviar, y el
  * último envío viaja aparte. */
 export type ClaveLiga = "consentimiento" | "evaluador" | "otro_sistema" | "proveedor";
-export interface EnvioLiga { canal: string; destino: string; enviado: boolean; detalle: string }
+export interface EnvioLiga { canal: string; destino: string; enviado: boolean; detalle: string; pendiente?: boolean }
 export interface LigaEvaluacion {
   clave: ClaveLiga; titulo: string; url: string; para: string; puedeEnviar: boolean; motivoNoEnvio: string;
-  ultimoEnvio: { fecha: string | null; por: string; enviado: boolean; envios: EnvioLiga[] } | null;
+  ultimoEnvio: { fecha: string | null; por: string; enviado: boolean; pendiente?: boolean; envios: EnvioLiga[] } | null;
 }
 
 export interface AdjuntoEvaluacion { id: string; nombre: string; mime: string; subidoPor: string; subidoVia: string; subidoEn: string | null }

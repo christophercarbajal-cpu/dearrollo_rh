@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     meta_plantilla_evaluador: str = "aviso_evaluador_rh"
     meta_plantilla_evaluador_cambio: str = "cita_cambio_evaluador_rh"
     meta_plantilla_evaluador_cancelada: str = "cita_cancelada_evaluador_rh"
+    # Cambio 46 (2026-10-14): aviso de cita NUEVA / recordatorio a un instructor (capacitación presencial) y a un médico,
+    # con las mismas 6 variables. Todas las plantillas de evaluador van en es_MX.
+    meta_plantilla_instructor: str = "aviso_instructor"
+    meta_plantilla_medico: str = "aviso_medico"
+    meta_plantilla_evaluador_idioma: str = "es_MX"
+    # Cambio 46: un aviso «Pendiente de plantilla» (plantilla inexistente o en revisión en Meta) se reintenta cada N minutos
+    # mientras no pasen M días desde el primer intento.
+    meta_reintento_plantilla_min: int = 15
+    meta_reintento_plantilla_dias: int = 7
     # 2026-10-13 (plantillas oficiales, Cambios 28-29): al habilitarse «Prefiltro por WhatsApp» se abre el flujo con
     # META_PLANTILLA_INICIO ({{1}} nombre del candidato); cuando el candidato debe confirmar un horario,
     # META_PLANTILLA_AGENDA, que en Meta NO tiene variables (META_PLANTILLA_AGENDA_PARAMS vacío = 0 parámetros; solo si

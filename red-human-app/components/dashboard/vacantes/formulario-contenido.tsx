@@ -48,7 +48,7 @@ import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
 import type { EtapaCandidato, PasoProceso, Vacante } from "@/lib/data";
 import { enfoqueDeRuta, rutaMasiva } from "@/components/dashboard/vacantes/perfil-operativo";
-import { TextoPlataforma } from "@/components/dashboard/vacantes/texto-plataforma";
+import { PestanasTextoPlataforma } from "@/components/dashboard/vacantes/texto-plataforma";
 import { ligaCanal, markdownATexto, slugificar } from "@/lib/markdown-texto";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import {
@@ -903,13 +903,16 @@ export function FormularioContenidoVacante({
 
           <Seccion titulo="Textos por plataforma" ayuda="«Copiar» lleva el texto limpio y la liga de postulación de ese canal.">
             {/* Cambio 43: Markdown pintado (sin #, ** ni símbolos crudos); WhatsApp siempre sin Markdown */}
-            <TextoPlataforma etiqueta="WhatsApp" canal="whatsapp" texto={value.texto_whatsapp} sinMarkdown
-              liga={ligaDe("whatsapp")} provisional={!slugVacante} onChange={(t) => set("texto_whatsapp")(markdownATexto(t))} />
-            {(["portal", "occ", "linkedin"] as const).map((k) => (
-              <TextoPlataforma key={k} etiqueta={{ portal: "Portal Red Human", occ: "OCC Mundial", linkedin: "LinkedIn" }[k]} canal={k}
-                texto={value.publicaciones[k]?.page ?? (k === "occ" ? value.texto_bolsa : "")} liga={ligaDe(k)} provisional={!slugVacante}
-                onChange={(t) => setPub(k, t)} />
-            ))}
+            {/* Cambio 45: pestañas horizontales; WhatsApp activa al cargar y solo se ve el texto de la pestaña elegida */}
+            <PestanasTextoPlataforma pestanas={[
+              { etiqueta: "WhatsApp", canal: "whatsapp", texto: value.texto_whatsapp, sinMarkdown: true, liga: ligaDe("whatsapp"),
+                provisional: !slugVacante, onChange: (t: string) => set("texto_whatsapp")(markdownATexto(t)) },
+              ...(["portal", "occ", "linkedin"] as const).map((k) => ({
+                etiqueta: { portal: "Portal Red Human", occ: "OCC Mundial", linkedin: "LinkedIn" }[k], canal: k,
+                texto: value.publicaciones[k]?.page ?? (k === "occ" ? value.texto_bolsa : ""), liga: ligaDe(k), provisional: !slugVacante,
+                onChange: (t: string) => setPub(k, t),
+              })),
+            ]} />
           </Seccion>
         </section>
       )}

@@ -341,9 +341,10 @@ function FilaLiga({ l, live, ocupado, onCopiar, onEnviar }: {
         {!u
           ? (l.puedeEnviar ? `Sin enviar · para ${l.para}` : l.motivoNoEnvio)
           : <>
-              {u.enviado ? "Enviado" : "Envío fallido"} a {l.para}{u.fecha ? ` · ${textoFechaHora(u.fecha)}` : ""}:{" "}
-              {u.envios.map((x) => `${x.enviado ? "✓" : "✗"} ${CANAL[x.canal] ?? (x.canal || "sin canal")}${!x.enviado && x.detalle ? ` (${x.detalle})` : ""}`).join(" · ")}
-              {!u.enviado && " — la liga sigue disponible para abrir o copiar."}
+              {u.enviado ? "Enviado" : u.pendiente ? "Pendiente de plantilla" : "Envío fallido"} a {l.para}{u.fecha ? ` · ${textoFechaHora(u.fecha)}` : ""}:{" "}
+              {u.envios.map((x) => `${x.enviado ? "✓" : x.pendiente ? "⏳" : "✗"} ${CANAL[x.canal] ?? (x.canal || "sin canal")}${!x.enviado && !x.pendiente && x.detalle ? ` (${x.detalle})` : ""}`).join(" · ")}
+              {u.pendiente && !u.enviado && " — la plantilla sigue en revisión en Meta; se enviará sola en cuanto la aprueben."}
+              {!u.enviado && !u.pendiente && " — la liga sigue disponible para abrir o copiar."}
             </>}
       </p>
     </li>
@@ -453,7 +454,7 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
         // 2026-10-08: trazabilidad por destinatario (último envío a cada quien)
         <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-ink-3">
           {Object.entries(e.envios!).map(([d, x]) => (
-            <span key={d}>{DESTINATARIO[d] ?? d}: <b className={x.estado === "fallido" ? "text-bad" : x.estado === "entregado" ? "text-good" : "text-ink-2"}>{x.estadoTexto}</b>
+            <span key={d}>{DESTINATARIO[d] ?? d}: <b className={x.estado === "fallido" ? "text-bad" : x.estado === "pendiente" ? "text-warn" : x.estado === "entregado" ? "text-good" : "text-ink-2"}>{x.estadoTexto}</b>
               {x.estado === "fallido" && x.error && <span className="text-bad"> — {x.error}</span>}</span>
           ))}
         </p>

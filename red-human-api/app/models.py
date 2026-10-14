@@ -1818,6 +1818,10 @@ class NotificacionEnviada(Base):
     enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     detalle: Mapped[str] = mapped_column(Text, default="")
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    # Cambio 46: «pendiente» = la plantilla de Meta no existe o sigue en revisión (132001…); el job
+    # `reintento_plantillas` lo vuelve a intentar con `reintento` {telefono, plantilla, parametros, texto, intentos, ultimo}.
+    estado: Mapped[str] = mapped_column(String(20), default="")
+    reintento: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 
 class IntegracionTeams(Base):
@@ -2632,7 +2636,10 @@ class EventoEvaluacion(Base):
 # evaluador/médico, captura de referencias, sala de la entrevista, documentos) deja una fila POR CANAL con su estado
 # real. Una llamada de envío = un `lote` (todas sus filas comparten el mismo); el último lote de cada destinatario es lo
 # que se muestra. `entregado`/`fallido` también los escribe el acuse de WhatsApp (statuses del webhook, por `mensaje_id`).
-ESTADOS_ENVIO = {"intento": "Intento", "enviado": "Enviado", "entregado": "Entregado", "fallido": "Fallido"}
+# Cambio 46: «pendiente» = Pendiente de plantilla (plantilla de Meta en revisión; se reintenta sola). «Fallido» queda SOLO para
+# errores definitivos (número inválido, token…).
+ESTADOS_ENVIO = {"intento": "Intento", "enviado": "Enviado", "entregado": "Entregado", "pendiente": "Pendiente de plantilla",
+                 "fallido": "Fallido"}
 DESTINATARIOS_ENVIO = {"candidato": "Candidato", "evaluador": "Evaluador", "entrevistador": "Entrevistador",
                        "medico": "Médico", "rh": "RH", "cliente": "Cliente"}
 # Qué se envió (la liga o el aviso): define qué reenviar sin reiniciar el avance de la actividad.
@@ -2665,6 +2672,8 @@ class EnvioActividad(Base):
     creado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, index=True)
     actualizado_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
     entregado_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    # Cambio 46: la fila de `notificaciones_enviadas` que lo originó (el reintento de plantilla actualiza ambas)
+    notificacion_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
 
 
 # --- Firma electrónica incrustada con Dropbox Sign (2026-09-29) ---

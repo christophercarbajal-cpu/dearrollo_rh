@@ -60,7 +60,7 @@ export const TONO_ESTADO_U: Record<EstadoUnificado, "neutral" | "brand" | "human
 const TEXTO_DESTINATARIO: Record<string, string> = {
   candidato: "Candidato", medico: "Médico", entrevistador: "Entrevistador", evaluador: "Evaluador", rh: "RH", cliente: "Cliente",
 };
-const TONO_ENVIO: Record<EnvioDestinatario["estado"], string> = { intento: "text-ink-3", enviado: "text-human", entregado: "text-good", fallido: "text-bad" };
+const TONO_ENVIO: Record<EnvioDestinatario["estado"], string> = { intento: "text-ink-3", enviado: "text-human", entregado: "text-good", pendiente: "text-warn", fallido: "text-bad" };
 
 export type PresetPaso = { tipo: string; pasoId: string; titulo: string; usuarioId?: number | null };
 type Pestana = NonNullable<AccionPaso["pestana"]>;
@@ -553,7 +553,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           {ps && ps.status === "error_envio" ? <EstadoFilaPsicometria ps={ps} />
                             : <Badge tone={TONO_ESTADO_U[estadoU] ?? "neutral"}>{p.estadoUnificadoTexto ?? p.estadoTexto}</Badge>}
                           {/* C8: el estado del aviso va aparte del de la actividad («Programada» + «Aviso no enviado») */}
-                          {p.aviso && <Badge tone="bad">Aviso: {p.aviso.texto}</Badge>}
+                          {p.aviso && <Badge tone={p.aviso.estado === "pendiente_plantilla" ? "warn" : "bad"}>Aviso: {p.aviso.texto}</Badge>}
                         </button>
                         {menu.length > 0 ? (
                           <MenuAcciones acciones={menu} etiqueta={`Acciones de «${p.nombre}»`} className="shrink-0" />
@@ -575,7 +575,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
                           {p.espera && <p className={cn("font-medium", p.error ? "text-bad" : "text-warn")}>{p.espera}</p>}
                           {p.aviso && (
                             <div className="flex flex-col gap-1.5 rounded-lg border border-bad/30 bg-bad-soft/30 px-2.5 py-2">
-                              <p><b className="text-bad">Aviso {p.aviso.aQuien}: {p.aviso.texto}.</b> {p.aviso.motivo}</p>
+                              <p><b className={p.aviso.estado === "pendiente_plantilla" ? "text-warn" : "text-bad"}>Aviso {p.aviso.aQuien}: {p.aviso.texto}.</b> {p.aviso.motivo}</p>
                               <div className="flex flex-wrap gap-1.5">
                                 {p.aviso.liga && (
                                   <Button size="sm" variant="ghost" onClick={() => copiarTexto(p.aviso!.liga, "Liga")}>Copiar liga</Button>

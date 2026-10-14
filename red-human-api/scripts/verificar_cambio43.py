@@ -262,7 +262,8 @@ console.log(JSON.stringify(r));
     check(r["slug"] == "cajero-a-de-sucursal", "la liga provisional de una vacante nueva usa la misma regla de slug que el servidor")
     tp = (APP_DIR / "components/dashboard/vacantes/texto-plataforma.tsx").read_text(encoding="utf-8")
     pagina = (APP_DIR / "app/dashboard/vacantes/page.tsx").read_text(encoding="utf-8")
-    check("BotonCopiarTexto" in tp and "textoParaCopiar(texto, liga)" in tp and 'canal="whatsapp"' in form and "sinMarkdown" in form,
+    # Cambio 45: los textos van en pestañas (`PestanasTextoPlataforma`) con las mismas props
+    check("BotonCopiarTexto" in tp and "textoParaCopiar(texto, liga)" in tp and 'canal: "whatsapp"' in form and "sinMarkdown: true" in form,
           "cada texto del formulario trae «Copiar» y WhatsApp va sin Markdown")
     check("<MarkdownVista" in pagina and "ligaDe(activa)" in pagina and "<pre" not in pagina.split("function PestanasPlataforma")[1].split("\nfunction ")[0],
           "el detalle de la vacante pinta el Markdown y copia con la liga del canal")

@@ -200,8 +200,10 @@ with TestClient(app) as client:
     res = {(x["destinatario"], x["canal"]): x for x in r.json()["resultados"]}
     ent_wa = res[("entrevistador", "whatsapp")]
     check(len(WA_PLANTILLA) == 1 and not any(t[0] == "3399998888" for t in WA_TEXTO) and ent_wa["enviado"] is False,
-          "Cambio 35: si Meta rechaza la plantilla NO se manda texto libre al evaluador")
-    check(ent_wa.get("error", "").startswith("La plantilla no existe"), f"el resultado trae el error de Meta legible («{ent_wa.get('error')}»)")
+          "si Meta rechaza la plantilla no hay un texto libre de respaldo después (el texto libre va ANTES, Cambio 46)")
+    # Cambio 46: plantilla inexistente / en revisión (132001) = «Pendiente de plantilla» (se reintenta sola), nunca «Fallido»
+    check(ent_wa.get("estado") == "pendiente" and ent_wa.get("error", "").startswith("Pendiente de plantilla"),
+          f"132001 → «Pendiente de plantilla» («{ent_wa.get('error')}»)")
     PLANTILLA_OK["ok"] = True
 
     # correo sin clave: warning, sin excepción

@@ -1128,7 +1128,8 @@ function PestanasPlataforma({ bloques, slug }: { bloques: Record<string, BloqueP
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap gap-1 border-b border-border-faint bg-surface-2/50 p-1.5">
+      {/* Cambio 45: pestañas deslizables si no caben; WhatsApp primero y activa al cargar */}
+      <div role="tablist" className="scroll-x gap-1 border-b border-border-faint bg-surface-2/50 p-1.5">
         {disponibles.map((p) => (
           <button
             key={p.clave}

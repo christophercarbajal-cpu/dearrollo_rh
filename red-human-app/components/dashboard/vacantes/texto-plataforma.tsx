@@ -117,3 +117,32 @@ export function TextoPlataforma({ etiqueta, canal, texto, liga, onChange, sinMar
     </div>
   );
 }
+
+export type PestanaTexto = Omit<Parameters<typeof TextoPlataforma>[0], "canal"> & { canal: string };
+
+/** Cambio 45 (2026-10-14): «Textos por plataforma» en PESTAÑAS horizontales (deslizables si no caben). La primera
+ * (WhatsApp) queda activa al cargar y debajo se pinta SOLO el texto de la pestaña elegida, con su «Editar» y su «Copiar»
+ * (liga `?canal=`). */
+export function PestanasTextoPlataforma({ pestanas }: { pestanas: PestanaTexto[] }) {
+  const [activa, setActiva] = useState<string>(pestanas[0]?.canal ?? "");
+  const actual = pestanas.find((p) => p.canal === activa) ?? pestanas[0];
+  if (!actual) return null;
+  return (
+    <div className="flex flex-col gap-3" data-pestanas-plataforma>
+      <div role="tablist" aria-label="Textos por plataforma" className="scroll-x gap-1 rounded-xl border border-border-faint bg-surface-2/50 p-1">
+        {pestanas.map((p) => (
+          <button key={p.canal} type="button" role="tab" aria-selected={p.canal === actual.canal} data-pestana={p.canal}
+            onClick={() => setActiva(p.canal)}
+            className={cn("rounded-lg px-3 py-1.5 text-[13px] font-medium transition",
+              p.canal === actual.canal ? "bg-surface text-ink shadow-sm" : "text-ink-3 hover:text-ink")}>
+            {p.etiqueta}
+          </button>
+        ))}
+      </div>
+      {/* key = canal: al cambiar de pestaña el modo «Editar» de la anterior no se arrastra */}
+      <div role="tabpanel">
+        <TextoPlataforma key={actual.canal} {...actual} />
+      </div>
+    </div>
+  );
+}

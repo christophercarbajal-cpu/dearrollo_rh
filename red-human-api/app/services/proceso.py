@@ -1854,6 +1854,11 @@ def _con_cuello(paso: dict, r: dict, ev: Optional[Evaluacion], env: Optional[dic
             return {**r, "aviso": aviso_no_enviado(ev, quien, canales)}
         return {**r, "error": f"No se pudo enviar {que} {a_quien}" + (f" ({motivo})" if motivo else ""),
                 "espera": f"Error de envío {a_quien}: reenvía o copia la liga"}
+    if estado == "pendiente" and quien != "candidato" and ev is not None:
+        # Cambio 46: la plantilla de Meta sigue en revisión — el aviso NO falló: se reintenta solo
+        aviso = aviso_no_enviado(ev, quien, (env.get(quien) or {}).get("canales") or [])
+        return {**r, "aviso": {**aviso, "estado": "pendiente_plantilla", "texto": "Pendiente de plantilla",
+                               "motivo": "La plantilla de WhatsApp sigue en revisión en Meta; el aviso se enviará solo en cuanto la apruebe."}}
     if estado is None and not cuello.get("legado"):
         # a quien debe actuar no le ha salido nada todavía: la actividad no ha empezado (copiar la liga no cuenta)
         return {**r, "cuello": {**cuello, "clave": "sin_iniciar", "texto": "Sin enviar"}, "espera": f"Falta enviar {que} {a_quien}"}

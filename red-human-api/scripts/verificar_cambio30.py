@@ -67,8 +67,15 @@ def leer(rel):
     return (APP_DIR / rel).read_text(encoding="utf-8")
 
 
+# Cambio 46: el aviso al evaluador intenta primero texto libre; estos números NO han escrito en 24 h (Meta lo rechaza) y
+# el aviso sigue con la plantilla
+FUERA_DE_VENTANA = {"523311112222"}
+
+
 async def _meta_falso(cuerpo):
     ENVIADOS.append(cuerpo)
+    if cuerpo.get("type") == "text" and cuerpo.get("to") in FUERA_DE_VENTANA:
+        return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": 131047}
     return {"enviado": True, "proveedor": "meta", "detalle": "ok", "mensaje_id": f"wamid.{len(ENVIADOS)}"}
 
 
@@ -302,10 +309,10 @@ with TestClient(app) as client:
     textos = [c.get("text", {}).get("body", "") for c in ENVIADOS[desde:] if c.get("type") == "text"]
     check(r.status_code == 201 and any(t.startswith("Hola Carla, tienes una capacitación programada para Operador de montacargas") for t in textos),
           f"candidato: «Tienes una capacitación programada para [puesto]» ({r.status_code})")
-    hsm = [c for c in ENVIADOS[desde:] if c.get("type") == "template" and c["template"]["name"] == "aviso_evaluador_rh"]
+    hsm = [c for c in ENVIADOS[desde:] if c.get("type") == "template" and c["template"]["name"] == "aviso_instructor"]
     ps = [x["text"] for x in hsm[0]["template"]["components"][0]["parameters"]] if hsm else []
     check(len(ps) == 6 and ps[2] == "Capacitación: Operador de montacargas",
-          f"instructor: plantilla «aviso_evaluador_rh» (Cambio 35) con «Capacitación: [puesto]» → {ps}")
+          f"instructor: plantilla «aviso_instructor» (Cambio 46) con «Capacitación: [puesto]» → {ps}")
     x = paso_cap(pp)
     check(x["estado"] == "en_curso" and x["evaluacion"], "programada: la actividad queda en curso")
     ev_cod = r.json()["evaluacion"]["codigo"]

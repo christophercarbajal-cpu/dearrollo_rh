@@ -155,7 +155,7 @@ export interface PasoSeguimiento {
   /** Motivo del estado «Error» (envío fallido, disparo automático fallido…). */
   error?: string | null;
   /** C8 (prueba del 11 de octubre): el aviso al entrevistador / evaluador NO salió — va aparte del estado de la actividad. */
-  aviso?: { a: string; aQuien: string; estado: "no_enviado"; texto: string; motivo: string; sinBot: boolean; mensaje: string; liga: string } | null;
+  aviso?: { a: string; aQuien: string; estado: "no_enviado" | "pendiente_plantilla"; texto: string; motivo: string; sinBot: boolean; mensaje: string; liga: string } | null;
   /** Ruta automática: el prefiltro quedó en «Revisar prefiltro» (decide RH). */
   revisarPrefiltro?: boolean;
   /** URL REAL de la actividad (sala, prueba, liga del evaluador, consentimiento, documentos). Abrirla/copiarla no marca nada. */
@@ -180,7 +180,8 @@ export interface PasoSeguimiento {
   /** 2026-10-08: configurada al agregarla; «Iniciar» la ejecuta tal cual. */
   configurada?: boolean;
 }
-export type EstadoEnvio = "intento" | "enviado" | "entregado" | "fallido";
+/** Cambio 46: «pendiente» = Pendiente de plantilla (en revisión en Meta; se reintenta sola). Nunca es «Fallido». */
+export type EstadoEnvio = "intento" | "enviado" | "entregado" | "pendiente" | "fallido";
 export interface EnvioDestinatario {
   estado: EstadoEnvio;
   estadoTexto: string;

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from .. import fechas
 from ..models import DESTINATARIOS_ENVIO, ESTADOS_ENVIO, EnvioActividad, Evaluacion, EventoEvaluacion, Postulacion
 
-PRIORIDAD = ("entregado", "enviado", "intento", "fallido")  # estado agregado de un lote: el «mejor» de sus canales
+PRIORIDAD = ("entregado", "enviado", "intento", "pendiente", "fallido")  # Cambio 46: «pendiente» = Pendiente de plantilla  # estado agregado de un lote: el «mejor» de sus canales
 
 
 def destinatario_evaluador(ev: Optional[Evaluacion]) -> str:
@@ -83,7 +83,10 @@ def cerrar(db: Session, fila: Optional[EnvioActividad], resultados: Iterable[dic
         )
         destino.canal = str(r.get("proveedor") if r.get("proveedor") == "telegram" else (r.get("canal") or ""))[:20]
         destino.destino = str(r.get("destino") or "")[:200]
-        destino.estado = "enviado" if r.get("enviado") else "fallido"
+        # Cambio 46: una plantilla en revisión NUNCA es «Fallido»: queda «Pendiente de plantilla» y se reintenta sola
+        destino.estado = "enviado" if r.get("enviado") else "pendiente" if r.get("estado") == "pendiente" else "fallido"
+        if r.get("notificacion_id"):
+            destino.notificacion_id = int(r["notificacion_id"])
         destino.detalle = str(r.get("detalle") or "")[:1000]
         destino.mensaje_id = str(r.get("wa_id") or r.get("mensaje_id") or r.get("id") or "")[:120]
         if i:
@@ -195,7 +198,7 @@ def resumen(filas: List[EnvioActividad], *, ev: Optional[Evaluacion] = None, mot
 
 
 def estado_de(resumen_: Dict[str, dict], destinatario: str, motivos: Optional[tuple] = None) -> Optional[str]:
-    """Estado del último envío a ese destinatario (de esos motivos): entregado | enviado | intento | fallido | None."""
+    """Estado del último envío a ese destinatario (de esos motivos): entregado | enviado | intento | pendiente | fallido | None."""
     d = (resumen_ or {}).get(destinatario)
     if not d:
         return None

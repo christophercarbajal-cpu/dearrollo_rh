@@ -150,10 +150,30 @@ PLANTILLA_EVALUADOR_POR_EVENTO = {
 _PLANTILLA_EVALUADOR_DEFAULT = {"aviso": "aviso_evaluador_rh", "cambio": "cita_cambio_evaluador_rh", "cancelada": "cita_cancelada_evaluador_rh"}
 
 
-def plantilla_evaluador(evento: str) -> Optional[str]:
+# Cambio 46: el aviso de cita nueva / recordatorio a un instructor o a un médico tiene su propia plantilla
+_PLANTILLA_ROL_DEFAULT = {"instructor": "aviso_instructor", "medico": "aviso_medico"}
+
+
+def rol_evaluador(d_ev: Optional[dict]) -> str:
+    """instructor (capacitación presencial) | medico (evaluación médica) | evaluador."""
+    d_ev = d_ev or {}
+    if d_ev.get("capacitacion"):
+        return "instructor"
+    if d_ev.get("tipo") == "medica":
+        return "medico"
+    return "evaluador"
+
+
+def plantilla_evaluador(evento: str, d_ev: Optional[dict] = None) -> Optional[str]:
+    """Nombre EXACTO de la plantilla de Meta (los que ya están en revisión): aviso_evaluador_rh · cita_cambio_evaluador_rh ·
+    cita_cancelada_evaluador_rh · aviso_instructor · aviso_medico."""
     clase = PLANTILLA_EVALUADOR_POR_EVENTO.get(evento)
     if clase is None:
         return None
+    rol = rol_evaluador(d_ev)
+    if clase == "aviso" and rol in _PLANTILLA_ROL_DEFAULT:
+        nombre = {"instructor": settings.meta_plantilla_instructor, "medico": settings.meta_plantilla_medico}[rol]
+        return (nombre or "").strip() or _PLANTILLA_ROL_DEFAULT[rol]
     nombre = {"aviso": settings.meta_plantilla_evaluador, "cambio": settings.meta_plantilla_evaluador_cambio,
               "cancelada": settings.meta_plantilla_evaluador_cancelada}[clase]
     return (nombre or "").strip() or _PLANTILLA_EVALUADOR_DEFAULT[clase]
@@ -681,7 +701,7 @@ async def _enviar_y_registrar(
             with de_cuenta(cuenta_canal):
                 envio = await enviar_plantilla_documentos(destino, plantilla_valores, contenido, nivel=int(plantilla_valores.get("nivel") or 1))
         elif canal == "whatsapp" and plantilla_evaluador_ is not None and settings.whatsapp_provider == "meta":
-            # Cambio 35: evaluadores SIEMPRE con plantilla «Utilidad» de 6 variables (nunca texto libre)
+            # Cambio 46: evaluadores en cascada — texto libre → plantilla «Utilidad» de 6 variables → «Pendiente de plantilla»
             nombre_pl, params_pl = plantilla_evaluador_
             with de_cuenta(cuenta_canal):
                 envio = await enviar_plantilla_evaluador(destino, nombre_pl, params_pl, contenido)
@@ -710,10 +730,17 @@ async def _enviar_y_registrar(
         envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}
     finally:
         rol.__exit__(None, None, None)
-    db.add(NotificacionEnviada(
+    pendiente = envio.get("estado") == "pendiente" and not envio.get("enviado")
+    fila = NotificacionEnviada(
         cuenta_id=cuenta_id, candidato_id=candidato_id, evento=evento, destinatario_tipo=destinatario_tipo,
         canal=canal, destino=destino, enviado=bool(envio.get("enviado")), detalle=str(envio.get("detalle", "")),
-    ))
+        estado="enviado" if envio.get("enviado") else "pendiente" if pendiente else "fallido",
+        # Cambio 46: lo necesario para reintentar SOLO cuando la plantilla está en revisión
+        reintento={**(envio.get("reintento") or {}), "intentos": 1, "postulacion_id": p.id} if pendiente else None,
+    )
+    db.add(fila)
+    if pendiente:
+        db.flush()  # el id liga la fila con la trazabilidad (`envios_actividad.notificacion_id`)
     if destinatario_tipo == "candidato" and canal == "whatsapp":
         # Mensaje saliente: queda en el historial de ESTA postulación pero NO mueve la
         # conversación del candidato (B1, ver candidatos.fijar_conversacion).
@@ -721,7 +748,9 @@ async def _enviar_y_registrar(
             candidato_id=candidato_id, postulacion_id=p.id, rol="assistant", texto=contenido, canal="whatsapp",
             enviado=bool(envio.get("enviado")), wa_id=envio.get("wa_id", ""),
         ))
-    salida = {**base, **envio, "detalle": str(envio.get("detalle", ""))}
+    salida = {**base, **{k: v for k, v in envio.items() if k != "reintento"}, "detalle": str(envio.get("detalle", ""))}
+    if pendiente:
+        salida["notificacion_id"] = fila.id
     if canal == "whatsapp" and not salida.get("enviado") and not salida.get("error"):
         from .whatsapp import error_legible
 
@@ -737,6 +766,10 @@ def advertencias_de(resultados: List[dict]) -> List[str]:
         if r.get("enviado"):
             continue
         detalle = str(r.get("detalle") or "")
+        if r.get("estado") == "pendiente":
+            avisos.append(f"El WhatsApp a {r.get('destinatario')} está pendiente de plantilla (en revisión en Meta); "
+                          "se enviará solo en cuanto Meta la apruebe")
+            continue
         if r.get("canal") == "correo" and r.get("destino"):
             avisos.append(f"Evaluación asignada, pero el correo falló. Verifica la API Key o el Dominio ({r.get('destinatario')}: {detalle[:120]})")
         elif r.get("canal") == "whatsapp" and r.get("destino"):
@@ -871,7 +904,7 @@ async def disparar(
             d_ev = extra.get("_datos_evaluacion") or {}
             # Cambio 35: todo aviso de cita al evaluador (nuevo, «Reenviar», recordatorio, «Tu cita cambió», cancelación)
             # sale con plantilla de Meta de 6 variables; los demás eventos al entrevistador conservan su texto
-            nombre_pl = plantilla_evaluador(evento)
+            nombre_pl = plantilla_evaluador(evento, d_ev)
             pl = ((nombre_pl, parametros_plantilla_evaluador(extra.get("_datos_entrevista") or {}, d_ev))
                   if nombre_pl and texto else None)
             resultados.append(await _enviar_y_registrar(

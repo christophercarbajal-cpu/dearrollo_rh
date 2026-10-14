@@ -180,8 +180,10 @@ def ultimo_envio(eventos: List[EventoEvaluacion], clave: str) -> Optional[dict]:
         if filas:
             return {
                 "fecha": fechas.iso(e.fecha), "por": e.actor or "", "enviado": any(f.get("enviado") for f in filas),
+                # Cambio 46: plantilla en revisión en Meta = «Pendiente de plantilla», no «Envío fallido»
+                "pendiente": not any(f.get("enviado") for f in filas) and any(f.get("estado") == "pendiente" for f in filas),
                 "envios": [{"canal": f.get("canal") or "", "destino": f.get("destino") or "", "enviado": bool(f.get("enviado")),
-                            "detalle": str(f.get("detalle") or "")[:200]} for f in filas],
+                            "pendiente": f.get("estado") == "pendiente", "detalle": str(f.get("detalle") or "")[:200]} for f in filas],
             }
     return None
 
@@ -767,7 +769,7 @@ async def notificar(db: Session, ev: Evaluacion, p: Postulacion, evento_: str, a
     if resultados:
         # también los fallidos: el estado del envío se muestra junto a cada liga (nunca en silencio)
         evento(db, ev, "envio", actor, "sistema", evento=evento_, firma_cita=firma,
-               envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle")} for r in resultados])
+               envios=[{k: r.get(k) for k in ("destinatario", "canal", "destino", "enviado", "detalle", "estado")} for r in resultados])
         from . import envios
 
         motivo = ("recordatorio" if evento_ == "recordatorio_evaluacion" else "otro_sistema" if ev.forma == "liga_otro_sistema"

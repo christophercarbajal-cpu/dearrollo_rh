@@ -65,8 +65,15 @@ def check(cond, msg):
 RECHAZAR = {"plantilla": None}
 
 
+# Cambio 46: el aviso al evaluador intenta primero texto libre; estos números NO han escrito en 24 h (Meta lo rechaza) y
+# el aviso sigue con la plantilla
+FUERA_DE_VENTANA = {"523311112222"}
+
+
 async def _meta_falso(cuerpo):
     ENVIADOS.append(cuerpo)
+    if cuerpo.get("type") == "text" and cuerpo.get("to") in FUERA_DE_VENTANA:
+        return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": 131047}
     if RECHAZAR["plantilla"] and cuerpo.get("type") == "template" and cuerpo["template"]["name"] == RECHAZAR["plantilla"]:
         return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": "131047"}
     return {"enviado": True, "proveedor": "meta", "detalle": "ok", "mensaje_id": f"wamid.{len(ENVIADOS)}"}
@@ -214,13 +221,13 @@ with TestClient(app) as client:
     client.post(f"/evaluaciones/publica/consentimiento/{db.query(__import__('app.models', fromlist=['Evaluacion']).Evaluacion).filter_by(codigo=ev).one().consentimiento_token}/aceptar",
                 json={"nombre": "Carla Cita", "acepto": True})
     al_medico = [c for c in ENVIADOS[desde:] if c.get("to") == "523311112222"]
-    check(al_medico and all(c.get("type") == "template" for c in al_medico)
-          and al_medico[-1]["template"]["name"] == "aviso_evaluador_rh" and len(al_medico[-1]["template"]["components"][0]["parameters"]) == 6,
-          f"al médico le llega la plantilla «aviso_evaluador_rh» de 6 variables, nunca texto libre ({[c.get('type') for c in al_medico]})")
+    check(al_medico and al_medico[-1].get("type") == "template"
+          and al_medico[-1]["template"]["name"] == "aviso_medico" and len(al_medico[-1]["template"]["components"][0]["parameters"]) == 6,
+          f"fuera de la ventana de 24 h al médico le llega la plantilla «aviso_medico» de 6 variables ({[c.get('type') for c in al_medico]})")
     ps = [x["text"] for x in al_medico[-1]["template"]["components"][0]["parameters"]]
     check(ps[0] == "Dra. Paula Médica" and ps[1] == "Carla Cita" and ps[2] == "Repartidor" and "Clínica Centro" in ps[4] and "/evaluacion/" in ps[5],
           f"[nombre_evaluador, candidato, puesto, fecha_y_hora, lugar, liga] → {ps}")
-    RECHAZAR["plantilla"] = "aviso_evaluador_rh"
+    RECHAZAR["plantilla"] = "aviso_medico"
     r = client.post(f"/evaluaciones/{ev}/ligas/evaluador/enviar")
     RECHAZAR["plantilla"] = None
     s = client.get(f"/procesos/postulaciones/{pc.codigo}").json()

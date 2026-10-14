@@ -62,8 +62,15 @@ def check(cond, msg):
     print(f"✅ {msg}")
 
 
+# Cambio 46: el aviso al evaluador intenta primero texto libre; estos números NO han escrito en 24 h (Meta lo rechaza) y
+# el aviso sigue con la plantilla
+FUERA_DE_VENTANA = {"523399998888", "523399997777"}
+
+
 async def _meta_falso(cuerpo):
     ENVIADOS.append(cuerpo)
+    if cuerpo.get("type") == "text" and cuerpo.get("to") in FUERA_DE_VENTANA:
+        return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": 131047}
     return {"enviado": True, "proveedor": "meta", "detalle": "ok", "mensaje_id": f"wamid.{len(ENVIADOS)}"}
 
 
@@ -218,13 +225,17 @@ with TestClient(app) as client:
     check([notificaciones.plantilla_evaluador(e) for e in ("evaluacion_asignada", "evaluacion_reprogramada", "evaluacion_cancelada", "recordatorio_evaluacion")]
           == ["aviso_evaluador_rh", "cita_cambio_evaluador_rh", "cita_cancelada_evaluador_rh", "aviso_evaluador_rh"],
           "aviso nuevo / «Reenviar» / recordatorio → aviso_evaluador_rh · «Tu cita cambió» → cita_cambio_evaluador_rh · cancelación")
+    check(notificaciones.plantilla_evaluador("evaluacion_asignada", {"capacitacion": True}) == "aviso_instructor"
+          and notificaciones.plantilla_evaluador("evaluacion_asignada", {"tipo": "medica"}) == "aviso_medico",
+          "Cambio 46: instructor → aviso_instructor · médico → aviso_medico")
     desde = len(ENVIADOS)
     env = asyncio.run(whatsapp.enviar_plantilla_evaluador("3399998888", "aviso_evaluador_rh",
                                                           notificaciones.parametros_plantilla_evaluador(d, dev), "texto"))
     t = plantillas(desde)
     check(env.get("enviado") and t and t[0]["template"]["name"] == "aviso_evaluador_rh" and t[0]["to"] == "523399998888"
-          and len(t[0]["template"]["components"][0]["parameters"]) == 6 and not any(c.get("type") == "text" for c in ENVIADOS[desde:]),
-          "sale la plantilla de 6 variables al número del evaluador (nunca texto libre)")
+          and len(t[0]["template"]["components"][0]["parameters"]) == 6
+          and [c.get("type") for c in ENVIADOS[desde:]] == ["text", "template"],
+          "fuera de la ventana de 24 h sale la plantilla de 6 variables al número del evaluador (Cambio 46: el texto libre se intentó antes)")
     check(whatsapp.error_legible("131047: Re-engagement message").startswith("Fuera de la ventana de 24 horas")
           and whatsapp.error_legible("131026 Message undeliverable").startswith("Número inválido")
           and whatsapp.error_legible("132001: Template name does not exist").startswith("La plantilla no existe"),

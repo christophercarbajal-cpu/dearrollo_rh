@@ -308,6 +308,14 @@ async def lifespan(app: FastAPI):
         id="documentos_web_recordatorio", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=300,
     )
+    # Cambio 46: avisos a evaluadores «Pendiente de plantilla» (plantilla de Meta en revisión) se reintentan solos
+    from .services.reintento_plantillas import job_reintentar
+
+    scheduler.add_job(
+        job_reintentar, "interval", minutes=max(1, int(settings.meta_reintento_plantilla_min or 15)),
+        id="reintento_plantillas", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
     scheduler.start()
     try:
         yield

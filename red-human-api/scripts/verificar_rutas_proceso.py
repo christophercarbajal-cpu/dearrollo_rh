@@ -325,8 +325,11 @@ with TestClient(app) as client:
         if t["estado"] == "pendiente" and t.get("clave") not in ("contrato_firmado", "confirmar_ingreso"):
             client.patch(f"/onboarding/tareas/{t['id']}", json={"estado": "realizada"})
     check(paso(seg(P), "tareas-onboarding")["estado"] == "completada", "Tareas de onboarding completadas")
-    r = client.post(f"/contratacion/expedientes/{EXP}/alta", json={"notificar": {"candidato_whatsapp": False, "candidato_correo": False}})
-    check(r.status_code == 200, f"«Confirmación de ingreso» ({r.status_code} {r.text[:160]})")
+    # Cambio 33: con TODAS las actividades de Onboarding completas pasa SOLO a Colaborador (ya no hay alta manual)
+    pe = post(P)
+    db.refresh(pe)
+    check(not pe.activa and pe.motivo_cierre == "contratado" and pe.expediente.estado == "alta",
+          "«Confirmación de ingreso»: actividades completas → Colaborador automático")
     s = seg(P)
     check(paso(s, "alta")["estado"] == "completada", "la ruta llega a «Confirmación de ingreso» completada")
     check(all(x["estado"] in ("completada", "omitida") for e in s["etapas"] for x in e["pasos"] if x["obligatorio"]),
@@ -355,7 +358,7 @@ with TestClient(app) as client:
     r = client.post(f"/expedientes/publica/{tok}/documentos", data={"tipo": "Identificación oficial"}, files={"archivo": ("ine.pdf", PDF, "application/pdf")})
     check(r.status_code in (200, 201), f"el candidato sube su identificación por la liga ({r.status_code})")
     s = seg(PM)
-    check(paso(s, "documentos-iniciales")["estado"] == "en_curso" and "identificación oficial" in paso(s, "documentos-iniciales")["espera"].lower()
+    check(paso(s, "documentos-iniciales")["estado"] == "en_curso" and "ine (frente y reverso)" in paso(s, "documentos-iniciales")["espera"].lower()
           and paso(s, "documentos-iniciales")["accion"]["clave"] == "validar_documentos",
           "Documentos iniciales: en curso, dice exactamente qué falta aprobar y la acción pasa a «Validar documentos»")
     client.post(f"/contratacion/expedientes/{post(PM).expediente.id}/documentos/estado", json={"tipo": "Identificación oficial", "estado": "aprobado"})

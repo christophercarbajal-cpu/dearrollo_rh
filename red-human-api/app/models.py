@@ -720,46 +720,108 @@ class SugerenciaMovilidad(Base):
     empleado: Mapped["Empleado"] = relationship(back_populates="sugerencias")
 
 
-# Checklist exacto pedido por el cliente para el expediente de contratación.
-DOCUMENTOS_BASE = [
-    "Identificación oficial",
-    "CURP",
-    "Constancia de Situación Fiscal / RFC",
-    "Número de Seguridad Social",
-    "Comprobante de domicilio",
-    "Cuenta bancaria / CLABE",
+# Cambio 34 (2026-10-13): catálogo ÚNICO de documentos con IDs fijos. Vacante, Configuración de la Cuenta («Documentos
+# de contratación» = plantilla de Onboarding), expediente y liga del candidato usan SOLO estos nombres. «Otro» lleva el
+# nombre que escribió RH (su identidad es «otro:<nombre>»). `alias` = cómo se llamaban antes o cómo los menciona una
+# descripción: se convierten al nombre del catálogo al guardar y en la migración (`scripts/migrar_catalogo_documentos.py`).
+ID_DOCUMENTO_OTRO = "otro"
+CATALOGO_DOCUMENTOS = [
+    {"id": "ine", "nombre": "INE (frente y reverso)", "cantidad": 1, "foto": False,
+     "alias": ("ine", "ife", "identificacion oficial", "identificacion", "credencial de elector", "credencial para votar")},
+    {"id": "curp", "nombre": "CURP", "cantidad": 1, "foto": False, "alias": ("curp",)},
+    {"id": "acta_nacimiento", "nombre": "Acta de nacimiento", "cantidad": 1, "foto": False, "alias": ("acta de nacimiento",)},
+    {"id": "nss", "nombre": "Número de Seguridad Social (NSS)", "cantidad": 1, "foto": False,
+     "alias": ("nss", "numero de seguridad social", "numero del imss", "numero de imss")},
+    {"id": "rfc", "nombre": "Constancia de Situación Fiscal (RFC)", "cantidad": 1, "foto": False,
+     "alias": ("rfc", "constancia de situacion fiscal", "constancia de situacion fiscal / rfc", "constancia fiscal")},
+    {"id": "comprobante_domicilio", "nombre": "Comprobante de domicilio", "cantidad": 1, "foto": False,
+     "alias": ("comprobante de domicilio", "comprobante domiciliario")},
+    {"id": "semanas_cotizadas", "nombre": "Semanas cotizadas del IMSS", "cantidad": 1, "foto": False,
+     "alias": ("semanas cotizadas", "semanas cotizadas imss", "reporte de semanas cotizadas")},
+    {"id": "cuenta_bancaria", "nombre": "Cuenta bancaria / CLABE", "cantidad": 1, "foto": False,
+     "alias": ("cuenta bancaria", "clabe", "estado de cuenta", "cuenta bancaria clabe")},
+    {"id": "licencia", "nombre": "Licencia de conducir", "cantidad": 1, "foto": False,
+     "alias": ("licencia de conducir", "licencia de manejo", "licencia federal", "licencia federal de conducir", "licencia vigente")},
+    {"id": "carta_recomendacion", "nombre": "Carta de recomendación laboral", "cantidad": 1, "foto": False,
+     "alias": ("carta de recomendacion", "cartas de recomendacion")},
+    {"id": "comprobante_estudios", "nombre": "Comprobante de estudios", "cantidad": 1, "foto": False,
+     "alias": ("comprobante de estudios", "certificado de estudios")},
+    {"id": "fotos_auto", "nombre": "Fotos del auto", "cantidad": 4, "foto": True,
+     "alias": ("fotos del auto", "fotos del vehiculo", "fotos del carro", "fotos de tu auto", "auto propio", "vehiculo propio",
+               "carro propio", "coche propio")},
+    {"id": "tarjeta_circulacion", "nombre": "Tarjeta de circulación", "cantidad": 1, "foto": False, "alias": ("tarjeta de circulacion",)},
+    {"id": "poliza_seguro", "nombre": "Póliza de seguro", "cantidad": 1, "foto": False,
+     "alias": ("poliza de seguro", "poliza del seguro")},
+    {"id": ID_DOCUMENTO_OTRO, "nombre": "Otro", "cantidad": 1, "foto": False, "alias": ()},
 ]
+_DOC_POR_ID = {x["id"]: x for x in CATALOGO_DOCUMENTOS}
 
-# Cambio 25 (2026-10-12): «Documentos y fotos que se piden» en la vacante. Sugeridos (RH puede escribir otros);
-# `cantidad` = cuántos archivos exige (las fotos del auto son 4) y `foto` = se valida a ojo de RH, no como documento
-# oficial. `palabras` = cómo los menciona una descripción (la IA los detecta con `ia.documentos_de_descripcion`).
+
+def _plano_documento(t) -> str:
+    import re as _re
+    import unicodedata as _ud
+
+    t = _ud.normalize("NFKD", str(t or "")).encode("ascii", "ignore").decode().lower()
+    t = _re.sub(r"[()\[\].,:;/]", " ", t)
+    return " ".join(t.split())
+
+
+_DOC_POR_ALIAS = {}
+for _d in CATALOGO_DOCUMENTOS:
+    if _d["id"] != ID_DOCUMENTO_OTRO:
+        for _a in (_d["nombre"], _d["id"], *_d["alias"]):
+            _DOC_POR_ALIAS[_plano_documento(_a)] = _d
+
+
+def documento_catalogo(valor) -> dict:
+    """{id, nombre, cantidad, foto} del catálogo para un id, un nombre del catálogo o un nombre viejo/alias
+    («Identificación oficial» → INE). Lo que no se reconoce es «Otro» con su nombre ({"id": "otro", "nombre": "…"})."""
+    if isinstance(valor, dict):
+        if valor.get("id") in _DOC_POR_ID and valor.get("id") != ID_DOCUMENTO_OTRO:
+            base = _DOC_POR_ID[valor["id"]]
+            return {k: base[k] for k in ("id", "nombre", "cantidad", "foto")}
+        valor = valor.get("nombre") or valor.get("tipo") or ""
+    nombre = " ".join(str(valor or "").split())[:80]
+    plano = _plano_documento(nombre)
+    d = _DOC_POR_ALIAS.get(plano)
+    if d is None:  # «Licencia federal de conducir (frente y reverso)», «Copia de CURP», «INE vigente»…
+        import re as _re
+
+        corto = " ".join(_re.sub(r"\b(frente y reverso|ambos lados|vigente|copia( de)?|original|escaneada?)\b", " ", plano).split())
+        d = _DOC_POR_ALIAS.get(corto)
+    if d is not None:
+        return {k: d[k] for k in ("id", "nombre", "cantidad", "foto")}
+    return {"id": ID_DOCUMENTO_OTRO, "nombre": nombre, "cantidad": 1, "foto": False}
+
+
+def clave_documento(valor) -> str:
+    """Identidad de un documento en TODO el sistema (dedupe vacante + Cuenta y dentro del expediente): el id del
+    catálogo o «otro:<nombre plano>»."""
+    d = documento_catalogo(valor)
+    return d["id"] if d["id"] != ID_DOCUMENTO_OTRO else f"{ID_DOCUMENTO_OTRO}:{_plano_documento(d['nombre'])}"
+
+
+def nombre_documento(valor) -> str:
+    return documento_catalogo(valor)["nombre"]
+
+
+# «Documentos de contratación» por defecto de la Cuenta (sin plantilla de Onboarding): del catálogo.
+DOCUMENTOS_BASE = [_DOC_POR_ID[i]["nombre"] for i in ("ine", "curp", "rfc", "nss", "comprobante_domicilio", "cuenta_bancaria")]
+
+# Cambio 25 → Cambio 34: los sugeridos de la vacante SON el catálogo (sin «Otro»). `palabras` = cómo los menciona una
+# descripción (`ia.documentos_de_descripcion`).
 DOCUMENTOS_SUGERIDOS_VACANTE = [
-    {"nombre": "INE", "cantidad": 1, "foto": False, "palabras": ("ine", "ife", "credencial de elector", "identificacion oficial")},
-    {"nombre": "Licencia de conducir", "cantidad": 1, "foto": False, "palabras": ("licencia de conducir", "licencia de manejo", "licencia vigente", "licencia tipo", "licencia federal")},
-    {"nombre": "Fotos del auto", "cantidad": 4, "foto": True, "palabras": ("fotos del auto", "fotos del vehiculo", "fotos de tu auto", "fotos del carro", "auto propio", "vehiculo propio", "carro propio", "coche propio")},
-    {"nombre": "Tarjeta de circulación", "cantidad": 1, "foto": False, "palabras": ("tarjeta de circulacion",)},
-    {"nombre": "Comprobante de domicilio", "cantidad": 1, "foto": False, "palabras": ("comprobante de domicilio",)},
-    {"nombre": "CURP", "cantidad": 1, "foto": False, "palabras": ("curp",)},
-    {"nombre": "Constancia de situación fiscal", "cantidad": 1, "foto": False, "palabras": ("constancia de situacion fiscal", "rfc")},
-    {"nombre": "Número de Seguridad Social", "cantidad": 1, "foto": False, "palabras": ("nss", "numero de seguridad social", "numero del imss")},
-    {"nombre": "Acta de nacimiento", "cantidad": 1, "foto": False, "palabras": ("acta de nacimiento",)},
-    {"nombre": "Comprobante de estudios", "cantidad": 1, "foto": False, "palabras": ("comprobante de estudios", "certificado de estudios")},
-    {"nombre": "Carta de antecedentes no penales", "cantidad": 1, "foto": False, "palabras": ("antecedentes no penales", "carta de no antecedentes")},
-    {"nombre": "Foto de frente", "cantidad": 1, "foto": True, "palabras": ("fotografia reciente", "foto reciente", "foto de frente")},
+    {"id": d["id"], "nombre": d["nombre"], "cantidad": d["cantidad"], "foto": d["foto"], "palabras": tuple(d["alias"])}
+    for d in CATALOGO_DOCUMENTOS if d["id"] != ID_DOCUMENTO_OTRO
 ]
 MAX_DOCUMENTOS_VACANTE = 15
 MAX_ARCHIVOS_DOCUMENTO = 10
 
 
 def normalizar_documentos_vacante(lista) -> List[dict]:
-    """[{nombre, cantidad, foto}] sin duplicados (por nombre, sin acentos). Acepta textos sueltos («INE») y completa
-    cantidad/foto con el sugerido del mismo nombre."""
-    import unicodedata as _ud
-
-    def clave(t: str) -> str:
-        return _ud.normalize("NFKD", t or "").encode("ascii", "ignore").decode().lower().strip()
-
-    sugeridos = {clave(x["nombre"]): x for x in DOCUMENTOS_SUGERIDOS_VACANTE}
+    """[{id, nombre, cantidad, foto, etapa?}] del catálogo único (Cambio 34), sin duplicados por `clave_documento`.
+    Acepta textos sueltos («INE», «Identificación oficial») y los convierte al nombre del catálogo; lo que no está es
+    «Otro» con su nombre. `cantidad`/`foto` capturados mandan sobre los del catálogo."""
     salida: List[dict] = []
     vistos: set = set()
     for x in lista or []:
@@ -767,19 +829,20 @@ def normalizar_documentos_vacante(lista) -> List[dict]:
             x = {"nombre": x}
         if not isinstance(x, dict):
             continue
-        nombre = " ".join(str(x.get("nombre") or "").split())[:80]
-        k = clave(nombre)
-        if not nombre or k in vistos:
+        cat = documento_catalogo(x)
+        if not cat["nombre"] or (cat["id"] == ID_DOCUMENTO_OTRO and _plano_documento(cat["nombre"]) == "otro"):
+            continue
+        k = clave_documento(cat)
+        if k in vistos:
             continue
         vistos.add(k)
-        base = sugeridos.get(k, {})
         try:
-            cantidad = int(x.get("cantidad") or base.get("cantidad") or 1)
+            cantidad = int(x.get("cantidad") or cat["cantidad"] or 1)
         except (TypeError, ValueError):
             cantidad = 1
         foto = x.get("foto")
-        item = {"nombre": nombre, "cantidad": max(1, min(cantidad, MAX_ARCHIVOS_DOCUMENTO)),
-                "foto": bool(base.get("foto", False) if foto is None else foto)}
+        item = {"id": cat["id"], "nombre": cat["nombre"], "cantidad": max(1, min(cantidad, MAX_ARCHIVOS_DOCUMENTO)),
+                "foto": bool(cat["foto"] if foto is None else foto)}
         # Cambio 28: «Se pide en:» — etapa de la actividad «Documentos» que lo pide (vacío = la primera de la ruta)
         if x.get("etapa") in ETAPAS_CANDIDATO:
             item["etapa"] = x["etapa"]

@@ -5,7 +5,8 @@
 1. Al habilitarse «Prefiltro por WhatsApp» sale UNA vez `inicio_entrevista_rh` con {{1}} = nombre del candidato.
 2. La respuesta al botón («Sí, empezar ahora») o cualquier confirmación abre la ventana de 24 h y el bot contesta YA con el
    saludo estricto y la primera pregunta (base fija en Masivos / prefiltro configurable en Corporativos), sin «/start».
-3. Aviso de cita al entrevistador: `alerta_entrevista_asig` con 8 variables en orden.
+3. Aviso de cita al evaluador (Cambio 35): `aviso_evaluador_rh` con 6 variables en orden; nunca texto libre; el error de
+   Meta llega legible.
    ({{6}} = «Pregunta por»: el responsable o contacto en el lugar de la cita).
 4. Confirmación de horario del candidato: `aviso_proceso_rh`, SIN variables (así está aprobada en Meta).
 """
@@ -198,23 +199,35 @@ with TestClient(app) as client:
     check(not plantillas(desde, "inicio_entrevista_rh"), "origen WhatsApp: la conversación ya está abierta, no hay plantilla")
 
     # ================= 3. Aviso al entrevistador =================
-    print("\n--- 3. alerta_entrevista_asig: 8 variables en orden ---")
-    d = {"entrevistador": "Mariana López", "candidato": "Luisa Pérez Gómez", "vacante": "Almacenista", "fecha": "jueves 15 de octubre",
-         "hora": "10:30 h", "pregunta_por": "Ing. Pedro Salas", "indicaciones_entrevistador": "Validar turnos",
-         "liga_expediente": "https://app/evaluacion/abc"}
-    # 2026-10-13 (fix HSM): {{6}} y {{7}} adaptados al entrevistador/instructor (textos fijos)
-    check(notificaciones.parametros_plantilla_entrevista(d) == ["Mariana López", "Luisa Pérez Gómez", "Almacenista", "jueves 15 de octubre",
-                                                               "10:30 h", "Candidato en espera", "Por favor revisa su perfil y CV antes de iniciar la sesión",
-                                                               "https://app/evaluacion/abc"],
-          "{{1}} entrevistador · {{2}} candidato · {{3}} vacante · {{4}} fecha · {{5}} hora · {{6}} «Candidato en espera» · {{7}} «Por favor revisa su perfil y CV…» · {{8}} liga")
-    check(notificaciones.parametros_plantilla_entrevista({**d, "capacitacion": True})[2] == "Capacitación: Almacenista",
-          "capacitación presencial → {{3}} «Capacitación: [vacante]»")
-    check(all(str(x).strip() for x in notificaciones.parametros_plantilla_entrevista({})), "nunca variables vacías (Meta las rechaza)")
+    print("\n--- 3. aviso_evaluador_rh: 6 variables en orden (Cambio 35) ---")
+    from app.fechas import ETIQUETA_ZONA
+
+    d = {"entrevistador": "Mariana López", "candidato": "Luisa Pérez Gómez", "vacante": "Almacenista"}
+    dev = {"fecha_texto": "jueves 15 de octubre", "horario_texto": "de 10:30 a.m. a 11:30 a.m.", "modalidad": "Presencial",
+           "direccion": "Av. Patria 100, Zapopan", "liga_evaluador": "https://app/evaluacion/abc"}
+    check(notificaciones.parametros_plantilla_evaluador(d, dev) == [
+        "Mariana López", "Luisa Pérez Gómez", "Almacenista", f"jueves 15 de octubre, de 10:30 a.m. a 11:30 a.m. ({ETIQUETA_ZONA})",
+        "Av. Patria 100, Zapopan", "https://app/evaluacion/abc"],
+        "{{1}} evaluador · {{2}} candidato · {{3}} puesto · {{4}} fecha y hora · {{5}} lugar · {{6}} liga")
+    check(notificaciones.parametros_plantilla_evaluador(d, {**dev, "capacitacion": True})[2] == "Capacitación: Almacenista",
+          "capacitación presencial → {{3}} «Capacitación: [puesto]»")
+    check(notificaciones.parametros_plantilla_evaluador(d, {**dev, "modalidad": "Videollamada", "liga_videollamada": "https://meet/x"})[4]
+          == "Videollamada: https://meet/x", "lugar de una videollamada")
+    check(all(str(x).strip() for x in notificaciones.parametros_plantilla_evaluador({}, {})), "nunca variables vacías (Meta las rechaza)")
+    check([notificaciones.plantilla_evaluador(e) for e in ("evaluacion_asignada", "evaluacion_reprogramada", "evaluacion_cancelada", "recordatorio_evaluacion")]
+          == ["aviso_evaluador_rh", "cita_cambio_evaluador_rh", "cita_cancelada_evaluador_rh", "aviso_evaluador_rh"],
+          "aviso nuevo / «Reenviar» / recordatorio → aviso_evaluador_rh · «Tu cita cambió» → cita_cambio_evaluador_rh · cancelación")
     desde = len(ENVIADOS)
-    env = asyncio.run(whatsapp.enviar_plantilla_entrevista("3399998888", notificaciones.parametros_plantilla_entrevista(d), "texto"))
+    env = asyncio.run(whatsapp.enviar_plantilla_evaluador("3399998888", "aviso_evaluador_rh",
+                                                          notificaciones.parametros_plantilla_evaluador(d, dev), "texto"))
     t = plantillas(desde)
-    check(env.get("enviado") and t and t[0]["template"]["name"] == "alerta_entrevista_asig" and t[0]["to"] == "523399998888"
-          and len(t[0]["template"]["components"][0]["parameters"]) == 8, "sale `alerta_entrevista_asig` al número del entrevistador")
+    check(env.get("enviado") and t and t[0]["template"]["name"] == "aviso_evaluador_rh" and t[0]["to"] == "523399998888"
+          and len(t[0]["template"]["components"][0]["parameters"]) == 6 and not any(c.get("type") == "text" for c in ENVIADOS[desde:]),
+          "sale la plantilla de 6 variables al número del evaluador (nunca texto libre)")
+    check(whatsapp.error_legible("131047: Re-engagement message").startswith("Fuera de la ventana de 24 horas")
+          and whatsapp.error_legible("131026 Message undeliverable").startswith("Número inválido")
+          and whatsapp.error_legible("132001: Template name does not exist").startswith("La plantilla no existe"),
+          "los errores de Meta se traducen («fuera de la ventana de 24 horas», «número inválido», plantilla no aprobada)")
 
     print("\n--- 3b. De punta a punta: cita de entrevista humana con indicaciones ---")
     admin.telefono = "+52 1 (33) 9999-7777"  # mismo formateo que el candidato: llega a la API como 52 + 10
@@ -227,14 +240,38 @@ with TestClient(app) as client:
         "tipo": "entrevista_humana", "forma": "asignada", "evaluador": {"tipo": "interno", "usuario_id": admin.id},
         "cita": {"fecha": "2030-01-15", "hora": "10:30", "modalidad": "Presencial", "direccion": "Av. Patria 100, Zapopan",
                  "indicaciones_entrevistador": "Validar disponibilidad de turnos"}})
-    t = plantillas(desde, "alerta_entrevista_asig")
+    t = plantillas(desde, "aviso_evaluador_rh")
     params = [x["text"] for x in t[0]["template"]["components"][0]["parameters"]] if t else []
-    check(r.status_code in (200, 201) and t and t[0]["to"] == "523399997777" and len(params) == 8,
+    check(r.status_code in (200, 201) and t and t[0]["to"] == "523399997777" and len(params) == 6,
           f"la cita nueva le manda la plantilla al WhatsApp del entrevistador ({r.status_code})")
-    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and params[5] == "Candidato en espera"
-          and "5512770001" not in " ".join(params) and params[6] == "Por favor revisa su perfil y CV antes de iniciar la sesión"
-          and "/evaluacion/" in params[7],
-          f"variables adaptadas al entrevistador (nunca el teléfono del candidato) y liga → {params}")
+    check(params and params[1] == "Luisa Pérez Gómez" and params[2] == "Almacenista" and "Av. Patria 100" in params[4]
+          and "5512770001" not in " ".join(params) and "/evaluacion/" in params[5],
+          f"variables: candidato, puesto, fecha y hora, lugar y SU liga (nunca el teléfono del candidato) → {params}")
+    ev_codigo = r.json()["evaluacion"]["codigo"]
+    desde = len(ENVIADOS)
+    r = client.patch(f"/evaluaciones/{ev_codigo}", json={"cita": {"fecha": "2030-01-16", "hora": "11:00", "modalidad": "Presencial",
+                                                                   "direccion": "Av. Patria 100, Zapopan"}})
+    t = plantillas(desde, "cita_cambio_evaluador_rh")
+    check(r.status_code == 200 and t and len(t[0]["template"]["components"][0]["parameters"]) == 6,
+          f"«Tu cita cambió» al evaluador también es plantilla ({r.status_code})")
+
+    print("\n--- 3c. Error de Meta visible junto al «Fallido» ---")
+
+    async def _meta_rechaza(cuerpo):
+        ENVIADOS.append(cuerpo)
+        if cuerpo.get("type") == "template" and cuerpo["template"]["name"] == "aviso_evaluador_rh":
+            return {"enviado": False, "proveedor": "meta", "detalle": "131026: Message undeliverable", "codigo": "131026"}
+        return await _meta_falso(cuerpo)
+
+    original = whatsapp._meta_post
+    whatsapp._meta_post = _meta_rechaza
+    r = client.post(f"/evaluaciones/{ev_codigo}/ligas/evaluador/enviar")
+    whatsapp._meta_post = original
+    s = client.get(f"/procesos/postulaciones/{p1.codigo}").json()
+    eh_paso = next(x for e in s["etapas"] for x in e["pasos"] if x["tipo"] == "entrevista_humana")
+    env_ev = (eh_paso.get("envios") or {}).get("entrevistador") or {}
+    check(env_ev.get("estado") == "fallido" and env_ev.get("error", "").startswith("Número inválido"),
+          f"«Reenviar» con número inválido → «Fallido» + el error de Meta legible ({env_ev.get('estadoTexto')}: {env_ev.get('error')})")
 
     # ================= 4. Aviso de agenda =================
     print("\n--- 4. Confirmación de horario → aviso_proceso_rh ---")

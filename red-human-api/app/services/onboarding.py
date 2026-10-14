@@ -26,6 +26,9 @@ from ..models import (
     Expediente,
     PlantillaOnboarding,
     TareaOnboarding,
+    clave_documento,
+    nombre_documento,
+    normalizar_documentos_vacante,
 )
 
 CLAVES_FIJAS = {c for c, _ in TAREAS_FIJAS_ONBOARDING}
@@ -65,14 +68,33 @@ def _entero(v, default: Optional[int] = None) -> Optional[int]:
 # ---------- normalización de lo que captura RH ----------
 
 def normalizar_documentos(docs: List[dict]) -> List[dict]:
+    """Cambio 34: cada documento con el nombre del catálogo único (lo viejo, p. ej. «Identificación oficial», se
+    convierte) y sin duplicados por `clave_documento`."""
     salida, vistos = [], set()
     for d in docs or []:
-        tipo = str((d or {}).get("tipo") or "").strip()[:80]
-        if not tipo or norm(tipo) in vistos:
+        d = d if isinstance(d, dict) else {"tipo": d}
+        crudo = str(d.get("tipo") or d.get("nombre") or "").strip()[:80]
+        if not crudo and not d.get("id"):
             continue
-        vistos.add(norm(tipo))
-        salida.append({"tipo": tipo, "obligatorio": bool((d or {}).get("obligatorio", True))})
+        tipo = nombre_documento({"id": d.get("id"), "nombre": crudo})
+        if not tipo or clave_documento(tipo) in vistos:
+            continue
+        vistos.add(clave_documento(tipo))
+        salida.append({"tipo": tipo, "obligatorio": bool(d.get("obligatorio", True))})
     return salida
+
+
+def documentos_requeridos(db: Session, p) -> List[dict]:
+    """Cambio 34 — los documentos que se le piden a la persona salen de DOS fuentes con el MISMO catálogo: la
+    Configuración de la Cuenta («Documentos de contratación» = plantilla de Onboarding que aplica, o la base) + los de la
+    VACANTE. Se suman sin duplicados (la Cuenta primero). [{tipo, obligatorio}]"""
+    e = getattr(p, "expediente", None)
+    v = getattr(p, "vacante", None)
+    puesto = (e.puesto if e is not None else "") or (v.titulo if v is not None else "")
+    empresa = e.empresa if e is not None else ""
+    cuenta = configuracion_para(db, p.cuenta_id, puesto, empresa).get("documentos") or []
+    vacante = [{"tipo": d["nombre"], "obligatorio": True} for d in normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or [])]
+    return normalizar_documentos([*cuenta, *vacante])
 
 
 def normalizar_recursos(recursos: List[dict]) -> List[dict]:
@@ -209,10 +231,10 @@ def generar_tareas(db: Session, e: Expediente, cuenta_id: int, config: dict, por
 def aplicar_documentos(db: Session, e: Expediente, documentos: List[dict]) -> List[str]:
     """Agrega al expediente los documentos de la configuración que falten (por tipo). Nunca borra ni cambia
     el estado de uno existente. Regresa los tipos agregados."""
-    existentes = {norm(d.tipo) for d in e.documentos}
+    existentes = {clave_documento(d.tipo) for d in e.documentos if not d.interno}
     nuevos = []
     for d in normalizar_documentos(documentos):
-        if norm(d["tipo"]) in existentes:
+        if clave_documento(d["tipo"]) in existentes:
             continue
         doc = Documento(expediente_id=e.id, tipo=d["tipo"], obligatorio=d["obligatorio"])
         db.add(doc)
@@ -318,14 +340,14 @@ def aplicar_seleccion_documentos(db: Session, e: Expediente, documentos: List[di
     """Aplica la selección de documentos de ESTA persona: agrega los que falten y ajusta si son obligatorios;
     un documento del expediente que RH quitó de la selección pasa a «No aplica» con motivo (nunca se borra).
     Uno ya entregado se conserva tal cual. Regresa (agregados, no_aplica, conservados)."""
-    seleccion = {norm(d["tipo"]): d for d in normalizar_documentos(documentos)}
+    seleccion = {clave_documento(d["tipo"]): d for d in normalizar_documentos(documentos)}
     agregados = aplicar_documentos(db, e, list(seleccion.values()))
     no_aplica, conservados = [], []
     ahora = datetime.now(timezone.utc)
     for d in e.documentos:
         if d.interno:
             continue
-        sel = seleccion.get(norm(d.tipo))
+        sel = seleccion.get(clave_documento(d.tipo))
         if sel:
             d.obligatorio = bool(sel["obligatorio"])
             continue

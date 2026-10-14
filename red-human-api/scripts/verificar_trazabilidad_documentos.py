@@ -150,9 +150,9 @@ with TestClient(app) as client:
     p.candidato.postulacion_conversacion_id = p.id
     db.commit()
     r = webhook_meta(client, TEL, "mi INE", tipo="document", media={"id": "media-1", "mime_type": "application/pdf", "filename": "ine.pdf"}, wamid="wamid.doc1")
-    check(r.status_code == 200 and r.json().get("documento") == "Identificación oficial", "INE por WhatsApp adjuntada")
+    check(r.status_code == 200 and r.json().get("documento") == "INE (frente y reverso)", "INE por WhatsApp adjuntada (Cambio 34: nombre del catálogo)")
     e = client.get(f"/contratacion/expedientes/{EXP}").json()
-    ine = next(d for d in e["documentos"] if d["nombre"] == "Identificación oficial")
+    ine = next(d for d in e["documentos"] if d["nombre"] == "INE (frente y reverso)")
     check(ine["estadoSimple"] == "Recibido" and ine["recibidoEn"] and ine["recibidoCanal"] == "whatsapp", f"INE: Recibido, con fecha/hora y canal whatsapp (estado interno {ine['estado']})")
     check(ine["solicitadoEn"] == primera and ine["solicitadoCanal"] == "whatsapp", "la INE conserva su trazabilidad de solicitud")
     db.expire_all()
@@ -160,7 +160,7 @@ with TestClient(app) as client:
     # un recordatorio posterior ya no toca los recibidos
     client.post(f"/contratacion/expedientes/{EXP}/recordatorio", json={"notificar": {"candidato_whatsapp": True, "candidato_correo": False}})
     e = client.get(f"/contratacion/expedientes/{EXP}").json()
-    ine = next(d for d in e["documentos"] if d["nombre"] == "Identificación oficial")
+    ine = next(d for d in e["documentos"] if d["nombre"] == "INE (frente y reverso)")
     curp = next(d for d in e["documentos"] if d["nombre"] == "CURP")
     check(len(ine["solicitudes"]) == 3 and len(curp["solicitudes"]) == 4, "los recordatorios solo se acumulan en los documentos aún pendientes")
 

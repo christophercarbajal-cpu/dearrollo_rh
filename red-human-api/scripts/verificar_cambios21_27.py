@@ -396,11 +396,11 @@ with TestClient(app) as client:
     for dep in (usuario_actual, usuario_decisor):
         app.dependency_overrides[dep] = lambda: admin
     det = ia.documentos_de_descripcion("Chofer con auto propio. Requisitos: licencia de conducir vigente e INE.")
-    check([d["nombre"] for d in det] == ["INE", "Licencia de conducir", "Fotos del auto"] and det[2] == {"nombre": "Fotos del auto", "cantidad": 4, "foto": True},
+    check([d["nombre"] for d in det] == ["INE (frente y reverso)", "Licencia de conducir", "Fotos del auto"] and det[2] == {"id": "fotos_auto", "nombre": "Fotos del auto", "cantidad": 4, "foto": True},
           f"la IA llena «Documentos y fotos que se piden» con lo que menciona la descripción: {det}")
     check(ia.documentos_de_descripcion("Ayudante general para almacén, turno matutino.") == [], "sin menciones no inventa documentos")
     check(sdv.de_vacante(type("V", (), {"documentos_solicitados": ["INE", {"nombre": "ine"}, {"nombre": "Fotos del auto"}]})())
-          == [{"nombre": "INE", "cantidad": 1, "foto": False}, {"nombre": "Fotos del auto", "cantidad": 4, "foto": True}],
+          == [{"id": "ine", "nombre": "INE (frente y reverso)", "cantidad": 1, "foto": False}, {"id": "fotos_auto", "nombre": "Fotos del auto", "cantidad": 4, "foto": True}],
           "sin duplicados; las fotos del auto exigen 4")
 
     cuenta3 = Cuenta(nombre="C25 docs", nombre_comercial="Docs MX", estado="Activa", slug="c25-docs")
@@ -417,7 +417,7 @@ with TestClient(app) as client:
     v3.proceso = sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS)
     db.commit()
     r = client.patch(f"/vacantes/{v3.codigo}", json={"documentos_solicitados": [{"nombre": "INE"}, {"nombre": "Fotos del auto"}]})
-    check(r.status_code == 200 and [d["nombre"] for d in r.json()["documentosSolicitados"]] == ["INE", "Fotos del auto"],
+    check(r.status_code == 200 and [d["nombre"] for d in r.json()["documentosSolicitados"]] == ["INE (frente y reverso)", "Fotos del auto"],
           f"la vacante guarda «Documentos y fotos que se piden» ({r.status_code} {r.text[:160]})")
     db.expire_all()
 
@@ -431,7 +431,7 @@ with TestClient(app) as client:
     pasos = [x["id"] for x in q3.proceso["pasos"]]
     paso_docs = next(x for x in q3.proceso["pasos"] if x["id"] == sdv.ID_PASO)
     check(pasos[:3] == ["sw", "pwa", sdv.ID_PASO] and paso_docs["etapa"] == "Prefiltro" and paso_docs["depende_de"] == ["pwa"]
-          and paso_docs["documentos"] == ["INE", "Fotos del auto"], f"la ruta suma «Documentos» DESPUÉS del prefiltro de WhatsApp: {pasos}")
+          and paso_docs["documentos"] == ["INE (frente y reverso)", "Fotos del auto"], f"la ruta suma «Documentos» DESPUÉS del prefiltro de WhatsApp: {pasos}")
     v4 = db.query(Vacante).filter(Vacante.estado == "Publicada", Vacante.id.notin_([v.id, v2.id, v3.id])).order_by(Vacante.id).first()
     v4.cuenta_id, v4.proceso, v4.documentos_solicitados = cuenta3.id, sproc.proceso_para_vacante(db, cuenta3.id, {}, RUTA_DOCS), []
     db.commit()
@@ -451,12 +451,12 @@ with TestClient(app) as client:
     check(q3.etapa == "Prefiltro" and q3.expediente is not None, "la actividad obligatoria detiene la ruta hasta revisar los documentos")
     e3 = q3.expediente
     docs3 = {d.tipo: d for d in e3.documentos}
-    check(docs3["Fotos del auto"].cantidad == 4 and docs3["Fotos del auto"].es_foto and docs3["INE"].solicitado_en is not None,
+    check(docs3["Fotos del auto"].cantidad == 4 and docs3["Fotos del auto"].es_foto and docs3["INE (frente y reverso)"].solicitado_en is not None,
           "cada documento solicitado queda ligado al expediente (fotos del auto: 4)")
     asyncio.run(sproc.avanzar_seguro(db, q3))
     check(len([x for x in ENV[n:] if x[1].endswith("5512350001")]) == 1, "la liga sale una sola vez")
     pub = client.get(f"/expedientes/publica/{e3.token}").json()
-    check([d["tipo"] for d in pub["documentos"]] == ["INE", "Fotos del auto"] and pub["documentos"][1]["cantidad"] == 4,
+    check([d["tipo"] for d in pub["documentos"]] == ["INE (frente y reverso)", "Fotos del auto"] and pub["documentos"][1]["cantidad"] == 4,
           f"la liga muestra un renglón por documento pedido: {[d['tipo'] for d in pub['documentos']]}")
 
     print("\n--- Cambio 25 · foto por el chat → liga ---")
@@ -494,7 +494,7 @@ with TestClient(app) as client:
     if heic:
         r = client.post(f"/expedientes/publica/{e3.token}/documentos", data={"tipo": "INE"}, files={"archivo": ("ine.heic", heic, "image/heic")})
         db.expire_all()
-        a_ine = db.query(ArchivoDocumento).filter(ArchivoDocumento.documento_id == docs3["INE"].id).first()
+        a_ine = db.query(ArchivoDocumento).filter(ArchivoDocumento.documento_id == docs3["INE (frente y reverso)"].id).first()
         check(r.status_code == 200 and a_ine and a_ine.mime == "image/jpeg" and a_ine.convertido_de == "heic" and a_ine.nombre_archivo.endswith(".jpg"),
               f"una foto HEIC se convierte a JPG en el servidor ({r.status_code} {r.text[:160]})")
     else:

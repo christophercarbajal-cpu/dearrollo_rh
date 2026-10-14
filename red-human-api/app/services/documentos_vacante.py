@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (DOCUMENTOS_SUGERIDOS_VACANTE, ESTADOS_DOCUMENTOS_EXPEDIENTE, ArchivoDocumento, Documento, Expediente,
-                      Postulacion, normalizar_documentos_vacante, registrar)
+                      Postulacion, clave_documento, normalizar_documentos_vacante, registrar)
 
 ID_PASO = "documentos-vacante"
 ACTOR = "Red Human"
@@ -148,7 +148,7 @@ def asegurar_documentos(db: Session, e: Expediente, docs: List[dict]) -> List[Do
     """Crea (o ajusta) en el expediente un `Documento` por cada documento que pide la vacante. Idempotente."""
     salida = []
     for d in docs:
-        doc = next((x for x in e.documentos if _plano(x.tipo) == _plano(d["nombre"]) and not x.interno), None)
+        doc = next((x for x in e.documentos if clave_documento(x.tipo) == clave_documento(d["nombre"]) and not x.interno), None)
         if doc is None:
             doc = Documento(expediente_id=e.id, tipo=d["nombre"], obligatorio=True)
             db.add(doc)
@@ -251,10 +251,10 @@ def liga(p: Postulacion) -> str:
 
 def aprobar(db: Session, e: Expediente, tipos: List[str], actor: str) -> List[str]:
     """Aprueba los documentos elegidos (vacío = todos los entregados). Solo lo entregado se aprueba."""
-    elegidos = {_plano(t) for t in tipos or []}
+    elegidos = {clave_documento(t) for t in tipos or []}
     hechos = []
     for d in docs_en_juego(e):
-        if elegidos and _plano(d.tipo) not in elegidos:
+        if elegidos and clave_documento(d.tipo) not in elegidos:
             continue
         if not d.entregado and not (d.estado == "pendiente" and d.archivo and multiple(d)):
             continue
@@ -268,11 +268,11 @@ def aprobar(db: Session, e: Expediente, tipos: List[str], actor: str) -> List[st
 def pedir_correccion(db: Session, e: Expediente, tipos: List[str], motivo: str, actor: str) -> List[Documento]:
     """Marca los elegidos como «Corrección pedida»: sus archivos dejan de estar vigentes (se conservan) y el candidato debe
     reemplazarlos por la misma liga."""
-    elegidos = {_plano(t) for t in tipos or []}
+    elegidos = {clave_documento(t) for t in tipos or []}
     ahora = datetime.now(timezone.utc)
     salida = []
     for d in docs_en_juego(e):
-        if _plano(d.tipo) not in elegidos:
+        if clave_documento(d.tipo) not in elegidos:
             continue
         d.estado = "rechazado"
         d.revisado_por = ""
@@ -382,6 +382,6 @@ def liga_si_intercepta(p: Postulacion) -> str:
     (los archivos se suben ahí, un renglón por documento). Regresa la liga o ""."""
     if p is None or p.etapa in ("Contratación", "Onboarding") or paso_de(p) is None or p.expediente is None:
         return ""
-    nombres = {_plano(d["nombre"]) for d in de_vacante(p.vacante)}
-    faltan = [d for d in p.expediente.documentos if _plano(d.tipo) in nombres and not d.aprobado]
+    nombres = {clave_documento(d["nombre"]) for d in de_vacante(p.vacante)}
+    faltan = [d for d in p.expediente.documentos if clave_documento(d.tipo) in nombres and not d.aprobado]
     return liga(p) if faltan else ""

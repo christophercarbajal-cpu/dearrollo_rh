@@ -22,6 +22,7 @@ from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
     ALCANCES_PLANTILLA_ONBOARDING,
+    CATALOGO_DOCUMENTOS,
     DOCUMENTOS_BASE,
     ESTADOS_DOCUMENTO_ONBOARDING,
     PLAZOS_ONBOARDING_DEFAULT,
@@ -168,6 +169,8 @@ def opciones(db: Session = Depends(get_db), _: Usuario = Depends(usuario_actual)
         "puestos": puestos,
         "cursos": [{"id": c.id, "codigo": c.codigo, "titulo": c.titulo, "estado": c.estado} for c in cursos],
         "documentosBase": list(DOCUMENTOS_BASE),
+        # Cambio 34: catálogo único (la plantilla solo elige de aquí; «Otro» con su nombre)
+        "catalogoDocumentos": [{"id": d["id"], "nombre": d["nombre"]} for d in CATALOGO_DOCUMENTOS],
         "tareasFijas": [{"clave": c, "nombre": n} for c, n in TAREAS_FIJAS_ONBOARDING],
         "tiposRecurso": list(TIPOS_RECURSO_ONBOARDING),
         "plazosDefault": dict(PLAZOS_ONBOARDING_DEFAULT),
@@ -329,6 +332,11 @@ async def editar_tarea(tid: int, datos: EditarTareaIn, db: Session = Depends(get
     registrar(db, u.nombre, "tarea_onboarding_actualizada", "expediente", str(t.expediente_id),
               {"tarea": t.nombre, "de": anterior, "a": t.estado, "motivo": t.motivo_cancelacion[:300], "correo_rh": u.correo})
     db.commit()
+    if e and e.postulacion is not None and anterior != t.estado:
+        from ..services import proceso as sproc
+
+        await sproc.avanzar_seguro(db, e.postulacion)  # Cambio 33: actividades completas → Colaborador
+        db.commit()
     aviso = None
     nuevo = (t.responsable or "").strip()
     if e and nuevo and nuevo != responsable_previo and t.estado == "pendiente":
@@ -368,6 +376,8 @@ def resumen_inicio(exp_id: int, db: Session = Depends(get_db), _: Usuario = Depe
     e = _expediente(db, exp_id, cuenta.id)
     cfg = onb.configuracion_para(db, cuenta.id, e.puesto, e.empresa)
     cfg["cursoInduccion"] = _curso_titulo(db, cfg.get("cursoInduccionId"), cuenta.id)
+    if e.postulacion is not None:
+        cfg["documentos"] = onb.documentos_requeridos(db, e.postulacion)  # Cambio 34: Cuenta + vacante, sin duplicados
     req = onb.requisitos_inicio(e)
     prueba = modo_prueba_activo(db)
     p = e.postulacion
@@ -438,6 +448,11 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
         raise HTTPException(409, "«Iniciar Onboarding» es para postulaciones en Contratación.")
     if onb.onboarding_iniciado(db, e) and p.etapa == "Onboarding":
         raise HTTPException(409, "El Onboarding de esta persona ya se inició.")
+    from ..services import onboarding_colaborador as ocol
+
+    sin_actividades = not ocol.tiene_actividades(p)
+    if sin_actividades and p.etapa == "Onboarding":
+        raise HTTPException(409, "Esta persona ya está en Onboarding: «Listo para pasar a colaborador».")
     prueba = modo_prueba_activo(db)
     req = onb.requisitos_inicio(e)
     if not req["completos"] and not prueba:
@@ -450,6 +465,18 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
             sproc.verificar_avance(db, p, "Onboarding", u, datos.omitir_obligatorios, datos.comentario)
         except sproc.ErrorProceso as ex:
             raise HTTPException(ex.status, ex.mensaje)
+    if sin_actividades:
+        # Cambio 33: la ruta NO tiene actividades de Onboarding → solo cambia la etapa y queda «Listo para pasar a
+        # colaborador». No se generan tareas ni se le envía nada a nadie.
+        ocol.marcar_listo(p)
+        registrar(db, u.nombre, "onboarding_iniciado", "expediente", str(e.id),
+                  {"postulacion": p.codigo, "sin_actividades": True, "estado": ocol.LISTO, "correo_rh": u.correo})
+        await rcand.aplicar_movimiento(db, p, rcand.EtapaIn(etapa="Onboarding", comentario="Iniciar Onboarding"), u, desde_iniciar=True)
+        from ..serial import postulacion_dict
+
+        return {"candidato": postulacion_dict(p, detalle=True), "tareas": [], "documentosAgregados": [], "documentosNoAplica": [],
+                "documentosConservados": [], "solicitudDocumentos": [], "documentosPorSolicitar": [], "bienvenida": [],
+                "avisosResponsables": [], "cursoInduccion": None, "estadoOnboarding": ocol.LISTO}
     if not onb.normalizar_documentos(datos.documentos):
         raise HTTPException(400, "Selecciona al menos un documento.")
     if datos.curso_induccion_id and not _curso_titulo(db, datos.curso_induccion_id, cuenta.id):
@@ -529,7 +556,7 @@ async def iniciar_automatico(db: Session, p) -> bool:
         return False
     cfg = onb.configuracion_para(db, cuenta.id, e.puesto, e.empresa)
     datos = IniciarOnboardingIn(
-        documentos=cfg.get("documentos") or [], recursos=cfg.get("recursos") or [], responsables=cfg.get("responsables") or {},
+        documentos=onb.documentos_requeridos(db, p),  # Cambio 34: Cuenta + vacante, sin duplicados recursos=cfg.get("recursos") or [], responsables=cfg.get("responsables") or {},
         plazos=cfg.get("plazos") or {}, curso_induccion_id=cfg.get("cursoInduccionId"), plantilla_id=cfg.get("plantillaId"),
     )
     actor = SimpleNamespace(nombre=ACTOR_AUTOMATICO, correo="", id=None, rol="Sistema", puede_autorizar_omisiones=lambda: False)
@@ -733,7 +760,7 @@ class ConfirmarIngresoIn(BaseModel):
 
 
 @router.post("/expedientes/{exp_id}/confirmar-ingreso")
-def confirmar_ingreso(exp_id: int, datos: ConfirmarIngresoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+async def confirmar_ingreso(exp_id: int, datos: ConfirmarIngresoIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
     """«Confirmar ingreso»: registra la fecha REAL de llegada (quién y cuándo), cierra la tarea fija y recalcula los
     plazos pendientes contra esa fecha. Es lo que habilita «Dar de alta», sin importar la fecha prevista."""
     from ..services.notificaciones import TZ_MEXICO
@@ -761,6 +788,11 @@ def confirmar_ingreso(exp_id: int, datos: ConfirmarIngresoIn, db: Session = Depe
     registrar(db, u.nombre, "ingreso_confirmado", "expediente", str(e.id),
               {"fecha_real": real.date().isoformat(), "fecha_prevista": prevista, "plazos_recalculados": recalculadas, "correo_rh": u.correo})
     db.commit()
+    if e.postulacion is not None:
+        from ..services import proceso as sproc
+
+        await sproc.avanzar_seguro(db, e.postulacion)  # Cambio 33: actividades completas → Colaborador
+        db.commit()
     return {**onb.resumen_tablero(e, onb.tareas_de(db, e)), "listaTareas": [tarea_onboarding_dict(t) for t in onb.tareas_de(db, e)], "plazosRecalculados": recalculadas}
 
 
@@ -827,3 +859,54 @@ async def no_ingreso(exp_id: int, datos: NoIngresoIn, db: Session = Depends(get_
     )
     db.commit()
     return {**onb.resumen_tablero(e, tareas), "listaTareas": [tarea_onboarding_dict(t) for t in tareas], "avisosResponsables": avisos}
+
+
+# ---------- Cambio 33 (2026-10-13): paso a colaborador y acciones manuales en la ficha ----------
+
+
+class PasarColaboradorIn(BaseModel):
+    comentario: str = ""
+
+
+def _postulacion_onboarding(db: Session, exp_id: int, cuenta: Cuenta):
+    e = _expediente(db, exp_id, cuenta.id)
+    p = e.postulacion
+    if p is None:
+        raise HTTPException(409, "El expediente no está ligado a una postulación.")
+    if p.etapa != "Onboarding":
+        raise HTTPException(409, "Esta acción es para candidatos en Onboarding.")
+    return e, p
+
+
+@router.post("/expedientes/{exp_id}/pasar-colaborador")
+async def pasar_colaborador(exp_id: int, datos: PasarColaboradorIn, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor),
+                            cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Pasar a colaborador»: lo da de alta en Colaboradores aunque falten cosas; lo pendiente se queda «Pendiente» en su
+    expediente (y queda listado en historial y bitácora)."""
+    from ..services import onboarding_colaborador as ocol
+
+    e, p = _postulacion_onboarding(db, exp_id, cuenta)
+    return await ocol.pasar_a_colaborador(db, p, u, cuenta, comentario=datos.comentario)
+
+
+@router.post("/expedientes/{exp_id}/solicitar-pendientes")
+async def solicitar_pendientes(exp_id: int, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Solicitar documentos pendientes»: actividad «Documentos» SOLO con los requeridos aún no aprobados."""
+    from ..serial import postulacion_dict
+    from ..services import onboarding_colaborador as ocol
+
+    e, p = _postulacion_onboarding(db, exp_id, cuenta)
+    r = await ocol.solicitar_documentos_pendientes(db, p, u)
+    return {**r, "candidato": postulacion_dict(p, detalle=True)}
+
+
+@router.post("/expedientes/{exp_id}/asignar-tareas")
+async def asignar_tareas(exp_id: int, db: Session = Depends(get_db), u: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)):
+    """«Asignar tareas»: actividad «Tareas de onboarding» solo para esta persona (la plantilla y la vacante no cambian)."""
+    from ..serial import postulacion_dict
+    from ..services import onboarding_colaborador as ocol
+
+    e, p = _postulacion_onboarding(db, exp_id, cuenta)
+    r = await ocol.asignar_tareas(db, p, u, cuenta)
+    return {**r, "candidato": postulacion_dict(p, detalle=True)}
+

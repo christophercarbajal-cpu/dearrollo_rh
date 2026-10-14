@@ -1208,7 +1208,8 @@ def _paso_contratacion(paso: dict, p: Postulacion, tareas: Optional[list]) -> di
             "revisadoPor": "Pendiente de revisión", "evaluacion": None, "terminado_en": None}
     if tipo == "solicitud_documentos":
         return _paso_solicitud_documentos(base, p, exp)
-    if tipo == "documentos" and _indice(paso["etapa"]) < _indice("Contratación"):
+    if tipo == "documentos" and (_indice(paso["etapa"]) < _indice("Contratación") or (paso.get("adhoc") and paso.get("documentos"))):
+        # Cambio 33: «Solicitar documentos pendientes» en Onboarding valida SOLO su lista (lo que faltaba aprobar)
         return _paso_documentos_previos(base, paso, exp)
     if tipo == "carta_contrato":
         return _paso_carta_contrato(base, p, exp)
@@ -1315,7 +1316,7 @@ def _paso_solicitud_documentos(base: dict, p: Postulacion, exp) -> dict:
 
 def _paso_documentos_previos(base: dict, paso: dict, exp) -> dict:
     """«Validar documentos» antes de Contratación: valida lo SOLICITADO (o la lista del paso, si RH la definió)."""
-    from .documentos_vacante import _plano
+    from ..models import clave_documento as _plano  # Cambio 34: identidad del catálogo único
 
     docs = _docs_candidato(exp)
     lista = paso.get("documentos") or []
@@ -2362,6 +2363,9 @@ def _recomendacion_ruta(bloqueo: Optional[dict], accion: dict, p: Optional[Postu
         return {"texto": accion["detalle"], "motivo": f"Resuélvelo aquí mismo con «{accion['texto']}».", "tono": "warn"}
     if tipo == "alta":
         return {"texto": "Lista para dar de alta", "motivo": accion.get("detalle") or "", "tono": "good"}
+    if tipo == "pasar_colaborador":
+        return {"texto": accion.get("detalle") or "Listo para pasar a colaborador",
+                "motivo": "La ruta no tiene actividades de Onboarding.", "tono": "good"}
     if tipo == "cerrar_onboarding":
         return {"texto": "Colaborador dado de alta", "motivo": "Cierra el Onboarding para terminar el proceso.", "tono": "good"}
     if tipo == "fin":
@@ -2385,6 +2389,10 @@ def accion_onboarding(p: Postulacion) -> Optional[dict]:
         tareas = onb.tareas_de(db, exp)
     except Exception:  # noqa: BLE001 — sin tablas de módulos la ruta sigue como antes
         return None
+    from . import onboarding_colaborador as ocol
+
+    if exp.estado != "alta" and p.activa and ocol.estado(p) == ocol.LISTO:
+        return {"tipo": "pasar_colaborador", "texto": "Pasar a colaborador", "detalle": ocol.TEXTO_LISTO}
     if exp.estado == "alta":
         if exp.onboarding_cerrado_en:
             return {"tipo": "fin", "texto": "Proceso completo", "detalle": f"Colaborador dado de alta y Onboarding cerrado por {exp.onboarding_cerrado_por}."}
@@ -2664,6 +2672,13 @@ async def avanzar_si_corresponde(db: Session, p: Postulacion) -> List[str]:
 
                 if await iniciar_automatico(db, p):
                     movidas.append("Onboarding")
+            break
+        if p.etapa == "Onboarding":
+            # Cambio 33: con actividades de Onboarding y TODAS completadas (u omitidas) → Colaborador. Sin actividades
+            # queda «Listo para pasar a colaborador» (RH usa «Pasar a colaborador»).
+            from . import onboarding_colaborador
+
+            await onboarding_colaborador.revisar(db, p)
             break
         if p.etapa in ETAPAS_SIN_AVANCE_AUTOMATICO or not encendido:
             break

@@ -187,7 +187,9 @@ export interface EnvioDestinatario {
   nombre: string;
   intentos: number;
   por: string;
-  canales: { canal: string; destino: string; estado: EstadoEnvio; detalle: string }[];
+  canales: { canal: string; destino: string; estado: EstadoEnvio; detalle: string; /** Cambio 35: error de Meta legible */ error?: string }[];
+  /** Cambio 35: por qué falló (error de Meta en lenguaje de RH: «Fuera de la ventana de 24 horas…», «Número inválido…»). */
+  error?: string;
 }
 export interface ItemMenuPaso {
   clave: "accion" | "abrir_liga" | "copiar_liga" | "registrar_resultado" | "reintentar_sincronizacion" | "omitir" | "reactivar"
@@ -247,7 +249,7 @@ export interface EtapaSeguimiento {
 }
 export interface SiguienteAccionProceso {
   /** 2026-10-08: en Onboarding `tarea` (resolver una tarea desde la ficha) → `alta` → `cerrar_onboarding`. */
-  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada" | "bloqueo" | "tarea" | "alta" | "cerrar_onboarding";
+  tipo: "paso" | "avanzar" | "abrir" | "esperar" | "fin" | "cerrada" | "bloqueo" | "tarea" | "alta" | "cerrar_onboarding" | "pasar_colaborador";
   texto: string;
   detalle?: string;
   paso?: string;
@@ -392,6 +394,8 @@ export interface Candidato {
   /** 2026-10-01: motivo que capturó RH al descartar (la tarjeta se queda en su columna con «No cumple»). */
   motivoDescarte?: string;
   resultadoIntegral?: ResultadoIntegral;
+  /** Cambio 33: en Onboarding — «Listo para pasar a colaborador» y «Documentos pendientes: N». */
+  onboarding?: OnboardingFicha | null;
   /** UX 2026-10-07: siguiente actividad de la ruta (tarjeta del tablero). */
   siguienteActividad?: { id: string; nombre: string; estado: EstadoUnificado; estadoTexto: string } | null;
   /* --- Rediseño del tablero (2026-10-07, red-human-kanban-completo.md §3): campos calculados por la API --- */
@@ -857,4 +861,13 @@ export interface OfertaResumen {
   liga: string;
   datos: Partial<CartaOferta>;
   enRuta: boolean;
+}
+
+/** Cambio 33 (2026-10-13): estado de la postulación en Onboarding (ficha). */
+export interface OnboardingFicha {
+  estado: "listo_colaborador" | "actividades";
+  texto: string;
+  documentosPendientes: number;
+  documentosPendientesLista: string[];
+  puedePasarColaborador: boolean;
 }

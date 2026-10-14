@@ -314,7 +314,7 @@ with TestClient(app) as client:
     check(r.status_code == 200, "Solicitar documentos desde Contratación → 200 (antes solo Onboarding)")
     res_wa = [x for x in r.json()["resultados"] if x["canal"] == "whatsapp"]
     check(res_wa and res_wa[0]["enviado"] and res_wa[0].get("plantilla") == "solicitud_documentos_rh", "WhatsApp al candidato salió con la plantilla solicitud_documentos_rh")
-    check(PLANTILLAS and PLANTILLAS[-1]["parametros"][0] == "Alta" and "Identificación oficial" in PLANTILLAS[-1]["parametros"][1] and "/expediente/" in PLANTILLAS[-1]["parametros"][2],
+    check(PLANTILLAS and PLANTILLAS[-1]["parametros"][0] == "Alta" and "INE (frente y reverso)" in PLANTILLAS[-1]["parametros"][1] and "/expediente/" in PLANTILLAS[-1]["parametros"][2],
           f"parámetros de la plantilla = nombre, documentos pendientes, liga: {PLANTILLAS[-1]['parametros']}")
     r = client.post(f"/contratacion/expedientes/{EXP}/recordatorio", json={"notificar": {"candidato_whatsapp": True, "candidato_correo": False}})
     check(r.status_code == 200 and any(x.get("plantilla") for x in r.json()["notificaciones"]), "«Enviar recordatorio» del expediente también usa la plantilla")
@@ -332,11 +332,11 @@ with TestClient(app) as client:
     db.commit()
     ENVIADOS.clear()
     r = webhook_meta(client, "5215577778888", "mi INE", tipo="document", media={"id": "media-1", "mime_type": "application/pdf", "filename": "ine_karla.pdf"}, wamid="wamid.doc1")
-    check(r.status_code == 200 and r.json().get("accion") == "documento_whatsapp" and r.json().get("documento") == "Identificación oficial", f"documento por WhatsApp con pie «mi INE» → adjuntado como Identificación oficial ({r.json().get('estado')})")
+    check(r.status_code == 200 and r.json().get("accion") == "documento_whatsapp" and r.json().get("documento") == "INE (frente y reverso)", f"documento por WhatsApp con pie «mi INE» → adjuntado como INE (frente y reverso) ({r.json().get('estado')})")
     db.expire_all()
-    doc = db.query(Documento).filter_by(expediente_id=EXP, tipo="Identificación oficial").one()
+    doc = db.query(Documento).filter_by(expediente_id=EXP, tipo="INE (frente y reverso)").one()
     check(bool(doc.archivo) and os.path.isfile(doc.archivo) and doc.mime == "application/pdf" and doc.subido_en is not None, "el archivo quedó guardado en disco y ligado al Documento del expediente")
-    check(ENVIADOS and "Recibí tu Identificación oficial" in ENVIADOS[-1]["texto"], "el candidato recibe confirmación con lo que falta")
+    check(ENVIADOS and "Recibí tu INE (frente y reverso)" in ENVIADOS[-1]["texto"], "el candidato recibe confirmación con lo que falta")
     # imagen sin pie → primer obligatorio pendiente (CURP)
     r = webhook_meta(client, "5215577778888", "", tipo="image", media={"id": "media-2", "mime_type": "image/jpeg"}, wamid="wamid.img1")
     check(r.status_code == 200 and r.json().get("documento") == "CURP", "imagen sin pie de foto → primer obligatorio pendiente (CURP)")

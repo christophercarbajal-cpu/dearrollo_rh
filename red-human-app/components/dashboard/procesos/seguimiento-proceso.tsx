@@ -23,6 +23,7 @@
 import { useEffect, useState } from "react";
 import { BotonCartaOferta, ModalOferta } from "@/components/dashboard/candidatos/oferta-laboral";
 import { ModalCapacitacionPresencial } from "@/components/dashboard/procesos/capacitacion-presencial";
+import { AccionesOnboarding } from "@/components/dashboard/onboarding/acciones-onboarding";
 import {
   AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ClipboardCheck, Clock, Copy, ExternalLink, FileText, Play, RefreshCw, RotateCcw, Send,
   SkipForward, Sparkles, ThumbsDown, XCircle,
@@ -391,7 +392,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
   // flujo simple: si la ruta espera una psicométrica obligatoria ya enviada, se dice claro por qué no avanza
   const pasoBloqueo = bloqueoPsico ?? (simple && !principal && pasoSig?.obligatorio && pasoSig.psicometria?.status === "enviada"
     && pasoSig.estado !== "omitida" && pasoSig.estado !== "cancelada" ? pasoSig : null);
-  const textoEspera = !principal && !pasoBloqueo && sig ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
+  const textoEspera = !principal && !pasoBloqueo && sig && sig.tipo !== "pasar_colaborador" ? `${sig.texto}${sig.detalle ? ` — ${sig.detalle}` : ""}` : "";
   /** Actividad automática sin error: solo se muestra su estado (sin botón). */
   const soloEstado = (p: PasoSeguimiento) => Boolean(p.automatica) && !p.error;
 
@@ -494,6 +495,10 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
         <ModalOferta codigo={c.id} onClose={() => setOfertaAbierta(false)}
           onEnviada={(_o, m) => { setOfertaAbierta(false); void refrescarTodo(m); }} />
       )}
+
+      {/* Cambio 33: Onboarding — «Documentos pendientes: N», Pasar a colaborador, Solicitar documentos pendientes, Asignar tareas */}
+      <AccionesOnboarding c={c} live={live}
+        onListo={(m, tono) => (tono === "error" ? setAviso({ tono: "error", texto: m }) : void refrescarTodo(m))} />
 
       {/* 2. Resultados clave */}
       <ResultadosClave c={c} />
@@ -742,13 +747,14 @@ function EnviosPorDestinatario({ envios }: { envios?: Record<string, EnvioDestin
         <li key={dest} className="flex flex-wrap items-baseline gap-x-1.5">
           <b className="text-ink">{TEXTO_DESTINATARIO[dest] ?? dest}{e.nombre && dest !== "candidato" ? ` (${e.nombre})` : ""}:</b>
           <span className={cn("font-semibold", TONO_ENVIO[e.estado])}>{e.estadoTexto}</span>
+          {e.estado === "fallido" && e.error && <span className="font-semibold text-bad">— {e.error}</span>}
           {e.fecha && <span className="text-ink-3">· {textoFechaHora(e.fecha)}</span>}
           {e.canales.length > 0 && (
             <span className="text-ink-3">· {e.canales.map((x) => `${x.canal || "sin canal"} ${x.estado === "fallido" ? "✗" : "✓"}`).join(", ")}</span>
           )}
           {e.intentos > 1 && <span className="text-ink-3">· {e.intentos} envíos</span>}
-          {e.estado === "fallido" && e.canales.some((x) => x.detalle) && (
-            <span className="w-full text-bad">{e.canales.map((x) => x.detalle).filter(Boolean).join("; ")}</span>
+          {e.estado === "fallido" && !e.error && e.canales.some((x) => x.detalle) && (
+            <span className="w-full text-bad">{e.canales.map((x) => x.error || x.detalle).filter(Boolean).join("; ")}</span>
           )}
         </li>
       ))}

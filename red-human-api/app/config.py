@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # {{8}} liga al expediente.
     # Si Meta la rechaza (no aprobada, nombre distinto) sale texto libre.
     meta_plantilla_entrevista: str = "alerta_entrevista_asig"
+    # Cambio 35 (2026-10-13): TODO aviso por WhatsApp a evaluadores (entrevistadores, médicos, instructores, evaluadores)
+    # sale con plantilla de Meta categoría «Utilidad» — nunca texto libre (casi nunca están en la ventana de 24 h).
+    # Las tres llevan las MISMAS 6 variables: {{1}} nombre del evaluador, {{2}} candidato, {{3}} puesto,
+    # {{4}} fecha y hora, {{5}} lugar, {{6}} liga. Aviso nuevo / «Reenviar» / recordatorio → META_PLANTILLA_EVALUADOR;
+    # «Tu cita cambió» → META_PLANTILLA_EVALUADOR_CAMBIO; cancelación → META_PLANTILLA_EVALUADOR_CANCELADA.
+    meta_plantilla_evaluador: str = "aviso_evaluador_rh"
+    meta_plantilla_evaluador_cambio: str = "cita_cambio_evaluador_rh"
+    meta_plantilla_evaluador_cancelada: str = "cita_cancelada_evaluador_rh"
     # 2026-10-13 (plantillas oficiales, Cambios 28-29): al habilitarse «Prefiltro por WhatsApp» se abre el flujo con
     # META_PLANTILLA_INICIO ({{1}} nombre del candidato); cuando el candidato debe confirmar un horario,
     # META_PLANTILLA_AGENDA, que en Meta NO tiene variables (META_PLANTILLA_AGENDA_PARAMS vacío = 0 parámetros; solo si

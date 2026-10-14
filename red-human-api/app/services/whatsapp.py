@@ -221,6 +221,64 @@ async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallba
     return await enviar_mensaje(telefono, texto_fallback)
 
 
+# Cambio 35: errores de Meta en lenguaje de RH (se muestran junto al «Fallido» del seguimiento)
+ERRORES_META = {
+    "131047": "Fuera de la ventana de 24 horas: solo se puede enviar con una plantilla aprobada",
+    "131026": "Número inválido o sin WhatsApp: no puede recibir mensajes",
+    "131009": "Número inválido o dato de la plantilla incorrecto",
+    "131030": "El número no está en la lista de destinatarios permitidos de Meta (cuenta de prueba)",
+    "131049": "Meta frenó el envío para cuidar la experiencia del usuario; intenta más tarde",
+    "131056": "Demasiados mensajes seguidos al mismo número; intenta más tarde",
+    "131051": "Tipo de mensaje no soportado",
+    "130429": "Se alcanzó el límite de envíos de Meta; intenta más tarde",
+    "132000": "El número de variables no coincide con la plantilla aprobada en Meta",
+    "132001": "La plantilla no existe o no está aprobada en Meta (revisa el nombre y el idioma)",
+    "132005": "El texto de las variables es demasiado largo para la plantilla",
+    "132007": "El contenido viola las políticas de la plantilla en Meta",
+    "132012": "El formato de las variables no coincide con la plantilla",
+    "132015": "La plantilla está pausada en Meta por baja calidad",
+    "132016": "La plantilla está deshabilitada en Meta",
+    "190": "El token de Meta es inválido o venció",
+    "100": "Meta rechazó un dato del mensaje (revisa el número y la plantilla)",
+}
+
+
+def error_legible(detalle: str) -> str:
+    """«131047: Re-engagement message» → «Fuera de la ventana de 24 horas: …». Lo que no es un código de Meta se
+    regresa limpio («error de red: …» → «Sin conexión con Meta…»)."""
+    t = str(detalle or "").strip()
+    if not t:
+        return ""
+    if t.lower().startswith("error de red"):
+        return "Sin conexión con Meta; intenta de nuevo"
+    m = re.match(r"^\s*(\d{2,6})\b\s*:?\s*(.*)$", t)
+    if m:
+        return ERRORES_META.get(m.group(1)) or f"Meta rechazó el mensaje ({m.group(1)}): {m.group(2)[:160]}".rstrip(": ")
+    for codigo, texto in ERRORES_META.items():
+        if len(codigo) > 3 and codigo in t:
+            return texto
+    return t[:200]
+
+
+async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: List[str], texto: str,
+                                     cuenta_id: Optional[int] = None) -> dict:
+    """Cambio 35: aviso a un EVALUADOR (entrevistador, médico, instructor) SIEMPRE con plantilla de Meta categoría
+    «Utilidad», con EXACTAMENTE 6 variables [evaluador, candidato, puesto, fecha y hora, lugar, liga]. Nunca cae a texto
+    libre: si Meta la rechaza, el error (legible) viaja al seguimiento. Por Telegram (sin plantillas) sale `texto`."""
+    if _por_telegram(telefono, cuenta_id):
+        return await telegram.enviar_texto(telefono, texto)
+    if settings.whatsapp_provider != "meta":
+        return await enviar_mensaje(telefono, texto)
+    if len(parametros) != 6:
+        raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
+    resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma)
+    resultado["plantilla"] = plantilla
+    if not resultado.get("enviado"):
+        resultado["error"] = error_legible(resultado.get("detalle", ""))
+        print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» no salió: {resultado.get('detalle')}")
+    return resultado
+
+
 async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], texto_fallback: str, cuenta_id: Optional[int] = None) -> dict:
     """Aviso al entrevistador de una cita nueva: plantilla META_PLANTILLA_ENTREVISTA («alerta_entrevista_asig»,
     2026-10-13) con EXACTAMENTE 8 parámetros posicionales [entrevistador, candidato, vacante, fecha, hora, contacto,

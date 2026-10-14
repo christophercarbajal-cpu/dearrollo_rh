@@ -2207,8 +2207,16 @@ def _abrir_expediente(db: Session, p: Postulacion, u: Usuario) -> Expediente:
     p.expediente = exp
     db.add(exp)
     db.flush()
-    for tipo in DOCUMENTOS_BASE:
-        db.add(Documento(expediente_id=exp.id, tipo=tipo, obligatorio=True))
+    # Cambio 34: UN expediente con los documentos de la Cuenta («Documentos de contratación») + los de la vacante,
+    # del catálogo único y sin duplicados
+    from ..services.onboarding import documentos_requeridos
+
+    try:
+        requeridos = documentos_requeridos(db, p)
+    except Exception:  # noqa: BLE001 — sin tablas de módulos: la base del catálogo
+        requeridos = [{"tipo": t, "obligatorio": True} for t in DOCUMENTOS_BASE]
+    for d in requeridos:  # por la relación: quien lea `exp.documentos` en esta misma sesión ya los ve (sin duplicar)
+        exp.documentos.append(Documento(expediente_id=exp.id, tipo=d["tipo"], obligatorio=d["obligatorio"]))
     registrar(db, u.nombre, "expediente_abierto", "postulacion", p.codigo, {"candidato": p.candidato.codigo, "expediente": exp.id, "puesto": exp.puesto})
     return exp
 
@@ -2413,7 +2421,11 @@ async def aplicar_movimiento(
          "manual": manual, "omitidas": omitidas, "omitio_entrevista_ia": omitiendo_ia, "correo_rh": u.correo,
          "iniciar_onboarding": desde_iniciar, "automatico": automatico, "pasos_omitidos": omitidos_proceso},
     )
-    if datos.etapa == "Onboarding" and not desde_iniciar and p.expediente:
+    from ..services import onboarding_colaborador as _ocol
+
+    if datos.etapa == "Onboarding" and not desde_iniciar and p.expediente and not _ocol.tiene_actividades(p):
+        _ocol.marcar_listo(p)  # Cambio 33: ruta sin actividades de Onboarding → «Listo para pasar a colaborador»
+    elif datos.etapa == "Onboarding" and not desde_iniciar and p.expediente:
         # Modo Prueba (única vía sin «Iniciar Onboarding»): las tareas nacen igual desde la plantilla, sin avisos.
         try:
             from ..services import onboarding as onb

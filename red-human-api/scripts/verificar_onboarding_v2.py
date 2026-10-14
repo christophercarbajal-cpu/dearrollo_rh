@@ -104,7 +104,7 @@ with TestClient(app) as client:
         "responsables": {"alta_imss_nomina": "Nómina Norte"},
     })
     check(r.status_code == 201 and r.json()["empresa"] == "Logística Norte SA", "la razón social se guarda con su escritura oficial")
-    check([d["tipo"] for d in r.json()["documentos"]] == ["Identificación oficial", "CURP", "Licencia de manejo"], "documentos sin duplicados (CURP/curp)")
+    check([d["tipo"] for d in r.json()["documentos"]] == ["INE (frente y reverso)", "CURP", "Licencia de conducir"], "documentos sin duplicados (CURP/curp) y con el nombre del catálogo (Cambio 34)")
     LOG = r.json()["id"]
 
     r = client.post("/onboarding/plantillas", json={
@@ -298,7 +298,7 @@ with TestClient(app) as client:
     res = client.get(f"/onboarding/expedientes/{EXP2}/resumen").json()
     check(res["puedeIniciar"] and res["requisitos"]["completos"], "puesto + sueldo + tipo + fecha + consentimiento → habilitado")
     cfg = res["configuracion"]
-    check(cfg["origen"] == "puesto" and cfg["plantilla"] == "Chofer" and [d["tipo"] for d in cfg["documentos"]] == ["Identificación oficial", "Licencia federal", "Carta de no antecedentes"],
+    check(cfg["origen"] == "puesto" and cfg["plantilla"] == "Chofer" and [d["tipo"] for d in cfg["documentos"]] == ["INE (frente y reverso)", "Licencia de conducir", "Carta de no antecedentes"],
           "el resumen viene PRECARGADO con la plantilla del puesto")
 
     print("\n--- 10. «Cambiar selección» (solo para esta persona) + Iniciar ---")
@@ -316,8 +316,8 @@ with TestClient(app) as client:
     check(out["candidato"]["etapa"] == "Onboarding", "cambia la etapa a Onboarding (el mismo movimiento de siempre)")
     check([t["clave"] for t in out["tareas"]][:3] == ["contrato_firmado", "alta_imss_nomina", "confirmar_ingreso"] and len(out["tareas"]) == 4,
           "genera las tres tareas fijas + el recurso seleccionado")
-    check(out["documentosAgregados"] == ["Licencia federal"], "agrega los documentos seleccionados que faltaban")
-    check(set(out["documentosNoAplica"]) == {"Constancia de Situación Fiscal / RFC", "Comprobante de domicilio", "Cuenta bancaria / CLABE"},
+    check(out["documentosAgregados"] == ["Licencia de conducir"], "agrega los documentos seleccionados que faltaban (con el nombre del catálogo)")
+    check(set(out["documentosNoAplica"]) == {"Constancia de Situación Fiscal (RFC)", "Comprobante de domicilio", "Cuenta bancaria / CLABE"},
           "lo que RH quitó de la selección queda «No aplica» (nunca se borra)")
     check(out["documentosConservados"] == [], "nada entregado se tocó")
     docs2 = {d["nombre"]: d for d in client.get(f"/contratacion/expedientes/{EXP2}").json()["documentos"]}

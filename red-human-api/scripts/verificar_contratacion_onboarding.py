@@ -106,7 +106,9 @@ RUTA = [
     {"id": "carta-contrato", "tipo": "carta_contrato", "nombre": "Carta intención / contrato", "etapa": "Contratación",
      "depende_de": ["condiciones"]},
     {"id": "documentos-ingreso", "tipo": "documentos", "nombre": "Documentos de ingreso", "etapa": "Onboarding"},
-    {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding", "depende_de": ["documentos-ingreso"]},
+    # Cambio 33: con «Tareas de onboarding» en la ruta, el paso a Colaborador espera a que TODAS las tareas se resuelvan
+    {"id": "tareas-onboarding", "tipo": "onboarding", "nombre": "Tareas de onboarding", "etapa": "Onboarding"},
+    {"id": "alta", "tipo": "alta", "nombre": "Alta como colaborador", "etapa": "Onboarding", "depende_de": ["documentos-ingreso", "tareas-onboarding"]},
 ]
 
 with TestClient(app) as client:
@@ -254,13 +256,12 @@ with TestClient(app) as client:
     r = client.post(f"/onboarding/expedientes/{EA}/confirmar-ingreso", headers=H, json={"fecha_real": hoy})
     check(r.status_code == 200, "ingreso confirmado desde la ficha")
 
-    print("\n--- 6. Recomendación: dar de alta → alta → cierre ---")
-    s = seg(PA)
-    check(s["siguienteAccion"]["tipo"] == "alta" and s["recomendacion"]["texto"] == "Lista para dar de alta",
-          "con la última tarea resuelta, la recomendación sugiere dar de alta")
-    r = client.post(f"/contratacion/expedientes/{EA}/alta", headers=H, json={})
-    check(r.status_code == 200, f"alta como colaborador ({r.status_code} {r.text[:200]})")
+    print("\n--- 6. Actividades completas → Colaborador SOLO (Cambio 33) → cierre ---")
     pa = recargar(PA)
+    check(not pa.activa and pa.motivo_cierre == "contratado" and pa.expediente.estado == "alta",
+          "con la última tarea resuelta, las actividades de Onboarding están completas y pasa SOLO a Colaborador")
+    r = client.post(f"/contratacion/expedientes/{EA}/alta", headers=H, json={})
+    check(r.status_code == 409, "un alta manual después ya no duplica nada (409)")
     check(db.query(Colaborador).filter(Colaborador.cuenta_id == cu.id).count() == 1 and pa.expediente.id == EA,
           "un solo colaborador, sobre el mismo expediente")
     s = seg(PA)

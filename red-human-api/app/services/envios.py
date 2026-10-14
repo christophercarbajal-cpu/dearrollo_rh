@@ -147,6 +147,17 @@ def filas_de(db: Session, p: Postulacion) -> List[EnvioActividad]:
         return []
 
 
+def _error(estado: str, canal: str, detalle) -> str:
+    """Cambio 35: el porqué de un «Fallido» en lenguaje de RH (los códigos de Meta se traducen)."""
+    if estado != "fallido" or not detalle:
+        return ""
+    if (canal or "") in ("whatsapp", ""):
+        from .whatsapp import error_legible
+
+        return error_legible(str(detalle))
+    return str(detalle)[:200]
+
+
 def _estado_lote(filas: List[EnvioActividad]) -> str:
     estados = {f.estado for f in filas}
     return next((e for e in PRIORIDAD if e in estados), "fallido")
@@ -158,7 +169,9 @@ def _resumen_lote(filas: List[EnvioActividad], lotes: int) -> dict:
     return {
         "estado": estado, "estadoTexto": ESTADOS_ENVIO[estado], "fecha": fechas.iso(f0.creado_en), "motivo": f0.motivo,
         "nombre": f0.destinatario_nombre or "", "intentos": lotes, "por": f0.actor or "",
-        "canales": [{"canal": f.canal, "destino": f.destino, "estado": f.estado, "detalle": (f.detalle or "")[:200]} for f in filas],
+        "canales": [{"canal": f.canal, "destino": f.destino, "estado": f.estado, "detalle": (f.detalle or "")[:200],
+                     "error": _error(f.estado, f.canal, f.detalle)} for f in filas],
+        "error": next((e for e in (_error(f.estado, f.canal, f.detalle) for f in filas) if e), ""),
     }
 
 
@@ -221,8 +234,10 @@ def resumen_legado(db: Session, ev: Evaluacion, eventos: Optional[List[EventoEva
                 "estado": "enviado" if ok else "fallido", "estadoTexto": "Enviado" if ok else "Fallido", "fecha": fechas.iso(e.fecha),
                 "motivo": d.get("liga") or "aviso", "nombre": "", "intentos": (previo or {}).get("intentos", 0) + 1, "por": e.actor or "",
                 "canales": [{"canal": r.get("canal") or "", "destino": r.get("destino") or "", "estado": "enviado" if r.get("enviado") else "fallido",
-                             "detalle": str(r.get("detalle") or "")[:200]} for r in rs],
+                             "detalle": str(r.get("detalle") or "")[:200],
+                             "error": _error("enviado" if r.get("enviado") else "fallido", r.get("canal") or "", r.get("detalle"))} for r in rs],
             }
+            lote["error"] = "" if ok else next((c["error"] for c in lote["canales"] if c["error"]), "")
             lote["motivo"] = motivo
             lote["porMotivo"] = {**((previo or {}).get("porMotivo") or {}), motivo: dict(lote)}
             salida[dest] = lote

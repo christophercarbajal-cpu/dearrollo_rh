@@ -248,7 +248,7 @@ with TestClient(app) as client:
     check(r.json()["etapasDocumentos"] == ["Prefiltro", "Contratación"], "con «Documentos» en varias etapas se ofrece «Se pide en:»")
     check(r.json()["documentosSolicitados"][1]["etapa"] == "Contratación", "cada documento guarda su etapa")
     temprano = next(x for x in v.proceso["pasos"] if x["tipo"] == "documentos" and x["etapa"] == "Prefiltro")
-    check(temprano.get("documentos") == ["INE"], "lo de Contratación no se pide en el Prefiltro")
+    check(temprano.get("documentos") == ["INE (frente y reverso)"], "lo de Contratación no se pide en el Prefiltro")
     p3 = postular("Docs Tres", "5512880004", v.proceso["pasos"])
     r = client.patch(f"/candidatos/{p3.codigo}/etapa", json={"etapa": "Contratación", "manual": True, "omitir_obligatorios": True,
                                                               "comentario": "Prueba de documentos por etapa"})

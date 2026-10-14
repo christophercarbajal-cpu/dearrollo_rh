@@ -245,6 +245,21 @@ def _oferta(p) -> Optional[dict]:
         return None
 
 
+def _onboarding(p) -> Optional[dict]:
+    """Cambio 33: estado en Onboarding («Listo para pasar a colaborador»), «Documentos pendientes: N»."""
+    if p.etapa != "Onboarding":
+        return None
+    try:
+        from sqlalchemy.orm import object_session
+
+        from .services import onboarding_colaborador as ocol
+
+        db = object_session(p)
+        return ocol.resumen(db, p) if db is not None else None
+    except Exception:  # noqa: BLE001 — la ficha nunca truena por esto
+        return None
+
+
 def historial_laboral(p) -> List[dict]:
     """Cambio 29: Empresa · Puesto · Tareas · Duración · Motivo de la entrevista fija por WhatsApp más reciente."""
     try:
@@ -739,6 +754,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "pideCv": _pide_cv(p),
         # Cambio 30: oferta laboral (estado, fechas y liga) — también la del botón «Generar carta oferta»
         "oferta": _oferta(p),
+        # Cambio 33: Onboarding — «Listo para pasar a colaborador», documentos pendientes
+        "onboarding": _onboarding(p),
         # Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos)
         "historialLaboral": historial_laboral(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)

@@ -453,7 +453,8 @@ function TarjetaEvaluacion({ e, live, ocupado, onAccion, etiquetas, menu, onCopi
         // 2026-10-08: trazabilidad por destinatario (último envío a cada quien)
         <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-ink-3">
           {Object.entries(e.envios!).map(([d, x]) => (
-            <span key={d}>{DESTINATARIO[d] ?? d}: <b className={x.estado === "fallido" ? "text-bad" : x.estado === "entregado" ? "text-good" : "text-ink-2"}>{x.estadoTexto}</b></span>
+            <span key={d}>{DESTINATARIO[d] ?? d}: <b className={x.estado === "fallido" ? "text-bad" : x.estado === "entregado" ? "text-good" : "text-ink-2"}>{x.estadoTexto}</b>
+              {x.estado === "fallido" && x.error && <span className="text-bad"> — {x.error}</span>}</span>
           ))}
         </p>
       )}

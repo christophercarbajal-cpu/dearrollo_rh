@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
-from ..models import NIVELES_RECORDATORIO, Candidato, Colaborador, Cuenta, Documento, Expediente, Postulacion, Usuario, registrar
+from ..models import NIVELES_RECORDATORIO, Candidato, Colaborador, Cuenta, Documento, Expediente, Postulacion, Usuario, clave_documento, registrar
 from ..services.recordatorios import registrar_recordatorio_enviado
 from ..serial import colaborador_dict, expediente_dict, nombre_empresa_candidato
 from ..services import archivos as fs
@@ -54,7 +54,11 @@ def _expediente(db: Session, exp_id: int, cuenta_id: int) -> Expediente:
 
 
 def _documento(e: Expediente, tipo: str) -> Documento:
+    from ..models import clave_documento
+
     doc = next((d for d in e.documentos if d.tipo.lower() == tipo.strip().lower()), None)
+    if doc is None:  # Cambio 34: un nombre viejo («Identificación oficial») encuentra su documento del catálogo
+        doc = next((d for d in e.documentos if not d.interno and clave_documento(d.tipo) == clave_documento(tipo)), None)
     if not doc:
         raise HTTPException(404, f"El expediente no requiere el documento '{tipo}'")
     return doc
@@ -316,17 +320,27 @@ def _norm(s: str) -> str:
 
 # Sinónimos con los que un candidato nombra sus papeles por WhatsApp → palabra clave del tipo del
 # expediente (DOCUMENTOS_BASE). Se compara sin acentos y por subcadena.
+# Cambio 34: cómo menciona el candidato cada documento → id del catálogo único
 _SINONIMOS_DOC = [
-    (("ine", "ife", "pasaporte", "identificacion", "credencial"), "identificacion"),
+    (("ine", "ife", "pasaporte", "identificacion", "credencial"), "ine"),
     (("curp",), "curp"),
-    (("rfc", "fiscal", "sat", "constancia"), "fiscal"),
-    (("nss", "seguro social", "imss"), "seguridad social"),
-    (("domicilio", "luz", "cfe", "agua", "telmex", "predial", "recibo"), "domicilio"),
-    (("clabe", "banco", "bancaria", "estado de cuenta", "cuenta"), "bancaria"),
+    (("acta",), "acta_nacimiento"),
+    (("rfc", "fiscal", "sat", "constancia"), "rfc"),
+    (("semanas cotizadas", "semanas"), "semanas_cotizadas"),
+    (("nss", "seguro social", "imss"), "nss"),
+    (("domicilio", "luz", "cfe", "agua", "telmex", "predial", "recibo"), "comprobante_domicilio"),
+    (("clabe", "banco", "bancaria", "estado de cuenta", "cuenta"), "cuenta_bancaria"),
+    (("licencia",), "licencia"),
+    (("recomendacion",), "carta_recomendacion"),
+    (("estudios", "certificado", "titulo"), "comprobante_estudios"),
+    (("tarjeta de circulacion", "circulacion"), "tarjeta_circulacion"),
+    (("poliza", "seguro del auto"), "poliza_seguro"),
 ]
 
 
 def documento_para_adjunto(db: Session, e: Expediente, pie: str, nombre_archivo: str) -> Documento:
+    from ..models import clave_documento
+
     """A qué Documento del expediente corresponde un adjunto de WhatsApp: (1) el pie de foto o el
     nombre del archivo mencionan un tipo ("mi INE", "comprobante de luz"); (2) si no, el primer
     obligatorio pendiente/rechazado; (3) si no falta ninguno, el primer opcional pendiente; (4) si
@@ -339,7 +353,7 @@ def documento_para_adjunto(db: Session, e: Expediente, pie: str, nombre_archivo:
                 return d
         for palabras, clave in _SINONIMOS_DOC:
             if any(re.search(rf"\b{re.escape(w)}\b", pista) for w in palabras):
-                d = next((x for x in docs if clave in _norm(x.tipo)), None)
+                d = next((x for x in docs if clave_documento(x.tipo) == clave), None)
                 if d:
                     return d
     for d in docs:
@@ -552,10 +566,12 @@ def agregar_documento(
 ):
     """Suma un documento al checklist (título profesional, licencia, carta de no antecedentes…)."""
     e = _expediente(db, exp_id, cuenta.id)
-    tipo = datos.tipo.strip()
+    from ..models import clave_documento, nombre_documento
+
+    tipo = nombre_documento(datos.tipo.strip()) if datos.tipo.strip() else ""  # Cambio 34: nombre del catálogo único
     if not tipo:
         raise HTTPException(400, "Indica el nombre del documento.")
-    if any(d.tipo.lower() == tipo.lower() for d in e.documentos):
+    if any(clave_documento(d.tipo) == clave_documento(tipo) for d in e.documentos if not d.interno):
         raise HTTPException(409, f"El expediente ya incluye '{tipo}'.")
 
     db.add(Documento(expediente_id=e.id, tipo=tipo, obligatorio=datos.obligatorio))
@@ -693,12 +709,21 @@ async def alta(
     de "ya fue dado de alta" — _crear_colaborador() no es idempotente, forzar ese en particular
     crearía un Colaborador duplicado, así que se queda tan duro como el gate de consentimiento."""
     e = _expediente(db, exp_id, cuenta.id)
+    return await ejecutar_alta(db, e, datos, u, cuenta, forzar_prueba=forzar_prueba)
+
+
+async def ejecutar_alta(db: Session, e: Expediente, datos: AltaIn, u, cuenta: Cuenta, forzar_prueba: bool = False,
+                        ignorar_pendientes: bool = False) -> dict:
+    """El alta como colaborador (crea el Colaborador y cierra la postulación como «contratado»). Cambio 33:
+    `ignorar_pendientes` = «Pasar a colaborador» (o el paso automático al completar las actividades de Onboarding): se
+    salta la integridad del expediente (documentos, condiciones, confirmación de ingreso) y lo pendiente se QUEDA
+    pendiente en el expediente. Nunca se salta «ya fue dado de alta» ni «No ingresó»."""
     if e.estado == "alta":
         raise HTTPException(409, f"El expediente ya fue dado de alta por {e.alta_autorizada_por}.")
     # 2026-09-18 (Modo Prueba TOTAL, pedido del cliente): con modo_prueba activo se omite POR COMPLETO la
     # validación de integridad del expediente (documentos adjuntos, 100 %, confirmación de RH) — el flag
     # forzar_prueba ya no es necesario. Con Modo Prueba apagado todo sigue exigiéndose.
-    prueba = modo_prueba_activo(db)
+    prueba = modo_prueba_activo(db) or ignorar_pendientes
     if e.no_ingreso_en:
         raise HTTPException(409, "Esta persona quedó como «No ingresó»; no se puede dar de alta.")
     if not prueba and not any(d.archivo for d in e.documentos):

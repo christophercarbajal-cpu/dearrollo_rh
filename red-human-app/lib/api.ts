@@ -713,20 +713,27 @@ export interface VacanteGenerada {
  *  del auto son 4); `foto` = la revisa RH a ojo (no se valida como documento oficial). */
 /** Cambio 31: cómo pregunta Red Human cada requisito indispensable (lenguaje natural, se usa tal cual). */
 export interface PreguntaRequisito { requisito: string; pregunta: string }
-export interface DocumentoSolicitado { nombre: string; cantidad: number; foto: boolean; /** Cambio 28: «Se pide en:» */ etapa?: EtapaCandidato }
+export interface DocumentoSolicitado {
+  /** Cambio 34: id del catálogo único («otro» = nombre libre de RH). */
+  id?: string; nombre: string; cantidad: number; foto: boolean; /** Cambio 28: «Se pide en:» */ etapa?: EtapaCandidato;
+}
+/** Cambio 34 (2026-10-13): catálogo ÚNICO de documentos (mismo que `models.CATALOGO_DOCUMENTOS` del backend). Vacante y
+ *  Configuración de la Cuenta eligen de aquí; lo demás va como «Otro» con su nombre. */
 export const DOCUMENTOS_SUGERIDOS_VACANTE: DocumentoSolicitado[] = [
-  { nombre: "INE", cantidad: 1, foto: false },
-  { nombre: "Licencia de conducir", cantidad: 1, foto: false },
-  { nombre: "Fotos del auto", cantidad: 4, foto: true },
-  { nombre: "Tarjeta de circulación", cantidad: 1, foto: false },
-  { nombre: "Comprobante de domicilio", cantidad: 1, foto: false },
-  { nombre: "CURP", cantidad: 1, foto: false },
-  { nombre: "Constancia de situación fiscal", cantidad: 1, foto: false },
-  { nombre: "Número de Seguridad Social", cantidad: 1, foto: false },
-  { nombre: "Acta de nacimiento", cantidad: 1, foto: false },
-  { nombre: "Comprobante de estudios", cantidad: 1, foto: false },
-  { nombre: "Carta de antecedentes no penales", cantidad: 1, foto: false },
-  { nombre: "Foto de frente", cantidad: 1, foto: true },
+  { id: "ine", nombre: "INE (frente y reverso)", cantidad: 1, foto: false },
+  { id: "curp", nombre: "CURP", cantidad: 1, foto: false },
+  { id: "acta_nacimiento", nombre: "Acta de nacimiento", cantidad: 1, foto: false },
+  { id: "nss", nombre: "Número de Seguridad Social (NSS)", cantidad: 1, foto: false },
+  { id: "rfc", nombre: "Constancia de Situación Fiscal (RFC)", cantidad: 1, foto: false },
+  { id: "comprobante_domicilio", nombre: "Comprobante de domicilio", cantidad: 1, foto: false },
+  { id: "semanas_cotizadas", nombre: "Semanas cotizadas del IMSS", cantidad: 1, foto: false },
+  { id: "cuenta_bancaria", nombre: "Cuenta bancaria / CLABE", cantidad: 1, foto: false },
+  { id: "licencia", nombre: "Licencia de conducir", cantidad: 1, foto: false },
+  { id: "carta_recomendacion", nombre: "Carta de recomendación laboral", cantidad: 1, foto: false },
+  { id: "comprobante_estudios", nombre: "Comprobante de estudios", cantidad: 1, foto: false },
+  { id: "fotos_auto", nombre: "Fotos del auto", cantidad: 4, foto: true },
+  { id: "tarjeta_circulacion", nombre: "Tarjeta de circulación", cantidad: 1, foto: false },
+  { id: "poliza_seguro", nombre: "Póliza de seguro", cantidad: 1, foto: false },
 ];
 
 /** Parte 3 (2026-09-12): sueldo estructurado. "a_convenir" = sin montos. El texto que se muestra
@@ -3151,6 +3158,8 @@ export interface OpcionesPlantillaOnboarding {
   puestos: string[];
   cursos: { id: number; codigo: string; titulo: string; estado: string }[];
   documentosBase: string[];
+  /** Cambio 34: catálogo único de documentos (ids fijos; «otro» lleva el nombre que escriba RH). */
+  catalogoDocumentos?: { id: string; nombre: string }[];
   tareasFijas: { clave: ClavePlazoOnboarding; nombre: string }[];
   tiposRecurso: TipoRecursoOnboarding[];
   plazosDefault: Record<ClavePlazoOnboarding, number>;
@@ -3289,6 +3298,22 @@ export function generarTareasOnboarding(expedienteId: number) {
 }
 export function confirmarIngresoOnboarding(expedienteId: number, fechaReal: string) {
   return post<EstadoOnboardingDetalle & { plazosRecalculados: number }>(`/onboarding/expedientes/${expedienteId}/confirmar-ingreso`, { fecha_real: fechaReal });
+}
+/* Cambio 33 (2026-10-13): paso a colaborador y acciones manuales de la ficha en Onboarding. */
+export function pasarAColaborador(expedienteId: number, comentario = "") {
+  return post<{ ok: boolean; pendientes: { documentos: string[]; tareas: string[] } }>(
+    `/onboarding/expedientes/${expedienteId}/pasar-colaborador`, { comentario },
+  );
+}
+export function solicitarDocumentosPendientes(expedienteId: number) {
+  return post<{ paso: string; documentos: string[]; solicitud: AvisoOnboarding[]; candidato: Candidato }>(
+    `/onboarding/expedientes/${expedienteId}/solicitar-pendientes`, {},
+  );
+}
+export function asignarTareasOnboarding(expedienteId: number) {
+  return post<{ paso: string; tareas: string[]; avisosResponsables: AvisoOnboarding[]; candidato: Candidato }>(
+    `/onboarding/expedientes/${expedienteId}/asignar-tareas`, {},
+  );
 }
 export function cerrarOnboarding(expedienteId: number) {
   return post<ResumenTableroOnboarding>(`/onboarding/expedientes/${expedienteId}/cerrar`, {});

@@ -126,6 +126,19 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[proceso] ⚠️ migración del Cambio 30 no aplicada: {ex}", flush=True)
+        # Cambio 34 (2026-10-13): catálogo único de documentos — nombres del catálogo y un solo documento por tipo en cada
+        # expediente (el Aprobado y su archivo sobreviven). Idempotente, NO fatal.
+        try:
+            from .services import catalogo_documentos as _scat
+
+            with db.begin_nested():
+                c34 = _scat.migrar(db, aplicar=True)
+            db.commit()
+            if any(c34["totales"].values()):
+                print(f"[documentos] Cambio 34: {c34['totales']}", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[documentos] ⚠️ migración del catálogo de documentos no aplicada: {ex}", flush=True)
         # 2026-10-10 (Cambio 3): «Propuesta y aceptación» se cumple con la aceptación del candidato; quien YA tenía
         # condiciones guardadas la conserva cumplida («aceptada · legado»). Una sola vez, NO fatal.
         try:

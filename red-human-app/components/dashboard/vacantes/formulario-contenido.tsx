@@ -1014,7 +1014,7 @@ function CampoDocumentos({ valor, onChange, obligatorio = false, etapas = [] }: 
   const alternar = (d: DocumentoSolicitado) => onChange(tiene(d.nombre) ? valor.filter((x) => clave(x.nombre) !== clave(d.nombre)) : [...valor, d]);
   const agregar = () => {
     const nombre = otro.trim();
-    if (nombre && !tiene(nombre)) onChange([...valor, { nombre, cantidad: 1, foto: false }]);
+    if (nombre && !tiene(nombre)) onChange([...valor, { id: "otro", nombre, cantidad: 1, foto: false }]);
     setOtro("");
   };
   const otros = valor.filter((d) => !DOCUMENTOS_SUGERIDOS_VACANTE.some((x) => clave(x.nombre) === clave(d.nombre)));
@@ -1042,7 +1042,7 @@ function CampoDocumentos({ valor, onChange, obligatorio = false, etapas = [] }: 
       </div>
       <div className="mt-2 flex gap-2">
         <input value={otro} onChange={(e) => setOtro(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregar(); } }}
-          placeholder="Otro documento (p. ej. Carta de recomendación)"
+          placeholder="Otro documento (p. ej. Carta de no antecedentes penales)"
           className="min-h-10 flex-1 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20" />
         <button type="button" onClick={agregar} disabled={!otro.trim()} className="rounded-xl border border-border-soft px-3 text-sm font-semibold text-ink-2 disabled:opacity-50">
           Agregar

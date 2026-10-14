@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..config import settings
 from ..services import plantillas_correo as pc
-from ..services.notificaciones import parametros_plantilla_entrevista
+from ..services.notificaciones import parametros_plantilla_evaluador
 
 router = APIRouter(prefix="/api/emails/preview", tags=["emails-preview"])
 
@@ -105,7 +105,7 @@ def preview_entrevistador(
     d = _datos(evento, candidato, entrevistador, vacante, empresa, fecha, hora, modalidad, liga, ubicacion, telefono, telefono_candidato, comentario, liga_expediente)
     asunto, html = pc.html_entrevistador(d, evento)
     if json:
-        return JSONResponse({"asunto": asunto, "evento": evento, "datos": d, "parametros_meta": parametros_plantilla_entrevista(d)})
+        return JSONResponse({"asunto": asunto, "evento": evento, "datos": d, "parametros_meta": parametros_plantilla_evaluador(d)})
     return HTMLResponse(html)
 
 

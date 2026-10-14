@@ -142,10 +142,15 @@ function ModalPlantillaOnboarding({ plantilla, opciones, onClose, onGuardada }: 
 
   const filasPlazo: { clave: ClavePlazoOnboarding; nombre: string }[] = [{ clave: "documentos", nombre: "Documentos completos" }, ...opciones.tareasFijas];
 
+  // Cambio 34: solo del catálogo único; «Otro» con el nombre que escriba RH
+  const [nuevoOtro, setNuevoOtro] = useState("");
+  const catalogo = opciones.catalogoDocumentos ?? [];
   function agregarDoc() {
-    const t = nuevoDoc.trim();
+    const elegido = catalogo.find((x) => x.id === nuevoDoc);
+    const t = (elegido?.id === "otro" ? nuevoOtro : elegido?.nombre ?? "").trim();
     if (!t) return;
     if (documentos.some((d) => d.tipo.toLowerCase() === t.toLowerCase())) return setError(`«${t}» ya está en la lista.`);
+    setNuevoOtro("");
     setDocumentos([...documentos, { tipo: t, obligatorio: true }]);
     setNuevoDoc("");
     setError("");
@@ -228,13 +233,16 @@ function ModalPlantillaOnboarding({ plantilla, opciones, onClose, onGuardada }: 
         ))}
       </ul>
       <div className="mt-2 flex gap-2">
-        <input
-          value={nuevoDoc}
-          onChange={(e) => setNuevoDoc(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarDoc(); } }}
-          className={inputRH}
-          placeholder="Agregar documento (p. ej. Licencia de manejo)"
-        />
+        <select value={nuevoDoc} onChange={(e) => setNuevoDoc(e.target.value)} className={inputRH} aria-label="Documento del catálogo">
+          <option value="">Agregar documento del catálogo…</option>
+          {catalogo.filter((x) => x.id === "otro" || !documentos.some((d) => d.tipo === x.nombre)).map((x) => (
+            <option key={x.id} value={x.id}>{x.nombre}</option>
+          ))}
+        </select>
+        {nuevoDoc === "otro" && (
+          <input value={nuevoOtro} onChange={(e) => setNuevoOtro(e.target.value)} className={inputRH} placeholder="Nombre del documento"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarDoc(); } }} />
+        )}
         <Button variant="outline" size="sm" className="h-11" onClick={agregarDoc}><Plus className="h-4 w-4" /> Agregar</Button>
       </div>
 

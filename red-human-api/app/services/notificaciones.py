@@ -20,7 +20,7 @@ from ..config import settings
 from ..models import REGLAS_NOTIFICACION_DEFAULT, ClienteContacto, EntrevistaHumana, Mensaje, NotificacionEnviada, Postulacion, ReglaNotificacion, Usuario
 from .correo import enviar_correo
 from .mensajeria import de_cuenta
-from .whatsapp import enviar_mensaje, enviar_plantilla_documentos, enviar_plantilla_entrevista
+from .whatsapp import enviar_mensaje, enviar_plantilla_documentos, enviar_plantilla_entrevista, enviar_plantilla_evaluador
 from . import plantillas_correo
 from ..serial import nombre_empresa_candidato
 
@@ -138,6 +138,61 @@ def parametros_plantilla_entrevista(d: dict) -> List[str]:
         PREGUNTA_POR_ENTREVISTADOR,
         INDICACIONES_ENTREVISTADOR,
         d.get("liga_expediente") or f"{settings.app_url}",
+    ]
+
+
+# Cambio 35 (2026-10-13): qué plantilla de Meta recibe el EVALUADOR según el evento (todas con las mismas 6 variables).
+PLANTILLA_EVALUADOR_POR_EVENTO = {
+    "entrevista_agendada": "aviso", "evaluacion_asignada": "aviso", "recordatorio_entrevista": "aviso", "recordatorio_evaluacion": "aviso",
+    "entrevista_modificada": "cambio", "evaluacion_reprogramada": "cambio",
+    "entrevista_cancelada": "cancelada", "evaluacion_cancelada": "cancelada",
+}
+_PLANTILLA_EVALUADOR_DEFAULT = {"aviso": "aviso_evaluador_rh", "cambio": "cita_cambio_evaluador_rh", "cancelada": "cita_cancelada_evaluador_rh"}
+
+
+def plantilla_evaluador(evento: str) -> Optional[str]:
+    clase = PLANTILLA_EVALUADOR_POR_EVENTO.get(evento)
+    if clase is None:
+        return None
+    nombre = {"aviso": settings.meta_plantilla_evaluador, "cambio": settings.meta_plantilla_evaluador_cambio,
+              "cancelada": settings.meta_plantilla_evaluador_cancelada}[clase]
+    return (nombre or "").strip() or _PLANTILLA_EVALUADOR_DEFAULT[clase]
+
+
+def parametros_plantilla_evaluador(d_eh: dict, d_ev: Optional[dict] = None) -> List[str]:
+    """Las 6 variables de las plantillas de evaluador: {{1}} nombre del evaluador · {{2}} candidato · {{3}} puesto
+    («Capacitación: [puesto]» en una capacitación presencial) · {{4}} fecha y hora (con zona) · {{5}} lugar (dirección,
+    videollamada o teléfono) · {{6}} liga a SU evaluación. Meta no acepta variables vacías: lo que falte va neutro."""
+    from ..fechas import ETIQUETA_ZONA
+
+    d_ev = d_ev or {}
+    puesto = d_ev.get("vacante") or d_eh.get("vacante") or "Vacante"
+    if d_ev.get("capacitacion") or d_eh.get("capacitacion"):
+        puesto = f"Capacitación: {puesto}"
+    if d_ev.get("fecha_texto"):
+        cuando = f"{d_ev['fecha_texto']}, {d_ev.get('horario_texto') or ''}".rstrip(", ")
+    elif d_eh.get("fecha"):
+        cuando = f"{d_eh['fecha']}, {d_eh.get('hora') or ''}".rstrip(", ")
+    else:
+        cuando = ""
+    cuando = f"{cuando} ({ETIQUETA_ZONA})" if cuando and ETIQUETA_ZONA not in cuando else (cuando or "Por confirmar")
+    modalidad = d_ev.get("modalidad") or d_eh.get("modalidad") or ""
+    liga_video = d_ev.get("liga_videollamada") or d_eh.get("liga_conexion") or ""
+    if modalidad == "Videollamada":
+        lugar = "Videollamada" + (f": {liga_video}" if liga_video else "")
+    elif modalidad == "Teléfono":
+        tel = d_ev.get("telefono_cita") or d_eh.get("telefono_candidato") or ""
+        lugar = "Llamada telefónica" + (f": {tel}" if tel else "")
+    else:
+        lugar = d_ev.get("direccion") or d_eh.get("ubicacion") or "Por confirmar"
+    nombre = (d_eh.get("entrevistador") or d_ev.get("evaluador") or "").strip() or "Evaluador(a)"
+    return [
+        nombre,
+        d_eh.get("candidato") or d_ev.get("candidato") or "Candidato(a)",
+        puesto,
+        cuando,
+        lugar,
+        d_ev.get("liga_evaluador") or d_eh.get("liga_expediente") or f"{settings.app_url}",
     ]
 
 
@@ -600,6 +655,7 @@ async def _enviar_y_registrar(
     plantilla_valores: Optional[dict] = None,
     plantilla_entrevista: Optional[List[str]] = None,
     adjuntos: Optional[List[dict]] = None,
+    plantilla_evaluador_: Optional[tuple] = None,
 ) -> dict:
     """Regresa {destinatario, canal, destino, enviado, proveedor, detalle} — Fase 7A: el detalle de
     por qué NO salió un envío (sin correo, RESEND_API_KEY sin configurar, Meta rechazó…) ya no se
@@ -624,6 +680,11 @@ async def _enviar_y_registrar(
         if canal == "whatsapp" and plantilla_valores is not None:
             with de_cuenta(cuenta_canal):
                 envio = await enviar_plantilla_documentos(destino, plantilla_valores, contenido, nivel=int(plantilla_valores.get("nivel") or 1))
+        elif canal == "whatsapp" and plantilla_evaluador_ is not None and settings.whatsapp_provider == "meta":
+            # Cambio 35: evaluadores SIEMPRE con plantilla «Utilidad» de 6 variables (nunca texto libre)
+            nombre_pl, params_pl = plantilla_evaluador_
+            with de_cuenta(cuenta_canal):
+                envio = await enviar_plantilla_evaluador(destino, nombre_pl, params_pl, contenido)
         elif canal == "whatsapp" and plantilla_entrevista is not None and settings.whatsapp_provider == "meta":
             # plantilla de Meta «alerta_entrevista_asig» (8 parámetros) SIEMPRE con Meta: el entrevistador casi nunca está
             # dentro de la ventana de 24 h; solo si Meta la rechaza cae a texto (otros proveedores no tienen plantillas)
@@ -660,7 +721,12 @@ async def _enviar_y_registrar(
             candidato_id=candidato_id, postulacion_id=p.id, rol="assistant", texto=contenido, canal="whatsapp",
             enviado=bool(envio.get("enviado")), wa_id=envio.get("wa_id", ""),
         ))
-    return {**base, **envio, "detalle": str(envio.get("detalle", ""))}
+    salida = {**base, **envio, "detalle": str(envio.get("detalle", ""))}
+    if canal == "whatsapp" and not salida.get("enviado") and not salida.get("error"):
+        from .whatsapp import error_legible
+
+        salida["error"] = error_legible(salida["detalle"])  # Cambio 35: el porqué, en lenguaje de RH
+    return salida
 
 
 def advertencias_de(resultados: List[dict]) -> List[str]:
@@ -803,14 +869,13 @@ async def disparar(
         if regla.entrevistador_whatsapp:
             texto = _mensaje(evento, "entrevistador", "whatsapp", c, eh, liga, extra)
             d_ev = extra.get("_datos_evaluacion") or {}
-            # cita NUEVA de entrevista humana o de capacitación presencial → plantilla HSM al entrevistador/instructor
-            con_plantilla = evento == "entrevista_agendada" or (
-                evento == "evaluacion_asignada" and d_ev.get("con_cita")
-                and (d_ev.get("tipo") == "entrevista_humana" or d_ev.get("capacitacion")))
-            params = (parametros_plantilla_entrevista({**extra["_datos_entrevista"], "capacitacion": bool(d_ev.get("capacitacion"))})
-                      if con_plantilla and extra.get("_datos_entrevista") else None)
+            # Cambio 35: todo aviso de cita al evaluador (nuevo, «Reenviar», recordatorio, «Tu cita cambió», cancelación)
+            # sale con plantilla de Meta de 6 variables; los demás eventos al entrevistador conservan su texto
+            nombre_pl = plantilla_evaluador(evento)
+            pl = ((nombre_pl, parametros_plantilla_evaluador(extra.get("_datos_entrevista") or {}, d_ev))
+                  if nombre_pl and texto else None)
             resultados.append(await _enviar_y_registrar(
-                db, c, evento, "entrevistador", "whatsapp", _whatsapp_entrevistador(db, eh), texto, plantilla_entrevista=params,
+                db, c, evento, "entrevistador", "whatsapp", _whatsapp_entrevistador(db, eh), texto, plantilla_evaluador_=pl,
             ))
         if regla.entrevistador_correo:
             contenido = _mensaje(evento, "entrevistador", "correo", c, eh, liga, extra)

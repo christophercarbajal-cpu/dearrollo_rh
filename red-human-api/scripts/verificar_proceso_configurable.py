@@ -280,20 +280,18 @@ with TestClient(app) as client:
     s = seg(P2)
     check(paso(s, "entrevista_agente")["estado"] == "completada" and paso(s, "entrevista_agente")["cumpleRegla"]
           and "82/100" in paso(s, "entrevista_agente")["detalle"], "Entrevista Red Human 82 ≥ mínimo 70 → cumple su condición")
-    r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Entrevista Humana"})
-    check(r.status_code == 200 and post(P2).etapa == "Entrevista Humana", "con el proceso cumplido avanza a Filtro humano (sin exigir la entrevista agregada)")
+    # Cambio 55: la Psicometría digital va en Filtro Red Human — Filtro humano espera a que se cumpla
     s = seg(P2)
-    eh = paso(s, "entrevista_humana")
-    check(paso(s, "psicometria")["disponible"] and eh["disponible"] is False and "Falta completar: Psicometría digital" in eh["espera"]
-          and eh["accion"] is None, "la entrevista humana espera a la psicometría (dependencia) y no ofrece «Iniciar»")
-    check(paso(s, "psicometria")["accion"]["clave"] == "iniciar_evaluacion" and s["siguienteAccion"]["paso"] == "psicometria",
-          "la siguiente acción principal es «Iniciar: Psicométrica» (reutiliza «Agregar evaluación»)")
+    check(paso(s, "psicometria")["disponible"] and paso(s, "psicometria")["etapa"] == "Entrevista IA"
+          and paso(s, "psicometria")["accion"]["clave"] == "iniciar_evaluacion" and s["siguienteAccion"]["paso"] == "psicometria",
+          "la psicometría está en Filtro Red Human y la siguiente acción principal es «Iniciar: Psicométrica»")
     e_psi = evaluar(P2, "psicometrica", "psicometria")["evaluacion"]
     check(e_psi["pasoId"] == "psicometria", "la evaluación creada desde el paso queda ligada a él")
     s = seg(P2)
     check(paso(s, "psicometria")["estado"] == "en_curso" and paso(s, "psicometria")["espera"].startswith("Falta el resultado"),
           "psicometría En curso: «Falta el resultado»")
     check(resultado(e_psi["codigo"], "favorable").status_code == 200, "resultado favorable de la psicometría")
+    check(post(P2).etapa == "Entrevista Humana", "con Filtro Red Human cumplido (entrevista + psicometría) avanza solo a Filtro humano")
     r = evaluar(P2, "entrevista_humana")
     e_eh = r["evaluacion"]
     check(e_eh["pasoId"] == "entrevista_humana", "una entrevista humana agregada sin paso se liga sola al paso de ese tipo")

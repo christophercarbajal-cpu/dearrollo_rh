@@ -107,7 +107,7 @@ with TestClient(app) as client:
     client.post("/procesos/plantillas/rutas-base", headers=H)
     # 2026-10-09: la ruta base es «Corporativos»; la psicometría se agrega desde el catálogo en Filtro humano
     pl = next(x for x in client.get("/procesos/plantillas", headers=H).json() if x["rutaBase"] == "corporativo")
-    pasos = pl["pasos"] + [{"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría", "etapa": "Entrevista Humana", "pruebas": [BAT]}]
+    pasos = pl["pasos"] + [{"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría", "etapa": "Entrevista IA", "pruebas": [BAT]}]
     r = client.patch(f"/procesos/plantillas/{pl['id']}", headers=H, json={"pasos": pasos})
     check(r.status_code == 200 and next(x for x in r.json()["pasos"] if x["tipo"] == "psicometrica")["pruebas"] == [BAT],
           "la ruta guarda la batería por defecto del catálogo")
@@ -261,7 +261,15 @@ with TestClient(app) as client:
         print("\n--- 9. Recordatorio automático (sin consultar la API del proveedor) ---")
         from app.services.recordatorios_psicometria import revisar_recordatorios_psicometria
 
-        settings.psicometricas_recordatorio_dias, settings.psicometricas_recordatorios_max = 2, 2
+        # Cambio 56: el recordatorio sale por WhatsApp con plantilla (cascada); aquí la ventana se fija en 2 días y 2 envíos
+        settings.psicometricas_recordatorio_horas, settings.psicometricas_recordatorios_max = 48, 2
+
+        async def _cascada_falsa(telefono, texto, plantilla, parametros=None, idioma=None, cuenta_id=None):
+            MENSAJES.append((telefono, texto))
+            return {"enviado": True, "proveedor": "meta", "formato": "texto"}
+
+        orig_cascada = _wa.enviar_en_cascada
+        _wa.enviar_en_cascada = _cascada_falsa
         fila = db.query(Evaluacion).filter(Evaluacion.codigo == adi["codigo"]).one()
         db.refresh(fila)
         fila.enviada_en = datetime.now(timezone.utc) - timedelta(days=3)
@@ -271,7 +279,7 @@ with TestClient(app) as client:
         nm = len(MENSAJES)
         check(asyncio.run(revisar_recordatorios_psicometria()) == 1 and len(MENSAJES) == nm + 1 and "te recordamos" in MENSAJES[-1][1],
               "pendiente desde hace 3 días → un recordatorio (la recién enviada no)")
-        check(asyncio.run(revisar_recordatorios_psicometria()) == 0, "no se repite antes de que pasen otros 2 días")
+        check(asyncio.run(revisar_recordatorios_psicometria()) == 0, "no se repite antes de que pase la ventana")
         db.expire_all()
         fila = db.query(Evaluacion).filter(Evaluacion.codigo == adi["codigo"]).one()
         fila.recordatorio_psicometria_en = datetime.now(timezone.utc) - timedelta(days=3)
@@ -281,6 +289,8 @@ with TestClient(app) as client:
     finally:
         psi.httpx.post, psi.httpx.get = orig_post, orig_get
         _correo.enviar_correo, _wa.enviar_con_boton = orig_correo, orig_boton
+        if "orig_cascada" in dir():
+            _wa.enviar_en_cascada = orig_cascada
     db.close()
 
 print(f"\n🎉 Asignación simplificada de psicometrías: {OK} verificaciones OK")

@@ -130,7 +130,8 @@ with TestClient(app) as client:
     ayudante, sin_ubic, otra_v = base
     for v, cuenta in ((ayudante, cu), (sin_ubic, cu), (otra_v, cuentas["otra-cuenta"])):
         v.cuenta_id = cuenta.id
-        v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": RUTA, "etapas": ETAPAS})
+        # ruta YA guardada antes del Cambio 55 («Otra actividad» en Filtro Red Human): se acepta como venía
+        v.proceso = sproc.proceso_para_vacante(db, cuenta.id, {"pasos": sproc.normalizar_pasos(RUTA)}, {"pasos": RUTA, "etapas": ETAPAS})
     ayudante.titulo = "Ayudante general"
     ayudante.preguntas_filtro = [dict(q) for q in SEMBRADAS]
     ayudante.ubicacion, ayudante.ubicacion_estado, ayudante.ubicacion_municipio, ayudante.modalidad = (

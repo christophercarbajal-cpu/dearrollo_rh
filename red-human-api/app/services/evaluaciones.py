@@ -1112,7 +1112,61 @@ def sincronizar_psicometricas(db: Session, ev: Evaluacion, por: str = "Psicomét
     registrar_resultado(db, ev, actor=por, canal="proveedor", conclusion="", comentarios=resumen_resultado(datos),
                         realizada_por=ev.proveedor or "Psicométricas.mx", adjuntos=adjuntos, version=None, modo="registrar")
     ev.resultado_visto_en = None  # «Nuevo resultado» hasta que RH lo abra
+    dictaminar_automatico(db, ev)
     return "resultado_recibido"
+
+
+TEXTO_NO_CUMPLE_PARAMETRO = "No cumple parámetro"
+
+
+def config_psicometria(db: Session, ev: Evaluacion) -> Optional[dict]:
+    """Cambio 56: la «Modalidad» de la actividad Psicometría digital de la ruta (`evaluacion_psicometria`) a la que está
+    ligada la evaluación. None = ruta anterior al Cambio 56 (el resultado espera la revisión de RH, como siempre)."""
+    p = db.get(Postulacion, ev.postulacion_id) if ev.postulacion_id else None
+    pasos = ((p.proceso or {}).get("pasos") or []) if p is not None else []
+    paso = next((x for x in pasos if ev.paso_id and x.get("id") == ev.paso_id), None) or next(
+        (x for x in pasos if x.get("tipo") == "psicometrica" and x.get("modalidad") != "fisica"), None)
+    conf = (paso or {}).get("evaluacion_psicometria")
+    return conf if isinstance(conf, dict) and conf.get("modalidad") else None
+
+
+def dictaminar_automatico(db: Session, ev: Evaluacion) -> Optional[str]:
+    """Cambio 56 — al llegar el resultado del proveedor (webhook, reintento o «Sincronizar»):
+      · Informativa → «Favorable»: la actividad queda Completada y la ruta avanza sola (resultados en el expediente).
+      · Con mínimos por escala → se comparan los puntajes contra los mínimos de RH: todos → «Favorable» y avanza;
+        alguno abajo (o sin dato) → «Desfavorable» = «No cumple parámetro»: la ruta se DETIENE y RH decide (continuar por
+        decisión de RH o descartar). Nunca descarta solo.
+    No toca una conclusión que ya puso una persona. Regresa la conclusión aplicada (o None)."""
+    from ..models import registrar
+    from . import psicometricas as psi
+
+    conf = config_psicometria(db, ev)
+    if conf is None or ev.tipo != "psicometrica" or ev.conclusion_vigente:
+        return None
+    datos = dict(ev.resultado_json or {})
+    if conf["modalidad"] == "minimos":
+        r = psi.evaluar_minimos(datos, conf.get("minimos") or {})
+        conclusion = "favorable" if r["cumple"] else "desfavorable"
+        detalle = ("Cumple todos los mínimos por escala" if r["cumple"] else
+                   f"{TEXTO_NO_CUMPLE_PARAMETRO}: " + "; ".join(r["fallas"] + [f"{x}: sin dato del proveedor" for x in r["sin_dato"]]))
+        datos["evaluacion_red_human"] = {"modalidad": "minimos", "minimos": conf.get("minimos") or {}, **r, "detalle": detalle}
+    else:
+        conclusion, detalle = "favorable", "Informativa: resultados guardados en el expediente"
+        datos["evaluacion_red_human"] = {"modalidad": "informativa", "detalle": detalle, "puntajes": psi.puntajes_por_escala(datos)}
+    ev.resultado_json = datos
+    ev.conclusion = conclusion
+    evento(db, ev, "resultado", "Red Human (automático)", "sistema", nota=detalle[:500])
+    registrar(db, "Red Human (automático)", "psicometria_dictaminada", "evaluaciones", ev.codigo,
+              {"modalidad": conf["modalidad"], "conclusion": conclusion, "detalle": detalle[:300]})
+    return conclusion
+
+
+def no_cumple_parametro(ev: Optional[Evaluacion]) -> Optional[str]:
+    """Detalle de «No cumple parámetro» (Cambio 56) o None."""
+    er = ((ev.resultado_json or {}) if ev is not None else {}).get("evaluacion_red_human") or {}
+    if er.get("modalidad") == "minimos" and not er.get("cumple") and ev.conclusion_vigente == "desfavorable":
+        return er.get("detalle") or TEXTO_NO_CUMPLE_PARAMETRO
+    return None
 
 
 # ------------------------------------------------------------ vacante: sugeridas y avisos antes de Onboarding

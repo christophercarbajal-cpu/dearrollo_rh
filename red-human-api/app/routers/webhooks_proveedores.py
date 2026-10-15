@@ -87,12 +87,37 @@ async def webhook_dropbox(request: Request, background: BackgroundTasks):
 
 # ---------------- Psicométricas.mx ----------------
 
+def _avanzar(db, ev) -> None:
+    """Corre el avance de la ruta de la postulación de `ev` (este aviso se procesa en un hilo, fuera del event loop)."""
+    import asyncio
+
+    from ..services import evaluaciones as sev
+    from ..services import proceso as sproc
+
+    try:
+        p = sev.postulacion_de(db, ev)
+    except Exception:  # noqa: BLE001 — sin postulación viva: el resultado ya quedó guardado
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(sproc.avanzar_seguro(db, p))
+    else:
+        import threading
+
+        hilo = threading.Thread(target=lambda: asyncio.run(sproc.avanzar_seguro(db, p)))
+        hilo.start()
+        hilo.join()
+    db.commit()
+
+
 def _procesar_psicometricas(clave: str, tipo: str, datos: dict) -> None:
     from ..models import Evaluacion, registrar
     from ..services import evaluaciones as sev
     from ..services import psicometricas as psi
 
     db = SessionLocal()
+    avanzar = []
     try:
         # Evaluaciones unificadas (2026-09-29): la clave del proveedor vive en `evaluaciones` (migrada tal cual).
         evs = db.query(Evaluacion).filter(Evaluacion.clave_proveedor == clave).all()
@@ -105,7 +130,13 @@ def _procesar_psicometricas(clave: str, tipo: str, datos: dict) -> None:
             # `sincronizacion = fallida` (el job reintenta con espera y RH ve «Reintentar sincronización»).
             r = sev.recuperar_resultado(db, ev, origen="webhook")
             registrar(db, "psicometricas", "evaluacion_webhook", "evaluaciones", ev.codigo, {"tipo": tipo, "resultado": r})
+            if r == "resultado_recibido":
+                avanzar.append(ev)
         db.commit()
+        # Cambio 56: al atrapar el término de la prueba, la ruta del candidato sigue SOLA (Informativa / mínimos
+        # cumplidos); con «No cumple parámetro» la compuerta la detiene para RH
+        for ev in avanzar:
+            _avanzar(db, ev)
         log.info("[PSICOMETRICAS] %s %s → %d evaluación(es)", tipo, clave, len(evs))
     except Exception:  # noqa: BLE001
         db.rollback()

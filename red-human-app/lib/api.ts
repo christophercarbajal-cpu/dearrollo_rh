@@ -3969,6 +3969,9 @@ export interface OpcionesProceso {
   rutasBase?: { clave: string; nombre: string; descripcion: string; pasos: number; respaldo: boolean }[];
   /** Cambio 28: «Partir de:» al crear un proceso (Masivos sin/con documentos, Corporativos, En blanco). */
   partirDe?: { clave: string; nombre: string; pasos: PasoProceso[] }[];
+  /** Cambio 56: escalas que devuelve el proveedor por prueba (id del proveedor → escalas); sin escalas = solo «Informativa». */
+  escalasPsicometria?: Record<string, string[]>;
+  modalidadesPsicometria?: { valor: "informativa" | "minimos"; texto: string }[];
 }
 export interface PlantillaProceso {
   id: number;

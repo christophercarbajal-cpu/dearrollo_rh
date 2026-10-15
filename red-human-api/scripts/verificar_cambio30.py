@@ -266,13 +266,15 @@ with TestClient(app) as client:
     print("\n--- Bloque 3 · modalidades de Capacitación ---")
     op = client.get("/procesos/opciones").json()
     etapas = {e["valor"]: e["actividades"] for e in op["etapas"]}
-    check(all("induccion" in etapas[e] for e in ("Entrevista IA", "Entrevista Humana", "Contratación", "Onboarding"))
-          and "induccion" not in etapas["Prefiltro"], "Capacitación en Filtro RH, Filtro humano, Contratación y Onboarding")
+    # Cambio 55: Capacitación ya no va en Contratación
+    check(all("induccion" in etapas[e] for e in ("Entrevista IA", "Entrevista Humana", "Onboarding"))
+          and "induccion" not in etapas["Prefiltro"] and "induccion" not in etapas["Contratación"],
+          "Capacitación en Filtro RH, Filtro humano y Onboarding")
     caps = sproc.normalizar_pasos([
         {"id": "c-ia", "tipo": "induccion", "etapa": "Entrevista IA", "modalidad_capacitacion": "presencial"},
         {"id": "c-eh", "tipo": "induccion", "etapa": "Entrevista Humana", "modalidad_capacitacion": "plataforma"},
         {"id": "c-co", "tipo": "induccion", "etapa": "Contratación", "modalidad_capacitacion": "presencial"},
-        {"id": "c-on", "tipo": "induccion", "etapa": "Onboarding"}], previos=[])
+        {"id": "c-on", "tipo": "induccion", "etapa": "Onboarding"}])  # sin `previos`: ruta guardada antes del Cambio 55
     mods = {x["id"]: x["modalidad_capacitacion"] for x in caps}
     check(mods == {"c-ia": "plataforma", "c-eh": "presencial", "c-co": "presencial", "c-on": "plataforma"},
           "Filtro RH = solo «En plataforma»; Filtro humano = solo «Presencial»; Contratación/Onboarding = la que elija RH")
@@ -357,7 +359,7 @@ with TestClient(app) as client:
     db.add(vr)
     db.flush()
     vr.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": [
-        {"id": "sol", "tipo": "solicitud_sin_cv"}, {"id": "otra", "tipo": "otra", "etapa": "Prefiltro", "nombre": "Revisar licencia",
+        {"id": "sol", "tipo": "solicitud_sin_cv"}, {"id": "otra", "tipo": "otra", "etapa": "Entrevista Humana", "nombre": "Revisar licencia",
                                                     "mensaje": "Trae tu licencia original."},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana"}]})
     db.commit()
@@ -366,11 +368,13 @@ with TestClient(app) as client:
     db.commit()
     asyncio.run(sproc.avanzar_seguro(db, pr))
     db.refresh(pr)
-    check(pr.etapa == "Prefiltro" and ((pr.proceso_estado or {}).get("otra") or {}).get("mensaje_enviado"),
-          "el mensaje sale y la ruta se queda en Prefiltro mientras RH no la marque")
+    # Cambio 55: «Otra actividad» va en Filtro humano (ya no en Prefiltro)
+    paso_otra = lambda: next(x for x in sproc.estado_pasos(pr) if x["id"] == "otra")  # noqa: E731
+    check(pr.etapa == "Entrevista Humana" and ((pr.proceso_estado or {}).get("otra") or {}).get("mensaje_enviado")
+          and paso_otra()["estado"] != "completada", "el mensaje sale y la actividad queda pendiente mientras RH no la marque")
     r = client.post(f"/procesos/postulaciones/{pr.codigo}/pasos/otra/realizada", json={})
     db.refresh(pr)
-    check(r.status_code == 200 and pr.etapa == "Entrevista Humana", "«Marcar como realizada» → la ruta sigue sola")
+    check(r.status_code == 200 and paso_otra()["estado"] == "completada", "«Marcar como realizada» → la actividad se cumple")
 
     # ================= Bloque 4 · motor de ordenamiento del editor =================
     print("\n--- Bloque 4 · auto-acomodo y flechas por etapa ---")

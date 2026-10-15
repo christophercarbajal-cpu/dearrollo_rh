@@ -39,7 +39,7 @@ from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     ALIAS_CATALOGO, CATALOGO_ACTIVIDADES, TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
-    PlantillaProceso, Postulacion, TIPOS_AGENDA, Usuario,
+    PlantillaProceso, Postulacion, TIPOS_AGENDA, Usuario, ORDEN_FIJO_ETAPA, ACTIVIDAD_AL_FINAL, MODALIDADES_PSICOMETRIA,
     conclusiones_de, etapas_de_catalogo, modalidad_capacitacion_de, nombre_etapa, opcion_catalogo, registrar, ruta_automatica, score_de_entrevista,
 )
 from . import citas as scitas
@@ -208,6 +208,11 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             if crudo.get("modalidad") == "fisica":
                 paso["modalidad"] = "fisica"  # se aplica en persona y se captura; nunca va al proveedor
                 paso["pruebas"] = []
+            else:
+                conf = normalizar_evaluacion_psicometria(crudo.get("evaluacion_psicometria", crudo.get("evaluacionPsicometria")),
+                                                         por_defecto=estrictos is not None)
+                if conf:
+                    paso["evaluacion_psicometria"] = conf
         if tipo == "otra":
             # Cambio 28: nombre obligatorio y mensaje opcional (el agente lo manda por WhatsApp al habilitarse)
             if crudo.get("mensaje") and str(crudo["mensaje"]).strip():
@@ -260,6 +265,9 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
                 paso["enfoque"] = enf
         salida.append(paso)
 
+    # Cambio 55: «una actividad por etapa» es regla del MENÚ del editor (`orden-proceso.disponibles`), no del guardado:
+    # rutas ya configuradas con dos actividades del mismo tipo (p. ej. Fletes: entrevista con el jefe y con el sindicato)
+    # se siguen aceptando.
     if estrictos is not None and sum(1 for x in salida if x["tipo"] == "solicitud_web" and not x.get("heredado")) > 1:
         # Cambio 30: «Solicitud web sin CV» y «con CV» se reemplazan entre sí — un proceso lleva UNA sola
         raise ErrorProceso(400, "Un proceso lleva una sola solicitud web: «Solicitud web sin CV» o «Solicitud web con CV».")
@@ -296,10 +304,47 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
 
     for pid in por_id:
         visitar(pid, [])
-    salida.sort(key=lambda p: (_indice(p["etapa"]), p["orden"]))
+    salida.sort(key=lambda p: (_indice(p["etapa"]), _rango_orden(p) if estrictos is not None else 0, p["orden"]))
     for i, p in enumerate(salida):
         p["orden"] = i
     _validar_misma_cita(salida, estrictos is not None)
+    return salida
+
+
+def _rango_orden(p: dict) -> int:
+    """Cambio 55 (al guardar desde el editor o la API): Prefiltro y Filtro Red Human en su ORDEN FIJO
+    (`models.ORDEN_FIJO_ETAPA`); «Contrato y firma» siempre al final de Contratación; lo demás conserva el orden de RH."""
+    fijo = ORDEN_FIJO_ETAPA.get(p["etapa"])
+    if fijo:
+        clave = clave_catalogo(p)
+        return fijo.index(clave) if clave in fijo else len(fijo)
+    return 1 if ACTIVIDAD_AL_FINAL.get(p["etapa"]) == p["tipo"] else 0
+
+
+def normalizar_evaluacion_psicometria(crudo, por_defecto: bool = False) -> Optional[dict]:
+    """Cambio 56: {modalidad: informativa | minimos, minimos: {escala: puntaje}}. Sin dato: «Informativa» en lo que se
+    guarda desde el editor (`por_defecto`); las rutas anteriores sin la configuración conservan la revisión de RH."""
+    if not isinstance(crudo, dict):
+        return {"modalidad": "informativa"} if por_defecto else None
+    modalidad = str(crudo.get("modalidad") or "informativa")
+    if modalidad not in MODALIDADES_PSICOMETRIA:
+        raise ErrorProceso(400, f"Modalidad de la psicometría inválida. Usa una de: {', '.join(MODALIDADES_PSICOMETRIA)}.")
+    salida = {"modalidad": modalidad}
+    if modalidad == "minimos":
+        minimos = {}
+        for escala, valor in (crudo.get("minimos") or {}).items():
+            if valor in (None, ""):
+                continue
+            try:
+                n = float(valor)
+            except (TypeError, ValueError):
+                raise ErrorProceso(400, f"El mínimo de «{escala}» debe ser un número.")
+            if n < 0:
+                raise ErrorProceso(400, f"El mínimo de «{escala}» no puede ser negativo.")
+            minimos[str(escala).strip()[:60]] = int(n) if n == int(n) else n
+        if not minimos:
+            raise ErrorProceso(400, "«Con mínimos por escala» necesita al menos un mínimo.")
+        salida["minimos"] = minimos
     return salida
 
 
@@ -666,6 +711,102 @@ def migrar_procesos_cambio30(db: Session, aplicar: bool = True) -> dict:
         registrar(db, "sistema", "migracion_cambio30", "plantilla_proceso", "",
                   {"plantillas": plantillas, "vacantes": vacantes, "errores": errores})
     return {"plantillas": plantillas, "vacantes": vacantes, "errores": errores, "aplicada": aplicar}
+
+
+# ============================================================ Cambio 55: actividades a su etapa (2026-10-15)
+
+MARCA_CAMBIO55 = "migracion_cambio55_procesos"
+
+
+def pasos_cambio55(pasos: list) -> Tuple[list, bool]:
+    """Ruta al catálogo del Cambio 55 (sin guardar):
+      1. «Otra actividad» en Prefiltro o Filtro Red Human → al INICIO de Filtro humano.
+      2. «Psicometría digital» en Filtro humano → Filtro Red Human (en su lugar fijo).
+      3. «Capacitación / Inducción» en Contratación → al FINAL de Filtro humano.
+    Las dependencias que quedarían hacia una etapa posterior se quitan (las del catálogo se vuelven a calcular).
+    Regresa (pasos, cambió). Idempotente."""
+    pasos = [dict(x) for x in pasos or [] if isinstance(x, dict)]
+    movidos: Dict[str, str] = {}
+    for x in pasos:
+        if x.get("heredado") or x.get("adhoc"):
+            continue
+        if x.get("tipo") == "otra" and x.get("etapa") in ("Prefiltro", "Entrevista IA"):
+            movidos[x["id"]] = "inicio"
+            x["etapa"] = "Entrevista Humana"
+        elif x.get("tipo") == "psicometrica" and x.get("modalidad") != "fisica" and x.get("etapa") == "Entrevista Humana":
+            movidos[x["id"]] = "fijo"
+            x["etapa"] = "Entrevista IA"
+        elif x.get("tipo") == "induccion" and x.get("etapa") == "Contratación":
+            movidos[x["id"]] = "final"
+            x["etapa"] = "Entrevista Humana"
+            x.pop("modalidad_capacitacion", None)  # en Filtro humano es «Presencial» (la fija la etapa)
+    if not movidos:
+        return pasos, False
+    etapa_de = {x["id"]: x.get("etapa") for x in pasos}
+    for x in pasos:
+        deps = [d for d in x.get("depende_de") or [] if d in etapa_de and _indice(etapa_de[d]) <= _indice(x.get("etapa") or "")]
+        if x["id"] in movidos:
+            deps = [d for d in deps if etapa_de.get(d) == x.get("etapa")]
+        x["depende_de"] = deps
+
+    def llave(par):
+        k, x = par
+        modo = movidos.get(x["id"])
+        if modo == "inicio":
+            rango = -1
+        elif modo == "final":
+            rango = 10 ** 6
+        else:
+            rango = _rango_orden(x) if ORDEN_FIJO_ETAPA.get(x.get("etapa")) or ACTIVIDAD_AL_FINAL.get(x.get("etapa")) == x.get("tipo") else 0
+        return (_indice(x.get("etapa") or ""), rango, k)
+
+    ordenados = [x for _, x in sorted(enumerate(pasos), key=llave)]
+    for i, x in enumerate(ordenados):
+        x["orden"] = i
+    return normalizar_pasos(ordenados), True
+
+
+def migrar_cambio55(db: Session, aplicar: bool = True) -> dict:
+    """Cambio 55: plantillas de proceso y rutas de vacantes al catálogo nuevo (sube su versión). Las postulaciones conservan
+    su copia congelada. Una sola vez (marca en bitácora); idempotente y no fatal. No hace commit."""
+    from ..models import Bitacora, Vacante
+
+    salida = {"plantillas": [], "vacantes": [], "errores": [], "aplicada": aplicar}
+    try:
+        if aplicar and db.query(Bitacora.id).filter(Bitacora.accion == MARCA_CAMBIO55).first():
+            return {**salida, "yaAplicada": True}
+        filas = db.query(PlantillaProceso).all() if _tablas_proceso() else []
+        vacantes = db.query(Vacante).filter(Vacante.proceso.isnot(None)).all()
+    except Exception as ex:  # noqa: BLE001 — base sin esquema
+        db.rollback()
+        return {**salida, "errores": [f"sin tablas: {str(ex)[:120]}"]}
+    for pl in filas:
+        try:
+            nuevos, cambio = pasos_cambio55(pl.pasos or [])
+        except ErrorProceso as e:
+            salida["errores"].append({"plantilla": pl.id, "error": e.mensaje})
+            continue
+        if cambio:
+            salida["plantillas"].append(pl.id)
+            if aplicar:
+                pl.pasos = nuevos
+                pl.version = (pl.version or 1) + 1
+                pl.actualizada_por = "Migración Cambio 55"
+    for v in vacantes:
+        proc = dict(v.proceso or {})
+        try:
+            nuevos, cambio = pasos_cambio55(proc.get("pasos") or [])
+        except ErrorProceso as e:
+            salida["errores"].append({"vacante": v.codigo, "error": e.mensaje})
+            continue
+        if cambio:
+            salida["vacantes"].append(v.codigo)
+            if aplicar:
+                v.proceso = {**proc, "pasos": nuevos, "version": int(proc.get("version") or 0) + 1, "migrado_cambio55": True}
+    if aplicar:
+        registrar(db, "sistema", MARCA_CAMBIO55, "plantilla_proceso", "",
+                  {k: salida[k] for k in ("plantillas", "vacantes", "errores")})
+    return salida
 
 
 def corregir_rutas_base(db: Session) -> dict:
@@ -1046,7 +1187,16 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
                 espera = "Falta el dictamen (RH lo registra al revisar)"
     revisado = f"Revisado por: {ev.revisada_por}" if ev.revisada_en and ev.revisada_por else (
         f"Resultado de: {ev.realizada_por}" if completada and ev.realizada_por else "Pendiente de revisión")
-    return {
+    extra = {}
+    if completada and ev.tipo == "psicometrica":
+        from .evaluaciones import TEXTO_NO_CUMPLE_PARAMETRO, no_cumple_parametro
+
+        falla = no_cumple_parametro(ev)
+        if falla:
+            # Cambio 56: «Con mínimos por escala» reprobada → «No cumple parámetro»; la ruta se detiene y RH decide
+            extra = {"texto_no_aprobada": TEXTO_NO_CUMPLE_PARAMETRO}
+            legible = falla
+    return {**extra,
         "estado": "completada" if completada else "en_curso", "resultado": resultado, "cumple": cumple, "espera": espera,
         "detalle": legible or ("Resultado recibido" if ev.estado == "con_resultado" else ""),
         "revisadoPor": revisado, "evaluacion": ev.codigo,

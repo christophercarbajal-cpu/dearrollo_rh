@@ -1,4 +1,9 @@
 """
+Cambio 56 (2026-10-15): la Psicometría digital cuya invitación lleva MÁS DE 24 h sin completarse recibe UN recordatorio por
+WhatsApp (cascada: texto libre → plantilla `META_PLANTILLA_RECORDATORIO_PSICOMETRIA` → «Pendiente de plantilla» que el job de
+plantillas reintenta); sin teléfono, o si el WhatsApp falla de forma definitiva, sale por correo. Tope
+`PSICOMETRICAS_RECORDATORIOS_MAX` (1). Ventana `PSICOMETRICAS_RECORDATORIO_HORAS` (24; 0 = usa los días de antes).
+
 2026-10-07 — Recordatorio automático de psicometría pendiente (evento «recordatorio_psicometria»).
 
 `revisar_recordatorios_psicometria` corre cada hora (lifespan, app/main.py): para cada psicometría del proveedor
@@ -23,7 +28,7 @@ from ..models import Evaluacion, Postulacion, registrar
 from . import evaluaciones as sev
 
 
-def candidatas(db: Session, ahora: datetime, dias: int, tope: int):
+def candidatas(db: Session, ahora: datetime, dias: float, tope: int):
     corte = ahora - timedelta(days=dias)
     filas = (
         db.query(Evaluacion)
@@ -50,8 +55,52 @@ def _reclamar(db: Session, ev: Evaluacion, ahora: datetime) -> bool:
     return filas == 1
 
 
+def parametros_recordatorio(p: Postulacion) -> list:
+    from .prefiltro_conversacional import empresa_de
+
+    nombre = (p.nombre or "").split(" ")[0]
+    valores = {"nombre": "" if nombre.startswith("Candidato") else nombre, "empresa": empresa_de(p) or "Red Human",
+               "puesto": (p.vacante.titulo if p.vacante else "") or "la vacante"}
+    claves = [k.strip().lower() for k in (settings.meta_plantilla_recordatorio_psicometria_params or "").split(",") if k.strip()]
+    return [valores[k] or "-" for k in claves if k in valores]
+
+
+async def enviar_recordatorio(db: Session, ev: Evaluacion, p: Postulacion) -> list:
+    """Cambio 56: por WhatsApp con plantilla (cascada); correo solo si no hay teléfono o el WhatsApp falló sin remedio."""
+    from . import psicometricas as psi
+    from .mensajeria import de_cuenta
+    from .reintento_plantillas import registrar_envio
+    from .prefiltro_conversacional import empresa_de
+    from .whatsapp import enviar_en_cascada
+
+    resultados = []
+    if p.telefono:
+        liga = sev._url_proveedor(ev) or psi.url_candidato(ev.clave_proveedor) or psi.PORTAL_SUSTENTANTE
+        nombre = ((p.nombre or "").split(" ")[0]) if p.nombre and not p.nombre.startswith("Candidato") else ""
+        texto = psi.mensaje_candidato(nombre, ev.clave_proveedor, liga, empresa_de(p), p.vacante.titulo if p.vacante else "",
+                                      recordatorio=True)
+        try:
+            with de_cuenta(p.cuenta_id):
+                r = await enviar_en_cascada(p.telefono, texto, (settings.meta_plantilla_recordatorio_psicometria or "").strip()
+                                            or "recordatorio_psicometria_rh", parametros_recordatorio(p), settings.meta_plantilla_idioma)
+        except Exception as ex:  # noqa: BLE001
+            r = {"enviado": False, "detalle": str(ex)[:200]}
+        try:
+            registrar_envio(db, p, "recordatorio_psicometria", r, "recordatorio_psicometria")
+        except Exception:  # noqa: BLE001
+            pass
+        resultados.append({"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, "enviado": bool(r.get("enviado")),
+                           "detalle": str(r.get("detalle") or r.get("error") or ""), "estado": r.get("estado", "")})
+        if r.get("enviado") or r.get("estado") == "pendiente":
+            return resultados
+    if p.correo:
+        resultados += await sev.notificar_psicometria(db, ev, p, "sistema", evento_notificacion="recordatorio_psicometria")
+    return resultados
+
+
 async def revisar_recordatorios_psicometria() -> int:
-    dias = int(settings.psicometricas_recordatorio_dias or 0)
+    horas = int(settings.psicometricas_recordatorio_horas or 0)
+    dias = horas / 24 if horas > 0 else int(settings.psicometricas_recordatorio_dias or 0)
     tope = int(settings.psicometricas_recordatorios_max or 0)
     if dias <= 0 or tope <= 0:
         return 0
@@ -64,7 +113,7 @@ async def revisar_recordatorios_psicometria() -> int:
                 continue
             db.refresh(ev)
             try:
-                resultados = await sev.notificar_psicometria(db, ev, p, "sistema", evento_notificacion="recordatorio_psicometria")
+                resultados = await enviar_recordatorio(db, ev, p)
             except Exception as ex:  # noqa: BLE001 — un envío caído nunca tumba el job
                 resultados = [{"destinatario": "candidato", "canal": "", "destino": "", "enviado": False, "detalle": str(ex)[:200]}]
             sev.evento(db, ev, "recordatorio", "sistema", automatico=True, a_quien="candidato")

@@ -103,7 +103,7 @@ with TestClient(app) as client:
     PASOS = [
         {"id": "solicitud", "tipo": "solicitud_web", "etapa": "Prefiltro"},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "responsable": {"tipo": "usuario", "usuario_id": admin.id}},
-        {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista Humana", "pruebas": [GER]},
+        {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista IA", "pruebas": [GER]},
     ]
     assert fijar_ruta(db, v.codigo, json={"pasos": PASOS}).status_code == 200
     tel = iter(range(5587000000, 5587999999))

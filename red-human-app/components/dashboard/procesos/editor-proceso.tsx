@@ -17,7 +17,7 @@ import { inputRH } from "@/components/dashboard/modulos-rh";
 import { SelectorPruebas } from "@/components/dashboard/evaluaciones/asignar-psicometria";
 import { fetchCursos, fetchPruebasPsicometricas, type Curso, type OpcionesProceso, type OpcionTipoPaso, type PruebaPsicometrica } from "@/lib/api";
 import type { EtapaCandidato, EtapasProceso, PasoProceso } from "@/lib/data";
-import { aplicarOrdenFijo, claveCatalogo, conFlechas, insertarSugerido } from "@/lib/orden-proceso";
+import { aplicarOrdenFijo, claveCatalogo, conFlechas, disponibles as disponiblesEn, insertarSugerido } from "@/lib/orden-proceso";
 import { ENFOQUE_DEFAULT, enfoquePaso } from "@/components/dashboard/vacantes/perfil-operativo";
 import { cn } from "@/lib/utils";
 
@@ -121,9 +121,10 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
       </p>
       {opciones.etapas.map((e) => {
         const deEtapa = pasos.filter((p) => p.etapa === e.valor);
-        const disponibles = e.actividades
-          ? e.actividades.map((v) => tipos[v]).filter((t): t is OpcionTipoPaso => Boolean(t))
-          : opciones.tiposPaso.filter((t) => t.etapas.includes(e.valor));
+        // Cambio 55: sin lo que ya está en la etapa (salvo «Otra actividad») y una sola Solicitud web (sin o con CV)
+        const catalogoEtapa = e.actividades ?? opciones.tiposPaso.filter((t) => t.etapas.includes(e.valor)).map((t) => t.valor);
+        const disponibles = disponiblesEn(e.valor, catalogoEtapa, pasos)
+          .map((v) => tipos[v]).filter((t): t is OpcionTipoPaso => Boolean(t));
         return (
           <section key={e.valor} className="rounded-2xl border border-border-soft">
             <header className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border-faint bg-surface-2/60 px-4 py-2.5">
@@ -202,6 +203,63 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   );
 }
 
+/** Cambio 56: escalas que el proveedor devuelve para las pruebas elegidas (por su id en el proveedor, «1,7» = varias). */
+export function escalasDe(pruebas: number[], catalogo: PruebaPsicometrica[], escalas: Record<string, string[]> = {}): string[] {
+  const salida: string[] = [];
+  for (const id of pruebas) {
+    const prueba = catalogo.find((x) => x.id === id);
+    for (const ip of String(prueba?.idProveedor ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      for (const e of escalas[ip] ?? []) if (!salida.includes(e)) salida.push(e);
+    }
+  }
+  return salida;
+}
+
+/** Cambio 56: modalidad de evaluación de la Psicometría digital. «Con mínimos por escala» solo si las pruebas elegidas
+ *  devuelven puntajes por escala en la API del proveedor. */
+function EvaluacionPsicometria({ p, catalogo, opciones, soloLectura, onCambio }: {
+  p: PasoProceso; catalogo: PruebaPsicometrica[]; opciones: OpcionesProceso; soloLectura: boolean; onCambio: (c: Partial<PasoProceso>) => void;
+}) {
+  const escalas = escalasDe(p.pruebas ?? [], catalogo, opciones.escalasPsicometria);
+  const conf = p.evaluacion_psicometria ?? { modalidad: "informativa" as const };
+  const modalidad = escalas.length ? conf.modalidad : "informativa";
+  const minimos = conf.minimos ?? {};
+  return (
+    <div className="flex flex-col gap-2 text-xs text-ink-2 sm:col-span-2">
+      <label className="flex flex-col gap-1">
+        Modalidad
+        <select className={selectRH} value={modalidad} disabled={soloLectura}
+          onChange={(ev) => onCambio({ evaluacion_psicometria: { modalidad: ev.target.value as "informativa" | "minimos", minimos } })}>
+          <option value="informativa">Informativa</option>
+          <option value="minimos" disabled={!escalas.length}>Con mínimos por escala</option>
+        </select>
+        <span className="text-[11px] text-ink-3">
+          {modalidad === "minimos"
+            ? "Al terminar la prueba se comparan sus puntajes: si cumple todos los mínimos avanza solo; si no, queda «No cumple parámetro» y RH decide."
+            : escalas.length ? "Al terminar la prueba se guardan los resultados y el candidato avanza solo."
+              : "Estas pruebas no devuelven puntajes por escala: solo pueden ser informativas (al terminar, el candidato avanza solo)."}
+        </span>
+      </label>
+      {modalidad === "minimos" && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {escalas.map((e) => (
+            <label key={e} className="flex flex-col gap-1">
+              {e}
+              <input type="number" min={0} className={inputRH} disabled={soloLectura} value={minimos[e] ?? ""} placeholder="Sin mínimo"
+                onChange={(ev) => {
+                  const siguiente = { ...minimos };
+                  if (ev.target.value === "") delete siguiente[e];
+                  else siguiente[e] = Number(ev.target.value);
+                  onCambio({ evaluacion_psicometria: { modalidad: "minimos", minimos: siguiente } });
+                }} />
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Cambio 47: actividades que se hacen en persona con cita (misma regla que `proceso.es_presencial` del backend). */
 function esPresencial(p: PasoProceso): boolean {
   if (p.tipo === "entrevista_humana" || p.tipo === "medica" || p.tipo === "tecnica") return true;
@@ -251,6 +309,9 @@ function DetalleActividad({ p, pasos = [], catalogo = [], cursos = [], opciones,
           </span>
           {!soloLectura && <SelectorPruebas catalogo={catalogo} seleccion={p.pruebas ?? []} onChange={(ids) => onCambio({ pruebas: ids })} />}
         </div>
+      )}
+      {p.tipo === "psicometrica" && p.modalidad !== "fisica" && (
+        <EvaluacionPsicometria p={p} catalogo={catalogo} opciones={opciones} soloLectura={soloLectura} onCambio={onCambio} />
       )}
       {p.tipo === "otra" && (
         <label className="flex flex-col gap-1 text-xs text-ink-2 sm:col-span-2">

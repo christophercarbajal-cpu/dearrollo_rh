@@ -2765,7 +2765,8 @@ TIPOS_PASO = {
     "entrevista_agente": {"nombre": "Entrevista Red Human con avatar", "etapa": "Entrevista IA", "regla": "calificacion",
                           "responsable": "red_human", "etapas": ("Entrevista IA",)},
     # Evaluaciones: mismas claves que TIPOS_EVALUACION_U (se ejecutan con «Agregar actividad»)
-    "psicometrica": _evaluacion("Psicometría digital"),
+    # Cambio 55: la Psicometría digital va en Filtro Red Human (su etapa por defecto)
+    "psicometrica": {**_evaluacion("Psicometría digital"), "etapa": "Entrevista IA"},
     "entrevista_humana": _evaluacion("Entrevista humana", "usuario"),
     "medica": _evaluacion("Evaluación médica"),
     "tecnica": _evaluacion("Evaluación técnica o práctica"),
@@ -2815,14 +2816,25 @@ CATALOGO_ACTIVIDADES = (
 # Cambio 28 (2026-10-12): catálogo ESTRICTO por etapa — lo que el editor ofrece y lo único que acepta al guardar una
 # actividad NUEVA en una plantilla o en la ruta de una vacante («Otra actividad» va en todas). Las actividades que ya
 # estaban guardadas en otra etapa (rutas previas, copias congeladas, ad hoc) se siguen aceptando y derivando.
+# Cambio 55 (2026-10-15): «Otra actividad» ya no va en Prefiltro ni Filtro Red Human; «Psicometría digital» solo en
+# Filtro Red Human (ya no en Filtro humano); «Capacitación / Inducción» ya no en Contratación.
 ACTIVIDADES_POR_ETAPA = {
-    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos", "otra"),
-    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion", "otra"),
-    "Entrevista Humana": ("entrevista_humana", "psicometrica", "psicometria_fisica", "medica", "tecnica",
+    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos"),
+    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion"),
+    "Entrevista Humana": ("entrevista_humana", "psicometria_fisica", "medica", "tecnica",
                           "socioeconomica", "referencias", "documentos", "induccion", "otra"),
-    "Contratación": ("oferta", "documentos", "carta_contrato", "medica", "socioeconomica", "induccion", "otra"),
+    "Contratación": ("oferta", "documentos", "carta_contrato", "medica", "socioeconomica", "otra"),
     "Onboarding": ("induccion", "onboarding", "documentos", "alta", "otra"),
 }
+# Cambio 55: etapas de ORDEN FIJO (sin flechas en el editor) y su orden. Las demás: lo nuevo al final (Contratación: justo
+# antes de «Contrato y firma», que siempre va al final). Mismo orden que `red-human-app/lib/orden-proceso.ts`.
+ORDEN_FIJO_ETAPA = {
+    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos"),
+    "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion"),
+}
+ACTIVIDAD_AL_FINAL = {"Contratación": "carta_contrato"}
+# Cambio 56: modalidad de evaluación de la Psicometría digital
+MODALIDADES_PSICOMETRIA = {"informativa": "Informativa", "minimos": "Con mínimos por escala"}
 # Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
 DESCRIPCION_ETAPA = {
     "Prefiltro": "Solicitud y primeras preguntas.",

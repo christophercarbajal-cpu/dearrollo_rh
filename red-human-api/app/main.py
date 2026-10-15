@@ -126,6 +126,17 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[proceso] ⚠️ migración del Cambio 30 no aplicada: {ex}", flush=True)
+        # Cambio 55 (2026-10-15): «Otra actividad» a Filtro humano, «Psicometría digital» a Filtro Red Human y
+        # «Capacitación» de Contratación al final de Filtro humano (plantillas y vacantes). Una vez, NO fatal.
+        try:
+            with db.begin_nested():
+                c55 = sproc.migrar_cambio55(db)
+            db.commit()
+            if c55.get("plantillas") or c55.get("vacantes"):
+                print(f"[proceso] Cambio 55: {len(c55['plantillas'])} plantilla(s) y {len(c55['vacantes'])} vacante(s) migradas", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[proceso] ⚠️ migración del Cambio 55 no aplicada: {ex}", flush=True)
         # Cambio 34 (2026-10-13): catálogo único de documentos — nombres del catálogo y un solo documento por tipo en cada
         # expediente (el Aprobado y su archivo sobreviven). Idempotente, NO fatal.
         try:

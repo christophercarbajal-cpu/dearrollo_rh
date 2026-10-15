@@ -1,8 +1,12 @@
-/* Cambio 30 (2026-10-13): motor de ordenamiento del editor de procesos (funciones puras, sin React).
-   - Al agregar, la actividad se acomoda SOLA en su posición sugerida: el orden del catálogo (el de `/procesos/opciones`).
-   - Prefiltro es FIJO (siempre en orden de catálogo, sin flechas).
-   - «Contrato y firma» va SIEMPRE al final de Contratación (sin flechas; nada se puede mover después de ella).
-   - En las demás etapas RH reordena libremente con las flechas. */
+/* Motor de ordenamiento del editor de procesos (funciones puras, sin React). Cambio 30 (2026-10-13), reglas del
+   Cambio 55 (2026-10-15) — las MISMAS que valida el backend (`proceso.normalizar_pasos`, `models.ORDEN_FIJO_ETAPA`):
+   - Prefiltro: orden FIJO, sin flechas — Solicitud web (sin / con CV) → Prefiltro por WhatsApp → Documentos.
+   - Filtro Red Human: orden FIJO, sin flechas — Llamada Red Human → Entrevista por WhatsApp → Entrevista con avatar →
+     Psicometría digital → Capacitación / Inducción (plataforma).
+   - Filtro humano y Onboarding: con flechas; lo nuevo va al FINAL.
+   - Contratación: con flechas; «Contrato y firma» sin flechas y SIEMPRE al final (lo nuevo se inserta justo antes).
+   - Menú «+ Agregar actividad» (`disponibles`): sin lo que ya está en la etapa (salvo «Otra actividad», que es múltiple);
+     «Solicitud web sin CV» y «con CV» son excluyentes. */
 
 type PasoOrden = { id: string; tipo: string; etapa: string; con_cv?: boolean; modalidad?: string };
 
@@ -14,24 +18,39 @@ export function claveCatalogo(p: Pick<PasoOrden, "tipo" | "con_cv" | "modalidad"
   return p.tipo;
 }
 
-const ETAPA_FIJA = "Prefiltro";
+/** Cambio 55: etapas de orden fijo (sin flechas) y su orden. */
+export const ORDEN_FIJO: Record<string, string[]> = {
+  Prefiltro: ["solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos"],
+  "Entrevista IA": ["llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion"],
+};
 const SIEMPRE_AL_FINAL = "carta_contrato";
+const MULTIPLE = "otra";
+const SOLICITUDES = ["solicitud_sin_cv", "solicitud_con_cv"];
 
-/** Posición sugerida de una actividad (orden del catálogo; lo heredado o desconocido va al final). */
-export function rangoSugerido(p: PasoOrden, orden: string[]): number {
-  const i = orden.indexOf(claveCatalogo(p));
-  if (p.tipo === SIEMPRE_AL_FINAL) return 10_000;
+/** Rango dentro de una etapa fija (lo desconocido o heredado va al final, en su orden). */
+function rangoFijo(p: PasoOrden): number {
+  const lista = ORDEN_FIJO[p.etapa] ?? [];
+  const i = lista.indexOf(claveCatalogo(p));
   return i === -1 ? 9_000 : i;
 }
 
-/** Reglas fijas: Prefiltro en orden de catálogo y «Contrato y firma» al final de Contratación. El resto conserva el orden de RH. */
-export function aplicarOrdenFijo<T extends PasoOrden>(pasos: T[], orden: string[]): T[] {
+/** Compatibilidad (Cambio 30): posición sugerida de una actividad. */
+export function rangoSugerido(p: PasoOrden, orden: string[] = []): number {
+  if (p.tipo === SIEMPRE_AL_FINAL) return 10_000;
+  if (ORDEN_FIJO[p.etapa]) return rangoFijo(p);
+  const i = orden.indexOf(claveCatalogo(p));
+  return i === -1 ? 9_000 : i;
+}
+
+/** Reglas fijas: Prefiltro y Filtro Red Human en su orden fijo; «Contrato y firma» al final de Contratación. El resto
+ *  conserva el orden de RH. */
+export function aplicarOrdenFijo<T extends PasoOrden>(pasos: T[], _orden: string[] = []): T[] {
   const porEtapa = new Map<string, T[]>();
   for (const p of pasos) porEtapa.set(p.etapa, [...(porEtapa.get(p.etapa) ?? []), p]);
   const salida: T[] = [];
   for (const [etapa, lista] of porEtapa) {
-    if (etapa === ETAPA_FIJA) {
-      salida.push(...[...lista].sort((a, b) => rangoSugerido(a, orden) - rangoSugerido(b, orden)));
+    if (ORDEN_FIJO[etapa]) {
+      salida.push(...lista.map((p, k) => ({ p, k })).sort((a, b) => rangoFijo(a.p) - rangoFijo(b.p) || a.k - b.k).map((x) => x.p));
     } else {
       salida.push(...lista.filter((x) => x.tipo !== SIEMPRE_AL_FINAL), ...lista.filter((x) => x.tipo === SIEMPRE_AL_FINAL));
     }
@@ -39,17 +58,31 @@ export function aplicarOrdenFijo<T extends PasoOrden>(pasos: T[], orden: string[
   return salida;
 }
 
-/** Inserta una actividad NUEVA en su posición sugerida dentro de su etapa (antes de la primera con rango mayor). */
-export function insertarSugerido<T extends PasoOrden>(pasos: T[], nuevo: T, orden: string[]): T[] {
-  const r = rangoSugerido(nuevo, orden);
-  const i = pasos.findIndex((x) => x.etapa === nuevo.etapa && rangoSugerido(x, orden) > r);
+/** Inserta una actividad NUEVA: en una etapa fija, en su lugar; en Contratación, justo antes de «Contrato y firma»; en
+ *  las demás, al final de su etapa. */
+export function insertarSugerido<T extends PasoOrden>(pasos: T[], nuevo: T, _orden: string[] = []): T[] {
+  let i = -1;
+  if (ORDEN_FIJO[nuevo.etapa]) {
+    const r = rangoFijo(nuevo);
+    i = pasos.findIndex((x) => x.etapa === nuevo.etapa && rangoFijo(x) > r);
+  } else if (nuevo.tipo !== SIEMPRE_AL_FINAL) {
+    i = pasos.findIndex((x) => x.etapa === nuevo.etapa && x.tipo === SIEMPRE_AL_FINAL);
+  }
   if (i !== -1) return [...pasos.slice(0, i), nuevo, ...pasos.slice(i)];
   const ultimo = pasos.map((x) => x.etapa).lastIndexOf(nuevo.etapa);
   return ultimo === -1 ? [...pasos, nuevo] : [...pasos.slice(0, ultimo + 1), nuevo, ...pasos.slice(ultimo + 1)];
 }
 
-/** ¿La actividad tiene flechas? No en Prefiltro ni «Contrato y firma». */
+/** ¿La actividad tiene flechas? No en Prefiltro ni Filtro Red Human, ni «Contrato y firma». */
 export function conFlechas(p: PasoOrden): boolean {
-  return p.etapa !== ETAPA_FIJA && p.tipo !== SIEMPRE_AL_FINAL;
+  return !ORDEN_FIJO[p.etapa] && p.tipo !== SIEMPRE_AL_FINAL;
 }
 
+/** Cambio 55: lo que ofrece «+ Agregar actividad» en una etapa (`catalogo` = su catálogo estricto, ya sin «Otra
+ *  actividad» en Prefiltro / Filtro Red Human, sin Psicometría digital en Filtro humano y sin Capacitación en
+ *  Contratación). Oculta lo que ya está en la etapa (salvo «Otra actividad») y la otra Solicitud web si ya hay una. */
+export function disponibles(etapa: string, catalogo: string[], pasos: PasoOrden[]): string[] {
+  const enEtapa = new Set(pasos.filter((p) => p.etapa === etapa).map((p) => claveCatalogo(p)));
+  const haySolicitud = pasos.some((p) => SOLICITUDES.includes(claveCatalogo(p)));
+  return catalogo.filter((v) => v === MULTIPLE || (!enEtapa.has(v) && !(SOLICITUDES.includes(v) && haySolicitud)));
+}

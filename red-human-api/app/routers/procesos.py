@@ -21,6 +21,7 @@ from ..models import (
     es_cuenta_demo, nombre_etapa, registrar,
 )
 from ..services import proceso as sproc
+from ..services import psicometricas as _psi
 from ..services.modulos_rh import requiere_modulos_rh
 
 router = APIRouter(prefix="/procesos", tags=["procesos"])
@@ -60,6 +61,11 @@ def opciones(_: Usuario = Depends(usuario_actual)):
         # Cambio 28: «Partir de:» al crear un proceso — las tres rutas base con sus actividades, o «En blanco»
         "partirDe": [*({"clave": k, "nombre": sproc.NOMBRE_PARTIR_DE.get(k, e["nombre"]), "pasos": sproc.ruta_base(k)["pasos"]}
                        for k, e in sproc.RUTAS_BASE.items()), {"clave": "blanco", "nombre": "En blanco", "pasos": []}],
+        # Cambio 55: etapas de orden fijo (sin flechas) y su orden; «Contrato y firma» siempre al final de Contratación
+        "ordenFijo": {e: list(v) for e, v in sproc.ORDEN_FIJO_ETAPA.items()},
+        # Cambio 56: escalas con puntaje por prueba del proveedor (id → escalas) y modalidades de la Psicometría digital
+        "escalasPsicometria": dict(_psi.ESCALAS_PROVEEDOR),
+        "modalidadesPsicometria": [{"valor": k, "texto": t} for k, t in sproc.MODALIDADES_PSICOMETRIA.items()],
     }
 
 

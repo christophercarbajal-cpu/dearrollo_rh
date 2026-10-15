@@ -81,6 +81,9 @@ export interface PasoProceso {
   /** Cambio 47 (actividades presenciales): quién agenda la cita y si va en la MISMA cita que sus vecinas presenciales. */
   tipo_agenda?: "rh" | "candidato";
   misma_cita?: boolean;
+  /** Cambio 56: Psicometría digital — «Informativa» (completa y avanza sola) o «Con mínimos por escala» (aprueba todo →
+   *  avanza; falla una → «No cumple parámetro» y RH decide). `minimos` = {escala: puntaje mínimo}. */
+  evaluacion_psicometria?: { modalidad: "informativa" | "minimos"; minimos?: Record<string, number> };
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {

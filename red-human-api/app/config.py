@@ -203,8 +203,13 @@ class Settings(BaseSettings):
     # Recordatorio automático de psicometría pendiente (2026-10-07): días desde el envío (o el último recordatorio) sin
     # que el proveedor confirme el inicio, y tope de recordatorios automáticos. 0 días = apagado. Nunca consulta la API
     # del proveedor (el saldo se comparte con producción): usa lo que Red Human ya sabe.
-    psicometricas_recordatorio_dias: int = 2
-    psicometricas_recordatorios_max: int = 2
+    psicometricas_recordatorio_dias: int = 2  # legado: solo si PSICOMETRICAS_RECORDATORIO_HORAS = 0
+    # Cambio 56 (2026-10-15): UN recordatorio por WhatsApp a las 24 h de la invitación sin completar (plantilla de Meta
+    # «recordatorio_psicometria_rh», variables nombre, empresa, puesto)
+    psicometricas_recordatorio_horas: int = 24
+    psicometricas_recordatorios_max: int = 1
+    meta_plantilla_recordatorio_psicometria: str = "recordatorio_psicometria_rh"
+    meta_plantilla_recordatorio_psicometria_params: str = "nombre,empresa,puesto"
     # Flujo simple de psicometría (2026-10-07, `psychometric_no_response_days`): días en «Enviada» sin resultado a
     # partir de los cuales la fila y el tablero avisan «Sin respuesta en N días». Solo es un aviso: el estado no cambia.
     psicometria_sin_respuesta_dias: int = 5

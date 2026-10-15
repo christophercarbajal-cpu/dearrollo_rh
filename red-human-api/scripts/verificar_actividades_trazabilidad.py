@@ -131,7 +131,7 @@ with TestClient(app) as client:
         {"id": "refs", "tipo": "referencias", "etapa": "Entrevista Humana", "obligatorio": False},
         {"id": "eh", "tipo": "entrevista_humana", "etapa": "Entrevista Humana", "responsable": {"tipo": "usuario"}},
         {"id": "tec", "tipo": "tecnica", "etapa": "Entrevista Humana", "obligatorio": False},
-        {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista Humana", "obligatorio": False},
+        {"id": "psico", "tipo": "psicometrica", "etapa": "Entrevista IA", "obligatorio": False},
         {"id": "cond", "tipo": "condiciones", "etapa": "Contratación"},
     ]
     for vac in (V, V2):

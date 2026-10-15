@@ -89,7 +89,9 @@ with TestClient(app) as client:
     print("\n--- Bloque 1 · catálogo estricto por etapa ---")
     op = client.get("/procesos/opciones").json()
     etapas = {e["valor"]: e for e in op["etapas"]}
-    check(all("otra" in e["actividades"] for e in op["etapas"]), "«Otra actividad» se ofrece en todas las etapas")
+    # Cambio 55: «Otra actividad» ya no se ofrece en Prefiltro ni Filtro Red Human
+    check(all(("otra" in e["actividades"]) == (e["valor"] not in ("Prefiltro", "Entrevista IA")) for e in op["etapas"]),
+          "«Otra actividad» se ofrece en todas las etapas salvo Prefiltro y Filtro Red Human")
     check(etapas["Prefiltro"]["actividades"] == list(ACTIVIDADES_POR_ETAPA["Prefiltro"])
           and "entrevista_humana" not in etapas["Prefiltro"]["actividades"]
           and "condiciones" not in etapas["Entrevista IA"]["actividades"]
@@ -108,8 +110,8 @@ with TestClient(app) as client:
         {"tipo": "prefiltro_whatsapp", "etapa": "Prefiltro"}, {"tipo": "condiciones", "etapa": "Prefiltro"}]})
     check(r.status_code == 400 and "no puede ir en" in r.json()["detail"], f"una actividad fuera de su etapa → 400 ({r.status_code})")
     r = client.post("/procesos/plantillas", json={"nombre": "Con otra", "pasos": [
-        {"tipo": "otra", "etapa": "Prefiltro", "nombre": "Llamar al candidato"}, {"tipo": "otra", "etapa": "Onboarding", "nombre": "Bienvenida"}]})
-    check(r.status_code == 201, f"«Otra actividad» en cualquier etapa ({r.status_code})")
+        {"tipo": "otra", "etapa": "Entrevista Humana", "nombre": "Llamar al candidato"}, {"tipo": "otra", "etapa": "Onboarding", "nombre": "Bienvenida"}]})
+    check(r.status_code == 201, f"«Otra actividad» en Filtro humano y Onboarding ({r.status_code})")
     viejo = [{"id": "cv", "tipo": "analisis_cv", "etapa": "Entrevista IA"}]
     check(sproc.normalizar_pasos(viejo, previos=viejo)[0]["etapa"] == "Entrevista IA",
           "una actividad ya guardada fuera del catálogo nuevo se conserva (rutas previas)")
@@ -151,11 +153,11 @@ with TestClient(app) as client:
         db.refresh(p)
         return next(x for x in sproc.estado_pasos(p) if x["id"] == pid)
 
-    r = client.post("/procesos/plantillas", json={"nombre": "Otra sin nombre", "pasos": [{"tipo": "otra", "etapa": "Prefiltro"}]})
+    r = client.post("/procesos/plantillas", json={"nombre": "Otra sin nombre", "pasos": [{"tipo": "otra", "etapa": "Entrevista Humana"}]})
     check(r.status_code == 400 and "nombre" in r.json()["detail"], "«Otra actividad» sin nombre no se guarda en la ruta")
     p1 = postular("Otra Uno", "5512880001", [{"id": "sw", "tipo": "solicitud_web", "etapa": "Prefiltro"},
-                                              {"id": "llamar", "tipo": "otra", "etapa": "Prefiltro", "nombre": "Llamada de bienvenida",
-                                               "mensaje": "Te llamaremos hoy para darte la bienvenida."}])
+                                              {"id": "llamar", "tipo": "otra", "etapa": "Entrevista Humana", "nombre": "Llamada de bienvenida",
+                                               "mensaje": "Te llamaremos hoy para darte la bienvenida."}], etapa="Entrevista Humana")
     check(next(x for x in p1.proceso["pasos"] if x["id"] == "llamar")["mensaje"].startswith("Te llamaremos"), "el mensaje viaja en la actividad")
     asyncio.run(sproc.avanzar_seguro(db, p1))
     x = paso_de(p1, "llamar")

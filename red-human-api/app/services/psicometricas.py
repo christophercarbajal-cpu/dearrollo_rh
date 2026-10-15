@@ -36,6 +36,85 @@ PRUEBAS_PROVEEDOR = {
     "11": "Barsit", "15": "Moss", "16": "Wonderlic",
 }
 TESTS_MAX = 100  # longitud máxima documentada del campo `Tests`
+# Cambio 56 (2026-10-15): escalas con PUNTAJE que cada prueba del catálogo regresa en `consultaResultado` (factores
+# estándar de cada instrumento). Solo con escalas se puede configurar «Con mínimos por escala»; IPV, LIFO e Inglés son
+# solo «Informativa». Si el proveedor cambia los nombres de sus factores, se ajusta AQUÍ (lo leen el editor y la regla).
+ESCALAS_PROVEEDOR = {
+    "1": ["D", "I", "S", "C"],
+    "2": ["G", "L", "I", "T", "V", "S", "R", "D", "C", "X", "B", "O", "Z", "K", "F", "W", "N", "A", "P", "E"],
+    "5": ["Moral", "Legalidad", "Indiferencia", "Corrupción", "Económico", "Político", "Social", "Religioso"],
+    "7": ["CI"],
+    "10": ["A", "B", "C", "E", "F", "G", "H", "I", "L", "M", "N", "O", "Q1", "Q2", "Q3", "Q4"],
+    "11": ["CI"],
+    "15": ["Supervisión", "Decisiones", "Evaluación", "Relaciones", "Sentido común"],
+    "16": ["Puntaje"],
+}
+
+
+def escalas_de(id_proveedor: str) -> List[str]:
+    """Escalas con puntaje de una prueba o batería («1,7» = Cleaver + Terman), sin repetir."""
+    salida: List[str] = []
+    for i in str(id_proveedor or "").replace(" ", "").split(","):
+        for e in ESCALAS_PROVEEDOR.get(i, []):
+            if e not in salida:
+                salida.append(e)
+    return salida
+
+
+_LLAVES_NOMBRE = ("escala", "factor", "nombre", "clave", "dimension", "dimensión", "rasgo", "area", "área", "name", "scale")
+_LLAVES_VALOR = ("puntaje", "puntuacion", "puntuación", "valor", "score", "resultado", "calificacion", "calificación", "pd", "pc",
+                 "percentil", "total", "value")
+
+
+def _numero(x) -> Optional[float]:
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    m = re.match(r"^\s*(-?\d+(?:[.,]\d+)?)\s*%?\s*$", str(x or ""))
+    return float(m.group(1).replace(",", ".")) if m else None
+
+
+def puntajes_por_escala(datos) -> dict:
+    """{escala normalizada: puntaje} de la respuesta de `consultaResultado`, venga como {«D»: 12} o como lista de
+    {escala/factor/nombre: «D», puntaje/valor/score: 12} (a cualquier profundidad)."""
+    salida: dict = {}
+
+    def visitar(x):
+        if isinstance(x, list):
+            for y in x:
+                visitar(y)
+        elif isinstance(x, dict):
+            llaves = {_sin_acentos(str(k)).strip(): v for k, v in x.items()}
+            nombre = next((llaves[k] for k in map(_sin_acentos, _LLAVES_NOMBRE) if k in llaves and isinstance(llaves[k], str)), None)
+            valor = next((_numero(llaves[k]) for k in map(_sin_acentos, _LLAVES_VALOR) if k in llaves and _numero(llaves[k]) is not None), None)
+            if nombre and valor is not None:
+                salida.setdefault(_sin_acentos(nombre).strip(), valor)
+            for k, v in x.items():
+                n = _numero(v)
+                if n is not None and _sin_acentos(str(k)).strip() not in map(_sin_acentos, _LLAVES_VALOR):
+                    salida.setdefault(_sin_acentos(str(k)).strip(), n)
+                elif isinstance(v, (dict, list)):
+                    visitar(v)
+
+    visitar(datos)
+    return salida
+
+
+def evaluar_minimos(datos, minimos: dict) -> dict:
+    """Cambio 56: compara los puntajes del proveedor contra los mínimos de RH. {cumple, fallas[], sin_dato[], puntajes{}}.
+    Una escala configurada que el proveedor no reporta cuenta como falla (RH decide; nunca se aprueba a ciegas)."""
+    puntajes = puntajes_por_escala(datos)
+    fallas, sin_dato, vistos = [], [], {}
+    for escala, minimo in (minimos or {}).items():
+        valor = puntajes.get(_sin_acentos(str(escala)).strip())
+        if valor is None:
+            sin_dato.append(escala)
+            continue
+        vistos[escala] = valor
+        if valor < float(minimo):
+            fallas.append(f"{escala}: {valor:g} (mínimo {float(minimo):g})")
+    return {"cumple": not fallas and not sin_dato, "fallas": fallas, "sin_dato": sin_dato, "puntajes": vistos}
 # 2026-10-08: pruebas PROYECTIVAS / de aplicación presencial que la plataforma NO ofrece por API (no están en el
 # catálogo oficial de `Tests`). «Persona bajo la lluvia» es una de ellas: se aplica con evaluador o se registra a mano.
 PRUEBAS_SIN_API = ("persona bajo la lluvia", "htp", "casa arbol persona", "casa-arbol-persona", "machover", "figura humana",

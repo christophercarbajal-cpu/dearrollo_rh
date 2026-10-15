@@ -217,7 +217,7 @@ with TestClient(app) as client:
     db.expire_all()
     q = db.query(Postulacion).filter_by(codigo=q.codigo).one()
     check(not q.activa and q.motivo_cierre == "descartado" and q.estado == "no_cumple", "el agente DESCARTA, no aprueba")
-    check("necesitamos secundaria terminada" in r["respuesta"], "y le manda el mensaje de cierre con el requisito")
+    check("no continuaremos con tu postulación" in r["respuesta"] and "secundaria" not in r["respuesta"].lower(), "y le manda el cierre genérico, sin el requisito (Cambio 48)")
 
     print("\n--- 6. Reconfirmación con formato viejo: se dice natural y también descarta ---")
     v2.cuenta_id, v2.titulo, v2.preguntas_filtro = cuenta.id, "Cargador B", [dict(FILTRO[0])]

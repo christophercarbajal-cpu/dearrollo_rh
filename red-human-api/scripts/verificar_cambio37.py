@@ -72,8 +72,14 @@ def check(cond, msg):
     print(f"✅ {msg}")
 
 
+# Cambio 48: el inicio del prefiltro va en cascada (texto libre → plantilla); el texto libre solo pasa a quien ya escribió
+VENTANA = set()
+
+
 async def _meta_falso(cuerpo):
     ENVIADOS.append(cuerpo)
+    if cuerpo.get("type") == "text" and cuerpo.get("to") not in VENTANA:
+        return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": 131047}
     return {"enviado": True, "proveedor": "meta", "detalle": "ok", "mensaje_id": f"wamid.{len(ENVIADOS)}"}
 
 
@@ -99,10 +105,12 @@ def boton(tel, t):
 
 
 def escribe(tel, t):
+    VENTANA.add("52" + tel)
     return asyncio.run(procesar_entrante(db, whatsapp.parsear_webhook(_msg(tel, {"type": "text", "text": {"body": t}}))))
 
 
 def pulsa(tel, t):
+    VENTANA.add("52" + tel)
     return asyncio.run(procesar_entrante(db, whatsapp.parsear_webhook(boton(tel, t))))
 
 

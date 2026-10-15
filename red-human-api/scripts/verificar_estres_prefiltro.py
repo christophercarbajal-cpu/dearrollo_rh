@@ -178,7 +178,7 @@ with TestClient(app) as client:
     turno(P4, "Hola")
     r = turno(P4, "no")
     p4 = post(P4)
-    check(not p4.activa and p4.motivo_cierre == "descartado" and "necesitamos secundaria terminada" in r,
+    check(not p4.activa and p4.motivo_cierre == "descartado" and "no continuaremos con tu postulación" in r and "secundaria" not in r.lower(),
           "«no» a un indispensable → «Descartado» con motivo y mensaje de cierre")
 
     print("\n--- 11. mensaje de voz ---")

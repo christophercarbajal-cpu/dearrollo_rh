@@ -66,8 +66,10 @@ class PreguntaRequisito(BaseModel):
 
     requisito: str = Field(description="El requisito indispensable, copiado literal.")
     pregunta: str = Field(description=(
-        "Pregunta directa en lenguaje natural, como la haría un reclutador por chat, que pide el DATO concreto del requisito "
-        "(ej. «Cuéntame, ¿cuántos años llevas en derecho corporativo?»). Una sola idea, sin «Para confirmar», sin opciones."))
+        "Pregunta DIRECTA, como la haría un reclutador por chat, que pide el DATO concreto del requisito (ej. «¿Cuántos años "
+        "llevas en derecho corporativo?», «¿Puedes cargar material pesado?», «¿Tienes disponibilidad para rolar turnos?»). "
+        "Una sola idea, sin «Para confirmar», sin opciones. PROHIBIDO el relleno conversacional («Cuéntame,», «Platícame,», "
+        "«Dime,») y PROHIBIDO pegar el requisito en una frase fija («Para esta vacante se pide: …»)."))
 
 
 class PreguntaFiltro(BaseModel):
@@ -126,9 +128,11 @@ class VacanteGenerada(BaseModel):
         default_factory=list,
         description=(
             "UNA por cada requisito indispensable: la pregunta directa en lenguaje natural con la que un reclutador pediría "
-            "el dato concreto (ej. «Cuéntame, ¿cuántos años llevas en derecho corporativo?», «¿Qué tipo de licencia de manejo "
-            "tienes?»). Nunca «¿Cuánto tiempo de experiencia en…?», nunca «Para confirmar…», nunca Sí/No con opciones. La "
-            "escolaridad SIEMPRE es «¿Cuál es tu último grado de estudios?»."
+            "el dato concreto (ej. «¿Cuántos años llevas en derecho corporativo?», «¿Qué tipo de licencia de manejo "
+            "tienes?», «¿Puedes cargar material pesado?»). Las de Sí/No son DIRECTAS, sin relleno («Cuéntame,», «Platícame,») "
+            "y sin pegar el requisito en una frase fija («Para esta vacante se pide: …»). Nunca «¿Cuánto tiempo de "
+            "experiencia en…?», nunca «Para confirmar…», nunca Sí/No con opciones. La escolaridad SIEMPRE es «¿Cuál es tu "
+            "último grado de estudios?»."
         ),
     )
     # 2026-09-16 (prefiltro dual): la IA elige SOLO los puntos críticos que vale la pena confirmar por chat.
@@ -190,8 +194,10 @@ _REGLAS = (
     "4. Usa lenguaje incluyente con la forma «(a)» del español mexicano (Cajero(a), Repartidor(a)).\n"
     "5. PREGUNTAS FILTRO (`preguntas_requisitos`, Cambio 37): UNA pregunta por requisito indispensable, en lenguaje natural "
     "y pidiendo el DATO concreto («¿Cuántos años de experiencia tienes en derecho corporativo?», «¿Tienes licencia de "
-    "manejo tipo B?»). PROHIBIDO copiar el requisito como pregunta («¿Cumples con…?») y frases como «¿Cuál es tu caso?» o "
-    "«Para confirmar». `preguntas_filtro` y `preguntas_filtro_whatsapp` déjalas vacías: el sistema arma la lista única.\n"
+    "manejo tipo B?»). Las de Sí/No (atributos o condiciones) son preguntas DIRECTAS: «¿Puedes cargar material pesado?», "
+    "«¿Tienes disponibilidad para rolar turnos?». PROHIBIDO el relleno conversacional en preguntas cerradas o de opción "
+    "(«Cuéntame,», «Platícame,», «Dime,»). PROHIBIDO copiar el requisito como pregunta («¿Cumples con…?») o pegarlo en una "
+    "frase fija («Para esta vacante se pide: …»), y frases como «¿Cuál es tu caso?» o «Para confirmar». `preguntas_filtro` y `preguntas_filtro_whatsapp` déjalas vacías: el sistema arma la lista única.\n"
     "6. Cada plataforma tiene su propio tono y formato: no repitas el mismo texto en las tres.\n"
     "7. Todo lo que escribas en `copy` y `page` lo lee el candidato. Nunca uses etiquetas internas como "
     "«indicado por RH», «según RH» o «no especificado»: escribe el sueldo directo («$10,500 mensuales») solo "
@@ -751,13 +757,29 @@ def generar_vacante(ficha: FichaVacante) -> Tuple[VacanteGenerada, bool]:
 
 
 _RE_PREGUNTA_ARMADA = re.compile(r"(cu[aá]nto tiempo de experiencia|para confirmar|primero conf[ií]rmame|cumples con|"
-                                 r"cu[aá]l de estas opciones|por ejemplo)", re.IGNORECASE)
+                                 r"cu[aá]l de estas opciones|por ejemplo|para esta vacante se pide|cu[aá]l es tu caso)", re.IGNORECASE)
+
+
+# Cambio 48: relleno conversacional al inicio de una pregunta cerrada («Cuéntame, ¿…?») — se quita en código
+_RE_RELLENO = re.compile(r"^\s*(?:cu[eé]ntame|cu[eé]ntanos|plat[ií]came|plat[ií]canos|dime|oye|a ver|bueno|entonces)\s*,?\s*(?=¿)",
+                         re.IGNORECASE)
+
+
+def sin_relleno(pregunta: str) -> str:
+    """Cambio 48: «Cuéntame, ¿cuántos años llevas en almacén?» → «¿Cuántos años llevas en almacén?». Solo quita el relleno
+    que va ANTES de los signos de interrogación (una pregunta abierta «Cuéntame un ejemplo…» se queda igual)."""
+    q = " ".join(str(pregunta or "").split())
+    m = _RE_RELLENO.match(q)
+    if not m:
+        return q
+    q = q[m.end():]
+    return q[:1] + q[1:2].upper() + q[2:] if q.startswith("¿") else q
 
 
 def pregunta_natural_requisito(req: str) -> str:
     """Cambio 31 (sin IA): la pregunta natural de un requisito indispensable. Escolaridad → «¿Cuál es tu último grado
-    de estudios?»; experiencia → «Cuéntame, ¿cuántos años llevas en …?»; licencia → «¿Qué tipo de licencia tienes?»;
-    lo demás, en lenguaje natural directo («Cuéntame, ¿tienes disponibilidad para rolar turnos?»)."""
+    de estudios?»; experiencia → «¿Cuántos años llevas en …?»; licencia → «¿Qué tipo de licencia tienes?»; lo demás,
+    DIRECTA («¿Tienes disponibilidad para rolar turnos?», «¿Puedes cargar material pesado?»). Cambio 48: sin «Cuéntame,»."""
     r = " ".join(str(req or "").split()).strip(" .")
     if not r:
         return ""
@@ -767,12 +789,11 @@ def pregunta_natural_requisito(req: str) -> str:
         tema = _tema_experiencia(r)
         primera = (tema.split() or [""])[0].lower()
         if tema == "un puesto similar":
-            return "Cuéntame, ¿cuántos años de experiencia tienes en un puesto similar?"
-        return f"Cuéntame, ¿cuántos años llevas {tema}?" if primera.endswith(("ando", "endo", "iendo")) else f"Cuéntame, ¿cuántos años llevas en {tema}?"
+            return "¿Cuántos años de experiencia tienes en un puesto similar?"
+        return f"¿Cuántos años llevas {tema}?" if primera.endswith(("ando", "endo", "iendo")) else f"¿Cuántos años llevas en {tema}?"
     if re.search(r"\blicencia\b", _clave_texto(r)):
         return "¿Qué tipo de licencia tienes?"
-    q = pregunta_si_no_natural(r)
-    return f"Cuéntame, {q[0] + q[1].lower() + q[2:]}" if q.startswith("¿") else q
+    return pregunta_si_no_natural(r)
 
 
 def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optional[List[dict]] = None) -> List[dict]:
@@ -781,7 +802,7 @@ def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optiona
     por_req = {_norm_req(x.get("requisito") or ""): str(x.get("pregunta") or "").strip() for x in propuestas or [] if isinstance(x, dict)}
     salida = []
     for req in [r for r in indispensables or [] if str(r or "").strip()]:
-        propia = por_req.get(_norm_req(req), "")
+        propia = sin_relleno(por_req.get(_norm_req(req), ""))  # Cambio 48: sin «Cuéntame,» aunque la IA lo ponga
         valida = (propia.count("?") == 1 and propia.endswith("?") and not _RE_PREGUNTA_ARMADA.search(propia)
                   and not RE_NIVEL_ESTUDIOS.search(req) and len(propia.split()) <= 20)
         salida.append({"requisito": req.strip(), "pregunta": propia if valida else pregunta_natural_requisito(req)})
@@ -3179,7 +3200,8 @@ _RE_HORARIO = re.compile(r"\b(horario|turno\w*|rolar|nocturn\w*|fines? de semana
                          r" a \d)", re.IGNORECASE)
 # Cambio 31: la escolaridad se pregunta SIEMPRE así (sin variantes)
 PREGUNTA_ESCOLARIDAD = "¿Cuál es tu último grado de estudios?"
-RE_NIVEL_ESTUDIOS = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|escolaridad)\b", re.IGNORECASE)
+RE_NIVEL_ESTUDIOS = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|maestr[ií]a|posgrado|postgrado|"
+                               r"doctorado|escolaridad)\b", re.IGNORECASE)
 
 
 def _pregunta_exigencia(texto: str) -> str:

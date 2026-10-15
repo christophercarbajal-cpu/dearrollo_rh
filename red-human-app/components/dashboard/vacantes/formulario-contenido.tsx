@@ -65,6 +65,7 @@ import {
   type PreguntaFiltroU,
   type BloquePlataforma,
   TIPOS_PREGUNTA_FILTRO,
+  textoDescartaSi,
   type EntrevistaBaseConfig,
   MONEDAS_SUELDO,
   PERIODICIDADES_SUELDO,
@@ -1002,10 +1003,10 @@ function EditorPreguntasFiltro({ requisitos, items, onChange, modo }: {
                   <label className="flex items-start gap-1.5">
                     <input type="checkbox" checked={q.descarta} onChange={(e) => set(q.id, { descarta: e.target.checked })}
                       className="mt-0.5 h-3.5 w-3.5 rounded border-border-soft text-brand" />
-                    <span>{q.descarta ? q.regla.replace(/^Descarta si /, "") : "No descarta"}</span>
+                    <span>{textoDescartaSi(q)}</span>
                   </label>
                 ) : (
-                  <span className="text-ink-3">{q.descarta ? q.regla.replace(/^Descarta si /, "") : "No descarta"}</span>
+                  <span className="text-ink-3">{textoDescartaSi(q)}</span>
                 )}
               </td>
             </tr>

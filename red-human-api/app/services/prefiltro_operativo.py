@@ -6,7 +6,7 @@ pregunta por mensaje y SIEMPRE en este orden:
 1. Saludo exacto (`prefiltro_conversacional.saludo`) + la primera pregunta indispensable.
 2. Cada indispensable de la vacante, confirmado con un DATO CONCRETO (nunca Sí/No): escolaridad («¿Hasta qué año
    estudiaste?»), experiencia («¿Cuánto tiempo de experiencia…?»), licencia («¿Qué tipo de licencia tienes?»),
-   disponibilidad y cualquier otro («¿Cuál es tu caso?»). Si el dato no lo cumple → descarta.
+   disponibilidad; cualquier otro, Sí/No directa (Cambio 48: «¿Puedes cargar material pesado?»). Si no lo cumple → descarta.
 3. «¿Cuántos años tienes?» — se registra; menor de 18 → Puntos por validar (descarta solo si la vacante pide una edad).
 4. «El puesto es [puesto]. ¿Te interesa?» · 5. «El sueldo es de [sueldo]. ¿Te interesa?» (se registran).
 6. Colonia y municipio · 7. «El trabajo es en [ubicación]. ¿Puedes trasladarte?» · 8. «¿Cuánto tiempo harías de tu
@@ -156,7 +156,10 @@ def _criterio(cid: str, dato: str, criterio: str, pregunta: str, indispensable: 
 def _pregunta_indispensable(i: int, req: str, natural: str = "") -> dict:
     """Un indispensable como pregunta de DATO CONCRETO (nunca Sí/No). Cambio 31: con la pregunta natural de la vacante
     (`natural`), el chat la usa TAL CUAL; el tipo de dato solo decide cómo se evalúa la respuesta."""
+    from . import ia
+
     c = _pregunta_indispensable_base(i, req)
+    natural = ia.sin_relleno(natural)  # Cambio 48: sin «Cuéntame,»
     if natural:
         c["pregunta"] = c["chat"] = natural
     return c
@@ -194,8 +197,8 @@ def _pregunta_indispensable_base(i: int, req: str) -> dict:
         tema = tema[:1].lower() + tema[1:] if tema[:2] != tema[:2].upper() else tema
         pregunta = (f"¿Qué disponibilidad tienes para {tema}?" if tema != r else "¿Qué días y horarios puedes trabajar?")
         return _criterio(cid, "disponibilidad", r, pregunta, True)
-    req_min = r[:1].lower() + r[1:] if r[:2] != r[:2].upper() else r
-    return _criterio(cid, "requisito", r, f"Para esta vacante se pide: {req_min}. ¿Cuál es tu caso?", True)
+    # Cambio 48: pregunta DIRECTA de Sí/No («¿Puedes cargar material pesado?»); nunca el requisito pegado en una frase fija
+    return _criterio(cid, "requisito", r, ia.pregunta_si_no_natural(r), True)
 
 
 def _texto_sueldo(sueldo: str) -> str:
@@ -290,6 +293,11 @@ def _edad(texto: str) -> Optional[int]:
     return n if 14 <= n <= 90 else None
 
 
+# Cambio 48: una pregunta que pide un DATO («¿Qué…?», «¿Cuánto…?») no se responde con un «sí» a secas; una Sí/No directa
+# («¿Tienes disponibilidad para rolar turnos?») sí
+_RE_PIDE_DATO = re.compile(r"^\s*¿\s*(qu[eé]|cu[aá]l|cu[aá]nt|c[oó]mo|d[oó]nde|cu[aá]ndo)", re.IGNORECASE)
+
+
 def clasificar(c: dict, texto: str) -> Tuple[Optional[str], dict]:
     """(valor, extra) de un dato del prefiltro operativo. valor None = vaga (se repregunta una vez)."""
     from .prefiltro_conversacional import _anos, limpiar, minutos_de
@@ -324,6 +332,8 @@ def clasificar(c: dict, texto: str) -> Tuple[Optional[str], dict]:
     if dato in ("disponibilidad", "requisito"):
         if niega:
             return "no", {}
+        if _si_no(texto) == "si" and (dato == "requisito" or not _RE_PIDE_DATO.match(c.get("chat") or c.get("pregunta") or "")):
+            return "si", {"concreto": texto.strip()[:200]}  # Cambio 48: la pregunta es Sí/No directa — un «sí» la responde
         if _si_no(texto) == "si" and len(t.split()) <= 2:
             return None, {}  # «sí» a secas: se pide el dato concreto una vez
         return "si", {"concreto": texto.strip()[:200]}

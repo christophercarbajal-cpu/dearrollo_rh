@@ -293,8 +293,10 @@ with TestClient(app) as client:
           "sin pregunta de transporte ni habilidades blandas (lo generado antes por IA se ignora)")
     check([c["indispensable"] for c in crit[:3]] == [True, True, True] and not crit[3]["indispensable"] and not crit[-1]["indispensable"],
           "los indispensables descartan; edad y traslado (sin límite) solo se registran")
-    check(not any(c["chat"].startswith(("¿Tienes", "¿Cuentas", "¿Cumples")) for c in crit[:3]),
-          "los indispensables se confirman con DATOS concretos (no Sí/No)")
+    # Cambio 48: preguntas DIRECTAS (dato concreto o Sí/No directa), nunca relleno ni el requisito pegado en una frase fija
+    check(not any(c["chat"].startswith(("Cuéntame", "¿Cumples")) or "Para esta vacante se pide" in c["chat"] for c in crit[:3])
+          and crit[0]["chat"] == "¿Cuál es tu último grado de estudios?" and crit[1]["chat"].startswith("¿Cuánt"),
+          f"los indispensables se preguntan directo ({[c['chat'] for c in crit[:3]]})")
     check(crit[4]["chat"] == "El puesto es Almacenista. ¿Te interesa?" and crit[5]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"
           and crit[7]["chat"] == "El trabajo es en Zapopan, Jalisco. ¿Puedes trasladarte?", "textos fijos de puesto, sueldo y traslado")
     ficha = ia.FichaGuion(titulo="Almacenista", requisitos_indispensables=REQS.split(" · "), sueldo="Desde $9,500 MXN mensuales",
@@ -353,8 +355,9 @@ with TestClient(app) as client:
     chat(q2, "Terminé la secundaria")
     r = chat(q2, "6 meses")
     db.refresh(q2)
-    check(not q2.activa and q2.motivo_cierre == "descartado" and "1 año de experiencia en almacén" in r,
-          f"el dato no cumple el indispensable → descarta con el mensaje de cierre → «{r[:100]}»")
+    check(not q2.activa and q2.motivo_cierre == "descartado" and "no continuaremos con tu postulación" in r
+          and "experiencia" not in r and "1 año de experiencia en almacén" in q2.analisis["prefiltro_web"]["motivo"],
+          f"el dato no cumple el indispensable → descarta con el cierre genérico (Cambio 48; el motivo solo en la ficha) → «{r[:100]}»")
 
     vo.requisitos = REQS + " · Vivir a máximo 60 minutos de la planta · Mayor de edad"
     db.commit()
@@ -368,7 +371,8 @@ with TestClient(app) as client:
         chat(q3, t)
     r = chat(q3, "hora y media")
     db.refresh(q3)
-    check(not q3.activa and "60 minutos" in r, "traslado mayor al límite de la vacante → descarta")
+    check(not q3.activa and "60 minutos" not in r and "60 minutos" in q3.analisis["prefiltro_web"]["motivo"],
+          "traslado mayor al límite de la vacante → descarta (Cambio 48: el límite solo en el motivo de la ficha)")
 
     # ================= Bloque 4 · Cambio 29: entrevista operativa fija y ficha =================
     print("\n--- Bloque 4 · configuración «Entrevista por WhatsApp» en la vacante ---")

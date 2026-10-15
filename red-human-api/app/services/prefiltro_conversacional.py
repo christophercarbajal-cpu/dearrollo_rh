@@ -387,11 +387,15 @@ def comparativo_indispensables(p: Postulacion) -> List[dict]:
 
 # ============================================================ datos de WhatsApp (escolaridad, zona, traslado, transporte)
 
-_NIVELES = ((4, r"licenciatura|universidad|ingenier\w*|licenciad\w*|maestria"),
+# Cambio 48: jerarquía ORDINAL Primaria < Secundaria < Preparatoria < Licenciatura < Posgrado — cualquier nivel igual o
+# superior al que pide la vacante pasa; solo uno estrictamente menor descarta (`cumple_nivel`). Se revisa del más alto al
+# más bajo: «licenciatura y maestría» = Posgrado.
+_NIVELES = ((5, r"maestria\w*|posgrado\w*|postgrado\w*|doctorado\w*|mba"),
+            (4, r"licenciatura|universidad|ingenier\w*|licenciad\w*"),
             (3, r"prepa\w*|preparatoria|bachiller\w*|cbtis|conalep|cetis|cecyt\w*|cobach|tecnico|carrera tecnica"),
             (2, r"secundaria|secu|telesecundaria"),
             (1, r"primaria"))
-NOMBRE_NIVEL = {0: "Sin estudios", 1: "Primaria", 2: "Secundaria", 3: "Preparatoria", 4: "Licenciatura"}
+NOMBRE_NIVEL = {0: "Sin estudios", 1: "Primaria", 2: "Secundaria", 3: "Preparatoria", 4: "Licenciatura", 5: "Posgrado"}
 _GRADO_FINAL = {1: 6, 2: 3, 3: 3}
 _ORDINALES = {"primero": 1, "primer": 1, "segundo": 2, "tercero": 3, "tercer": 3, "cuarto": 4, "quinto": 5, "sexto": 6}
 _RE_GRADO = re.compile(r"\b([1-9])\s*(?:er|ro|do|to|o|vo|mo|no|ero|º|°)?\s*(ano|anos|grado|semestre|semestres|sem)?\b|\b("
@@ -707,14 +711,14 @@ _RE_SI = re.compile(r"^(?:ya |obvio |claro que |por supuesto que |desde luego qu
                     r"trabaje|estudie|si tengo|ya tengo|listo|sale)\b")
 _RE_NO_ENTIENDE = re.compile(r"(no (le )?entiendo( la pregunta)?|no entendi( la pregunta)?|no le entendi|no comprendo|que|como|mande|"
                              r"perdon|a que te refieres|que quieres decir|que significa( eso)?|no se a que te refieres|explicame|me explicas)")
-_RE_SUPERIOR = re.compile(r"\b(prepa|preparatoria|bachiller\w*|licenciatura|universidad|carrera|ingenier\w*|tecnico|cbtis|conalep|cetis|cecyt\w*)\b")
+_RE_SUPERIOR = re.compile(r"\b(prepa|preparatoria|bachiller\w*|licenciatura|universidad|carrera|ingenier\w*|tecnico|cbtis|conalep|cetis|cecyt\w*|maestria|posgrado|postgrado|doctorado)\b")
 _RE_INCOMPLETA = re.compile(r"\b(trunca|no (la )?termine|sin terminar|inconclus\w*|me falto|incomplet\w*|la deje|no la acabe)\b")
 # 2026-10-11: «1er año de secundaria», «llegué hasta segundo», «me quedé en primero» = el nivel NO está terminado
 _RE_GRADO_PARCIAL = re.compile(r"\b(1er|1ro|1o|1ero|primer|primero|2do|2o|segundo|un ano|1 ano|dos anos|2 anos|medio ano|"
                                r"me quede en|me sali en|sali en|deje en|nomas (hice|curse|estudie)|solo (hice|curse|estudie)|hasta (el )?"
                                r"(1|2|primer|primero|segundo))\b")
 _RE_TERMINADA = re.compile(r"\b(termine|terminada|terminado|concluida|concluido|conclui|completa|completo|acabe|certificado)\b")
-_RE_NIVEL_REQ = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato)\b")
+_RE_NIVEL_REQ = re.compile(r"\b(primaria|secundaria|preparatoria|prepa|bachillerato|licenciatura|maestria|posgrado|postgrado|doctorado)\b")
 SALUDOS = {"hola", "holi", "ola", "buenas", "buen dia", "buenos dias", "buenas tardes", "buenas noches", "hey", "hi", "hello",
            "start", "/start", "continuar", "seguir", "retomar", "sigo aqui", "ya regrese", "inicio", "empezar", "menu"}
 
@@ -734,6 +738,11 @@ def clasificar(c: dict, texto: str) -> Optional[str]:
     base = _norm(c["criterio"] + " " + c["pregunta"])
     nivel = _RE_NIVEL_REQ.search(base)
     if nivel:
+        # Cambio 48: jerarquía ordinal — si la respuesta trae un nivel de estudios, decide `cumple_nivel` (igual o superior
+        # pasa; solo uno menor, o el mismo sin terminar, no cumple). Sin nivel en la respuesta («sí, la terminé») sigue abajo.
+        requerido = nivel_estudios(c["criterio"])[0] or nivel_estudios(base)[0]
+        if requerido and nivel_estudios(texto)[0] is not None:
+            return cumple_nivel(requerido, texto)
         # 2026-10-11: un nivel CURSADO a medias no cumple un nivel «terminado» → el agente descarta (nunca aprueba)
         parcial = bool(_RE_GRADO_PARCIAL.search(t)) and not _RE_TERMINADA.search(t)
         if nivel.group(1) == "secundaria":
@@ -906,11 +915,6 @@ def pregunta_pendiente(p: Postulacion) -> Optional[str]:
 # ============================================================ resolución
 
 
-def _requisito(c: dict) -> str:
-    t = c["criterio"].strip().rstrip(".")
-    return t[:1].lower() + t[1:] if t and not t[:2].isupper() else t
-
-
 def _resolver(db: Session, p: Postulacion, criterios: List[dict], e: dict, resultado: str, motivo: str) -> None:
     """Escribe la decisión en la entidad, en `analisis.prefiltro_web` (lo que lee el paso de la ruta) y en el tablero.
     Cambio 37: «revision» = «Requiere revisión» (la ruta se detiene y RH decide: continuar o descartar)."""
@@ -1002,11 +1006,55 @@ def _no_concluyente(db: Session, p: Postulacion, e: dict, c: dict, respuesta: st
     registrar(db, ACTOR, "prefiltro_no_concluyente", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": respuesta[:200]})
 
 
+# Cambio 48: el cierre es GENÉRICO — nunca dice qué requisito no cumplió. El motivo detallado vive SOLO en la base
+# (`Postulacion.historial`, evento «descartado»; bitácora), visible para RH en la ficha.
+TEXTO_DESCARTE = ("Gracias por tu interés{en}. En esta ocasión no continuaremos con tu postulación. Te tendremos en cuenta "
+                  "para futuras vacantes.")
+
+
+def texto_descarte(empresa: str = "") -> str:
+    """Cambio 31: la misma empresa que la presentación. Cambio 48: sin motivo."""
+    return TEXTO_DESCARTE.format(en=f" en {empresa}" if empresa else "")
+
+
 def _texto_cierre(c: dict, empresa: str = "") -> str:
-    """Cambio 31: el cierre usa EXACTAMENTE la misma empresa que la presentación."""
-    en = f" en {empresa}" if empresa else ""
-    return (f"Gracias por tu interés{en}. Para esta vacante necesitamos {_requisito(c)}, por lo que en esta ocasión no "
-            "continuaremos con tu postulación.")
+    return texto_descarte(empresa)
+
+
+def parametros_descarte(p: Postulacion) -> list:
+    """Variables de META_PLANTILLA_DESCARTE en el orden de META_PLANTILLA_DESCARTE_PARAMS (default «empresa»)."""
+    from ..config import settings
+    from ..routers.candidatos import nombre_ficha
+
+    valores = {"empresa": empresa_de(p) or "Red Human", "nombre": (nombre_ficha(p) or "").split(" ")[0] or "candidato(a)",
+               "puesto": (p.vacante.titulo if p.vacante else "") or "la vacante"}
+    claves = [k.strip().lower() for k in (settings.meta_plantilla_descarte_params or "empresa").split(",") if k.strip()]
+    return [valores[k] for k in claves if k in valores]
+
+
+async def enviar_descarte(db: Session, p: Postulacion, texto: str, canal: str = "whatsapp") -> dict:
+    """Cambio 48: el mensaje de descarte sale por la cascada del Cambio 46 — texto libre (ventana de 24 h abierta, lo
+    normal dentro del chat) → plantilla META_PLANTILLA_DESCARTE → «Pendiente de plantilla» (se reintenta) si Meta aún no
+    la tiene. Queda en `notificaciones_enviadas`. Nunca lanza. Telegram / sin teléfono: igual que cualquier respuesta."""
+    from ..config import settings
+    from ..routers.candidatos import _enviar_whatsapp
+    from .mensajeria import de_cuenta
+    from .reintento_plantillas import registrar_envio
+    from .whatsapp import enviar_en_cascada
+
+    if canal != "whatsapp" or not p.telefono:
+        return await _enviar_whatsapp(p, texto, canal)
+    try:
+        with de_cuenta(p.cuenta_id):
+            envio = await enviar_en_cascada(p.telefono, texto, (settings.meta_plantilla_descarte or "descarte_postulacion_rh").strip(),
+                                            parametros_descarte(p), settings.meta_plantilla_idioma)
+    except Exception as ex:  # noqa: BLE001 — un error de Meta nunca rompe el descarte
+        envio = {"enviado": False, "proveedor": "error", "detalle": f"{type(ex).__name__}: {str(ex)[:200]}"}
+    try:
+        registrar_envio(db, p, "descarte_prefiltro", envio, "descarte_prefiltro")
+    except Exception as ex:  # noqa: BLE001
+        print(f"[whatsapp][HSM] {p.codigo}: no se pudo registrar el envío del descarte — {ex}", flush=True)
+    return envio
 
 
 def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> str:
@@ -1184,9 +1232,17 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     if resultado == "no_cumple":
         texto = cerrar_no_aprobado(db, p, criterios, e, incumple)
         db.commit()
-        from .motor_ruta import _avisar
+        # Cambio 48: el candidato todavía no escribe (no hay ventana de 24 h) → cascada: texto libre → plantilla de
+        # descarte → «Pendiente de plantilla» (se reintenta). Solo un fallo definitivo cae al correo.
+        envio = await enviar_descarte(db, p, texto, "whatsapp") if p.telefono else {"enviado": False}
+        if envio.get("enviado") or envio.get("estado") == "pendiente":
+            from ..routers.candidatos import guardar_mensaje
 
-        await _avisar(db, p, texto, f"Tu postulación a {p.vacante.titulo}", "", motivo="prefiltro")
+            guardar_mensaje(db, p, "assistant", texto if envio.get("enviado") else f"[Pendiente de plantilla] {texto}", "whatsapp", envio)
+        elif p.correo:
+            from .motor_ruta import _avisar
+
+            await _avisar(db, p, texto, f"Tu postulación a {p.vacante.titulo}", "", motivo="prefiltro")
         db.commit()
         return "no_cumple"
     if resultado == "cumple":
@@ -1358,9 +1414,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if not e.get("web_importada"):
         e = _sembrar_web(p, e, criterios)
 
-    async def responder(mensaje: str, **extra) -> dict:
+    async def responder(mensaje: str, _descarte: bool = False, **extra) -> dict:
         _guardar(p, e)
-        envio = await _enviar_whatsapp(p, mensaje, canal)
+        # Cambio 48: el descarte sale por la cascada (texto libre → plantilla → «Pendiente de plantilla»)
+        envio = await (enviar_descarte(db, p, mensaje, canal) if _descarte else _enviar_whatsapp(p, mensaje, canal))
         guardar_mensaje(db, p, "assistant", mensaje, canal, envio)
         _actualizar_ultima_actividad(p)
         db.commit()
@@ -1524,7 +1581,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     resultado, incumple, siguiente = _evaluar(criterios, e)
     if resultado == "no_cumple":
         mensaje = cerrar_no_aprobado(db, p, criterios, e, incumple)
-        return await responder(mensaje, clasificacion_final="no_cumple")
+        return await responder(mensaje, _descarte=True, clasificacion_final="no_cumple")
     if resultado == "revision":
         # Cambio 37: un indispensable sin resolver tras su repregunta → «Requiere revisión»; la ruta se detiene para RH
         mensaje = resolver_revision(db, p, criterios, e, incumple)

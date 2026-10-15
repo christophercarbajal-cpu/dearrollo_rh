@@ -823,13 +823,19 @@ async def _disparar_plantilla_inicio(db: Session, p: Postulacion) -> dict:
     # Cambio 37: «Hola, [nombre]. Soy Red Human, el agente virtual de [empresa]. Recibimos tu postulación para [puesto].
     # ¿Tienes 5 minutos para responder unas preguntas?»
     texto = texto_inicio(p)
+    # Cambio 48: la cascada del Cambio 46 — texto libre (si escribió en 24 h) → plantilla → «Pendiente de plantilla»
+    from ..services.whatsapp import enviar_en_cascada
+
     with de_cuenta(p.cuenta_id):
-        envio = await enviar_plantilla(p.telefono, PLANTILLA_INICIO_ENTREVISTA, parametros_inicio(p), texto=texto)
-    texto_mensaje = (
-        f"[Plantilla de WhatsApp «{PLANTILLA_INICIO_ENTREVISTA}»] {texto}"
-        if envio.get("enviado")
-        else f"[Fallo de envío Meta] La plantilla «{PLANTILLA_INICIO_ENTREVISTA}» no pudo entregarse a {p.telefono}: {envio.get('detalle', 'sin detalle')}."
-    )
+        envio = await enviar_en_cascada(p.telefono, texto, PLANTILLA_INICIO_ENTREVISTA, parametros_inicio(p), settings.meta_plantilla_idioma)
+    if envio.get("enviado"):
+        texto_mensaje = texto if envio.get("formato") == "texto" else f"[Plantilla de WhatsApp «{PLANTILLA_INICIO_ENTREVISTA}»] {texto}"
+    elif envio.get("estado") == "pendiente":
+        texto_mensaje = (f"[Pendiente de plantilla] «{PLANTILLA_INICIO_ENTREVISTA}» aún no está activa en Meta; se reintentará "
+                         f"automáticamente. {texto}")
+    else:
+        texto_mensaje = (f"[Fallo de envío Meta] La plantilla «{PLANTILLA_INICIO_ENTREVISTA}» no pudo entregarse a {p.telefono}: "
+                         f"{envio.get('error') or envio.get('detalle', 'sin detalle')}.")
     guardar_mensaje(db, p, "assistant", texto_mensaje, "whatsapp", envio)
     registrar(
         db, "sistema", "plantilla_inicio_enviada", "postulacion", p.codigo,

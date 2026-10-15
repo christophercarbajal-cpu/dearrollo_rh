@@ -88,6 +88,7 @@ import {
   type VacanteGenerada,
   type Cliente,
   type Plantilla,
+  textoDescartaSi,
 } from "@/lib/api";
 import { usePuedeDecidir } from "@/components/sesion";
 import { useAnunciarContextoAgente } from "@/components/dashboard/agente/proveedor";
@@ -1213,7 +1214,7 @@ function PreguntasFiltroResumen({ items }: { items: NonNullable<Vacante["filtro"
               <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] text-ink-3">
                 <span className="rounded bg-surface-2 px-1.5 py-0.5">{q.etiqueta ?? (q.base ? "Base" : "Requisito")}</span>
                 <span>{q.requisito}</span>
-                {q.descarta ? <span className="rounded bg-bad-soft px-1.5 py-0.5 text-bad">{q.regla}</span>
+                {q.descarta ? <span className="rounded bg-bad-soft px-1.5 py-0.5 text-bad">Descarta si: {textoDescartaSi(q)}</span>
                   : <span className="rounded bg-surface-2 px-1.5 py-0.5">no descarta</span>}
               </p>
             </div>

@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     # Cambio 30: «Oferta laboral» — «{{1}}, tenemos una oferta para ti. Revísala aquí: {{2}}» ({{1}} nombre, {{2}} liga).
     # Si no está aprobada o falla, sale el mismo texto por el canal del candidato.
     meta_plantilla_oferta: str = "oferta_laboral_rh"
+    # Cambio 48: cierre GENÉRICO del prefiltro cuando el candidato no tiene ventana de 24 h abierta (descarte desde el
+    # formulario web) — «Gracias por tu interés en {{1}}. En esta ocasión no continuaremos con tu postulación. Te tendremos
+    # en cuenta para futuras vacantes.» ({{1}} = empresa). Nunca lleva el motivo. Si Meta aún no la tiene → «Pendiente de
+    # plantilla» y se reintenta (misma cascada que los avisos a evaluadores).
+    meta_plantilla_descarte: str = "descarte_postulacion_rh"
+    meta_plantilla_descarte_params: str = "empresa"
 
     # --- Telegram (2026-10-06): canal adicional por Cuenta (`Cuenta.canal_mensajeria`) ---
     # TELEGRAM_BOT_TOKEN solo vive aquí (servidor). Vacío = Telegram no disponible: las Cuentas que lo elijan

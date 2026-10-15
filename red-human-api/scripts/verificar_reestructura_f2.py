@@ -130,7 +130,7 @@ with TestClient(app) as client:
     p = db.query(Postulacion).filter_by(codigo=P).one()
     check(not p.activa and p.motivo_cierre == "descartado" and p.estado == "no_cumple",
           "un «no» explícito a un indispensable → el agente DESCARTA")
-    check("necesitamos" in r.json()["respuesta"], "al candidato se le manda el mensaje de cierre con el requisito")
+    check("no continuaremos con tu postulación" in r.json()["respuesta"] and "necesitamos" not in r.json()["respuesta"], "al candidato se le manda el cierre genérico, sin el requisito (Cambio 48)")
 
     print("\n--- Control manual de RH: mover libre + «Omitida manualmente» ---")
     r = client.post("/candidatos", json={"nombre": "Beto Manual", "telefono": "5522220002", "vacante": VAC, "consentimiento": True, "fuente": "RH"})

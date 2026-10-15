@@ -304,19 +304,37 @@ async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: 
        (número inválido, token) es definitivo: `error` legible.
 
     Por Telegram (sin plantillas) sale `texto`."""
+    if len(parametros) != 6 and settings.whatsapp_provider == "meta" and not _por_telegram(telefono, cuenta_id):
+        raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
+    return await enviar_en_cascada(telefono, texto, plantilla, parametros, settings.meta_plantilla_evaluador_idioma or "es_MX",
+                                   cuenta_id=cuenta_id)
+
+
+async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametros: Optional[List[str]] = None,
+                            idioma: Optional[str] = None, cuenta_id: Optional[int] = None) -> dict:
+    """La cascada del Cambio 46, para cualquier mensaje que deba salir aunque el destinatario no haya escrito (avisos a
+    evaluadores, inicio del prefiltro y descarte — Cambio 48):
+
+    1. Texto libre directo a Meta (pasa si escribió en las últimas 24 h).
+    2. Si Meta lo rechaza, la plantilla `plantilla` con `parametros` (vacíos → «-»).
+    3. Plantilla inexistente o en revisión (132001…) → `estado="pendiente"` («Pendiente de plantilla», NUNCA fallido) con
+       `reintento` {telefono, plantilla, parametros, texto, idioma} para `services/reintento_plantillas.py`. Cualquier otro
+       rechazo es definitivo: `error` legible.
+
+    Por Telegram (sin plantillas) sale `texto`; con otro proveedor, `enviar_mensaje`."""
     if _por_telegram(telefono, cuenta_id):
         return await telegram.enviar_texto(telefono, texto)
     if settings.whatsapp_provider != "meta":
         return await enviar_mensaje(telefono, texto)
-    if len(parametros) != 6:
-        raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
     libre = await _texto_libre_meta(telefono, texto) if (texto or "").strip() else _resultado(False, "sin texto")
     if libre.get("enviado"):
         libre["formato"] = "texto"
         return libre
-    params = [str(x or "-") for x in parametros]
-    resultado = await enviar_plantilla(telefono, plantilla, params, settings.meta_plantilla_evaluador_idioma or "es_MX")
+    params = [str(x or "-") for x in parametros or []]
+    idioma = idioma or settings.meta_plantilla_idioma or "es_MX"
+    resultado = await enviar_plantilla(telefono, plantilla, params, idioma)
     resultado["plantilla"] = plantilla
+    resultado["formato"] = "plantilla"
     resultado["texto_libre"] = str(libre.get("detalle") or "")
     if resultado.get("enviado"):
         return resultado
@@ -324,12 +342,12 @@ async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: 
         resultado["estado"] = "pendiente"
         resultado["pendiente_plantilla"] = True
         resultado["error"] = TEXTO_PENDIENTE_PLANTILLA
-        resultado["reintento"] = {"telefono": telefono, "plantilla": plantilla, "parametros": params, "texto": texto}
-        print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» todavía no está activa ({resultado.get('detalle')}); "
+        resultado["reintento"] = {"telefono": telefono, "plantilla": plantilla, "parametros": params, "texto": texto, "idioma": idioma}
+        print(f"[whatsapp][HSM] plantilla «{plantilla}» todavía no está activa ({resultado.get('detalle')}); "
               "queda pendiente y se reintentará", flush=True)
         return resultado
     resultado["error"] = error_legible(resultado.get("detalle", ""))
-    print(f"[whatsapp][HSM] plantilla de evaluador «{plantilla}» no salió: {resultado.get('detalle')}")
+    print(f"[whatsapp][HSM] plantilla «{plantilla}» no salió: {resultado.get('detalle')}")
     return resultado
 
 

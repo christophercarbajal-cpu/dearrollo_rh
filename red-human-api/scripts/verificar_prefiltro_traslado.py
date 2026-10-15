@@ -248,7 +248,7 @@ with TestClient(app) as client:
     r = turno(q, "Llegué hasta 2do de secundaria")
     q = fresca(q)
     check(not q.activa and q.motivo_cierre == "descartado" and q.estado == "no_cumple", "«2do de secundaria» con secundaria terminada → DESCARTADO")
-    check("necesitamos secundaria terminada" in r["respuesta"] and "colonia" not in r["respuesta"],
+    check("no continuaremos con tu postulación" in r["respuesta"] and "secundaria" not in r["respuesta"].lower() and "colonia" not in r["respuesta"],
           "mensaje de cierre de inmediato (ya no pregunta colonia ni traslado)")
 
     print("\n--- 5. Formulario web + WhatsApp ---")

@@ -68,9 +68,16 @@ def check(cond, msg):
 FUERA_DE_VENTANA = {"523399998888", "523399997777"}
 
 
+# Cambio 48: el inicio del prefiltro también va en cascada; un candidato (55 1277 00xx) que todavía no escribe no tiene
+# ventana y su texto libre se rechaza (sale la plantilla). `boton`/`texto` abren la ventana.
+VENTANA = set()
+
+
 async def _meta_falso(cuerpo):
     ENVIADOS.append(cuerpo)
-    if cuerpo.get("type") == "text" and cuerpo.get("to") in FUERA_DE_VENTANA:
+    sin_ventana = cuerpo.get("to") in FUERA_DE_VENTANA or (str(cuerpo.get("to")).startswith("5255127700")
+                                                           and cuerpo.get("to") not in VENTANA)
+    if cuerpo.get("type") == "text" and sin_ventana:
         return {"enviado": False, "proveedor": "meta", "detalle": "131047: Re-engagement message", "codigo": 131047}
     return {"enviado": True, "proveedor": "meta", "detalle": "ok", "mensaje_id": f"wamid.{len(ENVIADOS)}"}
 
@@ -84,6 +91,7 @@ def plantillas(desde=0, nombre=""):
 
 def boton(tel, texto):
     """Respuesta del candidato al botón de la plantilla, tal como la manda Meta."""
+    VENTANA.add(f"52{tel}")
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": "Candidato"}, "wa_id": f"52{tel}"}],
         "messages": [{"from": f"52{tel}", "id": f"wamid.in.{tel}.{len(ENVIADOS)}", "type": "button",
@@ -91,6 +99,7 @@ def boton(tel, texto):
 
 
 def texto(tel, t):
+    VENTANA.add(f"52{tel}")
     return {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
         "contacts": [{"profile": {"name": "Candidato"}, "wa_id": f"52{tel}"}],
         "messages": [{"from": f"52{tel}", "id": f"wamid.in.{tel}.{len(ENVIADOS)}.t", "type": "text", "text": {"body": t}}]}}]}]}

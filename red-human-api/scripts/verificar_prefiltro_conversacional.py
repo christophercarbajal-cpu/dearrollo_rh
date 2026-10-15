@@ -287,9 +287,10 @@ with TestClient(app) as client:
     pt = recargar(pt.codigo)
     from app.serial import nombre_empresa_candidato as _nec
 
-    esperado = (f"Gracias por tu interés en {_nec(pt.vacante)}. Para esta vacante necesitamos disponibilidad para rolar turnos, por lo "
-                "que en esta ocasión no continuaremos con tu postulación.")
-    check(salida == [esperado], "mensaje de cierre con el requisito exacto, por Telegram")
+    # Cambio 48: cierre GENÉRICO (sin el requisito); el motivo queda solo en la ficha
+    esperado = (f"Gracias por tu interés en {_nec(pt.vacante)}. En esta ocasión no continuaremos con tu postulación. Te tendremos en "
+                "cuenta para futuras vacantes.")
+    check(salida == [esperado], "mensaje de cierre genérico (sin el motivo), por Telegram")
     check(not pt.activa and pt.motivo_cierre == "descartado" and pt.estado == "no_cumple",
           "el agente decide: «Descartado» (mismo cierre que el descarte de RH)")
     # Cambio 37: el motivo lleva además la respuesta del candidato

@@ -124,8 +124,8 @@ with TestClient(app) as client:
     ficha = ia.FichaVacante(titulo="Abogado corporativo", requisitos_indispensables=REQS)
     g, _ = ia.generar_vacante(ficha)
     pr = {x.requisito: x.pregunta for x in g.preguntas_requisitos}
-    check(pr.get(REQS[0]) == "Cuéntame, ¿cuántos años llevas en derecho corporativo?",
-          f"experiencia → «Cuéntame, ¿cuántos años llevas en derecho corporativo?» ({pr.get(REQS[0])})")
+    check(pr.get(REQS[0]) == "¿Cuántos años llevas en derecho corporativo?",
+          f"experiencia → «¿Cuántos años llevas en derecho corporativo?» ({pr.get(REQS[0])})")
     check(all("cuánto tiempo de experiencia" not in q.lower() and "para confirmar" not in q.lower() for q in pr.values())
           and len(pr) == 3, "nunca «¿Cuánto tiempo de experiencia en…?» ni «Para confirmar»")
     propuestas = [{"requisito": REQS[0], "pregunta": "¿Cuántos años llevas litigando en derecho corporativo?"},
@@ -149,7 +149,7 @@ with TestClient(app) as client:
     vm.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
     db.commit()
     crit = pconv.criterios_de(vm)
-    check(crit[0]["chat"] == "Cuéntame, ¿cuántos años llevas en almacén?" and crit[0]["dato"] == "experiencia",
+    check(crit[0]["chat"] == "¿Cuántos años llevas en almacén?" and crit[0]["dato"] == "experiencia",
           f"el motor (Masivos) usa la pregunta natural tal cual → «{crit[0]['chat']}»")
     tsx = leer("components/dashboard/vacantes/formulario-contenido.tsx")
     # Cambio 37: la pregunta de cada requisito vive en la lista única «Preguntas filtro» (se guarda como `filtro`)
@@ -190,7 +190,7 @@ with TestClient(app) as client:
 
     pa = nuevo("Ana Cliente", "5531310002", vc)
     r = chat(pa, "Hola")
-    check(emp_cli == "Grupo Industrial" and r == f"Hola, Ana. Soy Red Human, el agente virtual de {emp_cli}. Cuéntame, ¿cuántos años llevas en almacén?",
+    check(emp_cli == "Grupo Industrial" and r == f"Hola, Ana. Soy Red Human, el agente virtual de {emp_cli}. ¿Cuántos años llevas en almacén?",
           f"saludo con el CLIENTE visible de la vacante → «{r}»")
     pd = nuevo("Diego Directo", "5531310003", vm)
     r = chat(pd, "Hola")
@@ -206,7 +206,7 @@ with TestClient(app) as client:
     plantillas_meta._guardar(pp, {"enviada_en": "2026-10-13T10:00:00+00:00", "plantilla": "inicio_entrevista_rh"})
     db.commit()
     r = chat(pp, "Sí, empezar ahora")
-    check(r == "Cuéntame, ¿cuántos años llevas en almacén?", f"«Sí, empezar ahora» → SOLO la primera pregunta → «{r}»")
+    check(r == "¿Cuántos años llevas en almacén?", f"«Sí, empezar ahora» → SOLO la primera pregunta → «{r}»")
 
     print("\n--- Bloque 2 · cierre con la misma empresa ---")
     pr = nuevo("Rita Rechazo", "5531310005", vc)

@@ -136,22 +136,44 @@ async def revisar_inicio_prefiltro(db: Session, p: Optional[Postulacion]) -> Opt
         db.rollback()
         envio = {"enviado": False, "detalle": f"{type(ex).__name__}: {str(ex)[:300]}"}
         registrar(db, ACTOR, "plantilla_inicio_fallida", "postulacion", p.codigo, {"motivo": "excepcion", "detalle": envio["detalle"]})
-    e = estado(p)
-    e["entregada"] = bool(envio.get("enviado"))
     if envio.get("enviado"):
-        # Cambio 37: la conversación queda LIGADA a la vacante de la plantilla (su respuesta es de esta postulación) y el
-        # bot ya se presentó en la plantilla
-        from ..routers.candidatos import fijar_conversacion
-        from .prefiltro_conversacional import marcar_presentado
-
-        fijar_conversacion(p)
-        marcar_presentado(p)
-    if not envio.get("enviado"):
-        e["error"] = str(envio.get("detalle") or "")[:300]
+        marcar_entregada(db, p, envio)
+    else:
+        e = estado(p)
+        e["entregada"] = False
+        if envio.get("estado") == "pendiente":
+            # Cambio 48 (cascada del Cambio 46): la plantilla aún no está activa en Meta → «Pendiente de plantilla», nunca
+            # fallido; `reintento_plantillas` la vuelve a intentar mientras el candidato no haya escrito
+            e["pendiente_plantilla"] = True
+            e["error"] = str(envio.get("error") or "")[:300]
+        else:
+            e["error"] = str(envio.get("error") or envio.get("detalle") or "")[:300]
         print(f"[whatsapp][HSM] {p.codigo}: «{nombre_plantilla_inicio()}» a {destino} NO salió — {e['error']}", flush=True)
-    _guardar(p, e)
+        _guardar(p, e)
+    if not envio.get("enviado"):
+        from .reintento_plantillas import registrar_envio
+
+        registrar_envio(db, p, "inicio_prefiltro", envio, "inicio_prefiltro")
     db.commit()
     return envio
+
+
+def marcar_entregada(db: Session, p: Postulacion, envio: dict) -> None:
+    """La plantilla de inicio SALIÓ (al primer intento o al reintentar): la conversación queda LIGADA a la vacante de la
+    plantilla (su respuesta es de esta postulación) y el bot ya se presentó (Cambio 37). No hace commit."""
+    from ..routers.candidatos import fijar_conversacion
+    from .prefiltro_conversacional import marcar_presentado
+
+    e = estado(p)
+    e["entregada"] = True
+    e.pop("pendiente_plantilla", None)
+    e.pop("error", None)
+    e.setdefault("enviada_en", datetime.now(timezone.utc).isoformat())
+    if envio.get("formato"):
+        e["formato"] = envio["formato"]
+    _guardar(p, e)
+    fijar_conversacion(p)
+    marcar_presentado(p)
 
 
 async def inicio_en_segundo_plano(postulacion_id: int) -> None:

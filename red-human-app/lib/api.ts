@@ -733,6 +733,17 @@ export interface PreguntaFiltroU {
   etiqueta?: string;
   opciones?: string[];
   unidad?: string;
+  /** Cambio 48: escolaridad — índice ordinal del nivel requerido (1 Primaria … 5 Posgrado). */
+  nivel?: number;
+}
+/** Cambio 48: jerarquía ordinal de estudios (misma que `prefiltro_conversacional.NOMBRE_NIVEL` del backend). */
+export const NIVELES_ESTUDIO = ["Primaria", "Secundaria", "Preparatoria", "Licenciatura", "Posgrado"];
+/** Texto de la columna «Descarta si»: escolaridad → «Menor que Secundaria»; lo demás, la regla sin «Descarta si». */
+export function textoDescartaSi(q: Pick<PreguntaFiltroU, "descarta" | "regla" | "dato" | "nivel">): string {
+  if (!q.descarta) return "No descarta";
+  if (q.dato === "escolaridad" && q.nivel && NIVELES_ESTUDIO[q.nivel - 1]) return `Menor que ${NIVELES_ESTUDIO[q.nivel - 1]}`;
+  const t = (q.regla || "").replace(/^Descarta si\s*/, "").replace(/^No descarta$/, "Responde que no");
+  return t ? t[0].toUpperCase() + t.slice(1) : "Responde que no";
 }
 export const TIPOS_PREGUNTA_FILTRO: { valor: TipoPreguntaFiltro; texto: string }[] = [
   { valor: "si_no", texto: "Sí / No" },

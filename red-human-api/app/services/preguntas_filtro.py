@@ -31,7 +31,8 @@ TIPOS_WEB = ("si_no", "numero", "opcion")
 BASES = ("edad", "interes", "sueldo", "zona", "traslado")
 MIN_WEB = 3
 MAX_INDISPENSABLES = 5
-NIVELES = ["Primaria", "Secundaria", "Preparatoria", "Licenciatura"]
+# Cambio 48: jerarquía ORDINAL (Primaria < Secundaria < Preparatoria < Licenciatura < Posgrado)
+NIVELES = ["Primaria", "Secundaria", "Preparatoria", "Licenciatura", "Posgrado"]
 ETIQUETA_BASE = "Base"
 REGLA_NO_DESCARTA = "No descarta"
 # Frases de formulario prohibidas en el texto de una pregunta (Cambio 37)
@@ -169,8 +170,9 @@ def regla_de(req: str, info: dict, descarta: bool) -> str:
         return REGLA_NO_DESCARTA
     d = info["dato"]
     if d == "escolaridad":
-        nombre = NOMBRE_NIVEL.get(info.get("nivel"), "") or _min(req)
-        return f"Descarta si no terminó la {nombre.lower()}"
+        # Cambio 48: regla ORDINAL — «Descarta si menor que Secundaria» (la tabla muestra «Menor que Secundaria»)
+        nombre = NOMBRE_NIVEL.get(info.get("nivel"), "") if info.get("nivel") else ""
+        return f"Descarta si menor que {nombre}" if nombre else f"Descarta si no cumple: {_min(req)}"
     if d == "experiencia":
         n = float(info.get("minimo") or 0)
         return "Descarta si no tiene experiencia" + (f" o tiene menos de {_anos_txt(n)}" if n > 0 else "")
@@ -205,8 +207,13 @@ def _compatible(pregunta: str, tipo: str, dato: str) -> bool:
 
 def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str = "", previa: Optional[dict] = None,
                         propuesto: bool = False) -> dict:
+    from . import ia
+
     info = tipo_requisito(req)
     d = info["dato"]
+    natural = ia.sin_relleno(natural)  # Cambio 48: nunca «Cuéntame,» en una pregunta filtro cerrada
+    if previa and previa.get("pregunta"):
+        previa = {**previa, "pregunta": ia.sin_relleno(previa["pregunta"])}
     tipo = {"escolaridad": "opcion", "experiencia": "numero", "transportes": "numero", "edad": "numero", "traslado": "numero",
             "blanda": "abierta"}.get(d, "si_no")
     pregunta = (natural if (natural and _pregunta_valida(natural) and d not in ("escolaridad", "edad", "traslado")
@@ -313,12 +320,17 @@ def normalizar_item(q: dict) -> dict:
     q = dict(q)
     q["tipo"] = q.get("tipo") if q.get("tipo") in TIPOS else "si_no"
     q["pregunta"] = _texto(q.get("pregunta"))
+    if q["tipo"] != "abierta":
+        from . import ia
+
+        q["pregunta"] = ia.sin_relleno(q["pregunta"])  # Cambio 48: cerradas, de número u opción sin «Cuéntame,»
     if q["tipo"] == "abierta":
         q["descarta"] = False
     q["descarta"] = bool(q.get("descarta"))
     if not q["descarta"]:
         q["regla"] = REGLA_NO_DESCARTA
-    elif not q.get("regla") or q["regla"] == REGLA_NO_DESCARTA:
+    elif not q.get("regla") or q["regla"] == REGLA_NO_DESCARTA or q.get("dato") == "escolaridad":
+        # Cambio 48: la escolaridad siempre con su regla ordinal (también las guardadas como «no terminó la …»)
         q["regla"] = regla_de(q.get("requisito") or "", tipo_requisito(q.get("requisito") or ""), True)
     q["base"] = bool(q.get("base"))
     q["etiqueta"] = ETIQUETA_BASE if q["base"] else ("Propuesto por Red Human" if q.get("propuesto") else "Requisito")

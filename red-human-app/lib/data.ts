@@ -690,6 +690,8 @@ export interface Vacante {
   avisarEvaluacionesAntesOnboarding?: boolean;
   /** Proceso configurable (2026-10-06): copia personalizable del proceso de selección (vacío = sin proceso). */
   proceso?: ProcesoConfig | Record<string, never>;
+  /** Cambio 58: nombre del proceso, SOLO para RH (distingue vacantes homónimas); nunca viene en los payloads públicos. */
+  procesoNombre?: string;
   cursoFiltroTitulo?: string | null;
   /** 2026-09-17: Cuenta dueña (portal por Cuenta) y homónimas publicadas en otras Cuentas (detalle). */
   cuentaId?: number | null;

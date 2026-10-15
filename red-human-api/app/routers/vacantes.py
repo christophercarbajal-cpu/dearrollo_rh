@@ -148,10 +148,18 @@ def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
         raise HTTPException(e.status, e.mensaje)
 
 
+# Cambio 58: campos de la vacante que solo ve RH (el nombre del proceso distingue vacantes homónimas en el tablero)
+CAMPOS_SOLO_RH = ("proceso", "procesoNombre")
+
+
 def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
     """Agrega el logo de la Cuenta al payload candidato-visible (Fase B, punto 12: la vista
     previa/portal público hereda la apariencia mínima de la Cuenta — logo + nombre comercial;
-    el nombre ya lo resuelve `nombre_empresa_candidato` dentro de `vacante_dict`)."""
+    el nombre ya lo resuelve `nombre_empresa_candidato` dentro de `vacante_dict`).
+
+    Cambio 58 (2026-10-15): el proceso de selección es INTERNO — su nombre y su ruta (`CAMPOS_SOLO_RH`) nunca salen en
+    estos payloads (portal, /aplicar, vista previa)."""
+    salida = {k: x for k, x in salida.items() if k not in CAMPOS_SOLO_RH}
     return {
         **salida,
         "logoUrl": v.cuenta.logo if v.cuenta else "",

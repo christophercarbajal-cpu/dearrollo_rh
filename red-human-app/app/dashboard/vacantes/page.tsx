@@ -483,6 +483,7 @@ export default function Vacantes() {
               <p className="mt-1 text-sm text-ink-3">
                 {v.area} · {v.cliente ?? v.empresa}
               </p>
+              {v.procesoNombre && <p className="mt-0.5 text-sm text-ink-3">Proceso: {v.procesoNombre}</p>}
 
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-ink-2">
                 <span className="flex items-center gap-1.5">
@@ -579,6 +580,7 @@ export default function Vacantes() {
                 <th className="px-4 py-3 text-left">Vacante</th>
                 {mostrarCliente && <th className="px-4 py-3 text-left">Cliente</th>}
                 <th className="px-4 py-3 text-left">Área</th>
+                <th className="px-4 py-3 text-left">Proceso</th>
                 <th className="px-4 py-3 text-left">Estatus</th>
                 <th className="px-4 py-3 text-left">Candidatos / Etapas</th>
                 <th className="px-4 py-3 text-left">Responsable</th>
@@ -600,6 +602,7 @@ export default function Vacantes() {
                   </td>
                   {mostrarCliente && <td className="px-4 py-3 text-ink-2">{v.cliente ?? "—"}</td>}
                   <td className="px-4 py-3 text-ink-2">{v.area || "—"}</td>
+                  <td className="px-4 py-3 text-ink-2">{v.procesoNombre || "—"}</td>
                   <td className="px-4 py-3">
                     <Badge tone={estadoTone[v.estado]} dot>{v.estado}</Badge>
                   </td>
@@ -1652,7 +1655,13 @@ function DetalleVacante({
   const nPrefiltro = v.filtro?.length || (v.criterios?.length ?? 0) + (v.criteriosWhatsapp?.length ?? 0);
 
   return (
-    <Panel titulo={v.titulo} eyebrow={v.id} onClose={onClose} ancho="max-w-3xl">
+    <Panel
+      titulo={v.titulo}
+      eyebrow={v.id}
+      subtitulo={v.procesoNombre ? `Proceso: ${v.procesoNombre}` : undefined}
+      onClose={onClose}
+      ancho="max-w-3xl"
+    >
       <div className="flex flex-col gap-4 p-6">
         {/* Resumen compacto */}
         <div className="flex flex-wrap items-center gap-2">
@@ -1874,12 +1883,15 @@ function DetalleVacante({
 function Panel({
   titulo,
   eyebrow,
+  subtitulo,
   onClose,
   children,
   ancho = "max-w-xl",
 }: {
   titulo: string;
   eyebrow: string;
+  /** Cambio 58: línea bajo el título (p. ej. «Proceso: Fletes operadores» en el detalle de la vacante). */
+  subtitulo?: string;
   onClose: () => void;
   children: React.ReactNode;
   ancho?: string;
@@ -1897,6 +1909,7 @@ function Panel({
           <div className="min-w-0">
             <Eyebrow>{eyebrow}</Eyebrow>
             <h2 className="font-display truncate text-xl font-bold">{titulo}</h2>
+            {subtitulo && <p className="truncate text-sm text-ink-3">{subtitulo}</p>}
           </div>
           <button
             onClick={onClose}

@@ -193,7 +193,8 @@ with TestClient(app) as client:
     sf.asegurar_proceso(db, cu, u, sf.PROCESO_A, sf.pasos_proceso_a(u.id), "A")
     sf.asegurar_vacante(db, cu, cl, u, pa, terminales, sf.VACANTES[0], publicar=True)
     db.commit()
-    check(db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == sf.VACANTES[0]["titulo"]).count() == 1
+    # Cambio 58: A y B comparten el título; el seed reconoce cada una por su proceso (no duplica)
+    check(db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == sf.VACANTES[0]["titulo"]).count() == 2
           and db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id, PlantillaProceso.nombre == sf.PROCESO_A).count() == 1,
           "el seed de Fletes es idempotente")
 

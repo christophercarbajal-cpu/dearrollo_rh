@@ -15,8 +15,9 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `rout
      Proceso B «Fletes operadores · Avatar»: Solicitud web sin CV → Entrevista Red Human con avatar (enfoque Operativo) →
      Documentos → Prueba de manejo → Entrevista con el jefe de operadores → Entrevista con el sindicato (misma cita) →
      Examen médico (la agenda RH) → Contrato y firma.
-  4. Vacante A «Operador de 5ª rueda» (proceso A) y vacante B «Operador de 5ª rueda · Entrevista en video» (proceso B):
-     las 5 terminales, presencial, 20 posiciones, $25,000 - $32,000 mensuales. Indispensables: licencia federal tipo B con
+  4. Vacante A (proceso A) y vacante B (proceso B), las dos con el título «Operador de 5ª rueda» (Cambio 58: RH las
+     distingue por el nombre del proceso; el candidato solo ve el título). Se reconocen por su proceso, no por el título;
+     la B con el título temporal «Operador de 5ª rueda · Entrevista en video» se renombra. Las 5 terminales, presencial, 20 posiciones, $25,000 - $32,000 mensuales. Indispensables: licencia federal tipo B con
      vigencia mayor a 3 meses, apto médico con vigencia mayor a 3 meses y experiencia como operador de 5ª rueda.
      «Unas preguntas» (ambas): Sí/No eliminatorias de los tres indispensables + «¿En qué terminal te gustaría trabajar?»
      (+ interés y sueldo, Cambio 50).
@@ -35,7 +36,7 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `rout
 
 Seguridad: sin `--aplicar` es un SIMULACRO (una transacción que al final se deshace); con `--aplicar` también es una sola
 transacción: o queda todo o nada. Idempotente (Cuenta por slug, Cliente/ubicaciones/procesos por nombre, vacantes por
-título; una ubicación existente se actualiza a su dirección real). Cero comunicaciones: no crea candidatos ni manda mensajes.
+título + proceso; una ubicación existente se actualiza a su dirección real). Cero comunicaciones: no crea candidatos ni manda mensajes.
 
 Uso (desde red-human-api/, con el .env del ambiente; la API debe haber arrancado una vez con esta versión):
     python scripts/seed_fletes_mexico.py              # simulacro
@@ -48,6 +49,7 @@ import asyncio
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
@@ -153,8 +155,11 @@ BASE_VACANTE = {
 }
 VACANTES = [
     {"clave": "A", "titulo": "Operador de 5ª rueda", "proceso": PROCESO_A},
-    {"clave": "B", "titulo": "Operador de 5ª rueda · Entrevista en video", "proceso": PROCESO_B},
+    {"clave": "B", "titulo": "Operador de 5ª rueda", "proceso": PROCESO_B},
 ]
+# Cambio 58: título temporal de la vacante B (antes de mostrar el proceso en la interfaz de RH) — se renombra
+TITULO_ANTERIOR_B = "Operador de 5ª rueda · Entrevista en video"
+TITULOS_ANTERIORES = {"B": [TITULO_ANTERIOR_B]}
 # «Unas preguntas» (web, Sí/No eliminatorias) y la pregunta del chat (el DATO) de cada indispensable
 PREGUNTAS_WEB = {EXPERIENCIA: "¿Tienes experiencia como operador de 5ª rueda?",
                  LICENCIA: "¿Tu licencia federal tipo B tiene vigencia de más de 3 meses?",
@@ -319,10 +324,34 @@ def sincronizar_vacante_existente(db, v: Vacante, pl: PlantillaProceso, d: dict)
            + (f" ({n} postulación(es) existente(s) conservan su copia)" if n else ""))
 
 
+def buscar_vacante(db, cu: Cuenta, pl: PlantillaProceso, d: dict) -> Optional[Vacante]:
+    """Cambio 58: las dos vacantes se llaman igual — se reconocen por su PROCESO. Orden: 1) la del título con la ruta de
+    `pl`; 2) la del título temporal anterior (B); 3) la del título cuya ruta no es de otro proceso de la demo (sembrada
+    con una versión anterior del seed)."""
+    titulos = [d["titulo"], *TITULOS_ANTERIORES.get(d["clave"], [])]
+    filas = (db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo.in_(titulos), Vacante.estado != "Eliminada")
+             .order_by(Vacante.id).all())
+    propia = next((v for v in filas if (v.proceso or {}).get("plantilla_id") == pl.id), None)
+    if propia is not None:
+        return propia
+    anterior = next((v for v in filas if v.titulo != d["titulo"]), None)
+    if anterior is not None:
+        return anterior
+    otros = {x for (x,) in db.query(PlantillaProceso.id).filter(PlantillaProceso.cuenta_id == cu.id,
+                                                                 PlantillaProceso.nombre.in_([PROCESO_A, PROCESO_B]),
+                                                                 PlantillaProceso.id != pl.id)}
+    return next((v for v in filas if (v.proceso or {}).get("plantilla_id") not in otros), None)
+
+
 def asegurar_vacante(db, cu: Cuenta, cl: Cliente, u: Usuario, pl: PlantillaProceso, terminales: list, d: dict, publicar: bool) -> Vacante:
-    v = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == d["titulo"], Vacante.estado != "Eliminada").first()
+    v = buscar_vacante(db, cu, pl, d)
     if v is not None:
         nota(f"Vacante existente: {v.codigo} {v.titulo} ({v.estado})")
+        if v.titulo != d["titulo"]:
+            # Cambio 58: el proceso se muestra a RH; el candidato solo ve el título real (la liga publicada no cambia)
+            registrar(db, ACTOR, "vacante_titulo_limpiado", "vacante", v.codigo, {"antes": v.titulo, "despues": d["titulo"]})
+            ok(f"{v.codigo}: título «{v.titulo}» → «{d['titulo']}»")
+            v.titulo = d["titulo"]
         sincronizar_vacante_existente(db, v, pl, d)
     else:
         b = BASE_VACANTE

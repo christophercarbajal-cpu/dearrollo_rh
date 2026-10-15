@@ -432,7 +432,9 @@ with TestClient(app) as client:
                                              "Terminal Hermosillo"]
           and all(t.horarios_citas == [{"dias": [0, 1, 2, 3, 4], "horas": ["09:00", "12:00"], "cupo": 8}] for t in terminales),
           "5 terminales con lunes a viernes, 9:00 y 12:00, 8 lugares")
-    fv = db.query(Vacante).filter_by(cuenta_id=cu.id, titulo="Operador de 5ª rueda").one()
+    # Cambio 58: las dos vacantes se llaman igual; la A es la del proceso «Fletes operadores»
+    fv = next(x for x in db.query(Vacante).filter_by(cuenta_id=cu.id, titulo="Operador de 5ª rueda").all()
+              if (x.proceso or {}).get("plantilla_nombre") == seed.PROCESO_A)
     check(len(subic.de_vacante(db, fv)) == 5 and fv.posiciones == 20 and fv.sueldo_desde == 25000 and fv.sueldo_hasta == 32000
           and fv.modalidad == "Presencial" and fv.estado == "Publicada", "vacante: 5 ubicaciones, presencial, 20 posiciones, $25,000-$32,000")
     nombres = [x["nombre"] for x in fv.proceso["pasos"]]

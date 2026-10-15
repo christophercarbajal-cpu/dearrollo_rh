@@ -160,6 +160,26 @@ def _pregunta_terminal(v) -> list:
     return [q] if q else []
 
 
+def nombre_proceso(v) -> str:
+    """Cambio 58 (2026-10-15): nombre del proceso de la vacante, SOLO para RH (distingue vacantes homónimas con distinta
+    ruta). La plantilla de la que salió la copia; armado a mano → «Proceso propio»; sin proceso → la ruta que recibirán sus
+    candidatos (predeterminada de la Cuenta o la de respaldo). Nunca va a payloads públicos ni a mensajes al candidato."""
+    proc = v.proceso or {}
+    if proc.get("pasos"):
+        return str(proc.get("plantilla_nombre") or "").strip() or "Proceso propio"
+    try:
+        from sqlalchemy.orm import object_session
+
+        from .services import proceso as sproc
+
+        db = object_session(v)
+        pl = sproc.predeterminada(db, v.cuenta_id) if db is not None else None
+        nombre = pl.nombre if pl is not None else sproc.RUTAS_BASE[sproc.RUTA_RESPALDO]["nombre"]
+        return f"{nombre} (predeterminado)"
+    except Exception:  # noqa: BLE001 — nunca tumba el listado
+        return ""
+
+
 def vacante_dict(
     v: Vacante,
     n_candidatos: int = 0,
@@ -193,6 +213,8 @@ def vacante_dict(
         "enfoqueEntrevista": v.enfoque_entrevista or "profesional",
         # Proceso configurable (2026-10-06): COPIA personalizable del proceso (vacío = sin proceso)
         "proceso": v.proceso or {},
+        # Cambio 58: nombre del proceso para RH (tarjeta, lista y detalle); `routers.vacantes._con_logo` lo quita de los payloads públicos
+        "procesoNombre": nombre_proceso(v),
         "candidatos": n_candidatos,
         "nuevos": n_nuevos,
         "publicada": hace(v.creada_en) if v.estado == "Publicada" else "borrador",

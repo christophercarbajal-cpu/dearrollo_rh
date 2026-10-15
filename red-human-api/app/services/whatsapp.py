@@ -317,12 +317,14 @@ BYPASS_INICIO_DEMO = True
 PLANTILLA_INICIO_APROBADA = "inicio_entrevista_rh"
 
 
-def _bypass_inicio_demo(plantilla: str, params: List[str], idioma: str):
-    if not BYPASS_INICIO_DEMO:
-        return plantilla, params, idioma
+def _es_plantilla_bypass(plantilla: str) -> bool:
     nombres = {PLANTILLA_INICIO_APROBADA, "entrevista_video_rh", (settings.meta_plantilla_inicio or "").strip(),
                (settings.meta_plantilla_video or "").strip()} - {""}
-    if plantilla not in nombres:
+    return plantilla in nombres
+
+
+def _bypass_inicio_demo(plantilla: str, params: List[str], idioma: str):
+    if not BYPASS_INICIO_DEMO or not _es_plantilla_bypass(plantilla):
         return plantilla, params, idioma
     nombre = (params[0] if params else "").strip().split(" ")[0] or "-"
     print(f"[whatsapp][HSM] bypass demo: «{plantilla}» → «{PLANTILLA_INICIO_APROBADA}» (1 variable, es_MX)", flush=True)
@@ -345,13 +347,19 @@ async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametro
         return await telegram.enviar_texto(telefono, texto)
     if settings.whatsapp_provider != "meta":
         return await enviar_mensaje(telefono, texto)
-    libre = await _texto_libre_meta(telefono, texto) if (texto or "").strip() else _resultado(False, "sin texto")
-    if libre.get("enviado"):
-        libre["formato"] = "texto"
-        return libre
     params = [str(x or "-") for x in parametros or []]
     idioma = idioma or settings.meta_plantilla_idioma or "es_MX"
+    forzada = BYPASS_INICIO_DEMO and _es_plantilla_bypass(plantilla)
     plantilla, params, idioma = _bypass_inicio_demo(plantilla, params, idioma)
+    if forzada:
+        # BYPASS demo: primer contacto DIRECTO con la plantilla. Meta responde 200 al texto libre aunque la ventana esté
+        # cerrada (el 131047 llega después por el webhook de estados), así que la cascada lo daba por enviado.
+        libre = _resultado(False, "bypass demo: sin texto libre")
+    else:
+        libre = await _texto_libre_meta(telefono, texto) if (texto or "").strip() else _resultado(False, "sin texto")
+        if libre.get("enviado"):
+            libre["formato"] = "texto"
+            return libre
     resultado = await enviar_plantilla(telefono, plantilla, params, idioma)
     resultado["plantilla"] = plantilla
     resultado["formato"] = "plantilla"

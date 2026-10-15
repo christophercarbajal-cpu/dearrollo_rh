@@ -240,7 +240,9 @@ async def _invitar_video(db: Session, p: Postulacion, paso: dict) -> Tuple[bool,
     from ..routers.candidatos import guardar_mensaje
 
     if envio.get("enviado") or envio.get("estado") == "pendiente":
-        guardar_mensaje(db, p, "assistant", texto if envio.get("enviado") else f"[Pendiente de plantilla] {texto}", "whatsapp", envio)
+        etiqueta = (f"[Plantilla de WhatsApp «{envio.get('plantilla')}»] " if envio.get("enviado") and envio.get("formato") == "plantilla"
+                    else "" if envio.get("enviado") else "[Pendiente de plantilla] ")
+        guardar_mensaje(db, p, "assistant", f"{etiqueta}{texto}", "whatsapp", envio)
     from . import envios
 
     envios.registrar(db, p, [{"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, **envio}],

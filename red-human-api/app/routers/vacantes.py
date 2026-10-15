@@ -524,6 +524,9 @@ class CrearIn(GenerarIn):
     guiones: Optional[dict] = None
     # Cambio 36: canales marcados en «Publicar en» (claves de `publicador.CANALES`); sin ellos, `plataformas` (compatibilidad)
     canales: Optional[List[str]] = None
+    # Cambio 47: ubicaciones de la vacante (muchos-a-muchos, ids de `ubicaciones` de la Cuenta) y posiciones a cubrir
+    ubicaciones_ids: Optional[List[int]] = None
+    posiciones: Optional[int] = None
 
 
 @router.post("", status_code=201)
@@ -631,6 +634,12 @@ async def crear(
     db.flush()
     v.codigo = f"VAC-{1036 + v.id}"
     v.slug = _slug_unico(db, v.titulo, v.id)
+    if datos.ubicaciones_ids:
+        _asignar_ubicaciones(db, v, datos.ubicaciones_ids)
+    if datos.posiciones is not None:
+        if datos.posiciones < 1:
+            raise HTTPException(400, "Las posiciones deben ser 1 o más.")
+        v.posiciones = datos.posiciones
     # Fase C: estampar fecha de publicación si la vacante se publica directamente al crear.
     if datos.publicar and v.publicada_en is None:
         v.publicada_en = v.creada_en  # misma marca de tiempo que la creación
@@ -648,6 +657,16 @@ async def crear(
         registrar(db, u.nombre, "vacante_distribuida", "vacante", v.codigo, {"distribucion": publicador.vista(v)})
         db.commit()
     return _salida_rh(db, v)
+
+
+def _asignar_ubicaciones(db: Session, v: Vacante, ids: List[int]) -> None:
+    """Cambio 47: ubicaciones de la vacante (muchos-a-muchos). Un id ajeno a la Cuenta → 400."""
+    from ..services import ubicaciones as subic
+
+    try:
+        subic.asignar(db, v, ids)
+    except subic.ErrorUbicacion as e:
+        raise HTTPException(e.status, e.mensaje)
 
 
 def _enfoque_por_ruta(db: Session, v: Vacante) -> None:
@@ -862,6 +881,8 @@ class ActualizarIn(BaseModel):
     preguntas_requisitos: Optional[List[dict]] = None  # Cambio 31
     filtro: Optional[List[dict]] = None  # Cambio 37: «Preguntas filtro» (entidad única)
     indispensables_propuestos: Optional[List[str]] = None  # Cambio 37
+    ubicaciones_ids: Optional[List[int]] = None  # Cambio 47 ([] = quitar todas)
+    posiciones: Optional[int] = None  # Cambio 47
     ubicacion_estado: Optional[str] = None  # Fase 4
     ubicacion_municipio: Optional[str] = None
     curso_filtro: Optional[str] = None  # Capacitación universal: código CUR-#### ("" = quitar)
@@ -948,8 +969,11 @@ async def actualizar(
     if "documentos_solicitados" in cambios:
         cambios["documentos_solicitados"] = normalizar_documentos_vacante(cambios["documentos_solicitados"])
     preguntas_req = cambios.pop("preguntas_requisitos", None)  # Cambio 31: se guardan en `guiones` (abajo)
+    ubicaciones_ids = cambios.pop("ubicaciones_ids", None)  # Cambio 47
     for campo, valor in cambios.items():
         setattr(v, campo, valor)
+    if ubicaciones_ids is not None:
+        _asignar_ubicaciones(db, v, ubicaciones_ids)
     if "proceso" in cambios or "enfoque_entrevista" in cambios:
         _enfoque_por_ruta(db, v)
     from ..services import preguntas_filtro as _pfu

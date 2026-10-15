@@ -93,6 +93,8 @@ class Vacante(Base):
     sueldo_hasta: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sueldo_moneda: Mapped[str] = mapped_column(String(5), default="MXN")
     sueldo_periodicidad: Mapped[str] = mapped_column(String(15), default="")  # ver PERIODICIDADES_SUELDO
+    # Cambio 47: cuántas personas se van a contratar en esta vacante (None = no se capturó)
+    posiciones: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     estado: Mapped[str] = mapped_column(String(30), default="Borrador")  # Publicada | Borrador | En revisión | Cerrada | Eliminada
     # CRUD (2026-09-15): baja LÓGICA — la fila y sus postulaciones/entrevistas/expedientes se conservan;
     # deja de aparecer en listados, portal, menú de WhatsApp y métricas.
@@ -343,6 +345,9 @@ class Postulacion(Base):
     # Telegram (2026-10-06): token del deep link `t.me/<bot>?start=p_<token>[_<paso>]` (16 hex). Nace perezoso y se
     # reutiliza; el chat que lo abre debe haber compartido el MISMO teléfono de la postulación.
     telegram_token: Mapped[Optional[str]] = mapped_column(String(32), index=True, nullable=True)
+    # Cambio 47 (2026-10-14): la UBICACIÓN que eligió el candidato («¿En qué terminal te gustaría trabajar?») cuando la
+    # vacante tiene varias (`ubicaciones.id`, sin FK). Manda en traslado, dirección de las citas y autoagenda.
+    ubicacion_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
     # Cuándo entró a su etapa actual (plazos de los pasos). La escribe el listener de `etapa`; NULL = creado_en.
     etapa_desde: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
     # Fase C: resultado vigente ("el más reciente gana"), ver candidatos._recalcular_resultado_apto.
@@ -1870,6 +1875,7 @@ TABLAS_MODULOS_RH = (
     "plantillas_proceso",  # Proceso configurable (2026-10-06)
     "chats_telegram", "updates_telegram",  # Canal Telegram (2026-10-06)
     "archivos_documento",  # Módulo de documentos (Cambio 25, 2026-10-12)
+    "ubicaciones", "vacante_ubicaciones", "reservas_cita",  # Multi-ubicación y autoagenda (Cambio 47, 2026-10-14)
 )
 
 # --- Desempeño ---
@@ -2981,3 +2987,63 @@ class UpdateTelegram(Base):
 
     update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     recibido_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, index=True)
+
+
+# --- Cambio 47 (2026-10-14): multi-ubicación, autoagenda y «misma cita» ---
+# Igual que las demás tablas de módulos: `cuenta_id` entero indexado SIN FK y se crean en el paso NO fatal del arranque.
+DIAS_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
+# Quién agenda una actividad presencial (Entrevista humana, Evaluación técnica / médica, Capacitación presencial)
+TIPOS_AGENDA = {"rh": "La agenda RH", "candidato": "La agenda el candidato"}
+
+
+class Ubicacion(Base):
+    """Sede donde se trabaja y se citan candidatos (terminal, CEDIS, sucursal). `horarios_citas` = lista de
+    {dias: [0-6, lunes=0], horas: ["09:00", "12:00"], cupo: 8}: en esos días y horas caben `cupo` candidatos por horario."""
+
+    __tablename__ = "ubicaciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    nombre: Mapped[str] = mapped_column(String(160))
+    direccion: Mapped[str] = mapped_column(Text, default="")
+    mapa: Mapped[str] = mapped_column(String(600), default="")  # liga de Google Maps (si falta, se arma con la dirección)
+    indicaciones: Mapped[str] = mapped_column(Text, default="")
+    ubicacion_estado: Mapped[str] = mapped_column(String(80), default="")
+    ubicacion_municipio: Mapped[str] = mapped_column(String(120), default="")
+    horarios_citas: Mapped[list] = mapped_column(JSON, default=list)
+    activa: Mapped[bool] = mapped_column(Boolean, default=True)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
+    actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
+
+
+class VacanteUbicacion(Base):
+    """Muchos-a-muchos Vacante ↔ Ubicación (una vacante en varias terminales; una terminal con varias vacantes)."""
+
+    __tablename__ = "vacante_ubicaciones"
+    __table_args__ = (UniqueConstraint("vacante_id", "ubicacion_id", name="uq_vacante_ubicacion"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vacante_id: Mapped[int] = mapped_column(Integer, index=True)
+    ubicacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    orden: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ReservaCita(Base):
+    """Un lugar ocupado en un horario de una ubicación (autoagenda). El cupo de un horario = reservas `activa` con el
+    mismo `ubicacion_id` + `inicio`. `pasos` = las actividades que se hacen en esa cita (varias con «misma cita»).
+    `recordatorio_24_en` / `recordatorio_2_en` se RECLAMAN antes de enviar."""
+
+    __tablename__ = "reservas_cita"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cuenta_id: Mapped[int] = mapped_column(Integer, index=True)
+    ubicacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    postulacion_id: Mapped[int] = mapped_column(Integer, index=True)
+    inicio: Mapped[datetime] = mapped_column(FechaUTC(), index=True)
+    pasos: Mapped[list] = mapped_column(JSON, default=list)
+    evaluaciones: Mapped[list] = mapped_column(JSON, default=list)  # códigos EV-#### creados al confirmar
+    estado: Mapped[str] = mapped_column(String(20), default="activa")  # activa | cancelada
+    motivo_cancelacion: Mapped[str] = mapped_column(String(300), default="")
+    recordatorio_24_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    recordatorio_2_en: Mapped[Optional[datetime]] = mapped_column(FechaUTC(), nullable=True)
+    creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)

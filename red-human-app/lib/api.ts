@@ -4178,3 +4178,40 @@ export function restaurarRutasBase() {
 export function aplicarProcesoVigente(codigoPostulacion: string) {
   return post<RespuestaPaso & { aplicado: { version: number; heredados: string[] } }>(`/procesos/postulaciones/${codigoPostulacion}/aplicar-vigente`);
 }
+
+// ============================================================ Cambio 47 (2026-10-14): ubicaciones con horarios y cupo
+export interface HorarioCitas {
+  /** 0 = lunes … 6 = domingo */
+  dias: number[];
+  /** «09:00» */
+  horas: string[];
+  /** lugares por horario */
+  cupo: number;
+}
+export interface Ubicacion {
+  id: number;
+  nombre: string;
+  direccion: string;
+  /** liga de Google Maps (la capturada o la que se arma con la dirección) */
+  mapa: string;
+  mapaCapturado: string;
+  indicaciones: string;
+  estado: string;
+  municipio: string;
+  horarios: HorarioCitas[];
+  horariosTexto: string;
+  activa: boolean;
+}
+export type UbicacionIn = Partial<Pick<Ubicacion, "nombre" | "direccion" | "mapa" | "indicaciones" | "estado" | "municipio" | "horarios" | "activa">>;
+export function fetchUbicaciones(todas = false) {
+  return get<Ubicacion[]>(`/ubicaciones${todas ? "?todas=true" : ""}`);
+}
+export function crearUbicacion(datos: UbicacionIn) {
+  return post<Ubicacion>("/ubicaciones", datos);
+}
+export function editarUbicacion(id: number, datos: UbicacionIn) {
+  return patch<Ubicacion>(`/ubicaciones/${id}`, datos);
+}
+export function desactivarUbicacion(id: number) {
+  return eliminar<{ ok: boolean }>(`/ubicaciones/${id}`);
+}

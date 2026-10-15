@@ -40,6 +40,7 @@ import { MenuAcciones } from "@/components/dashboard/menu-acciones";
 import { SeccionPlantillasClima } from "@/components/dashboard/clima/seccion-plantillas-clima";
 import { SeccionPlantillasOnboarding } from "@/components/dashboard/onboarding/seccion-plantillas-onboarding";
 import { SeccionPlantillasProceso } from "@/components/dashboard/procesos/seccion-plantillas-proceso";
+import { SeccionUbicaciones } from "@/components/dashboard/ubicaciones/seccion-ubicaciones";
 import { SeccionPruebasPsicometricas } from "@/components/dashboard/evaluaciones/seccion-pruebas-psicometricas";
 import {
   actualizarCliente,
@@ -129,6 +130,7 @@ export default function Configuracion() {
       <SeccionClientes />
       <SeccionPlantillas />
       <SeccionPlantillasProceso />
+      <SeccionUbicaciones />
       <SeccionPlantillasClima />
       <SeccionPlantillasOnboarding />
       <SeccionPruebasPsicometricas />

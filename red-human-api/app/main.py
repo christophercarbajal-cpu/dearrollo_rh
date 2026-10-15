@@ -18,7 +18,7 @@ from .config import settings
 from .database import Base, SessionLocal, engine
 from .migraciones import crear_tablas_base, crear_tablas_conocimiento, crear_tablas_modulos_rh, candidatos_sin_postulacion, relajar_not_null, sincronizar, evaluaciones_sin_migrar
 from .migraciones import asegurar_reglas_entrevistador, migrar_pipeline_cinco_columnas
-from .routers import agente, auth, candidatos, meta_publica, ofertas, procesos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, webhooks_telegram, metricas, notificaciones, onboarding, plantillas, requisiciones, vacantes, webhooks, integraciones
+from .routers import agente, auth, candidatos, meta_publica, ofertas, procesos, capacitacion, clientes, clima, colaboradores, configuracion, conocimiento, contratacion, cuentas, desempeno, emails_preview, empleados, entrevistas, evaluaciones, expediente_publico, feeds, firmas, webhooks_proveedores, webhooks_telegram, metricas, notificaciones, onboarding, plantillas, requisiciones, ubicaciones, vacantes, webhooks, integraciones
 from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
 from .services.avisos_estado import revisar_inactividad
@@ -316,6 +316,14 @@ async def lifespan(app: FastAPI):
         id="reintento_plantillas", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=300,
     )
+    # Cambio 47: recordatorios de las citas autoagendadas (24 h y 2 h antes)
+    from .services.autoagenda import job_recordatorios
+
+    scheduler.add_job(
+        job_recordatorios, "interval", minutes=10,
+        id="autoagenda_recordatorios", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
     scheduler.start()
     try:
         yield
@@ -384,6 +392,7 @@ app.include_router(webhooks_proveedores.router)  # 2026-09-29: /api/webhooks/dro
 app.include_router(webhooks_telegram.router)  # 2026-10-06: /api/webhooks/telegram (canal Telegram)
 app.include_router(procesos.router)  # 2026-10-06: proceso configurable y seguimiento de candidatos
 app.include_router(ofertas.router)  # 2026-10-13 (Cambio 30): oferta laboral (RH y liga del candidato)
+app.include_router(ubicaciones.router)  # 2026-10-14 (Cambio 47): ubicaciones con horarios y cupo
 app.include_router(meta_publica.router)  # 2026-10-13 (Cambio 31): Open Graph de las ligas públicas del candidato
 
 

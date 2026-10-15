@@ -73,6 +73,32 @@ def ubicacion_vacante(v) -> str:
 
 
 def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
+    """Criterios del prefiltro (`_criterios_base`) + Cambio 47: con varias ubicaciones, «¿En qué terminal te gustaría
+    trabajar?» justo después de los indispensables (si el candidato no la eligió ya en el formulario web); con la
+    terminal elegida, las preguntas de traslado nombran ESA terminal."""
+    salida = _criterios_base(v, p)
+    if v is None:
+        return salida
+    from . import ubicaciones as subic
+
+    elegida = subic.ubicacion_de(None, p) if p is not None and p.ubicacion_id else None
+    if elegida is not None:
+        for c in salida:
+            if c.get("dato") == "traslado":
+                c["chat"] = c["pregunta"] = f"¿Cuánto tiempo harías de tu casa a {elegida.nombre}?"
+            elif c.get("dato") == "puede_trasladarse":
+                c["chat"] = c["pregunta"] = f"El trabajo es en {elegida.nombre}. ¿Puedes trasladarte?"
+        return salida
+    terminal = subic.criterio_chat(None, v)
+    if terminal is None:
+        return salida
+    i = 0
+    while i < len(salida) and salida[i].get("indispensable") and not salida[i].get("base"):
+        i += 1
+    return salida[:i] + [terminal] + salida[i:]
+
+
+def _criterios_base(v, p: Optional[Postulacion] = None) -> List[dict]:
     """Criterios del prefiltro de la vacante, en el orden configurado. Con `p` se ajustan a SU ruta (Cambio 24: en la
     ruta corporativa no se pregunta colonia ni transporte y el sueldo es la expectativa) y se suman las brechas de SU
     Análisis de CV (Cambio 22). Cambio 29: en rutas Masivos (operativos) es la BASE FIJA de `prefiltro_operativo`."""
@@ -510,6 +536,12 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
         from . import prefiltro_operativo as pop  # Cambio 29: datos concretos del prefiltro operativo
 
         return pop.clasificar(c, texto)
+    if dato == "terminal":
+        # Cambio 47: la terminal donde quiere trabajar (nombre, ciudad o estado); ambigua → se repregunta una vez
+        from . import ubicaciones as subic
+
+        o = subic.elegir_en(c.get("ubicaciones") or [], texto)
+        return (None, {}) if o is None else ("si", {"ubicacion": o})
     if dato == "escolaridad":
         nivel, terminado = nivel_estudios(texto)
         if nivel is None:
@@ -538,6 +570,12 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
 
 def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
     """`analisis.prefiltro_datos`: lo que la ficha muestra (zona, traslado, transporte, escolaridad)."""
+    if c["dato"] == "terminal":
+        if extra.get("ubicacion"):
+            from . import ubicaciones as subic
+
+            subic.fijar(p, extra["ubicacion"], "prefiltro por WhatsApp")  # Cambio 47: queda en la ficha
+        return
     a = dict(p.analisis or {})
     d = dict(a.get("prefiltro_datos") or {})
     d[c["dato"]] = texto.strip()[:200]
@@ -800,6 +838,12 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
         if c["id"] in respuestas or c.get("por_brecha") or c.get("base_operativa"):
             # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»; Cambio 29: en el
             # prefiltro operativo cada indispensable se confirma con un dato concreto en el chat
+            continue
+        if c.get("unificado") and c.get("pregunta_web"):
+            # Cambio 47: vigencia — el web es Sí/No: un «No» descarta; un «Sí» se confirma en el chat con la FECHA
+            valor_w = web.get(_norm(c["pregunta_web"]))
+            if valor_w and _norm(valor_w) == "no":
+                respuestas[c["id"]] = {"respuesta": valor_w, "valor": "no", "fuente": "web", "en": _ahora()}
             continue
         valor = web.get(_norm(c["pregunta"])) or web.get(_norm(c["criterio"]))
         if not valor:

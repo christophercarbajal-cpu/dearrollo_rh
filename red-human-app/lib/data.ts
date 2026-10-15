@@ -78,6 +78,9 @@ export interface PasoProceso {
   curso?: string;
   /** Cambio 30: «En plataforma» (curso) o «Presencial» (cita con instructor); fija en Filtro RH y Filtro humano. */
   modalidad_capacitacion?: "plataforma" | "presencial";
+  /** Cambio 47 (actividades presenciales): quién agenda la cita y si va en la MISMA cita que sus vecinas presenciales. */
+  tipo_agenda?: "rh" | "candidato";
+  misma_cita?: boolean;
 }
 export type EtapasProceso = Partial<Record<EtapaCandidato, { avance_automatico: boolean }>>;
 export interface ProcesoConfig {
@@ -330,6 +333,9 @@ export interface Candidato {
   nombre: string;
   puesto: string;
   vacanteId: string;
+  /** Cambio 47: ubicación que eligió el candidato («¿En qué terminal te gustaría trabajar?»). */
+  ubicacionId?: number | null;
+  ubicacionNombre?: string;
   fuente: FuenteCandidato;
   estado: EstadoPrefiltro;
   etapa: EtapaCandidato;
@@ -605,6 +611,9 @@ export interface Vacante {
   area: string;
   empresa: string;
   ubicacion: string;
+  /** Cambio 47: ubicaciones de la vacante (muchos-a-muchos) y posiciones a cubrir. */
+  ubicaciones?: { id: number; nombre: string; direccion: string; mapa: string; horariosTexto: string }[];
+  posiciones?: number | null;
   modalidad: "Presencial" | "Híbrido" | "Remoto";
   sueldo: string;
   /** Parte 3: sueldo estructurado (el texto de arriba es el derivado que se muestra). */

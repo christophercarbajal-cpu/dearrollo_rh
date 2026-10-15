@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 CLAVE = "preguntas_filtro"
 CLAVE_PROPUESTOS = "indispensables_propuestos"
-TIPOS = ("si_no", "numero", "opcion", "abierta")
+TIPOS = ("si_no", "numero", "opcion", "abierta", "fecha")  # Cambio 47: fecha = vigencia
 TIPOS_WEB = ("si_no", "numero", "opcion")
 BASES = ("edad", "interes", "sueldo", "zona", "traslado")
 MIN_WEB = 3
@@ -50,6 +50,7 @@ REPREGUNTAS = {
     "sueldo": f"{FRASE_SUELDO} ¿te interesa el sueldo?",
     "zona": "¿Me dices el nombre de tu colonia y de tu municipio?",
     "traslado": "¿Cuántos minutos te tomaría llegar?",
+    "vigencia": "¿Me dices el mes y el año en que vence?",
 }
 
 
@@ -84,6 +85,9 @@ _RE_RASGO = re.compile(r"^(ser |persona )?(responsable|puntual|honest[oa]|honrad
                        r"servicial|confiable|limpi[oa]|amabilidad|responsabilidad|puntualidad|honestidad|compromiso)\b")
 
 
+_RE_VIGENCIA = re.compile(r"\b(vigencia|vigente)\b[^0-9]{0,40}?(\d{1,2})\s*mes")
+
+
 def tipo_requisito(req: str) -> dict:
     """Qué DATO verifica un requisito indispensable y con qué parámetros. dato ∈ escolaridad | experiencia | transportes |
     licencia | disponibilidad | edad | traslado | blanda | requisito."""
@@ -95,6 +99,11 @@ def tipo_requisito(req: str) -> dict:
     t = _n(r)
     if ia.RE_NIVEL_ESTUDIOS.search(r):
         return {"dato": "escolaridad", "nivel": nivel_estudios(r)[0]}
+    vig = _RE_VIGENCIA.search(t)
+    if vig:
+        # Cambio 47: «Licencia federal tipo B (vigencia mayor a 3 meses)» → se pide la FECHA y se descarta si vence antes
+        tema = re.sub(r"\s*[\(,;-]?\s*(con )?(vigencia|vigente)\b.*$", "", r, flags=re.IGNORECASE).strip(" .,(") or r
+        return {"dato": "vigencia", "meses_min": int(vig.group(2)), "tema": tema}
     edad = pop.edad_de_requisito(r)
     if edad is not None:
         return {"dato": "edad", "edad_min": edad[0], "edad_max": edad[1]}
@@ -141,6 +150,8 @@ def pregunta_natural(req: str, info: Optional[dict] = None) -> str:
     d = info["dato"]
     if d == "escolaridad":
         return ia.PREGUNTA_ESCOLARIDAD
+    if d == "vigencia":
+        return f"¿Hasta cuándo está vigente tu {_min(info['tema'])}?"
     if d == "edad":
         return "¿Cuántos años tienes?"
     if d == "traslado":
@@ -184,6 +195,8 @@ def regla_de(req: str, info: dict, descarta: bool) -> str:
         return f"Descarta si tiene {' o '.join(partes)} años" if partes else "Descarta si no cumple la edad"
     if d == "traslado":
         return f"Descarta si hace más de {int(info['limite_min'])} minutos"
+    if d == "vigencia":
+        return f"Descarta si vence en menos de {int(info['meses_min'])} meses"
     return "Descarta si responde que no"
 
 
@@ -215,13 +228,13 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
     if previa and previa.get("pregunta"):
         previa = {**previa, "pregunta": ia.sin_relleno(previa["pregunta"])}
     tipo = {"escolaridad": "opcion", "experiencia": "numero", "transportes": "numero", "edad": "numero", "traslado": "numero",
-            "blanda": "abierta"}.get(d, "si_no")
-    pregunta = (natural if (natural and _pregunta_valida(natural) and d not in ("escolaridad", "edad", "traslado")
+            "blanda": "abierta", "vigencia": "fecha"}.get(d, "si_no")
+    pregunta = (natural if (natural and _pregunta_valida(natural) and d not in ("escolaridad", "edad", "traslado", "vigencia")
                             and _compatible(natural, tipo, d)) else pregunta_natural(req, info))
     descarta = tipo != "abierta" and not (sin_experiencia and d == "experiencia")
     if previa:  # lo que RH ajustó (texto y si descarta) se conserva mientras el requisito siga
         if previa.get("tipo") in TIPOS:
-            tipo = previa["tipo"] if d not in ("escolaridad", "edad", "traslado", "transportes") else tipo
+            tipo = previa["tipo"] if d not in ("escolaridad", "edad", "traslado", "transportes", "vigencia") else tipo
         if _pregunta_valida(previa.get("pregunta") or "") and d not in ("escolaridad",):
             pregunta = _texto(previa["pregunta"])
         if "descarta" in previa:
@@ -229,9 +242,12 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
     item = {"id": f"ind{i + 1}", "requisito": req.strip(), "pregunta": pregunta, "tipo": tipo, "dato": d,
             "descarta": descarta, "regla": regla_de(req, info, descarta), "base": d in ("edad", "traslado"),
             "indispensable": True, "opciones": list(NIVELES) if tipo == "opcion" and d == "escolaridad" else []}
-    for k in ("nivel", "minimo", "maximo", "letra", "edad_min", "edad_max", "limite_min"):
+    for k in ("nivel", "minimo", "maximo", "letra", "edad_min", "edad_max", "limite_min", "meses_min", "tema"):
         if info.get(k) not in (None, ""):
             item[k] = info[k]
+    if d == "vigencia":
+        # Cambio 47: el formulario web la pregunta como Si/No; el chat pide la FECHA de vencimiento
+        item["pregunta_web"] = f"¿Tu {_min(info['tema'])} tiene vigencia de más de {int(info['meses_min'])} meses?"
     if tipo == "numero":
         item["unidad"] = {"experiencia": "años", "transportes": "transportes", "edad": "años", "traslado": "minutos"}.get(d, "")
     if propuesto:
@@ -369,7 +385,16 @@ def kw_de_vacante(v) -> dict:
 def web(lista: List[dict]) -> List[dict]:
     """Formulario web (columna `Vacante.preguntas_filtro`): las preguntas cerradas o numéricas de los indispensables y,
     si no llegan a `MIN_WEB`, las base que hagan falta (interés, sueldo, edad, traslado). Formato que lee `/aplicar`."""
-    indisp = [q for q in lista if q.get("indispensable") and q.get("tipo") in TIPOS_WEB]
+    indisp = []
+    for q in lista:
+        if not q.get("indispensable"):
+            continue
+        if q.get("tipo") in TIPOS_WEB:
+            indisp.append(q)
+        elif q.get("tipo") == "fecha" and q.get("pregunta_web"):
+            # Cambio 47: una vigencia (chat: fecha) entra al formulario web como Sí/No («¿Tu licencia … tiene vigencia de
+            # más de 3 meses?»); un «No» descarta y un «Sí» lo confirma el chat con la fecha
+            indisp.append({**q, "id": f"{q['id']}-web", "pregunta": q["pregunta_web"], "tipo": "si_no", "opciones": ["Sí", "No"]})
     salida = list(indisp)
     if len(salida) < MIN_WEB:
         orden = ("interes", "sueldo", "edad", "traslado")
@@ -487,7 +512,8 @@ def criterios(v, corporativa: bool = False) -> List[dict]:
              "criterio": q.get("requisito") or q["pregunta"], "pregunta": q["pregunta"], "chat": q["pregunta"],
              "indispensable": bool(q.get("descarta")), "esperada": "si", "tipo": q["tipo"], "unificado": True,
              "base": bool(q.get("base")), "regla": q.get("regla") or ""}
-        for k in ("nivel", "minimo", "maximo", "letra", "edad_min", "edad_max", "limite_min", "unidad", "opciones"):
+        for k in ("nivel", "minimo", "maximo", "letra", "edad_min", "edad_max", "limite_min", "unidad", "opciones", "meses_min", "tema",
+                  "pregunta_web"):
             if q.get(k) not in (None, "", []):
                 c[k] = q[k]
         if q.get("dato") == "escolaridad" and q.get("nivel") is not None:
@@ -557,6 +583,56 @@ def transportes_de(texto: str) -> Optional[int]:
     return None
 
 
+_MESES_NOMBRE = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6, "jul": 7, "ago": 8, "sep": 9, "set": 9, "oct": 10,
+                 "nov": 11, "dic": 12}
+_RE_VENCIDA = re.compile(r"\b(((ya|se|me|le) )+venci\w*|vencid[ao]|caducad[ao]|ya no (esta )?vigente|no (la |lo )?tengo|no tengo|esta en tramite|"
+                         r"en tramite)\b")
+
+
+def meses_vigencia(texto: str, hoy=None) -> Optional[float]:
+    """Cambio 47: cuántos meses le quedan a un documento según lo que escribe el candidato. «15/03/2027», «marzo de
+    2027», «mar 2027», «03/2027», «en 6 meses», «le quedan 2 años», «ya venció» (→ -1). Solo el año: cuenta desde el 1 de
+    enero de ese año (lo más conservador). None = no se entiende la fecha (se repregunta)."""
+    from datetime import date
+
+    hoy = hoy or date.today()
+    t = _n(_limpio(texto))
+    if _RE_VENCIDA.search(t):
+        return -1.0
+    m = re.search(r"\b(?:en|quedan?|faltan?|dentro de|por)\s+(?:como\s+|unos?\s+|unas?\s+)?(\d+|un|una|dos|tres|cuatro|cinco|seis|"
+                  r"siete|ocho|nueve|diez|once|doce)\s*(mes\w*|ano\w*)", t)
+    if m:
+        n = float(_NUM_PALABRA.get(m.group(1), m.group(1)) if not m.group(1).isdigit() else m.group(1))
+        return n * (12 if m.group(2).startswith("ano") else 1)
+
+    def meses_hasta(y: int, mes: int, dia: int = 1) -> float:
+        try:
+            fin = date(y, mes, min(max(dia, 1), 28))  # el día solo afina: nunca invalida la fecha
+        except ValueError:
+            return None
+        return round((fin - hoy).days / 30.44, 1)
+
+    m = re.search(r"\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b", t)
+    if m:
+        y = int(m.group(3)) + (2000 if len(m.group(3)) == 2 else 0)
+        return meses_hasta(y, int(m.group(2)), int(m.group(1))) if 1 <= int(m.group(2)) <= 12 else None
+    m = re.search(r"\b(\d{1,2})[/\-.](\d{4})\b", t)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return meses_hasta(int(m.group(2)), int(m.group(1)))
+    mes = next((n for k, n in _MESES_NOMBRE.items() if re.search(rf"\b{k}\w*\b", t)), None)
+    y = re.search(r"\b(20\d{2})\b", t)
+    if mes and y:
+        dia = re.search(r"\b(\d{1,2})\s+(?:de\s+)?[a-z]+", t)
+        return meses_hasta(int(y.group(1)), mes, int(dia.group(1)) if dia and int(dia.group(1)) <= 31 else 1)
+    if y:
+        anio = int(y.group(1))
+        if anio < hoy.year:
+            return -1.0
+        meses = meses_hasta(anio, 1)
+        return meses if meses > 0 else None  # «2026» en 2026: falta el mes
+    return None
+
+
 def es_evasiva(texto: str) -> bool:
     t = _limpio(texto)
     return not t or bool(_RE_EVASIVA.fullmatch(t))
@@ -600,6 +676,12 @@ def clasificar(c: dict, texto: str) -> Tuple[Optional[str], dict]:
             return None, {}
         extra = {"nivel": pc.NOMBRE_NIVEL.get(nivel, ""), "terminado": terminado}
         return pc.cumple_nivel(c.get("nivel_requerido"), texto) if c.get("nivel_requerido") is not None else "si", extra
+    if dato == "vigencia":
+        # Cambio 47: fecha de vencimiento → meses que le quedan; menos del mínimo (o ya vencida) = respuesta clara que no cumple
+        meses = meses_vigencia(texto)
+        if meses is None:
+            return None, {}
+        return ("si" if meses >= float(c.get("meses_min") or 0) else "no"), {"meses": round(meses, 1), "vence": texto.strip()[:80]}
     if dato == "transportes":
         n = transportes_de(texto)
         if n is None:
@@ -707,6 +789,9 @@ def registrar_datos(p, c: dict, texto: str, extra: dict) -> None:
         d["terminado"] = extra.get("terminado")
     elif dato == "experiencia" and extra.get("anos") is not None:
         d["experiencia"] = {**(d.get("experiencia") if isinstance(d.get("experiencia"), dict) else {}), c["criterio"]: extra["anos"]}
+    elif dato == "vigencia" and extra.get("meses") is not None:
+        d["vigencias"] = {**(d.get("vigencias") if isinstance(d.get("vigencias"), dict) else {}),
+                          c["criterio"]: {"respuesta": texto.strip()[:80], "meses": extra["meses"]}}
     elif dato == "licencia" and extra.get("otra_letra"):
         puntos.append(f"Licencia tipo {extra.get('tipo')}; la vacante pide: {c['criterio']}")
     d["en"] = pc._ahora()

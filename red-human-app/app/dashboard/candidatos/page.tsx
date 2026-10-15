@@ -273,6 +273,8 @@ function CandidatosContenido() {
 
   // Filtros principales
   const [filtroVacante, setFiltroVacante] = useState<string>("");
+  /** Cambio 47: ubicación elegida por el candidato ("" = todas, "0" = sin elegir). */
+  const [filtroUbicacion, setFiltroUbicacion] = useState<string>("");
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>("todos");
   const [busqueda, setBusqueda] = useState("");
   const [live, setLive] = useState(false);
@@ -455,6 +457,7 @@ function CandidatosContenido() {
   const datosBase = useMemo(() => {
     return datos.filter((c) => {
       if (filtroVacante && c.vacanteId !== filtroVacante) return false;
+      if (filtroUbicacion && String(c.ubicacionId ?? 0) !== filtroUbicacion) return false;  // Cambio 47
       if (columnaResaltada && c.etapa !== columnaResaltada) return false;  // B4: ?etapa= es un filtro exacto
       if (filtroAccion && c.accion_rh?.clave !== filtroAccion) return false;  // Cambio 42: campana agrupada
       if (!coincideEstado(c, filtroEstado)) return false;
@@ -497,6 +500,7 @@ function CandidatosContenido() {
     filtroAccion,
     datos,
     filtroVacante,
+    filtroUbicacion,
     filtroEstado,
     busqueda,
     fCliente,
@@ -522,6 +526,14 @@ function CandidatosContenido() {
   );
 
   const vacanteSeleccionada = vacantes.find((v) => v.id === filtroVacante);
+  /** Cambio 47: ubicaciones elegidas por los candidatos cargados (opciones del filtro). */
+  const ubicacionesTablero = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of datos) {
+      if (c.ubicacionId && (!filtroVacante || c.vacanteId === filtroVacante)) m.set(c.ubicacionId, c.ubicacionNombre || `Ubicación ${c.ubicacionId}`);
+    }
+    return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [datos, filtroVacante]);
   const totalFiltrosAvanzadosActivos =
     (fCliente !== "" ? 1 : 0) +
     (fResponsable !== "" ? 1 : 0) +
@@ -534,6 +546,7 @@ function CandidatosContenido() {
 
   const limpiarTodosLosFiltros = () => {
     setFiltroVacante("");
+    setFiltroUbicacion("");
     setFiltroEstado("todos");
     setBusqueda("");
     setFCliente("");
@@ -598,6 +611,22 @@ function CandidatosContenido() {
               <option key={v.id} value={v.id}>{textoOpcionVacante(v)}</option>
             ))}
           </select>
+
+          {/* Cambio 47: filtro por la ubicación que eligió el candidato (solo si alguna postulación tiene una) */}
+          {ubicacionesTablero.length > 0 && (
+            <select
+              aria-label="Ubicación"
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value)}
+              className="h-10 max-w-[240px] rounded-[10px] border border-kb-line-2 bg-kb-card px-3 text-sm text-kb-ink outline-none focus:border-brand"
+            >
+              <option value="">Todas las ubicaciones</option>
+              {ubicacionesTablero.map((u) => (
+                <option key={u.id} value={String(u.id)}>{u.nombre}</option>
+              ))}
+              <option value="0">Sin ubicación elegida</option>
+            </select>
+          )}
 
           <select
             aria-label="Ordenar"

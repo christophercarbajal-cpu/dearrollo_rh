@@ -381,6 +381,7 @@ def listar(
     activa: Optional[bool] = None,         # filtro explícito: True = en curso, False = cerradas
     mostrar_cerradas: bool = False,        # B4: por defecto el Kanban solo muestra activas
     descartados: bool = False,             # Cambio 37: solo las descartadas (liga «[n] descartados» de la vacante)
+    ubicacion: Optional[int] = None,       # Cambio 47: ubicación que eligió el candidato (0 = sin elegir)
     db: Session = Depends(get_db),
     _: Usuario = Depends(usuario_actual),
     cuenta: Cuenta = Depends(cuenta_actual),
@@ -409,6 +410,8 @@ def listar(
     if vacante:
         v = _vacante(db, vacante, cuenta.id)
         q = q.filter(Postulacion.vacante_id == v.id)
+    if ubicacion is not None:
+        q = q.filter(Postulacion.ubicacion_id.is_(None) if ubicacion == 0 else Postulacion.ubicacion_id == ubicacion)
     if etapa:
         q = q.filter(Postulacion.etapa == normalizar_etapa(etapa))  # acepta «Filtro humano» y la retirada «Evaluación»
     if estado:
@@ -939,6 +942,10 @@ async def postular(
         if canal_origen:
             analisis_p["canal_origen"] = canal_origen
         p.analisis = analisis_p
+    # Cambio 47: «¿En qué terminal te gustaría trabajar?» (vacante con varias ubicaciones) → queda en la ficha
+    from ..services import ubicaciones as _subic
+
+    _subic.desde_respuestas_web(db, p, respuestas_web)
     registrar(
         db, c.codigo, "consentimiento_otorgado", "postulacion", p.codigo,
         {"candidato": c.codigo, "medio": "portal", "vacante": vac.codigo, "aviso_privacidad": "aceptado en /aplicar"},
@@ -1705,6 +1712,12 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
 
     if sprop.esperando_respuesta(p):
         return await sprop.turno(db, p, texto, canal)
+
+    # Cambio 47: autoagenda — el candidato elige día y hora de su cita (o pide reagendar una cita que se autoagendó)
+    from ..services import autoagenda
+
+    if autoagenda.esperando(p) or autoagenda.quiere_reagendar(db, p, texto):
+        return await autoagenda.turno(db, p, texto, canal)
 
     # Zero-Touch fase 2: ya en Onboarding -> el agente solo acompaña documentos. Va ANTES que las
     # ramas de fase 1 a propósito: sin este check, una postulación en Onboarding (que ya trae

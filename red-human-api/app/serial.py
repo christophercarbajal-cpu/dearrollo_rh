@@ -140,6 +140,20 @@ def _sin_parcial(q: dict) -> dict:
     return q
 
 
+def _ubicaciones(v) -> list:
+    from .services import ubicaciones as subic
+
+    return [subic.ubicacion_dict(u) for u in subic.de_vacante(None, v)]
+
+
+def _pregunta_terminal(v) -> list:
+    """Cambio 47: con varias ubicaciones, el formulario web pregunta «¿En qué terminal te gustaría trabajar?» (opción)."""
+    from .services import ubicaciones as subic
+
+    q = subic.pregunta_web(None, v)
+    return [q] if q else []
+
+
 def vacante_dict(
     v: Vacante,
     n_candidatos: int = 0,
@@ -200,7 +214,10 @@ def vacante_dict(
         # prefiltro
         "preguntas_filtro": texto_preguntas(v.preguntas_filtro),
         # Cambio 27: los formularios web solo ofrecen Sí / No — un «Parcial» guardado antes nunca llega a la pantalla
-        "criterios": [_sin_parcial(p) for p in (v.preguntas_filtro or []) if isinstance(p, dict)],
+        "criterios": [_sin_parcial(p) for p in (v.preguntas_filtro or []) if isinstance(p, dict)] + _pregunta_terminal(v),
+        # Cambio 47: ubicaciones de la vacante (muchos-a-muchos)
+        "ubicaciones": _ubicaciones(v),
+        "posiciones": getattr(v, "posiciones", None),
         # Fase 4: prefiltro por WhatsApp independiente + ubicación estructurada
         "criteriosWhatsapp": [p for p in (v.preguntas_filtro_whatsapp or []) if isinstance(p, dict)],
         "documentosSolicitados": normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or []),  # Cambio 25
@@ -808,6 +825,9 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "puesto": v.titulo if v else "",
         "vacanteId": v.codigo if v else "",
         "vacanteTitulo": v.titulo if v else "",
+        # Cambio 47: ubicación que eligió el candidato («¿En qué terminal te gustaría trabajar?»)
+        "ubicacionId": p.ubicacion_id,
+        "ubicacionNombre": ((p.analisis or {}).get("ubicacion") or {}).get("nombre", "") if p.ubicacion_id else "",
         "fuente": c.fuente,
         "origen": p.origen,
         "estado": p.estado,

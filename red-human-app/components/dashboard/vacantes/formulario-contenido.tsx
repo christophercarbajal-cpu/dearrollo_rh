@@ -51,6 +51,7 @@ import { enfoqueDeRuta, rutaMasiva } from "@/components/dashboard/vacantes/perfi
 import { PestanasTextoPlataforma } from "@/components/dashboard/vacantes/texto-plataforma";
 import { ligaCanal, markdownATexto, slugificar } from "@/lib/markdown-texto";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
+import { CampoUbicaciones } from "@/components/dashboard/vacantes/campo-ubicaciones";
 import {
   ETAPAS_PIPELINE,
   nombreEtapa,
@@ -104,6 +105,9 @@ export interface ContenidoVacante {
   beneficios: string[];
   /** Cambio 25: «Documentos y fotos que se piden». Con elementos, la ruta suma «Documentos» después del prefiltro. */
   documentos_solicitados: DocumentoSolicitado[];
+  /** Cambio 47: ubicaciones de la vacante (con varias, el candidato elige «¿En qué terminal…?») y posiciones a cubrir. */
+  ubicaciones_ids: number[];
+  posiciones: string;
   /** Cambio 31: pregunta natural por requisito indispensable (la propone «Generar»; RH la puede ajustar). */
   preguntas_requisitos: PreguntaRequisito[];
   /** Cambio 37: «Preguntas filtro» — la entidad única (una por indispensable + las base). */
@@ -168,6 +172,8 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   requisitos_deseables: [],
   beneficios: [],
   documentos_solicitados: [],
+  ubicaciones_ids: [],
+  posiciones: "",
   preguntas_requisitos: [],
   filtro: [],
   indispensables_propuestos: [],
@@ -243,6 +249,8 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     requisitos_deseables: [...(p.requisitosDeseables ?? [])],
     beneficios: [...(p.beneficios ?? [])],
     documentos_solicitados: [...(p.documentosSolicitados ?? [])],
+    ubicaciones_ids: [],
+    posiciones: "",
     preguntas_requisitos: [],
     filtro: [],
     indispensables_propuestos: [],
@@ -305,6 +313,8 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     requisitos_deseables: [...(v.requisitosDeseables ?? [])],
     beneficios: [...(v.beneficios ?? [])],
     documentos_solicitados: [...(v.documentosSolicitados ?? [])],
+    ubicaciones_ids: (v.ubicaciones ?? []).map((u) => u.id),
+    posiciones: v.posiciones ? String(v.posiciones) : "",
     preguntas_requisitos: [...(v.preguntasRequisitos ?? [])],
     filtro: [...(v.filtro ?? [])],
     indispensables_propuestos: [...(v.indispensablesPropuestos ?? [])],
@@ -447,6 +457,9 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     requisitos_deseables: c.requisitos_deseables,
     beneficios: c.beneficios,
     documentos_solicitados: c.documentos_solicitados,
+    // Cambio 47: ubicaciones (muchos-a-muchos) y posiciones
+    ubicaciones_ids: c.ubicaciones_ids,
+    ...(c.posiciones && Number(c.posiciones) > 0 ? { posiciones: Number(c.posiciones) } : {}),
     // Cambio 37: la entidad única «Preguntas filtro» (el servidor deriva el formulario web y la pregunta de cada requisito)
     filtro: c.filtro,
     indispensables_propuestos: c.indispensables_propuestos.filter((x) => c.requisitos.some((r) => clave(r) === clave(x))),
@@ -782,6 +795,9 @@ export function FormularioContenidoVacante({
               }
             />
             <Selector label="Modalidad *" value={value.modalidad} onChange={set("modalidad")} opciones={MODALIDADES} />
+            {/* Cambio 47: sedes de la vacante (con varias, el candidato elige en cuál trabajar) y posiciones a cubrir */}
+            <Field label="Posiciones" value={value.posiciones} onChange={set("posiciones")} placeholder="Ej. 20" />
+            <CampoUbicaciones valor={value.ubicaciones_ids} onChange={set("ubicaciones_ids")} />
             <div className="sm:col-span-2">
               <CampoSueldo
                 value={sueldo}

@@ -136,6 +136,14 @@ def _evaluador_configurado(db: Session, p: Postulacion, paso: dict, u: Usuario) 
     return {"tipo": "interno", "usuario_id": uid} if uid else None
 
 
+def _notificar_in(datos):
+    if not isinstance(datos, dict) or not datos:
+        return None
+    from .notificaciones import NotificarIn
+
+    return NotificarIn(**{k: v for k, v in datos.items() if k in NotificarIn.model_fields})
+
+
 async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta, datos: dict) -> dict:
     """«Iniciar» de la actividad. Regresa {iniciada, evaluacion?, faltan?, mensaje, resultados?}."""
     if not p.activa:
@@ -192,6 +200,8 @@ async def iniciar(db: Session, p: Postulacion, paso_id: str, u: Usuario, cuenta,
         proveedor=str(datos.get("proveedor") or ""),
         cita=CitaIn(**{k: v for k, v in datos["cita"].items() if k in CitaIn.model_fields}) if isinstance(datos.get("cita"), dict) else None,
         cita_adjuntos=list(datos.get("cita_adjuntos") or []),
+        # Cambio 47: la autoagenda manda UNA confirmación al candidato por toda la cita; aquí solo se avisa al evaluador
+        notificar=_notificar_in(datos.get("notificar")),
     )
     if tipo == "referencias" and isinstance(datos.get("referencias"), dict):
         _SOLICITUD_REFERENCIAS[p.id] = datos["referencias"]  # la toma `crear_evaluacion` antes de mandar la liga

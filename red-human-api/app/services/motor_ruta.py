@@ -338,6 +338,15 @@ async def procesar(db: Session, p: Postulacion) -> List[str]:
         movidas += mas
         if not disparadas and not mas:
             break
+    # Cambio 47: una actividad presencial con «La agenda el candidato» → el bot le ofrece días con cupo (una sola vez
+    # por bloque «misma cita»)
+    from . import autoagenda
+
+    try:
+        await autoagenda.revisar(db, p)
+    except Exception as ex:  # noqa: BLE001 — la autoagenda nunca tumba el ciclo
+        db.rollback()
+        print(f"[autoagenda] {p.codigo}: {ex}", flush=True)
     return movidas
 
 

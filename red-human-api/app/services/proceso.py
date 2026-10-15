@@ -39,7 +39,7 @@ from ..models import (
     CALIFICACION_MINIMA_DEFAULT, DICTAMENES_ACEPTADOS_DEFAULT, DICTAMENES_ACEPTADOS_GENERAL, ENFOQUES_ENTREVISTA,
     ESPERA_DEL_CATALOGO, ESTADOS_PASO, ETAPAS_CANDIDATO, ETAPAS_SIN_AVANCE_AUTOMATICO, REGLAS_APROBACION, RESPONSABLES_PASO, RESULTADOS_PASO,
     ALIAS_CATALOGO, CATALOGO_ACTIVIDADES, TIPOS_ENTREVISTA_DE_PASO, TIPOS_ENTREVISTA_HUMANA, TIPOS_PASO, TIPOS_PASO_ENTREVISTA_IA, TIPOS_PASO_EVALUACION, Evaluacion,
-    PlantillaProceso, Postulacion, Usuario,
+    PlantillaProceso, Postulacion, TIPOS_AGENDA, Usuario,
     conclusiones_de, etapas_de_catalogo, modalidad_capacitacion_de, nombre_etapa, opcion_catalogo, registrar, ruta_automatica, score_de_entrevista,
 )
 from . import citas as scitas
@@ -230,6 +230,16 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
         if isinstance(crudo.get("config"), dict) and crudo["config"]:
             # 2026-10-08: configuración completa guardada al AGREGAR la actividad; «Iniciar» la ejecuta sin volver a pedirla
             paso["config"] = limpiar_config(crudo["config"])
+        if es_presencial(paso):
+            # Cambio 47: quién agenda la cita (RH o el candidato por WhatsApp) y si va en la MISMA cita que sus vecinas
+            agenda = str(crudo.get("tipo_agenda", crudo.get("tipoAgenda")) or "rh")
+            if agenda not in TIPOS_AGENDA:
+                raise ErrorProceso(400, f"«Quién agenda» inválido. Usa uno de: {', '.join(TIPOS_AGENDA)}.")
+            paso["tipo_agenda"] = agenda
+            if crudo.get("misma_cita", crudo.get("mismaCita")):
+                paso["misma_cita"] = True
+        elif crudo.get("misma_cita", crudo.get("mismaCita")) and estrictos is not None:
+            raise ErrorProceso(400, f"«Misma cita» solo aplica a actividades presenciales («{paso['nombre']}» no lo es).")
         if tipo == "entrevista_humana":
             t = crudo.get("tipo_entrevista", crudo.get("tipoEntrevista")) or "general"
             if t not in TIPOS_ENTREVISTA_HUMANA:
@@ -288,10 +298,68 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
     salida.sort(key=lambda p: (_indice(p["etapa"]), p["orden"]))
     for i, p in enumerate(salida):
         p["orden"] = i
+    _validar_misma_cita(salida, estrictos is not None)
     return salida
 
 
-CAMPOS_CONFIG = ("forma", "evaluador", "cita", "instrucciones", "liga_externa_candidato", "proveedor", "prueba_ids", "examen",
+# ============================================================ Cambio 47: «misma cita»
+
+def es_presencial(paso: dict) -> bool:
+    """Actividades que se hacen en persona con cita: Entrevista humana, Evaluación técnica, Evaluación médica,
+    Psicometría física y Capacitación presencial."""
+    tipo = paso.get("tipo")
+    if tipo in ("entrevista_humana", "medica", "tecnica"):
+        return True
+    if tipo == "psicometrica":
+        return paso.get("modalidad") == "fisica"
+    return tipo == "induccion" and paso.get("modalidad_capacitacion") == "presencial"
+
+
+def _validar_misma_cita(pasos: List[dict], estricto: bool) -> None:
+    """Las actividades «misma cita» deben ser presenciales y CONSECUTIVAS dentro de su etapa (al menos dos). Toda la
+    cita la agenda el mismo actor: si alguna la agenda el candidato, todas; y todas son obligatorias (el candidato no
+    avanza hasta tener TODOS los resultados). Un «misma cita» suelto se quita (no tiene con quién agruparse)."""
+    for grupo in grupos_misma_cita(pasos):
+        if len(grupo) < 2:
+            grupo[0].pop("misma_cita", None)
+            continue
+        agenda = "candidato" if any(x.get("tipo_agenda") == "candidato" for x in grupo) else "rh"
+        for x in grupo:
+            x["tipo_agenda"] = agenda
+            x["obligatorio"] = True
+
+
+def grupos_misma_cita(pasos: List[dict]) -> List[List[dict]]:
+    """Bloques de actividades consecutivas (misma etapa, en su orden) marcadas «misma cita»."""
+    grupos: List[List[dict]] = []
+    actual: List[dict] = []
+    for x in sorted(pasos, key=lambda p: (_indice(p.get("etapa") or ""), p.get("orden", 0))):
+        if x.get("misma_cita") and es_presencial(x) and not x.get("heredado"):
+            if actual and actual[-1].get("etapa") == x.get("etapa"):
+                actual.append(x)
+            else:
+                if actual:
+                    grupos.append(actual)
+                actual = [x]
+        else:
+            if actual:
+                grupos.append(actual)
+            actual = []
+    if actual:
+        grupos.append(actual)
+    return grupos
+
+
+def grupo_de(p: Postulacion, paso_id: str) -> List[dict]:
+    """Las actividades que se hacen en la misma cita que `paso_id` (ella sola si no está agrupada)."""
+    pasos = (p.proceso or {}).get("pasos") or []
+    for g in grupos_misma_cita(pasos):
+        if any(x["id"] == paso_id for x in g):
+            return g
+    return [x for x in pasos if x["id"] == paso_id]
+
+
+CAMPOS_CONFIG =("forma", "evaluador", "cita", "instrucciones", "liga_externa_candidato", "proveedor", "prueba_ids", "examen",
                  "referencias", "iniciar_al_guardar", "cita_adjuntos")
 
 
@@ -1620,6 +1688,15 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             # 2026-10-10 (Cambio 2): sin cita no se inicia ni se avisa — «Programar cita» es su acción
             r = {**r, "pendiente_agendar": True, "espera": "Falta programar la cita",
                  "cuello": {"clave": "pendiente_agendar", "texto": scitas.TEXTO_PENDIENTE, "quien": None}}
+            if paso.get("tipo_agenda") == "candidato" and not ((p.analisis or {}).get("autoagenda") or {}).get("error"):
+                # Cambio 47: la agenda el candidato por WhatsApp (autoagenda) — no es una acción de RH. Sin ubicación o
+                # sin cupo (`autoagenda.error`) vuelve a RH: «Pendiente de agendar»
+                r = {**r, "pendiente_agendar": False, "autoagenda": True, "espera": "El candidato elige día y hora por WhatsApp",
+                     "cuello": {"clave": "esperando_candidato", "texto": "Esperando que el candidato agende", "quien": "candidato"}}
+        if paso.get("tipo_agenda"):
+            r["tipoAgenda"] = paso["tipo_agenda"]
+        if paso.get("misma_cita"):
+            r["mismaCita"] = [x["nombre"] for x in grupo_de(p, paso["id"])]
         if es_psicometria_digital(paso) and falta_correo_psicometria(p, paso["id"], r, ev_paso):
             # 2026-10-08: no es «Error de envío» (eso es una falla HTTP del proveedor): falta un DATO y se resuelve con
             # «Agregar correo»; al guardarlo, el envío pendiente se retoma solo (`actividades.reanudar_por_correo`).
@@ -1722,6 +1799,9 @@ def estado_pasos(p: Postulacion, evaluaciones=None, solo_evaluables: bool = Fals
             "accion": _accion(paso, {**r, "motor_intentado": paso["id"] in (((p.analisis or {}).get("motor_ruta") or {}).get("envios") or {})},
                               disponible),
             "_terminado_en": r.get("terminado_en"),
+            # Cambio 47: quién agenda, autoagenda pendiente del candidato y el bloque «misma cita»
+            "tipoAgenda": paso.get("tipo_agenda"), "autoagenda": bool(r.get("autoagenda")) and not superada,
+            "pendiente_agendar": bool(r.get("pendiente_agendar")), "mismaCita": r.get("mismaCita") or [],
         })
         if not solo_evaluables:
             ultimo = salida[-1]

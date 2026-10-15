@@ -27,7 +27,7 @@ const selectRH = cn(inputRH, "h-10 pr-8");
 const ENTREVISTAS_IA = new Set(["entrevista_agente", "entrevista_whatsapp", "llamada_agente"]);
 // Cambio 28: «Otra actividad» (nombre + mensaje) y «Capacitación» (curso) también se configuran aquí
 // Cambio 30: la solicitud ya no tiene casilla «exige CV»: se elige «Solicitud web sin CV» o «con CV» del catálogo
-const CON_DETALLE = new Set(["entrevista_humana", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);
+const CON_DETALLE = new Set(["entrevista_humana", "medica", "tecnica", "psicometrica", "otra", "induccion", ...ENTREVISTAS_IA]);  // Cambio 47: médica y técnica = «Quién agenda» y «Misma cita»
 
 function nuevoId(pasos: PasoProceso[], tipo: string): string {
   const base = tipo.replace(/_/g, "-");
@@ -202,6 +202,13 @@ export function EditorProceso({ pasos, etapas, opciones, onChange, soloLectura =
   );
 }
 
+/** Cambio 47: actividades que se hacen en persona con cita (misma regla que `proceso.es_presencial` del backend). */
+function esPresencial(p: PasoProceso): boolean {
+  if (p.tipo === "entrevista_humana" || p.tipo === "medica" || p.tipo === "tecnica") return true;
+  if (p.tipo === "psicometrica") return p.modalidad === "fisica";
+  return p.tipo === "induccion" && (p.etapa === "Entrevista Humana" || p.modalidad_capacitacion === "presencial");
+}
+
 /** Solo lo PROPIO de cada actividad del catálogo. */
 function DetalleActividad({ p, pasos = [], catalogo = [], cursos = [], opciones, soloLectura, onCambio }: {
   p: PasoProceso;
@@ -280,6 +287,35 @@ function DetalleActividad({ p, pasos = [], catalogo = [], cursos = [], opciones,
           </select>
           <span className="text-[11px] text-ink-3">El bot manda la liga al habilitarse. Si aprueba el examen avanza sola; si reprueba queda «No aprobó el curso» y RH decide.</span>
         </label>
+      )}
+      {esPresencial(p) && (
+        <>
+          {/* Cambio 47: quién agenda (RH o el candidato por WhatsApp, con los horarios y cupos de su ubicación) */}
+          <label className="flex flex-col gap-1 text-xs text-ink-2">
+            Quién agenda
+            <select className={selectRH} value={p.tipo_agenda ?? "rh"} disabled={soloLectura}
+              onChange={(ev) => onCambio({ tipo_agenda: ev.target.value as "rh" | "candidato" })}>
+              <option value="rh">La agenda RH</option>
+              <option value="candidato">La agenda el candidato</option>
+            </select>
+            <span className="text-[11px] text-ink-3">
+              {p.tipo_agenda === "candidato"
+                ? "El bot le ofrece al candidato los próximos 3 días hábiles con cupo en su ubicación y le recuerda la cita 24 h y 2 h antes."
+                : "RH programa la cita desde la ficha del candidato."}
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs text-ink-2">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 rounded accent-brand" checked={Boolean(p.misma_cita)} disabled={soloLectura}
+              onChange={(ev) => onCambio({ misma_cita: ev.target.checked })} />
+            <span>
+              Misma cita
+              <span className="block text-[11px] text-ink-3">
+                Se agenda una sola vez junto con las actividades presenciales consecutivas marcadas igual; cada evaluador captura su
+                resultado y el candidato avanza hasta tener todos.
+              </span>
+            </span>
+          </label>
+        </>
       )}
       {p.tipo === "solicitud_web" && (
         <label className="flex items-center gap-2 text-xs text-ink-2 sm:col-span-2">

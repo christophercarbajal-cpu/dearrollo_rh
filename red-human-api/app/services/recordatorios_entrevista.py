@@ -30,6 +30,16 @@ def _reclamar(db: Session, ev: Evaluacion, ahora: datetime) -> bool:
     return filas == 1
 
 
+def _autoagendada(db: Session, p: Postulacion, ev: Evaluacion) -> bool:
+    try:
+        from ..models import ReservaCita
+
+        return db.query(ReservaCita.id).filter(ReservaCita.postulacion_id == p.id, ReservaCita.estado == "activa",
+                                               ReservaCita.inicio == ev.cita_fecha_hora).first() is not None
+    except Exception:  # noqa: BLE001 — tabla del paso NO fatal sin crear
+        return False
+
+
 def pendientes_de_recordatorio(db: Session, ahora: datetime, horas: int):
     limite = ahora + timedelta(hours=horas)
     return (
@@ -64,7 +74,10 @@ async def revisar_recordatorios_entrevista() -> int:
             firma = sev.firma_cita(ev)
             limite = ev.cita_fecha_hora - timedelta(hours=horas)
             recordar, primer_aviso = set(), set()
-            for aud in ("candidato", "entrevistador"):
+            # Cambio 47: una cita que el candidato se AUTOAGENDÓ tiene sus propios recordatorios al candidato (24 h y 2 h,
+            # `services/autoagenda.py`, uno por toda la cita aunque agrupe varias actividades): aquí solo el evaluador
+            audiencias = ("entrevistador",) if _autoagendada(db, p, ev) else ("candidato", "entrevistador")
+            for aud in audiencias:
                 aviso = sev.ultimo_aviso_entrevistador(db, ev, firma, aud)
                 if aviso is None:
                     primer_aviso.add(aud)

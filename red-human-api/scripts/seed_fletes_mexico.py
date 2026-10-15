@@ -288,21 +288,42 @@ def asegurar_proceso(db, cu: Cuenta, u: Usuario, nombre: str, pasos_crudos: list
 
 
 def configurar_preguntas(v: Vacante) -> None:
-    """«Preguntas filtro» de la vacante: Sí/No directos en la web, el DATO en el chat y las preguntas propias de RH."""
-    lista = [dict(q) for q in pfu.de_vacante(v) if not q.get("propia")]
-    for q in lista:
-        req = q.get("requisito")
-        if q.get("indispensable") and req in PREGUNTAS_CHAT:
-            q["pregunta"] = PREGUNTAS_CHAT[req]
-            q["pregunta_web"] = PREGUNTAS_WEB[req]
-            q["descarta"] = True
-    pfu.sincronizar(v, entrada=lista + [dict(x, propia=True) for x in PROPIAS])
+    """«Preguntas filtro» de la vacante: Sí/No directos en la web («Unas preguntas», un «No» descarta), el DATO en el chat
+    y las preguntas propias de RH. Se arman para LOS TRES indispensables aunque la vacante guardada no los traiga (una
+    vacante sembrada antes solo tenía licencia y apto): el orden del chat sale del orden de `INDISPENSABLES`."""
+    if rvac.requisitos_lista(v.requisitos or "") != INDISPENSABLES:
+        v.requisitos = rvac.SEPARADOR_REQUISITOS.join(INDISPENSABLES)
+    por_req = {q.get("requisito"): dict(q) for q in pfu.de_vacante(v) if q.get("indispensable") and not q.get("propia")}
+    previas = []
+    for req in INDISPENSABLES:
+        q = por_req.get(req) or {"requisito": req, "indispensable": True}
+        q.update({"pregunta": PREGUNTAS_CHAT[req], "pregunta_web": PREGUNTAS_WEB[req], "descarta": True})
+        previas.append(q)
+    pfu.sincronizar(v, entrada=previas + [dict(x, propia=True) for x in PROPIAS])
+
+
+def sincronizar_vacante_existente(db, v: Vacante, pl: PlantillaProceso, d: dict) -> None:
+    """Una vacante que ya existía (p. ej. sembrada con el Cambio 47) toma la ruta VIGENTE de su proceso (nombres y «misma
+    cita» incluidos; sube la versión de la vacante). Las postulaciones existentes conservan su copia congelada."""
+    actual = v.proceso or {}
+    vigente = sproc.proceso_desde_plantilla(pl)
+    firma = lambda pasos: [(x.get("tipo"), x.get("etapa"), x.get("nombre"), bool(x.get("misma_cita")), x.get("tipo_agenda"))  # noqa: E731
+                           for x in pasos or []]
+    if firma(actual.get("pasos")) != firma(vigente.get("pasos")):
+        vigente["version"] = int(actual.get("version") or 0) + 1
+        v.proceso = vigente
+        n = db.query(Postulacion).filter(Postulacion.vacante_id == v.id).count()
+        registrar(db, ACTOR, "vacante_proceso_actualizado", "vacante", v.codigo, {"proceso": d["proceso"], "version": vigente["version"],
+                                                                              "postulaciones_con_copia": n})
+        ok(f"{v.codigo}: ruta actualizada a «{d['proceso']}» v{vigente['version']}"
+           + (f" ({n} postulación(es) existente(s) conservan su copia)" if n else ""))
 
 
 def asegurar_vacante(db, cu: Cuenta, cl: Cliente, u: Usuario, pl: PlantillaProceso, terminales: list, d: dict, publicar: bool) -> Vacante:
     v = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == d["titulo"], Vacante.estado != "Eliminada").first()
     if v is not None:
         nota(f"Vacante existente: {v.codigo} {v.titulo} ({v.estado})")
+        sincronizar_vacante_existente(db, v, pl, d)
     else:
         b = BASE_VACANTE
         desde, hasta = b["sueldo"]

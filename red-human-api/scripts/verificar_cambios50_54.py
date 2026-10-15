@@ -146,6 +146,36 @@ with TestClient(app) as client:
     u = sf.vincular_admins(db, cu)
     cl = sf.asegurar_cliente(db, cu)
     terminales = sf.asegurar_ubicaciones(db, cu)
+    # estado de PRODUCCIÓN: el proceso y la Vacante A ya se sembraron con la versión del Cambio 47 (sin experiencia como
+    # indispensable y con los nombres anteriores de las actividades)
+    ev_viejo = {"evaluador": {"tipo": "interno", "usuario_id": u.id}}
+    viejos = [
+        {"id": "solicitud", "tipo": "solicitud_sin_cv", "etapa": "Prefiltro"},
+        {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro"},
+        {"id": "documentos", "tipo": "documentos", "nombre": "Documentos", "etapa": "Prefiltro"},
+        {"id": "prueba-manejo", "tipo": "tecnica", "nombre": "Prueba de manejo", "etapa": "Entrevista Humana", "tipo_agenda": "candidato",
+         "misma_cita": True, "config": ev_viejo},
+        {"id": "entrevista-jefe", "tipo": "entrevista_humana", "nombre": "Entrevista con jefe de operadores", "etapa": "Entrevista Humana",
+         "tipo_entrevista": "jefe_directo", "tipo_agenda": "candidato", "misma_cita": True, "config": ev_viejo},
+        {"id": "entrevista-sindicato", "tipo": "entrevista_humana", "nombre": "Entrevista con sindicato", "etapa": "Entrevista Humana",
+         "tipo_entrevista": "general", "tipo_agenda": "candidato", "misma_cita": True, "config": ev_viejo},
+        {"id": "medico", "tipo": "medica", "nombre": "Examen médico interno y antidoping", "etapa": "Entrevista Humana", "tipo_agenda": "rh"},
+        {"id": "contrato", "tipo": "carta_contrato", "nombre": "Contrato y firma", "etapa": "Contratación"},
+    ]
+    pl_viejo = sf.asegurar_proceso(db, cu, u, sf.PROCESO_A, viejos, "A (Cambio 47)")
+    from app.routers import vacantes as _rvac
+
+    asyncio.run(_rvac.crear(_rvac.CrearIn(
+        titulo=sf.VACANTES[0]["titulo"], area="Operaciones", seniority="Semi-senior", ubicacion_estado="Ciudad de México",
+        ubicacion_municipio="Azcapotzalco", modalidad="Presencial", sueldo_desde=25000, sueldo_hasta=32000, sueldo_moneda="MXN",
+        sueldo_periodicidad="mensual", descripcion="Operador de 5ª rueda.", requisitos_indispensables=[sf.LICENCIA, sf.APTO],
+        cliente_id=cl.id, mostrar_cliente_candidato=True, proceso={"plantilla_id": pl_viejo.id}, generar_si_falta=False, publicar=False,
+        enfoque_entrevista="operativo", ubicaciones_ids=[t.id for t in terminales], posiciones=20,
+        preguntas_requisitos=[{"requisito": sf.LICENCIA, "pregunta": sf.PREGUNTAS_CHAT[sf.LICENCIA]},
+                              {"requisito": sf.APTO, "pregunta": sf.PREGUNTAS_CHAT[sf.APTO]}]), db, u, cu))
+    db.commit()
+    v_vieja = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == sf.VACANTES[0]["titulo"]).one()
+    check(sf.validar(db, v_vieja, "A"), "la Vacante A sembrada con la versión anterior NO pasa la validación (estado de producción)")
     pa = sf.asegurar_proceso(db, cu, u, sf.PROCESO_A, sf.pasos_proceso_a(u.id), "A")
     pb = sf.asegurar_proceso(db, cu, u, sf.PROCESO_B, sf.pasos_proceso_b(u.id), "B")
     va = sf.asegurar_vacante(db, cu, cl, u, pa, terminales, sf.VACANTES[0], publicar=True)

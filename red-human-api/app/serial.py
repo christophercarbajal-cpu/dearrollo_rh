@@ -146,6 +146,12 @@ def _ubicaciones(v) -> list:
     return [subic.ubicacion_dict(u) for u in subic.de_vacante(None, v)]
 
 
+def _criterios_solicitud(v) -> list:
+    from .services import solicitud_web as ssw
+
+    return ssw.criterios_web(v)
+
+
 def _pregunta_terminal(v) -> list:
     """Cambio 47: con varias ubicaciones, el formulario web pregunta «¿En qué terminal te gustaría trabajar?» (opción)."""
     from .services import ubicaciones as subic
@@ -214,7 +220,8 @@ def vacante_dict(
         # prefiltro
         "preguntas_filtro": texto_preguntas(v.preguntas_filtro),
         # Cambio 27: los formularios web solo ofrecen Sí / No — un «Parcial» guardado antes nunca llega a la pantalla
-        "criterios": [_sin_parcial(p) for p in (v.preguntas_filtro or []) if isinstance(p, dict)] + _pregunta_terminal(v),
+        # Cambio 50: «Unas preguntas» = preguntas filtro + interés + sueldo (+ edad / colonia si la vacante los pide)
+        "criterios": _criterios_solicitud(v) + _pregunta_terminal(v),
         # Cambio 47: ubicaciones de la vacante (muchos-a-muchos)
         "ubicaciones": _ubicaciones(v),
         "posiciones": getattr(v, "posiciones", None),
@@ -281,6 +288,8 @@ def prefiltro_datos(p) -> Optional[dict]:
             "sueldoExpectativa": d.get("sueldo_expectativa"), "sueldoSobreTope": bool(d.get("sueldo_sobre_tope")),
             # Cambio 29 (prefiltro operativo fijo): edad, interés en el puesto y si puede trasladarse
             "edad": d.get("edad"), "interesPuesto": d.get("interes_puesto"), "puedeTrasladarse": d.get("puede_trasladarse"),
+            # Cambio 51: vive en otro estado → su respuesta a «¿Vives ahí o te cambiarías de ciudad?» (solo se registra)
+            "otroEstado": d.get("otro_estado") or "", "reubicacion": d.get("reubicacion") or "",
             # Cambio 19: sin umbrales fijos — el traslado solo se registra (ninguna alerta por minutos)
             "alerta": None}
 
@@ -668,7 +677,9 @@ def etiqueta_tablero(p: Postulacion) -> Optional[dict]:
     if not clave:
         return None
     # Cambio 38: un solo vocabulario (Recomendable / Con reservas / No recomendable) también en el perfil Corporativo
-    texto = {"recomendable": "Recomendable", "con_reservas": "Con reservas", "no_recomendable": "No recomendable"}[clave]
+    from .services.entrevista_operativa import RECOMENDACIONES as _REC
+
+    texto = _REC[clave][0]  # Cambio 53: Avanzar / Avanzar con reservas / No avanzar
     return {"clave": clave, "texto": texto, "faltan": []}
 
 

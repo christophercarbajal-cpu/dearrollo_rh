@@ -36,10 +36,12 @@ from ..models import TIPO_DESDE_LEGADO, TIPOS_EVALUACION_U, TIPOS_PASO_ENTREVIST
 RED_HUMAN = "Red Human"
 PENDIENTE_REVISION = "Pendiente de revisión"
 
+# Cambio 53 (2026-10-15): recomendación final = «No avanzar» (algo reprueba) · «Avanzar con reservas» (todo aprueba con
+# reservas) · «Avanzar» (todo limpio). Las claves internas no cambian.
 ESTADOS_INTEGRAL = {
-    "apto": "Recomendable",
-    "con_observaciones": "Con reservas",
-    "no_apto": "No recomendable",
+    "apto": "Avanzar",
+    "con_observaciones": "Avanzar con reservas",
+    "no_apto": "No avanzar",
     "pendiente": "Pendiente",
 }
 # Cambio 38: el perfil Corporativo usa el MISMO vocabulario (reemplaza la regla 6 del C6)

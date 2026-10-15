@@ -301,16 +301,47 @@ async def confirmar(db: Session, p: Postulacion, u: Ubicacion, dia: date, hora: 
     return await _responder(db, p, texto_confirmacion(u, dia, hora["hora"], nombres), canal, agendada=True, evaluaciones=codigos)
 
 
+_FEMENINOS = {"terminal", "planta", "sucursal", "sede", "oficina", "bodega", "nave", "prueba", "evaluacion", "entrevista",
+              "capacitacion", "induccion", "psicometria"}
+
+
+def _sin_acentos(t: str) -> str:
+    return unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().lower()
+
+
+def con_articulo(nombre: str) -> str:
+    """«Terminal Monterrey» → «la Terminal Monterrey»; «CEDIS Norte» → «el CEDIS Norte»."""
+    n = (nombre or "").strip()
+    if not n or _sin_acentos(n).split(" ")[0] in ("la", "el", "los", "las"):
+        return n
+    return f"{'la' if _sin_acentos(n).split(' ')[0] in _FEMENINOS else 'el'} {n}"
+
+
+def frase_actividad(nombre: str) -> str:
+    """«Prueba de manejo» → «la prueba de manejo»; «Entrevista con el sindicato» → «una entrevista con el sindicato»;
+    «Examen médico» → «el examen médico»."""
+    n = (nombre or "").strip()
+    if not n:
+        return ""
+    primera = _sin_acentos(n).split(" ")[0]
+    minus = n[:1].lower() + n[1:] if not n[:2].isupper() else n
+    if primera == "entrevista":
+        return f"una {minus}"
+    return f"{'la' if primera in _FEMENINOS or primera.endswith('a') else 'el'} {minus}"
+
+
 def texto_confirmacion(u: Ubicacion, dia: date, hora: str, actividades: List[str]) -> str:
-    partes = [f"Perfecto, te esperamos el {subic.texto_dia(dia)} a las {subic.texto_hora(hora)} en {u.nombre}"
+    """2026-10-15 (Fletes): «Perfecto, te esperamos el [día] a las [hora] en la Terminal [ciudad], [dirección]. Mapa: [liga].
+    Ese día harás la prueba de manejo, una entrevista con el jefe de operadores y una entrevista con el sindicato. Trae tu
+    licencia y tu apto médico originales.» (las indicaciones de la ubicación van al final)."""
+    partes = [f"Perfecto, te esperamos el {subic.texto_dia(dia)} a las {subic.texto_hora(hora)} en {con_articulo(u.nombre)}"
               + (f", {u.direccion.strip().rstrip('.')}." if (u.direccion or "").strip() else ".")]
+    partes.append(f"Mapa: {subic.liga_mapa(u)}.")
+    if len(actividades) > 1:
+        partes.append(f"Ese día harás {lista_es([frase_actividad(x) for x in actividades])}.")
     if (u.indicaciones or "").strip():
         partes.append(u.indicaciones.strip().rstrip(".") + ".")
-    partes.append(f"Mapa: {subic.liga_mapa(u)}")
-    texto = " ".join(partes)
-    if len(actividades) > 1:
-        texto += f"\n\nEse día harás: {lista_es(actividades)}."
-    return texto
+    return " ".join(partes)
 
 
 def _poner_cita_en_pasos(p: Postulacion, ids: List[str], cita: Optional[dict]) -> None:

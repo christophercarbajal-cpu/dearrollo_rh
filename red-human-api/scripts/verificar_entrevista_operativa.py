@@ -88,8 +88,8 @@ check(eop.recomendacion_de(reqs) == "recomendable" and not any(hasattr(eop, x) f
       "un traslado de 300 min ya no cambia nada: no hay umbrales fijos en el código")
 from app.services import evaluacion_integral as sint  # noqa: E402
 # Cambio 38: un solo vocabulario (Recomendable / Con reservas / No recomendable) también en el perfil Corporativo
-check(sint._resultado([], operativo=False)["texto"] == "Recomendable" and sint._resultado([], operativo=True)["texto"] == "Recomendable",
-      "Cambio 38: Corporativo y Operativo dicen «Recomendable» («Apto» solo en médica y socioeconómico)")
+check(sint._resultado([], operativo=False)["texto"] == "Avanzar" and sint._resultado([], operativo=True)["texto"] == "Avanzar",
+      "Cambio 38/53: Corporativo y Operativo dicen «Avanzar» («Apto» solo en médica y socioeconómico)")
 check([eop.dias_inicio(x) for x in ("mañana", "el lunes", "en 2 semanas", "en un mes", "no sé")] == [1, 7, 14, 30, None],
       "la fecha de inicio se lee en días (solo informativo: ya no hay umbral)")
 check(eop.faltan_de({"experiencia": {"estado": "no_cumple"}, "puntos": {"estado": "no_cumple", "cantidad": 2}})
@@ -251,7 +251,7 @@ with TestClient(app) as client:
           "C6: traslado (prefiltro), sueldo (prefiltro), experiencia, indispensables e inicio («el lunes») ✓")
     check(sproc.score_de_entrevista(ev) is None if hasattr(sproc, "score_de_entrevista") else True, "la entrevista operativa no aporta score")
     f1 = client.get(f"/candidatos/{p1.codigo}", headers=H).json()
-    check(f1["recomendacionOperativa"]["texto"] == "Recomendable" and f1["scoreEntrevista"] is None,
+    check(f1["recomendacionOperativa"]["texto"] == "Avanzar" and f1["scoreEntrevista"] is None,
           "C6: la ficha trae la recomendación operativa (sin «x/100»)")
 
     # Cambio 19: «No recomendable» = SIN experiencia en puesto similar y CON Puntos por validar (despido, sueldo)
@@ -309,7 +309,7 @@ with TestClient(app) as client:
     s2 = client.get(f"/procesos/postulaciones/{p2.codigo}", headers=H).json()
     pasos2 = [x for e in s2["etapas"] for x in e["pasos"]]
     ew = next(x for x in pasos2 if x["tipo"] == "entrevista_whatsapp")
-    check(ew["estadoUnificado"] == "no_aprobada" and ew["etiqueta"] == "No recomendable" and ew["score"] is None
+    check(ew["estadoUnificado"] == "no_aprobada" and ew["etiqueta"] == "No avanzar" and ew["score"] is None
           and "mínimo" not in ew["detalle"], f"C6: la actividad queda «No aprobada» por su etiqueta, sin mínimo 70: {ew['detalle']}")
     check(s2["bloqueo"] and s2["bloqueo"]["paso"] == ew["id"] and s2["recomendacion"]["texto"] == "Decisión de RH pendiente",
           "C6: «No recomendable» detiene la ruta para que RH decida")
@@ -325,13 +325,13 @@ with TestClient(app) as client:
     lista = client.get(f"/candidatos?vacante={v.codigo}", headers=H).json()
     t1 = next(x for x in lista if x["id"] == p1.codigo)
     t2 = next(x for x in lista if x["id"] == p2.codigo)
-    check(t1["card_label"] == {"clave": "recomendable", "texto": "Recomendable", "faltan": []},
+    check(t1["card_label"] == {"clave": "recomendable", "texto": "Avanzar", "faltan": []},
           "C11: la tarjeta muestra solo la etiqueta «Recomendable»")
     db.refresh(p2)
-    check((t2["card_label"] or {}).get("texto") == "No recomendable" and "✗ Experiencia en puesto similar" in (t2["card_label"] or {}).get("faltan", []),
+    check((t2["card_label"] or {}).get("texto") == "No avanzar" and "✗ Experiencia en puesto similar" in (t2["card_label"] or {}).get("faltan", []),
           f"C11: …y los requisitos que faltan (✗ / ?) ({t2['card_label']} {t2['etapa']} {[(x.codigo, x.tipo, x.estado) for x in p2.entrevistas]})")
     integral = client.get(f"/candidatos/{p2.codigo}", headers=H).json()["resultadoIntegral"]
-    check(integral["texto"] in ("Pendiente", "Con reservas", "Recomendable", "No recomendable") and "No apto" not in integral["texto"],
+    check(integral["texto"] in ("Pendiente", "Avanzar con reservas", "Avanzar", "No avanzar") and "No apto" not in integral["texto"],
           f"C6: la evaluación integral usa las etiquetas nuevas («{integral['texto']}»)")
     check(not any(eop.es_alerta_escolaridad(a) for a in op2["alertas"] + op3["alertas"]), "ninguna alerta de escolaridad o documentos")
     db.close()

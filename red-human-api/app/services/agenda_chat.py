@@ -164,6 +164,45 @@ def invitacion(p: Postulacion) -> str:
     return f"{saludo}El siguiente paso es una entrevista por videollamada con Red Human (unos 10 minutos). {PREGUNTA_AHORA}"
 
 
+MINUTOS_VIDEO = 5
+
+
+def invitacion_video(p: Postulacion) -> str:
+    """2026-10-15 (Fletes «Entrevista en video»): la ruta va de la solicitud web DIRECTO a la Entrevista con avatar — el
+    bot abre el chat por WhatsApp: «Hola, [nombre]. Soy Red Human, el agente virtual de [empresa]. El siguiente paso de tu
+    postulación a [puesto] es una entrevista en video de 5 minutos. ¿La quieres hacer ahora?» («sí» → liga; «no» → la
+    misma liga con 3 días). Deja vigente la pregunta y la presentación hecha."""
+    from .ia import presentacion_bot
+    from .prefiltro_conversacional import empresa_de, marcar_presentado, ya_presentado
+
+    a = dict(p.analisis or {})
+    a[CLAVE] = {"pregunta_ahora": True, "video": True, "en": datetime.now(timezone.utc).isoformat()}
+    p.analisis = a
+    flag_modified(p, "analisis")
+    nombre = (p.nombre or "").split(" ")[0]
+    nombre = "" if not nombre or nombre.startswith("Candidato") else nombre
+    presentacion = "" if ya_presentado(p) else f" {presentacion_bot(empresa_de(p))}"
+    marcar_presentado(p)
+    puesto = p.vacante.titulo if p.vacante else "la vacante"
+    return (f"Hola{', ' + nombre if nombre else ''}.{presentacion} El siguiente paso de tu postulación a {puesto} es una entrevista "
+            f"en video de {MINUTOS_VIDEO} minutos. {PREGUNTA_AHORA}")
+
+
+def parametros_video(p: Postulacion) -> list:
+    from ..config import settings
+    from .prefiltro_conversacional import empresa_de
+
+    nombre = (p.nombre or "").split(" ")[0]
+    valores = {"nombre": "" if nombre.startswith("Candidato") else nombre, "empresa": empresa_de(p) or "Red Human",
+               "puesto": (p.vacante.titulo if p.vacante else "") or "la vacante"}
+    claves = [k.strip().lower() for k in (settings.meta_plantilla_video_params or "").split(",") if k.strip()]
+    return [valores[k] or "-" for k in claves if k in valores]
+
+
+def esperando_ahora(p: Postulacion) -> bool:
+    return bool(((p.analisis or {}).get(CLAVE) or {}).get("pregunta_ahora"))
+
+
 def decidir_ahora(texto: str) -> dict:
     """Respuesta a «¿La quieres hacer ahora?»: {"accion": "ahora"} | {"accion": "plazo"} | {"accion": "responder"}."""
     t = _norm(texto)

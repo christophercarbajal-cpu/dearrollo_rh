@@ -364,6 +364,8 @@ export interface Candidato {
     edad?: number | null;
     interesPuesto?: boolean | null;
     puedeTrasladarse?: boolean | null;
+    otroEstado?: string;
+    reubicacion?: string;
     alerta: "alerta" | "no_recomendable" | null;
   } | null;
   /** Cambio 22: por indispensable, lo que acredita el CV contra lo que respondió el candidato. */

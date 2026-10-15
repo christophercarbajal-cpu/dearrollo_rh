@@ -781,8 +781,8 @@ function CandidatosContenido() {
               className="w-full rounded-lg border border-border-soft bg-surface p-2 text-xs outline-none focus:border-brand"
             >
               <option value="todos">Todos los resultados</option>
-              <option value="apto">Recomendable</option>
-              <option value="no_apto">No recomendable</option>
+              <option value="apto">Avanzar</option>
+              <option value="no_apto">No avanzar</option>
               <option value="sin_evaluar">Sin evaluar</option>
             </select>
           </div>

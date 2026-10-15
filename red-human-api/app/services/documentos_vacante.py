@@ -454,10 +454,19 @@ def marcar_excepcion(e: Expediente, motivo: str, actor: str) -> dict:
 
 # ============================================================ agente
 
+def _tras_entrevista(p: Postulacion) -> bool:
+    """¿La actividad de documentos llega justo después de una Entrevista Red Human ya evaluada?"""
+    return any(getattr(e, "estado", "") == "evaluada" for e in (getattr(p, "entrevistas", None) or []))
+
+
 def texto_solicitud(p: Postulacion, docs: List[dict], url: str) -> str:
     nombre = (p.nombre or "").split(" ")[0]
     puesto = p.vacante.titulo if p.vacante else "la vacante"
-    lineas = [f"{nombre + ', p' if nombre else 'P'}ara seguir con tu postulación a {puesto} necesitamos estos documentos:"]
+    if _tras_entrevista(p):
+        # 2026-10-15 (Fletes «Entrevista en video»): al terminar la entrevista con Red Human — «Gracias… sube tus documentos aquí»
+        lineas = [f"Gracias{', ' + nombre if nombre else ''}. Para seguir con tu postulación a {puesto} necesitamos estos documentos:"]
+    else:
+        lineas = [f"{nombre + ', p' if nombre else 'P'}ara seguir con tu postulación a {puesto} necesitamos estos documentos:"]
     lineas += [f"• {texto_documento(d)}" for d in docs]
     lineas.append(f"Súbelos aquí (puedes tomar la foto con tu celular o elegirla de tu galería): {url}")
     return "\n".join(lineas)

@@ -148,7 +148,7 @@ check(all("condiciones" not in [s["clave"] for s in eop.armar_guion("X", None, [
 # ================= Bloque 2 · conversación =================
 print("\n--- Bloque 2 · transición, «gracias», conteo ---")
 check(ia.mensaje_inicial_entrevista_whatsapp("Ayudante", "Luis", "¿Cuál fue tu último trabajo?")
-      == "Listo, Luis. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?",
+      == "Listo, Luis. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?",
       "transición EXACTA, sin pedir permiso ni presentarse de nuevo")
 from app.services import prefiltro_conversacional as pconv  # noqa: E402
 
@@ -181,7 +181,7 @@ for resp, esperada in (("Me corrieron", "¿Por qué te despidieron?"), ("Tuve pr
                        ("Cerró la empresa", None), ("Renuncié porque me cambié de casa", None)):
     check(eop.repregunta_salida(resp) == esperada, f"«{resp}» → {esperada or 'sin repregunta'}")
 QS = GM["preguntas"]
-hist = [{"rol": "assistant", "texto": "Listo. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?"},
+hist = [{"rol": "assistant", "texto": "Listo. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?"},
         {"rol": "user", "texto": "Ayudante en una bodega"}, {"rol": "assistant", "texto": "¿Qué hacías en ese trabajo?"},
         {"rol": "user", "texto": "Acomodaba mercancía"}, {"rol": "assistant", "texto": "¿Cuánto tiempo trabajaste ahí?"},
         {"rol": "user", "texto": "Un año"}, {"rol": "assistant", "texto": "¿Por qué saliste de ese trabajo?"},
@@ -351,8 +351,8 @@ conv = sent.guion_conversacion(ent)
 check(conv["operativo"]["secciones"][0]["preguntas"][0] == "¿Cuál fue tu último trabajo?"
       and desviado["preguntas"][0] == creativa, "el prompt usa la fija; el guion guardado de la vacante no se toca")
 check(ia.mensaje_inicial_entrevista_whatsapp("Ayudante", "Luis", sent.primera_pregunta(ent))
-      == "Listo, Luis. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?", "texto EXACTO de la transición")
-h = [{"rol": "assistant", "texto": "Listo, Luis. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?"},
+      == "Listo, Luis. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?", "texto EXACTO de la transición")
+h = [{"rol": "assistant", "texto": "Listo, Luis. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?"},
      {"rol": "user", "texto": "Ayudante en una bodega"}]
 t, _ = ia.entrevista_turno("x", h, qs, operativo=True)
 check(t.respuesta == "¿Qué hacías en ese trabajo?", "con la respuesta del candidato la conversación sigue con la pregunta 2")

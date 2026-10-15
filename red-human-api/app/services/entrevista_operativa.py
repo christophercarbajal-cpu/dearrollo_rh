@@ -292,9 +292,10 @@ CRITERIOS = (
 )
 RESULTADOS = ("cumple", "parcial", "no_cumple", "sin_dato")
 TEXTO_RESULTADO = {"cumple": "Cumple", "parcial": "Parcial", "no_cumple": "No cumple", "sin_dato": "Sin dato"}
-RECOMENDACIONES = {"recomendable": ("Recomendable", "avanzar"),
-                   "con_reservas": ("Con reservas", "revision"),
-                   "no_recomendable": ("No recomendable", "no_avanzar")}
+# Cambio 53 (2026-10-15): textos visibles «Avanzar» / «Avanzar con reservas» / «No avanzar» (claves internas sin cambio)
+RECOMENDACIONES = {"recomendable": ("Avanzar", "avanzar"),
+                   "con_reservas": ("Avanzar con reservas", "revision"),
+                   "no_recomendable": ("No avanzar", "no_avanzar")}
 # Cambio 19 (2026-10-12): SIN puntaje y SIN umbrales fijos (se eliminaron traslado ≤ 90/120 min, inicio ≤ 14 días y
 # empleo < 3 meses). La recomendación sale de dos requisitos: experiencia en un puesto similar con datos concretos y
 # ningún «Punto por validar».

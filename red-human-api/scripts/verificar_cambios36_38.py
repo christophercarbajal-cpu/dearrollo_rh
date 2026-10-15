@@ -252,10 +252,10 @@ with TestClient(app) as client:
 
     # ===================================================== 3. Cambio 38
     print("\n--- 3. Cambio 38: vocabulario y etiqueta única ---")
-    check([sei.ESTADOS_INTEGRAL[k] for k in ("apto", "con_observaciones", "no_apto")] == ["Recomendable", "Con reservas", "No recomendable"]
+    check([sei.ESTADOS_INTEGRAL[k] for k in ("apto", "con_observaciones", "no_apto")] == ["Avanzar", "Avanzar con reservas", "No avanzar"]
           and sei.ESTADOS_INTEGRAL_OPERATIVO == sei.ESTADOS_INTEGRAL, "evaluación integral: Recomendable / Con reservas / No recomendable en todos los perfiles")
     pf = SimpleNamespace(entrevistas=[SimpleNamespace(estado="evaluada", evaluacion={"recomendacion": "revision"})])
-    check(etiqueta_tablero(pf)["texto"] == "Con reservas", "la tarjeta corporativa ya no dice «Apto con observaciones»")
+    check(etiqueta_tablero(pf)["texto"] == "Avanzar con reservas", "la tarjeta corporativa ya no dice «Apto con observaciones»")
     p_m = crear_postulacion(db, _crear_candidato(db, cuenta.id, "Dora Migra", "Portal", False, telefono="5512360003"), v2, cuenta.id,
                             "web", consentimiento=True)
     p_m.analisis = {"resultado_integral": {"texto": "Apto con observaciones"}, "historial_resultados": ["Apto", "No apto"],

@@ -564,6 +564,28 @@ async def _evaluar_y_cerrar(db: Session, e: Entrevista, p, v, empresa: str, tema
         operativa, _ = eop.evaluar(e.transcript or [], e.guion or {}, respuestas_previas(p) if p else [], v.titulo if v else "",
                                    prefiltro=eop.contexto_prefiltro(p), extra=extra)
         ev = eop.aplicar(ev, operativa)
+    reconfirma = any(str(q).strip().lower().startswith("¿confirmas") for q in (e.guion or {}).get("preguntas") or [])
+    if p is not None and reconfirma:
+        # Fletes «Entrevista en video» (2026-10-15): si en la entrevista CONTRADICE lo que contestó en la solicitud web sobre
+        # un INDISPENSABLE (p. ej. «¿Confirmas que tu licencia federal tipo B está vigente?» → «ya se me venció»), la
+        # recomendación es «No avanzar». SOLO cuando el guion de RH reconfirma de forma expresa («¿Confirmas…?»); en las
+        # demás entrevistas una contradicción sigue siendo solo «Inconsistencia» (2026-10-09). Nunca descarta.
+        from ..services import solicitud_web as ssw
+
+        contradicho = ssw.contradice_indispensable(p, [str(x) for x in ev.inconsistencias or []]
+                                                   + [str(r) for r in ev.riesgos or [] if str(r).lower().startswith("inconsistencia")])
+        if contradicho:
+            punto = f"Inconsistencia en un requisito indispensable: {contradicho}"
+            if operativa is not None:
+                from ..services import entrevista_operativa as eop
+
+                operativa["recomendacion"] = "no_recomendable"
+                operativa["recomendacion_texto"] = eop.RECOMENDACIONES["no_recomendable"][0]
+                operativa["puntos"] = operativa["alertas"] = [punto] + [x for x in operativa.get("puntos") or [] if x != punto]
+                ev = eop.aplicar(ev, operativa)
+            ev.recomendacion = "no_avanzar"
+            if punto not in (ev.riesgos or []):
+                ev.riesgos = [punto] + list(ev.riesgos or [])
     e.evaluacion = {**ev.model_dump(), **({"operativa": operativa} if operativa else {})}
     e.estado = "evaluada"
     # p.score / p.evidencia son el resultado de Luna sobre el CV (ver ia.AjustePerfil,

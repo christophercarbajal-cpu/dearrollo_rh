@@ -265,9 +265,10 @@ with TestClient(app) as client:
     p2.estado, p2.prefiltro_completo = "cumple", True
     db.commit()
     s = seg(P2)
-    check(paso(s, "prefiltro_web")["estado"] == "completada" and paso(s, "prefiltro_web")["resultado"] == "favorable"
+    # Cambio 50: el ejemplo ya no lleva «Prefiltro web» — la solicitud web («Unas preguntas») es el prefiltro
+    check(paso(s, "solicitud_web")["estado"] == "completada" and paso(s, "solicitud_web")["resultado"] == "favorable"
           and s["siguienteAccion"]["tipo"] == "avanzar" and s["siguienteAccion"]["etapa"] == "Entrevista IA",
-          "prefiltro web completo; sin avance automático la acción principal es «Avanzar a Filtro Red Human»")
+          "solicitud web completa; sin avance automático la acción principal es «Avanzar a Filtro Red Human»")
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Entrevista IA"})
     check(r.status_code == 200 and post(P2).etapa == "Entrevista IA", "RH avanza a Filtro Red Human")
     check(db.query(Bitacora).filter(Bitacora.accion == "entrevista_ia_forzada", Bitacora.entidad_id == P2).count() == 1,

@@ -152,6 +152,19 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[vacantes] ⚠️ migración de «Preguntas filtro» no aplicada: {ex}", flush=True)
+        # Cambio 50 (2026-10-15): «Prefiltro web» sale del catálogo — la Solicitud web («Unas preguntas») ES el prefiltro.
+        # Plantillas y vacantes sin la actividad; candidatos detenidos en ella resueltos con sus respuestas web (el job del
+        # motor sigue su ruta). Una sola vez (marca en bitácora), NO fatal.
+        try:
+            from .services import solicitud_web as _ssw
+
+            c50 = await _ssw.migrar_cambio50(db, aplicar=True, avanzar=False)
+            if c50.get("plantillas") or c50.get("vacantes") or c50.get("postulaciones"):
+                print(f"[proceso] Cambio 50: {len(c50['plantillas'])} plantilla(s), {len(c50['vacantes'])} vacante(s) y "
+                      f"{len(c50['postulaciones'])} candidato(s) sin «Prefiltro web»", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[proceso] ⚠️ migración del Cambio 50 no aplicada: {ex}", flush=True)
         # Cambio 38 (2026-10-14): vocabulario único de la recomendación (Recomendable / Con reservas / No recomendable) en lo
         # que quedó guardado. Una sola vez (marca en bitácora), NO fatal.
         try:

@@ -47,7 +47,7 @@ from app.services.configuracion import obtener  # noqa: E402
 
 OK = 0
 # Cambio 30 (2026-10-13): «Solicitud web sin CV» / «con CV» y «Oferta laboral» (21 actividades)
-CATALOGO = ["Solicitud web sin CV", "Solicitud web con CV", "Prefiltro web", "Prefiltro WhatsApp", "Llamada Red Human",
+CATALOGO = ["Solicitud web sin CV", "Solicitud web con CV", "Prefiltro WhatsApp", "Llamada Red Human",
             "Entrevista Red Human por WhatsApp", "Entrevista Red Human con avatar", "Psicometría digital", "Psicometría física",
             "Entrevista humana", "Evaluación médica", "Evaluación técnica o práctica", "Estudio socioeconómico",
             "Referencias laborales", "Documentos", "Oferta laboral",

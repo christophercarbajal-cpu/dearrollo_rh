@@ -1,18 +1,21 @@
-"""Grupak · VAC-1156 (2026-10-13) — proceso «Operativo básico» y plantillas de conversación de la vacante.
+"""Grupak · VAC-1156 (2026-10-13; reestructura 2026-10-15) — proceso «Operativo básico» y conversación de la vacante.
 
 Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `proceso_para_vacante`, `routers.vacantes.crear`,
-`guiones.generar_para_vacante`), así cada registro queda idéntico a uno capturado en pantalla:
+`preguntas_filtro`, `guiones`), así cada registro queda idéntico a uno capturado en pantalla:
   1. Cuenta: la de la VAC-1156 si existe; si no, la Cuenta Grupak («Demo Grupak» / «Grupak») o una nueva «Grupak».
      Cliente «Grupak» en esa Cuenta, visible al candidato (el bot dice «Soy Red Human, el agente virtual de Grupak.»).
-  2. Proceso «Operativo básico»: Solicitud web sin CV → Prefiltro web → Prefiltro por WhatsApp | Entrevista Red Human
-     por WhatsApp | Entrevista humana. Sin Contratación ni Onboarding: al aprobarse la entrevista humana la postulación
-     cierra como «Contratado» (`proceso.contratar_directo`).
-  3. VAC-1156 (Ayudante general · Monterrey): toma ese proceso, enfoque Operativo (lo define la ruta Masivos), entrevista
-     por WhatsApp = base operativa SIN preguntas agregadas, prefiltro de WhatsApp regenerado (indispensables + base fija
-     operativa) y prefiltro web regenerado solo si tiene menos de 3 preguntas. Si la vacante pedía documentos se vacían:
-     con documentos la ruta se ajusta sola y agrega «Documentos» (Cambio 28), y esta ruta no los lleva.
-     Si la VAC-1156 no existe en ESTA base (p. ej. la base local), se crea «Ayudante general» en Monterrey con 3
-     indispensables; recibe el siguiente código libre (el código lo da el id) y el script lo reporta.
+  2. Proceso «Operativo básico» (SIN Prefiltro web ni Prefiltro por WhatsApp): Solicitud web sin CV → Entrevista Red
+     Human por WhatsApp (enfoque Operativo) → Entrevista humana (la agenda RH) → Contrato y firma (Contratación) →
+     Confirmación de ingreso (Onboarding).
+  3. VAC-1156 (Ayudante general · Monterrey): toma ese proceso; «Unas preguntas» de la solicitud (Cambio 50) = ¿Puedes
+     rolar turnos? y ¿Puedes cargar material pesado? (NO descartan) + edad + colonia y municipio (no descartan) + interés y
+     sueldo. La «Secundaria terminada» pasa a deseable (ya no filtra). Entrevista por WhatsApp = base operativa SIN preguntas
+     agregadas; arranca sola por WhatsApp al recibir la solicitud y cierra EXACTO: «Con esto terminamos, [nombre]. Gracias
+     por tu tiempo. El equipo de Recursos Humanos de Grupak te contactará para agendar una entrevista.» (sin direcciones,
+     sin repetir sueldo ni puesto: ya se dijeron en la solicitud). Si la vacante pedía documentos se vacían: esta ruta no
+     lleva la actividad «Documentos».
+     Si la VAC-1156 no existe en ESTA base (p. ej. la base local), se crea «Ayudante general» en Monterrey; recibe el
+     siguiente código libre (el código lo da el id) y el script lo reporta.
 
 Seguridad:
   * Sin `--aplicar` es un SIMULACRO: una transacción que al final se deshace. Con `--aplicar`, todo o nada.
@@ -43,13 +46,15 @@ from sqlalchemy import func  # noqa: E402
 from sqlalchemy.orm.attributes import flag_modified  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
-from app.models import Cliente, Cuenta, PlantillaProceso, Postulacion, Usuario, UsuarioCuenta, Vacante, registrar  # noqa: E402
+from app.models import Cliente, Cuenta, PlantillaProceso, Usuario, UsuarioCuenta, Vacante, registrar  # noqa: E402
 from app.routers import vacantes as rvac  # noqa: E402
 from app.seed import slug_cuenta_unico  # noqa: E402
 from app.services import guiones as sgui  # noqa: E402
 from app.services import ia  # noqa: E402
+from app.services import preguntas_filtro as pfu  # noqa: E402
 from app.services import proceso as sproc  # noqa: E402
 from app.services import sincronizacion_vacante as ssv  # noqa: E402
+from app.services import solicitud_web as ssw  # noqa: E402
 
 ACTOR = "script:configurar_grupak"
 NOMBRE = "Grupak"
@@ -58,13 +63,23 @@ CODIGO = "VAC-1156"
 NOMBRE_PROCESO = "Operativo básico"
 PASOS = [
     {"id": "solicitud", "tipo": "solicitud_sin_cv", "etapa": "Prefiltro"},
-    {"id": "prefiltro-web", "tipo": "prefiltro_web", "nombre": "Prefiltro web", "etapa": "Prefiltro"},
-    {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro"},
-    {"id": "entrevista-whatsapp", "tipo": "entrevista_whatsapp", "nombre": "Entrevista Red Human por WhatsApp", "etapa": "Entrevista IA"},
+    {"id": "entrevista-whatsapp", "tipo": "entrevista_whatsapp", "nombre": "Entrevista Red Human por WhatsApp", "etapa": "Entrevista IA",
+     "enfoque": "operativo", "tipo_entrevista": "operativo"},
     {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana", "etapa": "Entrevista Humana",
-     "tipo_entrevista": "general"},
+     "tipo_entrevista": "general", "tipo_agenda": "rh"},
+    {"id": "contrato", "tipo": "carta_contrato", "nombre": "Contrato y firma", "etapa": "Contratación"},
+    {"id": "alta", "tipo": "alta", "nombre": "Confirmación de ingreso", "etapa": "Onboarding"},
 ]
-TIPOS_ESPERADOS = ["solicitud_sin_cv", "prefiltro_web", "prefiltro_whatsapp", "entrevista_whatsapp", "entrevista_humana"]
+TIPOS_ESPERADOS = ["solicitud_sin_cv", "entrevista_whatsapp", "entrevista_humana", "carta_contrato", "alta"]
+
+# «Unas preguntas» (Cambio 50): los dos filtros NO descartan; edad y colonia se agregan (tampoco descartan)
+TURNOS = "Disponibilidad para rolar turnos"
+PESADO = "Disponibilidad para cargar material pesado"
+FILTROS = {TURNOS: "¿Puedes rolar turnos?", PESADO: "¿Puedes cargar material pesado?"}
+EXTRAS_WEB = ["edad", "zona"]
+DESEABLE = "Secundaria terminada"
+CIERRE = ("Con esto terminamos, {nombre}. Gracias por tu tiempo. El equipo de Recursos Humanos de Grupak te contactará para "
+          "agendar una entrevista.")
 
 # Solo si la VAC-1156 no existe en esta base: «Ayudante general» en Monterrey (datos de la demo Grupak)
 AYUDANTE = {
@@ -72,16 +87,6 @@ AYUDANTE = {
     "estado": "Nuevo León", "municipio": "Monterrey", "sueldo": (9500, 11000),
     "descripcion": "Apoyo en carga, descarga, acomodo de materiales y limpieza del área de trabajo en planta.",
     "responsabilidades": ["Cargar y descargar material", "Acomodar materiales en el área asignada", "Mantener limpia el área de trabajo"],
-    "indispensables": {
-        "Secundaria terminada": "¿Cuál es tu último grado de estudios?",
-        "Disponibilidad para rolar turnos": "¿Qué disponibilidad tienes para rolar turnos?",
-        "Disponibilidad para cargar material pesado": "¿Has cargado material pesado en algún trabajo?",
-    },
-    "web": [
-        ("¿Terminaste la secundaria?", "Secundaria terminada"),
-        ("¿Puedes rolar turnos?", "Disponibilidad para rolar turnos"),
-        ("¿Puedes cargar material pesado?", "Disponibilidad para cargar material pesado"),
-    ],
     "beneficios": ["Prestaciones de ley", "Comedor", "Transporte de personal"],
 }
 
@@ -162,9 +167,9 @@ def asegurar_proceso(db, cu: Cuenta, u: Usuario) -> PlantillaProceso:
         raise Abortar(f"Proceso «{NOMBRE_PROCESO}»: {e.mensaje}")
     pl = db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id, PlantillaProceso.nombre == NOMBRE_PROCESO).first()
     if pl is None:
-        pl = PlantillaProceso(cuenta_id=cu.id, nombre=NOMBRE_PROCESO, descripcion="Operativos: prefiltro, entrevista por WhatsApp y entrevista humana.",
-                              pasos=pasos, etapas=sproc.normalizar_etapas({}), predeterminada=False, version=1,
-                              creado_por=u.nombre, actualizada_por=u.nombre)
+        pl = PlantillaProceso(cuenta_id=cu.id, nombre=NOMBRE_PROCESO, descripcion="Operativos: solicitud web, entrevista por WhatsApp, "
+                              "entrevista humana, contrato e ingreso.", pasos=pasos, etapas=sproc.normalizar_etapas({}),
+                              predeterminada=False, version=1, creado_por=u.nombre, actualizada_por=u.nombre)
         db.add(pl)
         db.flush()
         registrar(db, ACTOR, "plantilla_proceso_creada", "plantilla_proceso", str(pl.id), {"nombre": NOMBRE_PROCESO})
@@ -176,7 +181,7 @@ def asegurar_proceso(db, cu: Cuenta, u: Usuario) -> PlantillaProceso:
         pl.version = int(pl.version or 1) + 1
         pl.actualizada_por = u.nombre
         registrar(db, ACTOR, "plantilla_proceso_actualizada", "plantilla_proceso", str(pl.id), {"version": pl.version})
-        ok(f"Proceso «{NOMBRE_PROCESO}» actualizado a v{pl.version}")
+        ok(f"Proceso «{NOMBRE_PROCESO}» actualizado a v{pl.version}: {' → '.join(x['nombre'] for x in pasos)}")
     else:
         nota(f"Proceso existente: «{NOMBRE_PROCESO}» (v{pl.version})")
     return pl
@@ -189,16 +194,14 @@ def crear_ayudante(db, cu: Cuenta, cl: Cliente, u: Usuario, pl: PlantillaProceso
         nota(f"Vacante existente (la {CODIGO} no está en esta base): {v.codigo} {v.titulo}")
         return v
     d = AYUDANTE
-    web = [{"pregunta": q, "tipo": "si_no", "valida": r, "respuesta_esperada": "Sí", "descarta": True, "opciones": ["Sí", "No"]}
-           for q, r in d["web"]]
     datos = rvac.CrearIn(
         titulo=d["titulo"], area=d["area"], seniority=d["seniority"], ubicacion_estado=d["estado"], ubicacion_municipio=d["municipio"],
         modalidad="Presencial", sueldo_desde=d["sueldo"][0], sueldo_hasta=d["sueldo"][1], sueldo_moneda="MXN",
         sueldo_periodicidad="mensual", descripcion=d["descripcion"], resumen=d["descripcion"],
-        requisitos_indispensables=list(d["indispensables"]), responsabilidades=d["responsabilidades"], beneficios=d["beneficios"],
-        cliente_id=cl.id, mostrar_cliente_candidato=True, proceso={"plantilla_id": pl.id}, preguntas_filtro=web,
-        preguntas_requisitos=[{"requisito": r, "pregunta": q} for r, q in d["indispensables"].items()],
-        generar_si_falta=False, publicar=True, plataformas=["Portal", "WhatsApp"],
+        requisitos_indispensables=list(FILTROS), requisitos_deseables=[DESEABLE], responsabilidades=d["responsabilidades"],
+        beneficios=d["beneficios"], cliente_id=cl.id, mostrar_cliente_candidato=True, proceso={"plantilla_id": pl.id},
+        preguntas_requisitos=[{"requisito": r, "pregunta": q} for r, q in FILTROS.items()],
+        generar_si_falta=False, publicar=True, plataformas=["Portal", "WhatsApp"], enfoque_entrevista="operativo",
     )
     try:
         asyncio.run(rvac.crear(datos, db, u, cu))  # Cambio 36: el alta es asíncrona (publica en sus canales)
@@ -209,8 +212,29 @@ def crear_ayudante(db, cu: Cuenta, cl: Cliente, u: Usuario, pl: PlantillaProceso
     return v
 
 
+def configurar_preguntas(v: Vacante) -> None:
+    """«Unas preguntas»: rolar turnos y cargar material pesado (NO descartan) + edad y colonia; «Secundaria terminada»
+    pasa a deseable (ya no filtra)."""
+    actuales = rvac.requisitos_lista(v.requisitos or "")
+    if actuales != list(FILTROS):
+        v.requisitos = " · ".join(FILTROS)
+        if DESEABLE in actuales or any("secundaria" in x.lower() for x in actuales):
+            v.requisitos_deseables = list(dict.fromkeys(list(v.requisitos_deseables or []) + [DESEABLE]))
+        nota(f"{v.codigo}: requisitos {actuales} → {list(FILTROS)} (la secundaria queda como deseable)")
+    lista = [dict(q) for q in pfu.de_vacante(v)]
+    previas = []
+    for req, pregunta in FILTROS.items():
+        q = next((x for x in lista if x.get("requisito") == req), {"requisito": req, "indispensable": True})
+        previas.append({**q, "pregunta": pregunta, "tipo": "si_no", "descarta": False})
+    pfu.sincronizar(v, entrada=previas)
+    g = dict(v.guiones or {})
+    g[ssw.CLAVE_EXTRA] = list(EXTRAS_WEB)
+    v.guiones = g
+    flag_modified(v, "guiones")
+
+
 def configurar_vacante(db, v: Vacante, cl: Cliente, u: Usuario, pl: PlantillaProceso) -> None:
-    """Proceso, cliente visible, enfoque operativo, entrevista base y prefiltros (lo mismo que hace RH en el formulario)."""
+    """Proceso, cliente visible, enfoque operativo, entrevista base y «Unas preguntas» (lo mismo que hace RH en el formulario)."""
     try:
         nuevo = sproc.proceso_para_vacante(db, v.cuenta_id, v.proceso or {}, {"plantilla_id": pl.id})
     except sproc.ErrorProceso as e:
@@ -229,61 +253,69 @@ def configurar_vacante(db, v: Vacante, cl: Cliente, u: Usuario, pl: PlantillaPro
              "la ruta «Operativo básico» no lleva la actividad «Documentos»")
         v.documentos_solicitados = []
     antes = v.enfoque_entrevista
-    rvac._enfoque_por_ruta(db, v)  # Masivos (entrevista por WhatsApp sin CV ni avatar) = Operativo
+    rvac._enfoque_por_ruta(db, v)  # el «Enfoque» de la actividad (Operativo)
     if v.enfoque_entrevista != "operativo":
         raise Abortar(f"{v.codigo}: la ruta no quedó como operativa (enfoque «{v.enfoque_entrevista}»)")
     if antes != "operativo":
         ok(f"{v.codigo}: entrevista «{antes or 'sin enfoque'}» → «operativo»")
+    configurar_preguntas(v)
     g = dict(v.guiones or {})
     g["entrevista_whatsapp_base"] = {"quitadas": [], "propias": []}  # base operativa, sin preguntas agregadas
     v.guiones = g
     flag_modified(v, "guiones")
-    solo = ["prefiltro_whatsapp", "entrevista_whatsapp"]
-    if len(v.preguntas_filtro or []) < ia.MIN_PREFILTRO_WEB:
-        solo.insert(0, "prefiltro_web")
     db.flush()
-    sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=True, solo=solo)
-    ok(f"{v.codigo}: generado {', '.join(solo)} (prefiltro de WhatsApp = indispensables + base fija operativa)")
-    registrar(db, ACTOR, "vacante_configurada", "vacante", v.codigo, {"proceso": NOMBRE_PROCESO, "secciones": solo})
+    sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=True, solo=["entrevista_whatsapp"])
+    ok(f"{v.codigo}: «Unas preguntas» (rolar turnos, cargar material pesado, edad, colonia, interés, sueldo) y entrevista base operativa")
+    registrar(db, ACTOR, "vacante_configurada", "vacante", v.codigo, {"proceso": NOMBRE_PROCESO})
     db.flush()
 
 
 def validar(db, v: Vacante) -> list:
+    from app.models import Postulacion
+    from app.serial import nombre_empresa_candidato, vacante_dict
     from app.services import entrevista_whatsapp_fija as ewf
-    from app.services import prefiltro_conversacional as pconv
-    from app.serial import nombre_empresa_candidato
 
     problemas = []
     pasos = sgui.pasos_de_vacante(db, v)
     tipos = [sproc.clave_catalogo(x) for x in pasos]
     if tipos != TIPOS_ESPERADOS:
         problemas.append(f"ruta {tipos} ≠ {TIPOS_ESPERADOS}")
-    if any(x.get("etapa") in ("Contratación", "Onboarding") for x in pasos):
-        problemas.append("la ruta trae Contratación u Onboarding")
-    if not sproc.ruta_es_masiva(pasos) or v.enfoque_entrevista != "operativo":
-        problemas.append("la ruta no es operativa (Masivos)")
+    if any(x.get("tipo") in ("prefiltro_web", "prefiltro_whatsapp") for x in pasos):
+        problemas.append("la ruta trae un prefiltro (Operativo básico no lleva Prefiltro web ni por WhatsApp)")
+    if v.enfoque_entrevista != "operativo" or sproc.enfoques_de_ruta(v.proceso).get("entrevista_whatsapp") != "operativo":
+        problemas.append("la entrevista por WhatsApp no es Operativa")
     base = ewf.vista(v)
     if not base["esBase"]:
         problemas.append(f"la entrevista por WhatsApp no es la base: {base['quitadas']} / {base['propias']}")
     empresa = nombre_empresa_candidato(v)
     if empresa != NOMBRE or ia.presentacion_bot(empresa) != "Soy Red Human, el agente virtual de Grupak.":
         problemas.append(f"presentación: «{ia.presentacion_bot(empresa)}»")
-    sim = Postulacion(proceso=dict(v.proceso or {}), analisis={})
-    criterios = pconv.criterios_de(v, sim)
-    chats = [c.get("chat") or c.get("pregunta") for c in criterios]
-    indisp = rvac.requisitos_lista(v.requisitos)
-    if not criterios or not criterios[0].get("base_operativa"):
-        problemas.append("el prefiltro de WhatsApp no es la base fija operativa")
-    preguntados = [c["criterio"] for c in criterios if c.get("indispensable")]
-    if indisp and not all(r in preguntados for r in indisp if not ia.es_autopercepcion(r)):
-        problemas.append(f"el prefiltro de WhatsApp no pregunta todos los indispensables: {indisp} → {preguntados}")
-    if len(v.preguntas_filtro or []) < ia.MIN_PREFILTRO_WEB:
-        problemas.append(f"prefiltro web con menos de {ia.MIN_PREFILTRO_WEB} preguntas")
+    criterios = vacante_dict(v).get("criterios") or []
+    textos = [c["pregunta"] for c in criterios]
+    for q in FILTROS.values():
+        c = next((x for x in criterios if x["pregunta"] == q), None)
+        if c is None or c.get("descarta"):
+            problemas.append(f"«Unas preguntas»: «{q}» debe estar y NO descartar → {textos}")
+    for q in (ssw.PREGUNTA_EDAD, ssw.PREGUNTA_ZONA, ssw.pregunta_interes(v)):
+        if q not in textos:
+            problemas.append(f"«Unas preguntas» sin «{q}» → {textos}")
+    if any(c.get("descarta") for c in criterios):
+        problemas.append("ninguna pregunta de Grupak descarta")
+    sim = Postulacion(proceso=dict(v.proceso or {}), analisis={"prefiltro_datos": {"interes_puesto": True, "sueldo_acepta": True}})
+    sim.vacante = v
+    try:
+        secuencia = ewf._secuencia_d(sim, [])
+    finally:
+        if sim in db:
+            db.expunge(sim)  # simulación: nunca se guarda
+        sim.vacante = None
+    if secuencia != ["inicio"]:
+        problemas.append(f"el cierre repite puesto/sueldo/ubicación ya dichos: {secuencia}")
     faltan = ssv.faltantes_publicacion(db, v)
     if faltan:
         nota(f"Para publicar falta: {' '.join(faltan)}")
     nota(f"Ruta: {' → '.join(x['nombre'] for x in pasos)}")
-    nota(f"Prefiltro WhatsApp: {' | '.join(c for c in chats if c)}")
+    nota(f"Unas preguntas: {' | '.join(textos)}")
     nota(f"Entrevista por WhatsApp: {' | '.join(b['texto'] for b in base['base'])}")
     return problemas
 
@@ -318,7 +350,7 @@ def main() -> int:
         problemas = validar(db, v)
         if problemas:
             raise Abortar("Validación fallida:\n    " + "\n    ".join(problemas))
-        ok("Validación: ruta Operativo básico, entrevista base operativa, prefiltros y presentación correctos")
+        ok("Validación: ruta Operativo básico, «Unas preguntas», entrevista base operativa y presentación correctas")
         if a.aplicar:
             commit_real()
             print(f"\nListo: cambios guardados ({v.codigo}).")

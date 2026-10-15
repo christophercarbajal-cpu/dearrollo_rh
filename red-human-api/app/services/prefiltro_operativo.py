@@ -238,10 +238,9 @@ def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str], na
     if q_sueldo:
         salida.append({**_criterio("dato-sueldo", "sueldo", f"Sueldo: {sueldo.strip()}", q_sueldo), "operativo": False})
     salida.append({**_criterio("dato-zona", "zona", "Colonia y municipio", "¿En qué colonia y municipio vives?"), "operativo": False})
-    lugar = (ubicacion or "").strip()
-    if lugar:
-        salida.append(_criterio("dato-puede-trasladarse", "puede_trasladarse", f"Trasladarse a {lugar}",
-                                f"El trabajo es en {lugar}. ¿Puedes trasladarte?"))
+    # Cambio 51 (2026-10-15): orden Indispensables → Edad → Puesto («El puesto es [puesto] en [ciudad, estado]. ¿Te
+    # interesa?», la ciudad la pone `prefiltro_conversacional.criterios_de`) → Sueldo → Colonia → Tiempo. Ya no se pregunta
+    # «El trabajo es en […]. ¿Puedes trasladarte?»: si vive en otro estado, «¿Vives ahí o te cambiarías de ciudad?».
     traslado = _criterio("dato-traslado", "traslado", limite_req or "Tiempo de traslado", "¿Cuánto tiempo harías de tu casa al trabajo?",
                          limite is not None)
     if limite is not None:

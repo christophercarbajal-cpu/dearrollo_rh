@@ -1,14 +1,16 @@
 """Cambio 29 (2026-10-12) — Entrevista Red Human por WhatsApp FIJA para rutas Masivos (operativos). Cero IA generativa.
 
 Flujo (una pregunta por mensaje, siempre en este orden):
-  Transición: «Listo, [nombre]. Ahora unas preguntas sobre tu experiencia.» + la primera pregunta.
+  Transición: «Listo, [nombre]. Ahora te haré unas preguntas sobre tu experiencia.» + la primera pregunta.
   A. Situación actual: «¿Trabajas actualmente?» → sí: el primer trabajo del historial es el actual (en presente) ·
-     no: «¿Cuánto tiempo llevas sin trabajar?».
+     no: «¿Cuánto tiempo llevas sin trabajar?» (historial: fila «Sin empleo actual» + su último empleo) · nunca: bloque C
+     directo y el resumen dice «Sin experiencia laboral» (Cambio 52).
   B. Historial laboral: hasta 3 trabajos — empresa, puesto, qué hacía, duración y motivo de salida. Un despido o una
      renuncia sin motivo se REPREGUNTA una vez («¿Por qué te despidieron?» / «¿Por qué renunciaste?»). Después de cada
      trabajo: «¿Tuviste otro trabajo antes de ese?».
   C. Preguntas propias que RH agregó a la vacante.
-  D. Confirmación de puesto, sueldo, traslado e inicio → cierre EXACTO. Lo que contradiga al prefiltro va a Puntos por
+  D. Confirmación de puesto, sueldo, traslado (SOLO lo que no se dijo antes en la solicitud o el prefiltro — Cambio 52) e
+     inicio → cierre EXACTO. Lo que contradiga al prefiltro va a Puntos por
      validar (nunca descarta).
 La vacante guarda su ajuste en `Vacante.guiones["entrevista_whatsapp_base"] = {quitadas: [ids], propias: [textos]}`: RH
 puede quitar preguntas base o agregar propias (van al bloque C); «Restaurar base» = vacío. La recomendación se calcula
@@ -107,7 +109,7 @@ def _datos(p) -> dict:
 
 def transicion(p, primera: str) -> str:
     d = _datos(p)
-    return f"Listo{', ' + d['nombre'] if d['nombre'] else ''}. Ahora unas preguntas sobre tu experiencia. {primera}"
+    return f"Listo{', ' + d['nombre'] if d['nombre'] else ''}. Ahora te haré unas preguntas sobre tu experiencia. {primera}"
 
 
 def _sigue_entrevista_humana(p) -> bool:
@@ -174,15 +176,43 @@ def _guardar(e, est: dict) -> None:
     flag_modified(e, "guion")
 
 
+def ya_dicho(p) -> Dict[str, bool]:
+    """Cambio 52 (regla de oro): qué ya se le dijo / respondió antes (solicitud web o prefiltro) — puesto, sueldo y
+    ubicación no se vuelven a confirmar en el bloque D."""
+    d = ((p.analisis or {}).get("prefiltro_datos")) or {}
+    return {"conf_puesto": d.get("interes_puesto") is not None,
+            "conf_sueldo": d.get("sueldo_acepta") is not None or bool(d.get("sueldo")),
+            # Cambio 51: la pregunta del puesto ya dice la ciudad y el estado («El puesto es … en [ciudad, estado]»)
+            "conf_traslado": d.get("interes_puesto") is not None
+            or any(d.get(k) not in (None, "") for k in ("traslado", "traslado_min", "puede_trasladarse", "reubicacion"))}
+
+
 def _secuencia_d(p, quitadas: List[str]) -> List[str]:
+    """Bloque D: puesto, sueldo y ubicación SOLO si no se dijeron antes; si ya se dijeron, solo «¿Cuándo podrías empezar?»."""
     d = _datos(p)
-    ids = ["conf_puesto"]
-    if _texto_sueldo(d["sueldo"]):
+    dicho = ya_dicho(p)
+    ids = [] if dicho["conf_puesto"] else ["conf_puesto"]
+    if _texto_sueldo(d["sueldo"]) and not dicho["conf_sueldo"]:
         ids.append("conf_sueldo")
-    if d["ubicacion"]:
+    if d["ubicacion"] and not dicho["conf_traslado"]:
         ids.append("conf_traslado")
     ids.append("inicio")
     return [x for x in ids if x not in quitadas]
+
+
+def _respondidas_antes(p) -> set:
+    """Textos (normalizados) de lo que el candidato YA contestó en la solicitud web o en el prefiltro."""
+    a = p.analisis or {}
+    salida = {_n(r.get("pregunta")) for r in a.get("respuestas_web") or [] if isinstance(r, dict) and str(r.get("respuesta") or "").strip()}
+    salida |= {_n(r.get("pregunta")) for r in a.get("respuestas_prefiltro") or [] if isinstance(r, dict) and r.get("respuesta")}
+    pw = (a.get("prefiltro_web") or {}).get("criterios") or []
+    salida |= {_n(c.get("pregunta")) for c in pw if isinstance(c, dict) and c.get("respuesta")}
+    return {x for x in salida if x}
+
+
+def propia_ya_respondida(p, texto: str) -> bool:
+    """Cambio 52: una pregunta propia de RH (bloque C) que ya contestó antes no se repite."""
+    return _n(texto) in _respondidas_antes(p)
 
 
 def siguiente(est: dict, p) -> Optional[str]:
@@ -193,8 +223,8 @@ def siguiente(est: dict, p) -> Optional[str]:
     if "trabaja" not in q and "trabaja" not in r:
         return "trabaja"
     if est.get("nunca_trabajo") and "rep_experiencia" not in r:
-        return "rep_experiencia"
-    if (est.get("actual") is False and not est.get("nunca_trabajo") and "rep_experiencia" not in r
+        return "rep_experiencia"  # conversación anterior al Cambio 52 que ya tenía la repregunta pendiente
+    if (est.get("actual") is False and not est.get("sin_experiencia") and not est.get("nunca_trabajo")
             and "sin_trabajo" not in q and "sin_trabajo" not in r):
         return "sin_trabajo"
     if not est.get("historial_cerrado"):
@@ -209,8 +239,8 @@ def siguiente(est: dict, p) -> Optional[str]:
             return trabajo["repregunta"]
         if "otro" not in q and k + 1 < MAX_TRABAJOS and f"otro{k}" not in r:
             return "otro"
-    for i, _ in enumerate(cfg["propias"]):
-        if f"propia:{i}" not in r:
+    for i, texto in enumerate(cfg["propias"]):
+        if f"propia:{i}" not in r and not propia_ya_respondida(p, texto):
             return f"propia:{i}"
     for x in _secuencia_d(p, q):
         if x not in r:
@@ -218,8 +248,12 @@ def siguiente(est: dict, p) -> Optional[str]:
     return None
 
 
-# «Nunca he trabajado» (2026-10-13): antes de cerrar el historial se repregunta UNA vez por trabajos informales
+# Cambio 52 (2026-10-15): «Nunca he trabajado» → bloque C directo (sin historial) y el resumen dice «Sin experiencia
+# laboral». (La repregunta por trabajos informales del 2026-10-13 ya no se hace; se conserva el texto para conversaciones
+# que ya la tenían pendiente.)
 PREGUNTA_SIN_EXPERIENCIA = "¿Has hecho algún trabajo, aunque sea por tu cuenta o ayudando a alguien?"
+SIN_EXPERIENCIA = "Sin experiencia laboral"
+SIN_EMPLEO_ACTUAL = "Sin empleo actual"
 _RE_NUNCA_TRABAJO = re.compile(r"\b(nunca (he )?trabaj\w*|no he trabajado( nunca)?|nunca he tenido (un )?(trabajo|empleo)|no tengo experiencia"
                                r"|sin experiencia|(es|seria|este seria|este es) mi primer (trabajo|empleo))\b")
 _RE_SIN_TRABAJO = re.compile(r"^(no|nunca|ninguno|ninguna|no he trabajado|nunca he trabajado|es mi primer trabajo|sin experiencia)\b")
@@ -248,14 +282,13 @@ def registrar_respuesta(est: dict, pid: str, texto: str, p) -> None:
     if pid == "trabaja":
         r["trabaja"] = texto
         est["actual"] = si_no == "si"
-        if _RE_NUNCA_TRABAJO.search(_n(texto)):
-            est["actual"] = False
-            est["nunca_trabajo"] = True
+        if _RE_NUNCA_TRABAJO.search(_n(texto)) or _n(texto) in ("nunca", "nunca he trabajado"):
+            _sin_experiencia(est)
         return
     if pid == "sin_trabajo":
         r["sin_trabajo"] = texto
-        if _RE_NUNCA_TRABAJO.search(_n(texto)):
-            est["nunca_trabajo"] = True
+        if _RE_NUNCA_TRABAJO.search(_n(texto)) or _n(texto) == "nunca":
+            _sin_experiencia(est)
         return
     if pid == "rep_experiencia":
         r["rep_experiencia"] = texto
@@ -274,14 +307,11 @@ def registrar_respuesta(est: dict, pid: str, texto: str, p) -> None:
         while len(trabajos) <= k:
             trabajos.append({"actual": bool(est.get("actual")) and len(trabajos) == 0})
         if pid == "empresa" and k == 0 and not est.get("actual") and (_RE_SIN_TRABAJO.match(_n(texto)) or _RE_NUNCA_TRABAJO.search(_n(texto))):
-            trabajos.pop()  # dice que nunca ha trabajado: antes de cerrar el historial, UNA repregunta por trabajo informal
-            if "rep_experiencia" in r:
-                est["historial_cerrado"] = True
-                est["sin_experiencia"] = True
-            else:
-                est["nunca_trabajo"] = True
+            trabajos.pop()  # Cambio 52: dice que nunca ha trabajado → bloque C directo
+            _sin_experiencia(est)
             return
-        trabajos[k][pid] = texto
+        # Cambio 53: si la respuesta no es un dato («¿En dónde?», «no sé»), la celda queda VACÍA (nunca se inventa)
+        trabajos[k][pid] = "" if no_es_dato(texto) else texto
         if pid == "motivo":
             rep = repregunta_motivo(texto)
             if rep:
@@ -301,6 +331,23 @@ def registrar_respuesta(est: dict, pid: str, texto: str, p) -> None:
     r[pid] = texto
     if pid in ("conf_puesto", "conf_sueldo", "conf_traslado"):
         est.setdefault("confirmaciones", {})[pid] = si_no
+
+
+def _sin_experiencia(est: dict) -> None:
+    est["actual"] = False
+    est["sin_experiencia"] = True
+    est["historial_cerrado"] = True
+    est.pop("nunca_trabajo", None)
+
+
+def no_es_dato(texto: str) -> bool:
+    """Cambio 53: la respuesta no aporta un dato para el historial (una pregunta de vuelta, «no sé», vacía)."""
+    from .preguntas_filtro import es_evasiva
+
+    crudo = (texto or "").strip()
+    t = _n(crudo)
+    return (not t or (("?" in crudo or "¿" in crudo) and len(t.split()) <= 6) or es_evasiva(crudo)
+            or t in ("en donde", "donde", "que", "como", "cual", "mande", "perdon"))
 
 
 def _cerrar_historial_si_toca(est: dict, p) -> None:
@@ -326,11 +373,38 @@ def primera(e) -> str:
     return texto_pregunta(pid, est, p) if pid else ""
 
 
+# Cambio 51: «no entiendo» → la MISMA pregunta con OTRAS palabras (nunca repetida)
+ALTERNATIVAS = {
+    "trabaja": "¿Ahorita tienes un empleo?",
+    "sin_trabajo": "¿Desde cuándo no tienes empleo?",
+    "empresa": "¿Cómo se llama la empresa donde trabajaste?",
+    "puesto": "¿Cuál era tu puesto o tu función ahí?",
+    "tareas": "¿Cuáles eran tus actividades en ese trabajo?",
+    "duracion": "¿Cuántos meses o años estuviste en ese trabajo?",
+    "motivo": "¿Qué pasó para que dejaras ese trabajo?",
+    "otro": "Antes de ese empleo, ¿trabajaste en otro lugar?",
+    "inicio": "¿En qué fecha podrías comenzar a trabajar?",
+}
+
+
 def turno(e, texto: str) -> Tuple[str, bool]:
     """Registra la respuesta a la pregunta pendiente y regresa (siguiente mensaje, terminada)."""
+    from .prefiltro_conversacional import es_negociacion, no_entiende, texto_negociacion
+
     p = e.postulacion
     est = _estado(e)
     pid = est.get("pendiente") or siguiente(est, p)
+    if pid and es_negociacion(texto):
+        # Cambio 51: nunca prometer nada fuera de la vacante; se retoma la MISMA pregunta
+        return f"{texto_negociacion(p)} {texto_pregunta(pid, est, p)}", False
+    if pid and no_entiende(texto) and not (est.get("refraseada") or {}).get(pid):
+        est.setdefault("refraseada", {})[pid] = True
+        _guardar(e, est)
+        alt = ALTERNATIVAS.get(pid) or texto_pregunta(pid, est, p)
+        if pid in ("empresa", "puesto", "tareas", "duracion", "motivo") and bool(est.get("actual")) and int(est.get("k") or 0) == 0:
+            alt = (alt.replace("trabajaste", "trabajas").replace("estuviste", "llevas").replace("era tu", "es tu")
+                   .replace("eran tus", "son tus").replace("dejaras ese", "quieras dejar ese"))
+        return f"Te lo pregunto de otra forma: {alt}", False
     if pid:
         registrar_respuesta(est, pid, texto, p)
         _cerrar_historial_si_toca(est, p)
@@ -348,8 +422,17 @@ def turno(e, texto: str) -> Tuple[str, bool]:
 
 def historial(e) -> List[dict]:
     """Historial laboral para la ficha: Empresa · Puesto · Tareas · Duración · Motivo."""
+    est = _estado(e)
     salida = []
-    for t in (_estado(e).get("trabajos") or []):
+    if est.get("sin_experiencia"):
+        # Cambio 52: «Nunca he trabajado» → una sola fila
+        return [{"empresa": SIN_EXPERIENCIA, "puesto": "", "tareas": "", "duracion": "", "motivo": "", "actual": False}]
+    if est.get("actual") is False and "trabaja" in (est.get("respuestas") or {}):
+        # Cambio 53: no trabaja actualmente → fila «Sin empleo actual» (con el tiempo sin trabajar) y debajo su último empleo
+        sin = (est.get("respuestas") or {}).get("sin_trabajo", "")
+        salida.append({"empresa": SIN_EMPLEO_ACTUAL, "puesto": "", "tareas": "", "duracion": "" if no_es_dato(sin) else sin,
+                       "motivo": "", "actual": True})
+    for t in (est.get("trabajos") or []):
         salida.append({"empresa": t.get("empresa", ""), "puesto": t.get("puesto", ""), "tareas": t.get("tareas", ""),
                        "duracion": t.get("duracion", ""), "motivo": t.get("motivo", ""), "actual": bool(t.get("actual"))})
     return salida
@@ -399,7 +482,7 @@ def evaluar(e, p, v) -> dict:
     from . import entrevista_operativa as eop
 
     est = _estado(e)
-    trabajos = est.get("trabajos") or []
+    trabajos = [t for t in est.get("trabajos") or [] if t.get("empresa")]
     similares = [t for t in trabajos if _similar(t, v) and t.get("empresa") and t.get("duracion")]
     if similares:
         t = similares[0]
@@ -408,7 +491,7 @@ def evaluar(e, p, v) -> dict:
         t = trabajos[0]
         a = eop._criterio("parcial", f"Experiencia en {t.get('puesto') or t.get('empresa') or 'otro puesto'}; no es similar o faltan datos")
     else:
-        a = eop._criterio("no_cumple", "Sin historial laboral")
+        a = eop._criterio("no_cumple", SIN_EXPERIENCIA if est.get("sin_experiencia") else "Sin historial laboral")
     criterios = {"A": a, "B": eop._criterio("sin_dato", "Entrevista fija: sin situación del oficio"),
                  "C": eop._criterio("cumple", "Confirmados en el prefiltro"), "D": eop._criterio("cumple" if est.get("respuestas", {}).get("inicio") else "sin_dato",
                                                                                                 est.get("respuestas", {}).get("inicio") or "")}

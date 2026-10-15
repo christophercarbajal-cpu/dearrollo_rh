@@ -269,7 +269,8 @@ with TestClient(app) as client:
           "el WhatsApp pregunta la terminal en una frase natural (sin lista numerada)")
     check(p1.ubicacion_id == mty["id"] and (p1.analisis.get("ubicacion") or {}).get("fuente") == "prefiltro por WhatsApp"
           and any(h.get("evento") == "ubicacion_elegida" for h in p1.historial), "la terminal elegida queda en la ficha (y en el historial)")
-    check(any("¿Cuánto tiempo harías de tu casa a Terminal Monterrey?" == q for q in vistos), "el traslado se pregunta hacia ESA terminal")
+    check(any(q.startswith("La Terminal Monterrey está en ") and q.endswith("¿Cuánto tiempo harías de tu casa?") for q in vistos),
+          "el traslado se pregunta hacia ESA terminal (2026-10-15: «La Terminal [ciudad] está en [dirección]…»)")
     check(p1.etapa == "Entrevista Humana", f"prefiltro cumplido → Filtro humano ({p1.etapa})")
     oferta = next((t for t in textos("5547000001", desde) if "¿Qué día puedes venir?" in t), "")
     check(oferta.startswith("Juan, el siguiente paso es tu cita para: Prueba de manejo, Entrevista con jefe de operadores y Entrevista con "
@@ -291,9 +292,10 @@ with TestClient(app) as client:
     antes = subic.ocupados(db, u_mty, subic._inicio(dias[0], "12:00"))
     r = escribe("5547000001", "a las 12")
     db.refresh(p1)
-    esperado = (f"Perfecto, te esperamos el {subic.texto_dia(dias[0])} a las 12:00 p.m. en Terminal Monterrey, Av. Industrial 100, "
-                f"Monterrey, Nuevo León. Pregunta en caseta por Recursos Humanos. Mapa: {mty['mapa']}\n\nEse día harás: Prueba de manejo, "
-                "Entrevista con jefe de operadores y Entrevista con sindicato.")
+    # 2026-10-15: confirmación agrupada «… en la Terminal […]. Mapa: […]. Ese día harás la prueba de manejo, …. [Indicaciones].»
+    esperado = (f"Perfecto, te esperamos el {subic.texto_dia(dias[0])} a las 12:00 p.m. en la Terminal Monterrey, Av. Industrial 100, "
+                f"Monterrey, Nuevo León. Mapa: {mty['mapa']}. Ese día harás la prueba de manejo, una entrevista con jefe de operadores y "
+                "una entrevista con sindicato. Pregunta en caseta por Recursos Humanos.")
     check(r["respuesta"] == esperado, f"confirmación exacta → «{r['respuesta']}»")
     check(subic.ocupados(db, u_mty, subic._inicio(dias[0], "12:00")) == antes + 1, "agendar resta 1 al cupo")
     evs = db.query(Evaluacion).filter(Evaluacion.postulacion_id == p1.id, Evaluacion.estado != "cancelada").all()
@@ -434,8 +436,8 @@ with TestClient(app) as client:
     check(len(subic.de_vacante(db, fv)) == 5 and fv.posiciones == 20 and fv.sueldo_desde == 25000 and fv.sueldo_hasta == 32000
           and fv.modalidad == "Presencial" and fv.estado == "Publicada", "vacante: 5 ubicaciones, presencial, 20 posiciones, $25,000-$32,000")
     nombres = [x["nombre"] for x in fv.proceso["pasos"]]
-    check(nombres == ["Solicitud web sin CV", "Prefiltro por WhatsApp", "Documentos", "Prueba de manejo", "Entrevista con jefe de operadores",
-                      "Entrevista con sindicato", "Examen médico interno y antidoping", "Contrato y firma"], f"proceso «Fletes operadores» → {nombres}")
+    check(nombres == ["Solicitud web sin CV", "Prefiltro por WhatsApp", "Documentos", "Prueba de manejo", "Entrevista con el jefe de operadores",
+                      "Entrevista con el sindicato", "Examen médico", "Contrato y firma"], f"proceso «Fletes operadores» → {nombres}")
     docs = [d["nombre"] for d in fv.documentos_solicitados]
     check(any("Licencia" in d for d in docs) and "Apto médico" in docs, f"documentos: licencia (frente y reverso) y apto médico → {docs}")
     check(seed.main() == 0 and db.query(Ubicacion).filter_by(cuenta_id=cu.id).count() == 5, "el seed es idempotente")

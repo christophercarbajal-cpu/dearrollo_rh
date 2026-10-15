@@ -2749,8 +2749,10 @@ TIPOS_PASO = {
     # «Solicitud web con CV»); solo se deriva en rutas ya congeladas
     "analisis_cv": {"nombre": "Análisis de CV", "etapa": "Prefiltro", "regla": "ninguna", "responsable": "red_human",
                     "etapas": ("Prefiltro", "Entrevista IA"), "legado": True},
+    # Cambio 50 (2026-10-15): LEGADO — «Unas preguntas» de la Solicitud web ES el prefiltro web (descarta al enviar). Ya no
+    # se ofrece; las rutas congeladas lo siguen derivando y `solicitud_web.migrar_cambio50` lo quita de plantillas/vacantes.
     "prefiltro_web": {"nombre": "Prefiltro web", "etapa": "Prefiltro", "regla": "validacion", "responsable": "red_human",
-                      "etapas": ("Prefiltro",)},
+                      "etapas": ("Prefiltro",), "legado": True},
     "prefiltro_whatsapp": {"nombre": "Prefiltro WhatsApp", "etapa": "Prefiltro", "regla": "validacion",
                            "responsable": "red_human", "etapas": ("Prefiltro",)},
     # 2026-10-09: TRES actividades de IA independientes en Filtro Red Human (nunca agruparlas en un «canal»): con avatar
@@ -2804,7 +2806,7 @@ ALIAS_CATALOGO = {"psicometria_fisica": ("psicometrica", {"modalidad": "fisica",
 # Cambio 30 (2026-10-13): «Solicitud web» y «Análisis de CV» → «Solicitud web sin CV» / «Solicitud web con CV»;
 # «Propuesta y aceptación» y «Carta de intención» → «Oferta laboral».
 CATALOGO_ACTIVIDADES = (
-    "solicitud_sin_cv", "solicitud_con_cv", "prefiltro_web", "prefiltro_whatsapp", "llamada_agente", "entrevista_whatsapp",
+    "solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "llamada_agente", "entrevista_whatsapp",
     "entrevista_agente", "psicometrica", "psicometria_fisica", "entrevista_humana", "medica", "tecnica", "socioeconomica",
     "referencias", "documentos", "oferta", "carta_contrato", "induccion", "onboarding", "alta", "otra",
 )
@@ -2814,7 +2816,7 @@ CATALOGO_ACTIVIDADES = (
 # actividad NUEVA en una plantilla o en la ruta de una vacante («Otra actividad» va en todas). Las actividades que ya
 # estaban guardadas en otra etapa (rutas previas, copias congeladas, ad hoc) se siguen aceptando y derivando.
 ACTIVIDADES_POR_ETAPA = {
-    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_web", "prefiltro_whatsapp", "documentos", "otra"),
+    "Prefiltro": ("solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos", "otra"),
     "Entrevista IA": ("llamada_agente", "entrevista_whatsapp", "entrevista_agente", "psicometrica", "induccion", "otra"),
     "Entrevista Humana": ("entrevista_humana", "psicometrica", "psicometria_fisica", "medica", "tecnica",
                           "socioeconomica", "referencias", "documentos", "induccion", "otra"),

@@ -203,6 +203,54 @@ async def _disparar_psicometria(db: Session, p: Postulacion, paso: dict) -> Tupl
     return True, ("Enviada por " + " y ".join(env.get("canales") or [])) if env.get("enviado") else "Generada; el aviso no salió", None
 
 
+def _directo_de_solicitud(p: Postulacion, paso: dict) -> bool:
+    """La Entrevista con avatar sigue DIRECTO a la solicitud web (sin prefiltro por WhatsApp): el candidato todavía no ha
+    escrito por el chat."""
+    tipos = {x.get("tipo") for x in (p.proceso or {}).get("pasos") or [] if not x.get("heredado")
+             and sproc._indice(x.get("etapa") or "") <= sproc._indice(paso["etapa"]) and x.get("id") != paso["id"]}
+    return "solicitud_web" in tipos and not tipos & {"prefiltro_whatsapp", "prefiltro_web", "entrevista_whatsapp", "llamada_agente"}
+
+
+async def _invitar_video(db: Session, p: Postulacion, paso: dict) -> Tuple[bool, str, Optional[bool]]:
+    """2026-10-15 (Fletes «Entrevista en video»): «… El siguiente paso es una entrevista en video de 5 minutos. ¿La quieres
+    hacer ahora?» por la cascada (texto libre → plantilla META_PLANTILLA_VIDEO → «Pendiente de plantilla»). La liga sale
+    con su respuesta (`agenda_chat.decidir_ahora`)."""
+    from ..config import settings
+    from . import agenda_chat
+    from .mensajeria import de_cuenta
+    from .reintento_plantillas import registrar_envio
+    from .whatsapp import enviar_en_cascada
+
+    texto = agenda_chat.invitacion_video(p)
+    db.flush()
+    if not p.telefono:
+        entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {p.vacante.titulo if p.vacante else 'la vacante'}", "",
+                                           motivo="entrevista", paso_id=paso["id"])
+        return True, (f"Invitación enviada por {detalle}" if entregado else f"La invitación no salió ({detalle})"), entregado
+    try:
+        with de_cuenta(p.cuenta_id):
+            envio = await enviar_en_cascada(p.telefono, texto, (settings.meta_plantilla_video or "entrevista_video_rh").strip(),
+                                            agenda_chat.parametros_video(p), settings.meta_plantilla_idioma)
+    except Exception as ex:  # noqa: BLE001
+        envio = {"enviado": False, "detalle": f"{type(ex).__name__}: {str(ex)[:200]}"}
+    try:
+        registrar_envio(db, p, "invitacion_video", envio, "invitacion_video")
+    except Exception as ex:  # noqa: BLE001
+        print(f"[motor_ruta] {p.codigo}: no se registró la invitación — {ex}", flush=True)
+    from ..routers.candidatos import guardar_mensaje
+
+    if envio.get("enviado") or envio.get("estado") == "pendiente":
+        guardar_mensaje(db, p, "assistant", texto if envio.get("enviado") else f"[Pendiente de plantilla] {texto}", "whatsapp", envio)
+    from . import envios
+
+    envios.registrar(db, p, [{"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, **envio}],
+                     motivo="entrevista", paso_id=paso["id"], actor=ACTOR, destinatario="candidato")
+    ok = bool(envio.get("enviado") or envio.get("estado") == "pendiente")
+    return ok, ("Invitación a la entrevista en video enviada" if envio.get("enviado") else
+                "Invitación pendiente de plantilla" if ok else f"La invitación no salió ({envio.get('detalle') or envio.get('error') or ''})"), \
+        bool(envio.get("enviado"))
+
+
 async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple[bool, str, Optional[bool]]:
     from ..config import settings
     from .entrevistas import crear_entrevista_para_candidato, iniciar_whatsapp
@@ -210,6 +258,8 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
     if paso["tipo"] == "entrevista_whatsapp":  # 2026-10-09: por texto en el chat, sin liga
         ok, detalle, entregado, _e = await iniciar_whatsapp(db, p, ACTOR, paso_id=paso["id"])
         return ok, detalle, entregado
+    if paso["tipo"] == "entrevista_agente" and _directo_de_solicitud(p, paso):
+        return await _invitar_video(db, p, paso)
     e, _ = crear_entrevista_para_candidato(db, p, ACTOR, paso_tipo=paso["tipo"])
     liga = f"{settings.app_url}/entrevista/{e.token}"
     if paso["tipo"] == "llamada_agente":

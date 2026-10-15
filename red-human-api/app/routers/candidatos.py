@@ -980,6 +980,16 @@ async def postular(
     from ..services import telegram as tg
     from ..services.mensajeria import canal_de_cuenta
 
+    # Cambio 50: «Unas preguntas» de la solicitud ES el prefiltro web — una respuesta que coincide con «Descarta si»
+    # descarta AL ENVIAR (mensaje genérico, sin motivo; el motivo queda en el historial). No sale la plantilla de inicio.
+    from ..services import solicitud_web as _ssw
+
+    descarte = await _ssw.al_enviar(db, p) if p.activa else None
+    if descarte:
+        return {"ok": True, "candidato": c.codigo, "postulacion": p.codigo, "nombre": c.nombre, "nuevo": nuevo_candidato,
+                "postulacionNueva": nueva_postulacion, "documentos": None, "telegram": "",
+                "cv": {"procesado": resultado_cv.get("ok", False), "avisos": resultado_cv.get("avisos", [])},
+                **canales_publicos(vac, db), **descarte}
     canal_cuenta = canal_de_cuenta(db, p.cuenta_id) if tg.activo() else "whatsapp"
     canales = canales_publicos(vac, db)
     # 2026-10-13: la liga de Telegram de la postulación SOLO si el canal configurado incluye Telegram (nunca en «solo WhatsApp»)
@@ -1223,6 +1233,13 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
     if not puede:
         registrar(db, "agente-ia", "agenda_detenida_por_ruta", "postulacion", p.codigo, {"motivo": motivo})
         return {"enviado": False, "detalle": f"No se agenda: {motivo}", "texto": ""}
+    paso_avatar = sproc.paso_de_tipo(p, "entrevista_agente")
+    from ..services import motor_ruta as _mr
+
+    if paso_avatar is not None and _mr._directo_de_solicitud(p, paso_avatar):
+        # 2026-10-15 (Fletes «Entrevista en video»): sin prefiltro de por medio la invitación la manda el motor
+        # («… entrevista en video de 5 minutos. ¿La quieres hacer ahora?»), nunca dos invitaciones
+        return {"enviado": None, "detalle": "La invitación la manda el motor de la ruta", "texto": ""}
     texto = _texto_apto(p)
     # 2026-10-13: el candidato debe confirmar horario → plantilla `aviso_proceso_rh` (sirve fuera de la ventana de 24 h)
     from ..services import plantillas_meta
@@ -1560,9 +1577,69 @@ async def _reanudar_entrevista_ia(db: Session, p: Postulacion, e, texto: str, hi
     return {"respuesta": respuesta, "clasificacion": None, "ia": False, "whatsapp": envio, "entrevista_reabierta": e.codigo}
 
 
+_RE_GRACIAS = re.compile(r"^(muchas |mil |ok,? |okay,? |va,? |sale,? |si,? |listo,? |perfecto,? |vale,? )*(gracias|grax|thx|"
+                         r"te lo agradezco|se agradece|muy amable)( a (ti|usted))?( (de nuevo|por todo|por la informacion|"
+                         r"por la info))?[!. 🙏😊👍🙌]*$")
+
+
+def es_agradecimiento(texto: str) -> bool:
+    """Cambio 54: el candidato solo da las gracias («Gracias», «ok gracias», «muchas gracias 🙏», «👍»)."""
+    t = _norm_resp(texto).strip(" .!¡")
+    return bool(t) and (bool(_RE_GRACIAS.match(t)) or t in ("👍", "🙏", "🙌", "👌", "😊"))
+
+
+def _ultimo_del_bot(p: Postulacion) -> str:
+    return next((m.texto or "" for m in reversed(p.mensajes or []) if m.rol == "assistant"), "")
+
+
+async def _con_gusto(db: Session, p: Postulacion, canal: str) -> dict:
+    """Cambio 54: terminó la actividad y el candidato dice «Gracias» → «Con gusto, [nombre].» UNA vez y después silencio
+    (nunca otro cierre, nunca saltar a otra vacante)."""
+    if _ultimo_del_bot(p).startswith("Con gusto"):
+        db.commit()
+        return {"respuesta": "", "clasificacion": None, "ia": False, "whatsapp": {"enviado": False, "detalle": "Sin respuesta (ya se dijo «Con gusto»)"},
+                "silencio": True}
+    nombre = nombre_ficha(p) or ""
+    nombre = "" if not nombre or nombre.startswith("Candidato") else nombre.split(" ")[0]
+    respuesta = f"Con gusto{', ' + nombre if nombre else ''}."
+    envio = await _enviar_whatsapp(p, respuesta, canal)
+    guardar_mensaje(db, p, "assistant", respuesta, canal, envio)
+    db.commit()
+    return {"respuesta": respuesta, "clasificacion": None, "ia": False, "whatsapp": envio, "con_gusto": True}
+
+
+def _liga_pendiente(db: Session, p: Postulacion, canal: str) -> bool:
+    """La actividad actual espera algo del candidato con una liga (entrevista, documentos…): no terminó — su «gracias» recibe
+    el recordatorio de la liga (una sola vez: el mismo mensaje nunca se repite)."""
+    try:
+        from ..services.canal_proceso import seguimiento
+
+        guia = seguimiento(db, p) if canal == "whatsapp" else None
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(guia and guia.get("url"))
+
+
+def _pregunta_en_curso(p: Postulacion) -> bool:
+    """¿El bot está esperando la respuesta a UNA pregunta concreta (prefiltro, «¿La quieres hacer ahora?», propuesta)?"""
+    from ..services import agenda_chat
+    from ..services import prefiltro_conversacional as pconv
+    from ..services import propuesta as sprop
+
+    if pconv.aplica(p) and not pconv.estado(p).get("resultado"):
+        return True
+    if ((p.analisis or {}).get(agenda_chat.CLAVE) or {}).get("pregunta_ahora"):
+        return True
+    return bool(sprop.esperando_respuesta(p))
+
+
 async def _procesar_turno_post_completo(db: Session, p: Postulacion, texto: str, canal: str) -> dict:
     """No queda nada pendiente que la IA deba coordinar (no_cumple ya avisado, o cumple con
-    videollamada ya agendada) — se responde con un mensaje fijo, sin volver a llamar al modelo."""
+    videollamada ya agendada) — se responde con un mensaje fijo, sin volver a llamar al modelo.
+    Cambio 54: un mensaje que ya se mandó (p. ej. el cierre) NUNCA se repite: si la respuesta fija es idéntica al último
+    mensaje del bot, se calla."""
+    if es_agradecimiento(texto) and not _liga_pendiente(db, p, canal):
+        return await _con_gusto(db, p, canal)
     if p.videollamada_agendada_en:
         respuesta = "¡Ya tienes tu videollamada agendada! Si necesitas reagendar, avísame y lo vemos. 🙌"
     elif p.estado == "no_cumple":
@@ -1579,6 +1656,9 @@ async def _procesar_turno_post_completo(db: Session, p: Postulacion, texto: str,
         guia = seguimiento(db, p) if canal == "whatsapp" else None
         if guia:
             respuesta = guia["texto"] + (f"\n\n👉 {guia['boton']}: {guia['url']}" if guia.get("url") else "")
+    if respuesta.strip() == _ultimo_del_bot(p).strip():
+        db.commit()  # Cambio 54: el mismo mensaje (cierre, seguimiento) se envía UNA sola vez
+        return {"respuesta": "", "clasificacion": None, "ia": False, "whatsapp": {"enviado": False, "detalle": "Ya enviado"}, "silencio": True}
     envio = await _enviar_whatsapp(p, respuesta, canal)
     guardar_mensaje(db, p, "assistant", respuesta, canal, envio)
     db.commit()
@@ -1739,6 +1819,9 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     e_wa = sent.entrevista_whatsapp_activa(p)
     if e_wa is not None:
         return await sent.turno_whatsapp(db, p, e_wa, texto, canal)
+    if es_agradecimiento(texto) and not _pregunta_en_curso(p) and not _liga_pendiente(db, p, canal):
+        # Cambio 54: terminó la actividad y solo dice «Gracias» → «Con gusto, [nombre].» y silencio
+        return await _con_gusto(db, p, canal)
 
     # Seguro de ejecución (2026-10-09): el bot NUNCA arranca un prefiltro sin guion. Si la vacante (p. ej. de un candidato
     # antiguo) no tiene el de las actividades de prefiltro de SU ruta, se genera Just-In-Time antes del primer mensaje.
@@ -1752,6 +1835,13 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
         r = await pconv.turno(db, p, texto, canal, reconexion=reconexion)
         if r is not None:
             return r
+
+    # 2026-10-15 (Fletes «Entrevista en video»): el bot preguntó «¿La quieres hacer ahora?» sin prefiltro de por medio →
+    # su respuesta la atiende la agenda (liga ya / liga con 3 días)
+    from ..services import agenda_chat as _agc
+
+    if _agc.esperando_ahora(p) and not p.videollamada_liga and sproc.agente_puede_actuar(p, "entrevista_agente")[0]:
+        return await _procesar_turno_agenda(db, p, historial, canal)
 
     # Zero-Touch fase 1: apto y sin videollamada agendada -> herramienta de agendamiento (nunca con entrevista por liga).
     if (p.prefiltro_completo and p.estado == "cumple" and not p.videollamada_agendada_en and not entrevista_por_liga(p)

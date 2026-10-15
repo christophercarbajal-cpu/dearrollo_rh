@@ -179,11 +179,13 @@ def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
     v = p.vacante if p else None
     guion = guion_conversacion(e)
     bloque = ""
+    from .evaluacion_integral import respuestas_previas
+
+    previas = respuestas_previas(p) if p else []
     if guion.get("operativo"):
         from . import entrevista_operativa as eop
-        from .evaluacion_integral import respuestas_previas
 
-        bloque = eop.bloque_prompt(guion, respuestas_previas(p) if p else [], historial if historial is not None else e.transcript)
+        bloque = eop.bloque_prompt(guion, previas, historial if historial is not None else e.transcript)
     return ia.prompt_entrevistador(
         v.titulo if v else "vacante general", v.requisitos if v else "", nombre_para_entrevista(e),
         list(guion.get("preguntas") or []), empresa=nombre_empresa_candidato(v) if v else "la empresa",
@@ -192,6 +194,7 @@ def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
         modalidad=(v.modalidad if v else "") or "", sueldo=(v.sueldo if v else "") or "",
         beneficios=list(v.beneficios or []) if v else [], area=(v.area if v else "") or "",
         canal=e.tipo, guion_de_vacante=bool(guion.get("seccion")), bloque_operativo=bloque,
+        ya_respondido=[] if bloque else previas,  # Cambio 52 (el bloque operativo ya trae lo respondido)
     ) + (f"\nLA PRIMERA PREGUNTA («{PRIMERA_PREGUNTA_FIJA}») YA SE HIZO en el mensaje de transición: no la repitas ni "
          "vuelvas a presentarte; toma su respuesta y continúa con la SIGUIENTE pregunta del guion.\n" if e.tipo == "whatsapp" else "")
 
@@ -209,7 +212,7 @@ def preguntas_de(e: Entrevista, historial: Optional[list] = None) -> list:
 
 
 def mensaje_inicial(p: Postulacion, primera: str = "", pedir_permiso: bool = False) -> str:
-    """«Listo, [nombre]. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?» (Cambio 19): un solo
+    """«Listo, [nombre]. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?» (Cambio 19): un solo
     mensaje, sin presentarse de nuevo, sin reglas internas ni «¿Comenzamos?»."""
     from ..routers.candidatos import nombre_ficha
 
@@ -240,6 +243,87 @@ def _norm(t: str) -> str:
     return " ".join(unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().lower().split())
 
 
+def directo_de_solicitud(p: Postulacion) -> bool:
+    """2026-10-15 (Grupak «Operativo básico»): la Entrevista Red Human por WhatsApp sigue DIRECTO a la solicitud web (sin
+    prefiltro por WhatsApp): el bot todavía no ha hablado con el candidato."""
+    pasos = [x for x in (p.proceso or {}).get("pasos") or [] if not x.get("heredado")]
+    i = next((n for n, x in enumerate(pasos) if x.get("tipo") == "entrevista_whatsapp"), None)
+    if i is None:
+        return False
+    antes = {x.get("tipo") for x in pasos[:i]}
+    return "solicitud_web" in antes and not antes & {"prefiltro_whatsapp", "prefiltro_web", "entrevista_agente", "llamada_agente"}
+
+
+async def _iniciar_directo(db: Session, p: Postulacion, e: Entrevista, actor: str, paso_id: str,
+                           ahora: datetime) -> Tuple[bool, str, Optional[bool], Entrevista]:
+    """Primer mensaje cuando la entrevista sigue directo a la solicitud: «Hola, [nombre]. Soy Red Human, el agente
+    virtual de [empresa]. Recibimos tu postulación para [puesto]. Ahora te haré unas preguntas sobre tu experiencia.
+    [primera pregunta]». Sale por la cascada: si el candidato no ha escrito (sin ventana de 24 h) va la plantilla
+    `inicio_entrevista_rh` y la entrevista espera su «Sí» para empezar (Cambio 51: transición, nunca «RH te escribirá»)."""
+    from ..config import settings
+    from . import entrevista_whatsapp_fija as ewf
+    from . import plantillas_meta
+    from .ia import presentacion_bot
+    from .mensajeria import de_cuenta
+    from .prefiltro_conversacional import empresa_de, marcar_presentado, ya_presentado
+    from .reintento_plantillas import registrar_envio
+    from .whatsapp import enviar_en_cascada
+
+    refrescar_guion(e)
+    primera = ewf.primera(e) if ewf.aplica(e) else PRIMERA_PREGUNTA_FIJA
+    v = plantillas_meta.valores_inicio(p)
+    nombre = v.get("nombre") or ""
+    presentacion = "" if ya_presentado(p) else f" {presentacion_bot(empresa_de(p))}"
+    nombre = "" if nombre in ("-", "candidato(a)") else nombre
+    texto = (f"Hola{', ' + nombre if nombre else ''}.{presentacion} Recibimos tu postulación para {v.get('puesto') or 'la vacante'}. "
+             f"Ahora te haré unas preguntas sobre tu experiencia. {primera}")
+    marcar_presentado(p)
+    try:
+        with de_cuenta(p.cuenta_id):
+            envio = await enviar_en_cascada(p.telefono, texto, plantillas_meta.nombre_plantilla_inicio(), plantillas_meta.parametros_inicio(p),
+                                            settings.meta_plantilla_idioma)
+    except Exception as ex:  # noqa: BLE001
+        envio = {"enviado": False, "detalle": f"{type(ex).__name__}: {str(ex)[:200]}"}
+    from ..routers.candidatos import guardar_mensaje
+
+    g = dict(e.guion or {})
+    if envio.get("enviado") and envio.get("formato") != "plantilla":
+        # texto libre entregado: la entrevista arranca en este mensaje (consentimiento = aviso de privacidad aceptado)
+        e.consentimiento, e.consentimiento_fecha = True, ahora
+        e.estado, e.iniciada_en = "en_curso", ahora
+        e.transcript = [{"rol": "assistant", "texto": texto}]
+        guardar_mensaje(db, p, "assistant", texto, "whatsapp", envio)
+    else:
+        # plantilla de inicio (o pendiente de plantilla): la entrevista espera el «Sí» del candidato
+        g["via_plantilla"] = True
+        plantillas_meta._guardar(p, {"enviada_en": ahora.isoformat(), "plantilla": plantillas_meta.nombre_plantilla_inicio(),
+                                     "entregada": bool(envio.get("enviado")), "entrevista": e.codigo})
+        if envio.get("enviado") or envio.get("estado") == "pendiente":
+            guardar_mensaje(db, p, "assistant", plantillas_meta.texto_inicio(p) if envio.get("enviado") else f"[Pendiente de plantilla] {texto}",
+                            "whatsapp", envio)
+    e.guion = g
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(e, "guion")
+    except Exception:  # noqa: BLE001
+        pass
+    e.ultima_actividad_en = ahora
+    try:
+        registrar_envio(db, p, "inicio_entrevista_whatsapp", envio, "inicio_prefiltro")
+    except Exception as ex:  # noqa: BLE001
+        print(f"[entrevistas] {p.codigo}: no se registró el inicio — {ex}", flush=True)
+    from . import envios
+
+    envios.registrar(db, p, [{"destinatario": "candidato", "canal": "whatsapp", "destino": p.telefono, **envio}],
+                     motivo="entrevista", paso_id=paso_id, actor=actor, destinatario="candidato")
+    entregado = bool(envio.get("enviado"))
+    ok = entregado or envio.get("estado") == "pendiente"
+    return ok, ("Entrevista iniciada por WhatsApp" if entregado and envio.get("formato") != "plantilla" else
+                "Plantilla de inicio enviada" if entregado else "Pendiente de plantilla" if ok else
+                f"El mensaje no salió ({envio.get('error') or envio.get('detalle') or ''})"), entregado, e
+
+
 async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str = "") -> Tuple[bool, str, Optional[bool], Entrevista]:
     """Crea (o reutiliza) la entrevista por WhatsApp y manda la transición. 2026-10-11 (tarde): sin pedir permiso — el
     candidato ya aceptó el aviso de privacidad (que dice que el proceso lo conduce una IA), así que la entrevista arranca
@@ -254,6 +338,8 @@ async def iniciar_whatsapp(db: Session, p: Postulacion, actor: str, paso_id: str
     if not p.telefono:
         return False, "El candidato no tiene teléfono: la entrevista por WhatsApp no se puede iniciar.", None, e
     ahora = datetime.now(timezone.utc)
+    if p.consentimiento and e.estado == "programada" and directo_de_solicitud(p) and not any(m.rol == "user" for m in p.mensajes or []):
+        return await _iniciar_directo(db, p, e, actor, paso_id, ahora)
     if p.consentimiento and e.estado == "programada":
         refrescar_guion(e)
         from . import entrevista_whatsapp_fija as ewf
@@ -304,6 +390,11 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         e.consentimiento_fecha = ahora
         e.estado = "en_curso"
         e.iniciada_en = ahora
+        via_plantilla = bool((e.guion or {}).get("via_plantilla"))
+        if via_plantilla:
+            from . import plantillas_meta
+
+            plantillas_meta.marcar_respuesta(db, p, texto)
         intro = mensaje_inicial(p, pedir_permiso=True)
         registrar(db, p.candidato.codigo if p.candidato else "candidato", "consentimiento_entrevista", "entrevista", e.codigo,
                   {"canal": canal, "respuesta": texto[:120]})
@@ -311,6 +402,9 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         from . import entrevista_whatsapp_fija as ewf
 
         primera = ewf.primera(e) if ewf.aplica(e) else PRIMERA_PREGUNTA_FIJA
+        if via_plantilla:
+            # 2026-10-15: contestó la plantilla de inicio («Sí, empezar ahora») → transición + primera pregunta (Cambio 51)
+            primera = ewf.transicion(p, primera) if ewf.aplica(e) else mensaje_inicial(p, primera)
         e.transcript = [{"rol": "assistant", "texto": intro}, {"rol": "user", "texto": texto[:2000]},
                         {"rol": "assistant", "texto": primera}]
         return await responder(primera, ia_entrevista=False)

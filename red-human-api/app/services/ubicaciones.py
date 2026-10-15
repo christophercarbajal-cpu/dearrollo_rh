@@ -205,7 +205,7 @@ def elegir(ubics: List[Ubicacion], texto: str) -> Optional[Ubicacion]:
 
 def ubicacion_de(db: Optional[Session], p: Postulacion) -> Optional[Ubicacion]:
     """La que eligió el candidato; si la vacante tiene una sola, esa."""
-    db = db or object_session(p)
+    db = db or object_session(p) or (object_session(p.vacante) if getattr(p, "vacante", None) is not None else None)
     if db is None:
         return None
     if p.ubicacion_id:

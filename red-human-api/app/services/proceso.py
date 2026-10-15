@@ -163,6 +163,7 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             tipo = real
         if tipo not in TIPOS_PASO:
             raise ErrorProceso(400, f"Tipo de paso inválido: «{tipo}». Usa uno de: {', '.join(CATALOGO_ACTIVIDADES)}.")
+
         defs = TIPOS_PASO[tipo]
         etapa = crudo.get("etapa") or defs["etapa"]
         if etapa not in defs["etapas"] and not (crudo.get("adhoc") and etapa in ETAPAS_CANDIDATO):
@@ -406,9 +407,9 @@ PROCESOS_EJEMPLO = {
     },
     "administrativo_completo": {
         "nombre": "Administrativo completo",
-        "descripcion": "Prefiltro web → Entrevista Red Human → psicometría → entrevista humana → referencias → contratación → onboarding.",
+        "descripcion": "Solicitud web → Entrevista Red Human → psicometría → entrevista humana → referencias → contratación → onboarding.",
         "pasos": [
-            {"id": "prefiltro_web", "tipo": "prefiltro_web", "obligatorio": True},
+            {"id": "solicitud_web", "tipo": "solicitud_web", "obligatorio": True},
             {"id": "entrevista_agente", "tipo": "entrevista_agente", "obligatorio": True, "regla": {"tipo": "calificacion", "minimo": 70}},
             {"id": "psicometria", "tipo": "psicometrica", "obligatorio": True, "plazo_dias": 5},
             {"id": "entrevista_humana", "tipo": "entrevista_humana", "obligatorio": True, "depende_de": ["psicometria"],

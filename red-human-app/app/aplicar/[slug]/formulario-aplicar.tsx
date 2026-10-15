@@ -51,6 +51,8 @@ export default function FormularioAplicar() {
   const [done, setDone] = useState(false);
   const [canal, setCanal] = useState<CanalExito>({ canal: "whatsapp", telegram: "", whatsapp: "" });
   // Cambio 42: «Documentos» sigue inmediatamente a «Solicitud web» → se suben aquí mismo, archivo por archivo
+  // Cambio 50: «Unas preguntas» es el prefiltro — si una respuesta coincide con «Descarta si» se cierra al enviar
+  const [descarte, setDescarte] = useState("");
   const [docsWeb, setDocsWeb] = useState<({ token: string } & Partial<ExpedientePublico>) | null>(null);
   const [consent, setConsent] = useState(false);
   const [cv, setCv] = useState<File | null>(null);
@@ -97,6 +99,9 @@ export default function FormularioAplicar() {
     }
     return m;
   }, [vacante]);
+
+  /** Cambio 50: preguntas abiertas de «Unas preguntas» (p. ej. colonia y municipio) — texto libre, nunca descartan. */
+  const abiertas = useMemo(() => new Set((vacante?.criterios ?? []).filter((c) => c.tipo === "abierta").map((c) => c.pregunta)), [vacante]);
 
   // 2026-10-09: el CV solo es obligatorio si la ruta de la vacante lo pide (Análisis de CV o solicitud con CV)
   const pideCv = vacante?.pideCv !== false;
@@ -152,7 +157,8 @@ export default function FormularioAplicar() {
         telegram: d?.telegram ?? "",
         whatsapp: d?.whatsappLiga ?? "",
       });
-      if (d?.documentos?.token) setDocsWeb(d.documentos);
+      if (d?.descartado) setDescarte(d.mensaje || "Gracias por tu interés. En esta ocasión no continuaremos con tu postulación.");
+      else if (d?.documentos?.token) setDocsWeb(d.documentos);
       setDone(true);
     } catch (err) {
       setEnviando(false);
@@ -220,6 +226,10 @@ export default function FormularioAplicar() {
           <Card className="mt-6 p-6 text-center" role="status">
             <p className="text-[15px] font-medium">{aviso}</p>
             <p className="mt-1 text-sm text-ink-3">Vuelve a intentarlo más adelante o revisa otras vacantes en la bolsa de trabajo.</p>
+          </Card>
+        ) : done && descarte ? (
+          <Card className="mt-8 p-6 text-center" role="status">
+            <p className="text-[15px] font-medium">{descarte}</p>
           </Card>
         ) : done ? (
           <>
@@ -360,6 +370,16 @@ export default function FormularioAplicar() {
                     <div className="flex flex-col gap-4">
                       {preguntas.map((q, i) => {
                         const opciones = opcionesPorPregunta[q] ?? ["Sí", "No"];
+                        if (abiertas.has(q)) {
+                          return (
+                            <label key={i} className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">{q}</span>
+                              <input type="text" value={respuestas[q] ?? ""} maxLength={200}
+                                onChange={(e) => setRespuestas((r) => ({ ...r, [q]: e.target.value }))}
+                                className="h-11 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none focus:border-brand" />
+                            </label>
+                          );
+                        }
                         if (q in numericas) {
                           return (
                             <label key={i} className="flex flex-col gap-2">

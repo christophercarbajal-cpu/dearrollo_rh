@@ -132,6 +132,11 @@ class Settings(BaseSettings):
     # plantilla» y se reintenta (misma cascada que los avisos a evaluadores).
     meta_plantilla_descarte: str = "descarte_postulacion_rh"
     meta_plantilla_descarte_params: str = "empresa"
+    # 2026-10-15 (Fletes «Entrevista en video»): la ruta pasa de la solicitud web DIRECTO a la Entrevista con avatar — el
+    # bot abre el chat con «Hola, {{1}}. Soy Red Human, el agente virtual de {{2}}. El siguiente paso de tu postulación a
+    # {{3}} es una entrevista en video de 5 minutos. ¿La quieres hacer ahora?». Misma cascada que el inicio del prefiltro.
+    meta_plantilla_video: str = "entrevista_video_rh"
+    meta_plantilla_video_params: str = "nombre,empresa,puesto"
 
     # --- Telegram (2026-10-06): canal adicional por Cuenta (`Cuenta.canal_mensajeria`) ---
     # TELEGRAM_BOT_TOKEN solo vive aquí (servidor). Vacío = Telegram no disponible: las Cuentas que lo elijan

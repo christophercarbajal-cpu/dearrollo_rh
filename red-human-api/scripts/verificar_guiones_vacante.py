@@ -275,7 +275,7 @@ with TestClient(app) as client:
     intro = (e3.transcript or [{}])[0].get("texto", "")
     # 2026-10-12: la primera pregunta de la transición se inyecta FIJA (nunca la del guion ni la del LLM); el guion
     # vigente (con la edición de RH) sigue desde su pregunta 2
-    check(intro == "Listo, Rosa. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?" and p3.espera_respuesta,
+    check(intro == "Listo, Rosa. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?" and p3.espera_respuesta,
           f"la transición lleva la primera pregunta FIJA, sin pedir permiso: {intro!r}")
     r2 = asyncio.run(procesar_prefiltro(db, p3, "No tengo experiencia operando montacargas; trabajé en almacén acomodando cajas.", "whatsapp"))
     check(r2["respuesta"] == "Cuéntame cómo cuidas la seguridad al cargar.", "segunda pregunta del guion, en orden")

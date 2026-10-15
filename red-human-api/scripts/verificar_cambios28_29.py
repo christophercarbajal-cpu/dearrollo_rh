@@ -287,7 +287,7 @@ with TestClient(app) as client:
     db.commit()
     crit = pconv.criterios_de(vo)
     check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "edad", "interes", "sueldo",
-                                                            "zona", "puede_trasladarse", "traslado"],
+                                                            "zona", "traslado"],
           f"ruta Masivos: base fija en orden (indispensables → edad → puesto → sueldo → colonia → traslado) {[c['dato'] for c in crit]}")
     check(not any(c["dato"] == "transporte" for c in crit) and not any("organizad" in c["chat"] or "equipo" in c["chat"].lower() for c in crit),
           "sin pregunta de transporte ni habilidades blandas (lo generado antes por IA se ignora)")
@@ -297,8 +297,10 @@ with TestClient(app) as client:
     check(not any(c["chat"].startswith(("Cuéntame", "¿Cumples")) or "Para esta vacante se pide" in c["chat"] for c in crit[:3])
           and crit[0]["chat"] == "¿Cuál es tu último grado de estudios?" and crit[1]["chat"].startswith("¿Cuánt"),
           f"los indispensables se preguntan directo ({[c['chat'] for c in crit[:3]]})")
-    check(crit[4]["chat"] == "El puesto es Almacenista. ¿Te interesa?" and crit[5]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"
-          and crit[7]["chat"] == "El trabajo es en Zapopan, Jalisco. ¿Puedes trasladarte?", "textos fijos de puesto, sueldo y traslado")
+    # Cambio 51: el puesto lleva ciudad y estado; ya no se pregunta «¿Puedes trasladarte?»
+    check(crit[4]["chat"] == "El puesto es Almacenista en Zapopan, Jalisco. ¿Te interesa?"
+          and crit[5]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"
+          and crit[7]["chat"] == "¿Cuánto tiempo harías de tu casa al trabajo?", f"textos fijos de puesto, sueldo y traslado {[c['chat'] for c in crit[4:]]}")
     ficha = ia.FichaGuion(titulo="Almacenista", requisitos_indispensables=REQS.split(" · "), sueldo="Desde $9,500 MXN mensuales",
                           ubicacion="Zapopan, Jalisco", enfoque_entrevista="operativo", ruta_masiva=True)
     wa = ia.generar_guiones(ficha, ["prefiltro_whatsapp"], hay_whatsapp=True)[0]["prefiltro_whatsapp"]
@@ -331,15 +333,14 @@ with TestClient(app) as client:
     r = chat(q1, "Puedo mañana y tarde")
     check(r.endswith("¿Cuántos años tienes?"), f"edad después de los indispensables → «{r}»")
     r = chat(q1, "17")
-    check(r.endswith("El puesto es Almacenista. ¿Te interesa?"), "puesto")
+    check(r.endswith("El puesto es Almacenista en Zapopan, Jalisco. ¿Te interesa?"), f"puesto (Cambio 51: con ciudad y estado) → «{r}»")
     r = chat(q1, "sí")
     check(r.endswith("El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"), "sueldo")
     r = chat(q1, "claro")
     check(r.endswith("¿En qué colonia y municipio vives?"), "colonia y municipio")
     r = chat(q1, "Colonia Centro, Zapopan")
-    check(r.endswith("¿Puedes trasladarte?"), "¿puedes trasladarte?")
-    r = chat(q1, "sí")
-    check(r.endswith("¿Cuánto tiempo harías de tu casa al trabajo?"), "tiempo de traslado")
+    # Cambio 51: ya no se pregunta «¿Puedes trasladarte?» (la ciudad va en la pregunta del puesto)
+    check(r.endswith("¿Cuánto tiempo harías de tu casa al trabajo?"), f"tiempo de traslado → «{r}»")
     r = chat(q1, "2 horas")
     db.refresh(q1)
     datos = (q1.analisis or {}).get("prefiltro_datos") or {}
@@ -411,7 +412,7 @@ with TestClient(app) as client:
     db.refresh(q4)
     e4 = next(x for x in q4.entrevistas if x.tipo == "whatsapp")
     transicion = (e4.transcript or [{}])[0].get("texto", "")
-    check(q4.etapa == "Entrevista IA" and transicion == "Listo, Mario. Ahora unas preguntas sobre tu experiencia. ¿Trabajas actualmente?",
+    check(q4.etapa == "Entrevista IA" and transicion == "Listo, Mario. Ahora te haré unas preguntas sobre tu experiencia. ¿Trabajas actualmente?",
           f"transición exacta + A. situación actual → «{transicion[:90]}»")
     pasos = [("No", "¿Cuánto tiempo llevas sin trabajar?"), ("2 meses", "¿Cuál fue tu último trabajo?"),
              ("Bodega del Centro", "¿Qué puesto tenías?"), ("Almacenista", "¿Qué hacías ahí?"),
@@ -430,32 +431,28 @@ with TestClient(app) as client:
     check(ok, "A → B (hasta 3 trabajos, repregunta de despido y renuncia) → C (pregunta propia de RH), una por mensaje")
     empresa = nombre_empresa_candidato(vo)
     r = chat(q4, "Un poco")
-    check(r == f"Para confirmar, el puesto es Almacenista en {empresa}. ¿Te interesa?", f"D. confirmación del puesto → «{r}»")
-    r = chat(q4, "Sí")
-    check(r == "El sueldo es desde $9,500 MXN mensuales. ¿Estás de acuerdo?", f"→ sueldo «{r}»")
-    r = chat(q4, "No, es poco")
-    check(r == "El trabajo es en Zapopan, Jalisco. ¿Puedes trasladarte?", "→ traslado")
-    r = chat(q4, "Sí")
-    check(r == "¿Cuándo podrías empezar?", "→ inicio")
+    # Cambio 52: puesto, sueldo y ubicación ya se dijeron en el prefiltro → el bloque D solo pregunta el inicio
+    check(r == "¿Cuándo podrías empezar?", f"D. sin repetir puesto/sueldo/ubicación → «{r}»")
     r = chat(q4, "El lunes")
     check(r == f"Con esto terminamos, Mario. Gracias por tu tiempo. El equipo de Recursos Humanos de {empresa} te contactará para "
               "agendar una entrevista.", f"cierre exacto → «{r}»")
     db.refresh(q4)
     textos = [m["texto"] for m in (next(x for x in q4.entrevistas if x.tipo == "whatsapp").transcript or []) if m.get("rol") == "assistant"]
-    check(all(cuenta.nombre not in t for t in textos) and sum(empresa in t for t in textos) >= 2,
+    check(all(cuenta.nombre not in t for t in textos) and sum(empresa in t for t in textos) >= 1,
           "un solo nombre de empresa en toda la conversación (nunca el nombre interno de la Cuenta)")
     e = next(x for x in q4.entrevistas if x.tipo == "whatsapp")
     op = (e.evaluacion or {}).get("operativa") or {}
     check(e.estado == "evaluada" and op.get("fija"), "la entrevista se cierra y se evalúa")
     puntos = " ".join(op.get("puntos") or [])
-    check("Inconsistencia" in puntos and "sueldo" in puntos and "despid" in puntos.lower(),
-          f"contradicción con el prefiltro (sueldo) y salida por despido → Puntos por validar: {op.get('puntos')}")
+    check("despid" in puntos.lower(), f"salida por despido → Puntos por validar: {op.get('puntos')}")
     check(op["requisitos"]["experiencia"]["estado"] == "cumple" and op["recomendacion"] == "con_reservas",
           "recomendación calculada sobre el historial (experiencia similar + puntos → «Con reservas»)")
     d = postulacion_dict(q4, detalle=True)
     hist = d["historialLaboral"]
-    check(len(hist) == 2 and hist[0]["empresa"] == "Bodega del Centro" and hist[0]["puesto"] == "Almacenista"
-          and hist[0]["duracion"] == "2 años" and "Por faltas" in hist[0]["motivo"] and hist[1]["empresa"] == "Tiendas Oxxo",
+    # Cambio 53: no trabaja → primero la fila «Sin empleo actual» (tiempo sin trabajar) y debajo su último empleo
+    check(len(hist) == 3 and hist[0]["empresa"] == "Sin empleo actual" and hist[0]["duracion"] == "2 meses"
+          and hist[1]["empresa"] == "Bodega del Centro" and hist[1]["puesto"] == "Almacenista"
+          and hist[1]["duracion"] == "2 años" and "Por faltas" in hist[1]["motivo"] and hist[2]["empresa"] == "Tiendas Oxxo",
           "la ficha trae la tabla «Historial laboral» (empresa, puesto, tareas, duración, motivo)")
 
     q5 = postular_op("Sofía Actual", "5512990005")

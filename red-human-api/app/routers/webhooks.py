@@ -400,6 +400,15 @@ async def _resolver_postulacion(
     return p, "postulacion_nueva"
 
 
+def texto_cambio_vacante(p: Postulacion) -> str:
+    """Cambio 54: «Ahora seguimos con tu postulación a [puesto] en [empresa].»"""
+    from ..serial import nombre_empresa_candidato
+
+    v = p.vacante
+    empresa = nombre_empresa_candidato(v) if v is not None else ""
+    return f"Ahora seguimos con tu postulación a {v.titulo if v else 'la vacante'}{' en ' + empresa if empresa else ''}."
+
+
 def _con_plantilla_pendiente(activas: List[Postulacion], conv: Optional[Postulacion]) -> Optional[Postulacion]:
     """Cambio 37: la postulación activa con la plantilla de inicio ENVIADA y sin responder más reciente — siempre que el
     candidato no haya escrito después en otra conversación (entonces la plantilla ya quedó atrás)."""
@@ -895,6 +904,7 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     prueba = modo_prueba_activo(db)
 
     # ── 1. Persona y postulación en conversación (dentro del alcance del número) ──
+    anterior = None  # Cambio 54: postulación en la que iba la conversación (para avisar si se cambia de vacante)
     if forzada is not None:
         c, personas, cuenta = forzada.candidato, [forzada.candidato], forzada.cuenta
         fijar_conversacion(forzada)
@@ -911,6 +921,10 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
             if nombre_wa and not c.wa_nombre:
                 c.wa_nombre = nombre_wa
         print(f"[agente] Alcance del número: {modo_numero} ({len(alcance)} Cuenta(s)); persona(s): {[x.codigo for x in personas]}")
+        for per in personas:
+            cand = per.postulacion_conversacion
+            if cand is not None and cand.vacante_id and (anterior is None or cand.id > anterior.id):
+                anterior = cand
         p, ruteo = await _resolver_postulacion(db, c, texto, id_seleccionado, alcance_ids, prueba, telefono, personas=personas)
     if p is None:
         db.commit()
@@ -920,6 +934,15 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
         return await _atender_post_descarte(db, p, texto, telefono, msg.get("wa_id", ""))
     c = p.candidato or c  # la fila de la persona en la Cuenta de la postulación elegida
     cuenta = next((x for x in alcance if x.id == p.cuenta_id), cuenta)
+    if (anterior is not None and p.vacante_id and p.consentimiento and anterior.id != p.id
+            and anterior.vacante_id != p.vacante_id and ruteo != "postulacion_nueva_por_seleccion"):
+        # Cambio 54: el agente NUNCA brinca de vacante sin avisar
+        aviso_cambio = texto_cambio_vacante(p)
+        envio_cambio = await enviar_mensaje(telefono, aviso_cambio)
+        guardar_mensaje(db, p, "assistant", aviso_cambio, "whatsapp", envio_cambio)
+        registrar(db, "agente-ia", "conversacion_cambio_vacante", "postulacion", p.codigo,
+                  {"desde": anterior.codigo, "hacia": p.codigo, "ruteo": ruteo})
+        db.flush()
     print(f"[agente] Postulación {p.codigo} ({ruteo}) — candidato={c.codigo} {c.nombre}, consentimiento={p.consentimiento}, vacante_id={p.vacante_id}, cuenta={p.cuenta_id}")
 
     # ── 1.1 Documento o imagen adjunta (2026-09-15): si la postulación ya está en Contratación u

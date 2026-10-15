@@ -201,13 +201,13 @@ with TestClient(app) as client:
     intro = next((t for t in enviados(p.telefono, desde) if t.startswith("Listo")), "")
     # 2026-10-11 (tarde): UN mensaje sin reglas internas ni permiso, con la primera pregunta del guion
     # Cambio 19: texto exacto, sin volver a presentarse
-    check(intro == "Listo, Ana. Ahora unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?",
+    check(intro == "Listo, Ana. Ahora te haré unas preguntas sobre tu experiencia. ¿Cuál fue tu último trabajo?",
           "la entrevista empieza SIN saludo y en el mismo mensaje hace la primera pregunta")
     check("Comenzamos" not in intro and "inteligencia artificial" not in intro, "…sin «¿Comenzamos?» (el aviso de IA va en el aviso de privacidad)")
     e = sent.entrevista_whatsapp_activa(p)
     s = asyncio.run(sent.turno_whatsapp(db, p, e, "Cargador en una bodega", "whatsapp"))
     check(s["respuesta"] == "¿Qué hacías en ese trabajo?", "la respuesta cuenta para la primera pregunta y sigue con la segunda")
-    check(ia.mensaje_inicial_entrevista_whatsapp("Cargador", "Luis").startswith("Listo, Luis. Ahora unas preguntas"),
+    check(ia.mensaje_inicial_entrevista_whatsapp("Cargador", "Luis").startswith("Listo, Luis. Ahora te haré unas preguntas"),
           "ya no dice «cumples con los requisitos» (sin promesas)")
 
     print("\n--- 5. Chat: «1er año de secundaria» → DESCARTA de inmediato ---")

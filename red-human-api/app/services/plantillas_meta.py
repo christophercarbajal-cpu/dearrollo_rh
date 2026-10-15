@@ -98,7 +98,9 @@ def _ya_conversa(p: Postulacion) -> bool:
     if (p.origen or "") in ("whatsapp", "telegram") or any(m.rol == "user" for m in p.mensajes or []):
         return True
     e = pconv.estado(p)
-    return bool(e.get("pendiente") or e.get("respuestas") or e.get("resultado"))
+    # Cambio 50: las respuestas de «Unas preguntas» (fuente web) no son conversación por el chat
+    por_chat = any(isinstance(r, dict) and r.get("fuente") != "web" for r in (e.get("respuestas") or {}).values())
+    return bool(e.get("pendiente") or por_chat or e.get("resultado"))
 
 
 def prefiltro_habilitado(p: Postulacion) -> bool:

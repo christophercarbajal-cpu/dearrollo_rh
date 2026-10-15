@@ -94,11 +94,14 @@ with TestClient(app) as client:
     v = r.json()
     VAC = v["id"]
     check(v["ubicacion"] == "Zapopan, Jalisco" and v["ubicacionEstado"] == "Jalisco" and v["ubicacionMunicipio"] == "Zapopan", "ubicación derivada «Zapopan, Jalisco» + campos estructurados")
-    check(len(v["criterios"]) == 3 and len(v["criteriosWhatsapp"]) == 1, "criterios web (3, el mínimo) y WhatsApp (1) guardados por separado")
+    # Cambio 50: «Unas preguntas» suma el interés en el puesto (y el sueldo, si lo hay) a las preguntas filtro
+    propios_web = [c for c in v["criterios"] if c.get("id") not in ("base-interes", "base-sueldo", "base-edad", "base-zona")]
+    check(len(propios_web) == 3 and len(v["criteriosWhatsapp"]) == 1, "criterios web (3, el mínimo) y WhatsApp (1) guardados por separado")
     r = client.patch(f"/vacantes/{VAC}", json={"ubicacion_estado": "Ciudad de México", "ubicacion_municipio": "Benito Juárez"})
     check(r.json()["ubicacion"] == "Benito Juárez, Ciudad de México", "PATCH Estado/Municipio → texto de ubicación se recalcula")
     r = client.patch(f"/vacantes/{VAC}", json={"preguntas_filtro_whatsapp": []})
-    check(r.json()["criteriosWhatsapp"] == [] and len(r.json()["criterios"]) == 3, "vaciar las de WhatsApp no toca las de la web")
+    check(r.json()["criteriosWhatsapp"] == [] and len([c for c in r.json()["criterios"] if not str(c.get("id", "")).startswith("base-")]) == 3,
+          "vaciar las de WhatsApp no toca las de la web")
     r = client.post("/vacantes", json={"titulo": "Libre", "descripcion": "x", "generar_si_falta": False, "ubicacion": "Guadalajara, JAL"})
     check(r.json()["ubicacion"] == "Guadalajara, JAL" and r.json()["ubicacionEstado"] == "", "vacante con texto libre (compatibilidad) se conserva")
 

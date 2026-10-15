@@ -79,13 +79,22 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     salida = _criterios_base(v, p)
     if v is None:
         return salida
+    from . import solicitud_web as ssw
     from . import ubicaciones as subic
 
     elegida = subic.ubicacion_de(None, p) if p is not None and p.ubicacion_id else None
+    for c in salida:
+        if c.get("dato") == "interes":
+            # Cambio 51: «El puesto es [puesto] en [ciudad, estado]. ¿Te interesa?» (la terminal elegida manda)
+            c["chat"] = c["pregunta"] = ssw.pregunta_interes(v, elegida)
+    salida = _con_reubicacion(salida, v, p, elegida)
     if elegida is not None:
         for c in salida:
             if c.get("dato") == "traslado":
-                c["chat"] = c["pregunta"] = f"¿Cuánto tiempo harías de tu casa a {elegida.nombre}?"
+                # Fletes (2026-10-15): «La Terminal [ciudad] está en [dirección]. ¿Cuánto tiempo harías de tu casa?»
+                c["chat"] = c["pregunta"] = (f"La {elegida.nombre} está en {elegida.direccion.strip().rstrip('.')}. ¿Cuánto tiempo harías "
+                                             f"de tu casa?" if (elegida.direccion or "").strip() else
+                                             f"¿Cuánto tiempo harías de tu casa a {elegida.nombre}?")
             elif c.get("dato") == "puede_trasladarse":
                 c["chat"] = c["pregunta"] = f"El trabajo es en {elegida.nombre}. ¿Puedes trasladarte?"
         return salida
@@ -93,9 +102,73 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     if terminal is None:
         return salida
     i = 0
-    while i < len(salida) and salida[i].get("indispensable") and not salida[i].get("base"):
-        i += 1
+    while i < len(salida) and ((salida[i].get("indispensable") and not salida[i].get("base")) or salida[i].get("dato") == "propia"):
+        i += 1  # 2026-10-15: las preguntas propias de RH van con su requisito (antes de la terminal)
     return salida[:i] + [terminal] + salida[i:]
+
+
+# Cambio 51: si el estado donde vive el candidato es OTRO que el de la vacante → «El trabajo es en [ciudad, estado]. ¿Vives
+# ahí o te cambiarías de ciudad?» (justo después de la colonia). Solo se registra en el resumen; nunca descarta.
+ESTADOS_MX = {
+    "Aguascalientes": ("aguascalientes", "ags"), "Baja California": ("baja california", "tijuana", "mexicali", "ensenada"),
+    "Baja California Sur": ("baja california sur", "bcs", "la paz", "los cabos"), "Campeche": ("campeche",),
+    "Chiapas": ("chiapas", "tuxtla"), "Chihuahua": ("chihuahua", "ciudad juarez", "cd juarez"),
+    "Ciudad de México": ("ciudad de mexico", "cdmx", "df", "distrito federal", "iztapalapa", "coyoacan", "azcapotzalco",
+                         "gustavo a madero", "tlalpan", "xochimilco", "benito juarez", "cuauhtemoc", "miguel hidalgo"),
+    "Coahuila": ("coahuila", "saltillo", "torreon", "monclova"), "Colima": ("colima", "manzanillo"),
+    "Durango": ("durango",), "Estado de México": ("estado de mexico", "edomex", "edo mex", "ecatepec", "nezahualcoyotl", "neza",
+                                                  "tlalnepantla", "naucalpan", "toluca", "tultepec", "tultitlan", "cuautitlan",
+                                                  "texcoco", "chalco", "coacalco", "nicolas romero", "huehuetoca"),
+    "Guanajuato": ("guanajuato", "leon", "irapuato", "celaya", "salamanca"), "Guerrero": ("guerrero", "acapulco", "chilpancingo"),
+    "Hidalgo": ("hidalgo", "pachuca", "tula", "tizayuca"),
+    "Jalisco": ("jalisco", "guadalajara", "zapopan", "tlaquepaque", "tonala", "tlajomulco", "puerto vallarta"),
+    "Michoacán": ("michoacan", "morelia", "uruapan"), "Morelos": ("morelos", "cuernavaca", "cuautla"),
+    "Nayarit": ("nayarit", "tepic"),
+    "Nuevo León": ("nuevo leon", "monterrey", "apodaca", "guadalupe nl", "san nicolas", "escobedo", "santa catarina",
+                   "san pedro garza", "juarez nl", "salinas victoria", "cienega de flores", "garcia nl"),
+    "Oaxaca": ("oaxaca",), "Puebla": ("puebla", "tehuacan", "cholula"), "Querétaro": ("queretaro", "qro", "corregidora", "el marques"),
+    "Quintana Roo": ("quintana roo", "cancun", "playa del carmen", "chetumal"), "San Luis Potosí": ("san luis potosi", "slp"),
+    "Sinaloa": ("sinaloa", "culiacan", "mazatlan", "los mochis"), "Sonora": ("sonora", "hermosillo", "ciudad obregon", "nogales", "guaymas"),
+    "Tabasco": ("tabasco", "villahermosa"), "Tamaulipas": ("tamaulipas", "reynosa", "matamoros", "nuevo laredo", "tampico", "victoria"),
+    "Tlaxcala": ("tlaxcala", "apizaco"), "Veracruz": ("veracruz", "xalapa", "coatzacoalcos", "cordoba", "orizaba", "poza rica"),
+    "Yucatán": ("yucatan", "merida"), "Zacatecas": ("zacatecas", "fresnillo"),
+}
+
+
+def estado_de_texto(texto: str) -> Optional[str]:
+    """Estado de México mencionado en una respuesta libre («Col. Centro, Apodaca» → «Nuevo León»). None si no se reconoce."""
+    t = f" {_norm(texto)} "
+    mejor, largo = None, 0
+    for estado, claves in ESTADOS_MX.items():
+        for k in claves:
+            if f" {k} " in t and len(k) > largo:
+                mejor, largo = estado, len(k)
+    return mejor
+
+
+def _estado_vacante(v, elegida=None) -> str:
+    if elegida is not None and (elegida.ubicacion_estado or "").strip():
+        return elegida.ubicacion_estado.strip()
+    return (getattr(v, "ubicacion_estado", "") or "").strip()
+
+
+def _con_reubicacion(salida: List[dict], v, p: Optional[Postulacion], elegida=None) -> List[dict]:
+    if p is None or (getattr(v, "modalidad", "") or "").lower().startswith("remot"):
+        return salida
+    zona = (((p.analisis or {}).get("prefiltro_datos")) or {}).get("zona") or ""
+    vive = estado_de_texto(zona) if zona else None
+    estado_v = _estado_vacante(v, elegida)
+    if not vive or not estado_v or _norm(vive) == _norm(estado_v):
+        return salida
+    from . import solicitud_web as ssw
+
+    lugar = ssw.lugar_vacante(v, elegida) or estado_v
+    c = {"id": "dato-reubicacion", "clave": "reubicacion", "dato": "reubicacion", "criterio": f"Vive en otro estado ({vive})",
+         "pregunta": f"El trabajo es en {lugar}. ¿Vives ahí o te cambiarías de ciudad?", "indispensable": False, "esperada": "si",
+         "tipo": "abierta", "unificado": True, "registra": True, "otro_estado": vive}
+    c["chat"] = c["pregunta"]
+    i = next((n for n, x in enumerate(salida) if x.get("dato") == "zona"), None)
+    return salida + [c] if i is None else salida[:i + 1] + [c] + salida[i + 1:]
 
 
 def _criterios_base(v, p: Optional[Postulacion] = None) -> List[dict]:
@@ -372,6 +445,27 @@ def es_omision(brecha: str) -> bool:
     return bool(_RE_OMISION.match(_norm(brecha)))
 
 
+NO_APLICA_CV = "No aplica"
+# Cambio 53 (2026-10-15): el CV solo se compara contra la respuesta en datos DEMOSTRABLES — experiencia, escolaridad y
+# licencias / certificaciones. Lo demás (disponibilidad, horarios, rolar turnos, cargar peso, traslado) = «No aplica» en el
+# CV y nunca genera «Inconsistencia».
+_RE_DEMOSTRABLE = re.compile(r"\b(experiencia|anos?|meses|escolaridad|estudios?|primaria|secundaria|preparatoria|prepa|bachillerato|"
+                             r"licenciatura|ingenieria|carrera|titulo|titulad\w*|cedula|posgrado|maestria|doctorado|tecnico|"
+                             r"licencia|certificac\w*|certificad\w*|diplomado|curso|ingles|idioma)\b")
+_RE_NO_DEMOSTRABLE = re.compile(r"\b(disponibilidad|disponible|horario|turnos?|rolar|fines? de semana|cargar|carga|peso|pesad\w*|"
+                                r"trasladar\w*|traslado|vivir|radio|cambiar(se)? de ciudad|viajar|edad)\b")
+
+
+def demostrable_en_cv(c: dict) -> bool:
+    """¿El requisito se puede demostrar (o contradecir) con un CV? Experiencia, escolaridad, licencias y certificaciones."""
+    if c.get("dato") in ("escolaridad", "experiencia", "licencia"):
+        return True
+    t = _norm(c.get("criterio") or "")
+    if _RE_NO_DEMOSTRABLE.search(t) and not re.search(r"\b(experiencia|licencia|cedula|titulo)\b", t):
+        return False
+    return bool(_RE_DEMOSTRABLE.search(t))
+
+
 def comparativo_indispensables(p: Postulacion) -> List[dict]:
     """Cambio 22 (ficha de RH): por cada indispensable, lo que dice el CV contra lo que respondió el candidato. Cambio 42:
     «Inconsistencia» SOLO con una contradicción explícita (el CV dice otra cosa); si el CV no trae el dato →
@@ -392,7 +486,9 @@ def comparativo_indispensables(p: Postulacion) -> List[dict]:
         if c.get("reconfirma") or c.get("por_brecha") or not (c["indispensable"] or (c.get("dato") == "escolaridad" and c.get("nivel_requerido") is not None and not c.get("registra"))):
             continue
         texto_cv, contradice = None, ""
-        if hay_cv:
+        if hay_cv and not demostrable_en_cv(c):
+            texto_cv = NO_APLICA_CV  # Cambio 53: disponibilidad, horarios, cargar peso… no se demuestran con un CV
+        elif hay_cv:
             brecha = _coincide(c, brechas)
             if brecha and not es_omision(brecha):
                 texto_cv, contradice = f"Contradice: {_texto_brecha(brecha) or brecha}", brecha
@@ -662,6 +758,33 @@ def es_duda(texto: str) -> bool:
     return bool(_RE_DUDA_SI.match(limpiar(texto)))
 
 
+# Cambio 51: «No sé qué sea eso», «¿qué es eso?», «no sé a qué te refieres» → NO entiende (se refrasea; no es evasiva)
+_RE_NO_SABE_QUE_ES = re.compile(r"\b(no se (que|ni que) (sea|es|seria|significa)( eso)?|que (es|seria|significa) eso|no se lo que (es|sea)|"
+                                r"no se a que te refieres|no se de que (me )?hablas|ni idea de que (es|sea)|que es (un|una|el|la) )")
+
+
+def no_entiende(texto: str) -> bool:
+    """El candidato no entendió la pregunta (Cambio 51): hay que REFRASEAR, no repetir ni pedir «sí o no»."""
+    t = limpiar(texto)
+    return bool(_RE_NO_ENTIENDE.fullmatch(t) or _RE_NO_SABE_QUE_ES.search(t) or es_pregunta_de_vuelta(texto))
+
+
+# Cambio 51: el agente NO promete nada fuera de la vacante («¿se puede negociar?», «¿me pueden pagar más?»)
+_RE_NEGOCIA = re.compile(r"\b(negocia\w*|se puede (subir|mejorar|aumentar|cambiar|ajustar)|(me )?(pueden|podrian) (pagar|dar) mas|"
+                         r"mas (sueldo|dinero|paga)|subir(le)? (el )?sueldo|aumento|me lo (pueden|podrian) (mejorar|subir)|"
+                         r"hay (bono|bonos|vales|aguinaldo extra)|(es|sera) negociable|se puede (hablar|ver) (lo del|el) (sueldo|horario))\b")
+
+
+def es_negociacion(texto: str) -> bool:
+    return bool(_RE_NEGOCIA.search(limpiar(texto)))
+
+
+def texto_negociacion(p: Postulacion) -> str:
+    """Cambio 51: «Eso lo puedes platicar con el equipo de RH de [empresa].» — nunca se promete ni se niega nada."""
+    emp = empresa_de(p)
+    return f"Eso lo puedes platicar con el equipo de RH{' de ' + emp if emp else ''}."
+
+
 def es_pregunta_de_vuelta(texto: str) -> bool:
     """El candidato pregunta en lugar de responder («¿qué procesos?»): hay que reformular, no repetir."""
     crudo = (texto or "").strip()
@@ -834,7 +957,19 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
     respuestas = dict(e.get("respuestas") or {})
     web = {_norm(r.get("pregunta", "")): str(r.get("respuesta", "")).strip()
            for r in (p.analisis or {}).get("respuestas_web") or [] if isinstance(r, dict)}
+    from . import solicitud_web as ssw
+
     for c in criterios:
+        if c["id"] not in respuestas and c.get("dato") in ("interes", "sueldo", "edad", "zona") and not c.get("expectativa"):
+            # Cambio 50/52 (regla de oro): lo que ya contestó en «Unas preguntas» de la solicitud no se vuelve a preguntar
+            valor_b = ssw.respuesta_web(p, c)
+            if valor_b:
+                from . import preguntas_filtro as pfu
+
+                sentido_b, extra_b = pfu.valor_web({**c, "tipo": c.get("tipo") if c.get("tipo") in pfu.TIPOS else "si_no"}, valor_b)
+                if sentido_b is not None:
+                    respuestas[c["id"]] = {"respuesta": valor_b, "valor": sentido_b, "fuente": "web", "en": _ahora(), **extra_b}
+                    continue
         if c["id"] in respuestas or c.get("por_brecha") or c.get("base_operativa"):
             # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»; Cambio 29: en el
             # prefiltro operativo cada indispensable se confirma con un dato concreto en el chat
@@ -1261,6 +1396,22 @@ def reabrir_por_excepcion(db: Session, p: Postulacion, u) -> bool:
 # ============================================================ desde el formulario web (motor de ruta)
 
 
+async def avisar_descarte(db: Session, p: Postulacion, texto: str) -> None:
+    """Cambio 48: el candidato todavía no escribe (no hay ventana de 24 h) → cascada: texto libre → plantilla de descarte →
+    «Pendiente de plantilla» (se reintenta). Solo un fallo definitivo cae al correo. Hace commit. (Cambio 50: también lo
+    usa el descarte al enviar la solicitud web.)"""
+    envio = await enviar_descarte(db, p, texto, "whatsapp") if p.telefono else {"enviado": False}
+    if envio.get("enviado") or envio.get("estado") == "pendiente":
+        from ..routers.candidatos import guardar_mensaje
+
+        guardar_mensaje(db, p, "assistant", texto if envio.get("enviado") else f"[Pendiente de plantilla] {texto}", "whatsapp", envio)
+    elif p.correo:
+        from .motor_ruta import _avisar
+
+        await _avisar(db, p, texto, f"Tu postulación a {p.vacante.titulo if p.vacante else 'la vacante'}", "", motivo="prefiltro")
+    db.commit()
+
+
 async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     """Al recibir la postulación web (o en el barrido del motor): importa las respuestas del formulario y resuelve lo que
     ya se pueda. Pendientes → nada (el bot pregunta cuando el candidato escriba); sin teléfono para preguntarle → RH
@@ -1276,18 +1427,7 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     if resultado == "no_cumple":
         texto = cerrar_no_aprobado(db, p, criterios, e, incumple)
         db.commit()
-        # Cambio 48: el candidato todavía no escribe (no hay ventana de 24 h) → cascada: texto libre → plantilla de
-        # descarte → «Pendiente de plantilla» (se reintenta). Solo un fallo definitivo cae al correo.
-        envio = await enviar_descarte(db, p, texto, "whatsapp") if p.telefono else {"enviado": False}
-        if envio.get("enviado") or envio.get("estado") == "pendiente":
-            from ..routers.candidatos import guardar_mensaje
-
-            guardar_mensaje(db, p, "assistant", texto if envio.get("enviado") else f"[Pendiente de plantilla] {texto}", "whatsapp", envio)
-        elif p.correo:
-            from .motor_ruta import _avisar
-
-            await _avisar(db, p, texto, f"Tu postulación a {p.vacante.titulo}", "", motivo="prefiltro")
-        db.commit()
+        await avisar_descarte(db, p, texto)
         return "no_cumple"
     if resultado == "cumple":
         _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables de la vacante")
@@ -1473,6 +1613,10 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if pendiente is not None and (reconexion or es_saludo(texto)):
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
         return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
+    if pendiente is not None and es_negociacion(texto):
+        # Cambio 51: nunca prometer condiciones fuera de la vacante; se responde y se retoma la MISMA pregunta
+        registrar(db, ACTOR, "prefiltro_negociacion", "postulacion", p.codigo, {"texto": texto[:200]})
+        return await responder(f"{texto_negociacion(p)} {pendiente['chat']}", aclaracion=True)
     if pendiente is not None and pendiente.get("unificado"):
         # Cambio 37 — «Preguntas filtro»: descarta SOLO una respuesta clara que no cumple; afirmativa sin dato, parcial,
         # ambigua o evasiva → UNA repregunta concreta y, si sigue sin resolverse, «Requiere revisión». Todo al historial.
@@ -1486,8 +1630,21 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             if re.search(r"\bmes", t_u) or re.search(r"\bano", t_u):
                 texto_eval = f"{unidad.pop(pendiente['id'])} {'meses' if re.search(r'\bmes', t_u) else 'años'}"
                 e["unidad_pendiente"] = unidad
-        no_entiende = bool(_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto))
-        valor, extra = (None, {}) if no_entiende else pfu.clasificar(pendiente, texto_eval)
+        no_entiende_ = no_entiende(texto)
+        valor, extra = (None, {}) if no_entiende_ else pfu.clasificar(pendiente, texto_eval)
+        if no_entiende_ and aclaraciones.get(pendiente["id"], 0) < MAX_ACLARACIONES and pendiente.get("dato") != "sueldo":
+            # Cambio 51: «No sé qué sea eso» → se REFRASEA con otras palabras (nunca se repite ni se pide «sí o no»)
+            n = aclaraciones.get(pendiente["id"], 0) + 1
+            aclaraciones[pendiente["id"]] = n
+            e["aclaraciones"] = aclaraciones
+            from . import ia
+
+            historial(p, "prefiltro_repregunta", f"Pregunta refraseada en «{pendiente['criterio']}»: no la entendió («{texto.strip()[:120]}»)",
+                      motivo="no entendió la pregunta", criterio=pendiente["criterio"])
+            registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
+            return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], None, intento=n,
+                                                          tipo=pendiente.get("tipo") if pendiente.get("tipo") in ("numero", "opcion") else "si_no"),
+                                   aclaracion=True)
         if extra.get("unidad") and pendiente["id"] not in unidad:
             # «uno» en una pregunta de tiempo: «¿Un año o un mes?» (no cuenta como la repregunta)
             unidad[pendiente["id"]] = extra["unidad"]
@@ -1498,14 +1655,14 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         if valor is None and not aclaraciones.get(pendiente["id"]):
             aclaraciones[pendiente["id"]] = 1
             e["aclaraciones"] = aclaraciones
-            motivo = ("no entendió la pregunta" if no_entiende else "respuesta parcial o ambigua" if extra.get("parcial")
+            motivo = ("no entendió la pregunta" if no_entiende_ else "respuesta parcial o ambigua" if extra.get("parcial")
                       else "respuesta evasiva o vacía" if pfu.es_evasiva(texto) else "respuesta sin el dato concreto")
             historial(p, "prefiltro_repregunta", f"Repregunta en «{pendiente['criterio']}»: {motivo} («{texto.strip()[:120]}»)",
                       motivo=motivo, criterio=pendiente["criterio"])
             registrar(db, ACTOR, "prefiltro_aclaracion_solicitada", "postulacion", p.codigo,
                       {"criterio": pendiente["criterio"], "respuesta": texto[:200], "intento": 1, "motivo": motivo})
             q = pfu.repregunta(pendiente)
-            if no_entiende and pendiente.get("dato") != "sueldo":
+            if no_entiende_ and pendiente.get("dato") != "sueldo":
                 q = f"Te lo pregunto de otra forma: {q}"
             return await responder(q, aclaracion=True)
         if valor is None and pendiente.get("expectativa"):
@@ -1525,7 +1682,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                 punto_por_validar(p, f"Respondió con duda en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
         e["pendiente"] = None
         pendiente = None
-    if pendiente is not None and (_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto)):
+    if pendiente is not None and no_entiende(texto):
         # retro 2026-10-09: «no entiendo» → la MISMA pregunta con otras palabras (cuenta como aclaración)
         n = aclaraciones.get(pendiente["id"], 0) + 1
         if n <= MAX_ACLARACIONES:
@@ -1622,6 +1779,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             punto_por_validar(p, f"Respondió con duda en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
         _respuestas_adelantadas(criterios, e, texto, pendiente["id"], canal_registro(canal))
 
+    criterios = criterios_de(p.vacante, p)  # Cambio 51: la colonia recién contestada puede sumar «¿Vives ahí o te cambiarías…?»
     resultado, incumple, siguiente = _evaluar(criterios, e)
     if resultado == "no_cumple":
         mensaje = cerrar_no_aprobado(db, p, criterios, e, incumple)

@@ -1327,7 +1327,9 @@ def onboarding_turno(nombre_candidato: str, vacante_titulo: str, historial: List
             "(fecha exacta de ingreso, sueldo, horario), sé honesto: dile que RH se lo confirma "
             "directamente, no lo inventes; (4) tono cálido, breve, una sola idea por mensaje; (5) nunca "
             "vuelvas a hacer preguntas de prefiltro o de disponibilidad para entrevista — esa etapa ya "
-            "quedó atrás."
+            "quedó atrás; (6) Cambio 54: los documentos se suben SIEMPRE en la LIGA de su expediente — nunca le "
+            "pidas que los mande «por este medio» ni por el chat; (7) nunca prometas nada fuera de la vacante: "
+            "«Eso lo puedes platicar con el equipo de RH»."
         ),
         input=mensajes,
         text_format=TurnoOnboarding,
@@ -1545,10 +1547,10 @@ def mensaje_inicial_entrevista_whatsapp(titulo_vacante: str = "", nombre: str = 
     candidato aceptó. Se concatena con la primera pregunta del guion:
     «Listo, [nombre]. Soy Red Human, te haré unas preguntas sobre tu experiencia.\n¿Cuál fue tu último trabajo?».
     `pedir_permiso` solo para una postulación sin consentimiento registrado (no debería pasar: el prefiltro lo exige)."""
-    # Cambio 19 (2026-10-12): texto EXACTO «Listo, [nombre]. Ahora unas preguntas sobre tu experiencia. [primera]» — sin
+    # Cambio 19 (2026-10-12): texto EXACTO «Listo, [nombre]. Ahora te haré unas preguntas sobre tu experiencia. [primera]» — sin
     # pedir permiso y sin volver a presentarse (ya se presentó en el saludo del prefiltro)
     inicio = f"Listo, {nombre.strip()}." if (nombre or "").strip() else "Listo."
-    texto = f"{inicio} Ahora unas preguntas sobre tu experiencia."
+    texto = f"{inicio} Ahora te haré unas preguntas sobre tu experiencia."
     if pedir_permiso:
         return f"{texto} ¿Comenzamos?"
     return f"{texto} {primera.strip()}" if (primera or "").strip() else texto
@@ -1580,8 +1582,12 @@ def prompt_entrevistador(
     canal: str = "avatar",
     guion_de_vacante: bool = False,
     bloque_operativo: str = "",
+    ya_respondido: Optional[List[dict]] = None,
 ) -> str:
     """System prompt compartido por el avatar (Anam) y el modo texto — misma personalidad en ambos.
+    Cambios 51-52 (2026-10-15): `ya_respondido` = lo que el candidato contestó en la solicitud web y en el prefiltro (REGLA
+    DE ORO: no se vuelve a preguntar); reglas de comprensión (refrasear, «sí o no» solo ante ambigüedad) y de límites (nada
+    fuera de la vacante: «Eso lo puedes platicar con el equipo de RH de [empresa]»).
     2026-10-10: con `bloque_operativo` (enfoque operativo) las preguntas son las del guion ARMADO, en orden.
     2026-10-09: también para la Entrevista por WhatsApp y la Llamada Red Human (`canal`). Con `guion_de_vacante` las
     preguntas son las de la plantilla de conversación de la vacante (aprobadas o editadas por RH): se cubren todas.
@@ -1647,7 +1653,9 @@ def prompt_entrevistador(
         "compatible», «vas muy bien», «seguro pasas» o que avanzará en el proceso — la decisión la toma una persona "
         "de RH; (8) cuando ya tengas suficiente de un tema, cambia de tema sin anunciarlo.\n\n"
         + TONO_CORPORATIVO.format(nombre=candidato_nombre) + "\n\n"
-        f"CUMPLIMIENTO (NO NEGOCIABLE): nunca preguntes, insinúes ni registres datos sobre {DATOS_SENSIBLES_PROHIBIDOS}. "
+        + reglas_comprension_y_limites(empresa_txt) + "\n\n"
+        + bloque_ya_respondido(ya_respondido or [])
+        + f"CUMPLIMIENTO (NO NEGOCIABLE): nunca preguntes, insinúes ni registres datos sobre {DATOS_SENSIBLES_PROHIBIDOS}. "
         "Si la persona los menciona por su cuenta, no repreguntes, no comentes y sigue con el tema laboral.\n\n"
         "CIERRE: cuando hayas cubierto los temas (o la persona no tenga más que aportar), despídete en un "
         f"solo mensaje que empiece EXACTAMENTE con «{DESPEDIDA_ENTREVISTA}, {candidato_nombre}.» seguido de un "
@@ -1753,6 +1761,36 @@ _RE_GRACIAS_INICIAL = re.compile(r"^\s*[¡!]?\s*(perfecto|muy bien|excelente|gen
                                  r"( por [^.!?\n]*)?\s*[.!,]*\s*(🙌|🙂|😊|👍)?\s*", re.IGNORECASE)
 # Cambio 31: agradecimientos BREVES y VARIADOS, nunca elogios ni calificaciones («¡Excelente!», «Muy bien»)
 VARIANTES_GRACIAS = ("Gracias, {nombre}.", "Entendido.", "Gracias.", "Anotado.")
+def reglas_comprension_y_limites(empresa: str) -> str:
+    """Cambio 51 (2026-10-15): comprensión y límites del agente — las mismas reglas que aplica el código del prefiltro y de
+    la entrevista fija (`prefiltro_conversacional.no_entiende` / `es_negociacion`)."""
+    emp = empresa or "la empresa"
+    return (
+        "COMPRENSIÓN Y LÍMITES (NO NEGOCIABLE): (a) si el candidato NO entiende («No sé qué sea eso», «¿qué es eso?», «no le "
+        "entendí»), REFRASEA la pregunta con otras palabras y explica en una frase a qué te refieres — NUNCA repitas el mismo "
+        "texto; (b) «Confírmame con un sí o un no» SOLO cuando su respuesta fue ambigua («más o menos», «depende»), nunca "
+        "cuando no entendió ni como forma normal de preguntar; (c) NUNCA prometas, ofrezcas ni negocies nada que no esté en "
+        "los datos de la vacante (sueldo distinto, bonos, horarios, cambios de turno, fechas): si pregunta «¿se puede "
+        f"negociar?» o algo fuera de la vacante, responde EXACTAMENTE «Eso lo puedes platicar con el equipo de RH de {emp}.» "
+        "y retoma tu pregunta; (d) si después de un tema sigue una actividad automática, NO digas que RH le escribirá: usa "
+        "la transición («Ahora te haré unas preguntas sobre tu experiencia…»)."
+    )
+
+
+def bloque_ya_respondido(previas: List[dict]) -> str:
+    """Cambio 52 — REGLA DE ORO: lo que el candidato YA contestó en la solicitud web y en los prefiltros entra al prompt y
+    no se vuelve a preguntar (salvo que el guion de la vacante pida confirmarlo de forma expresa: «¿Confirmas…?»)."""
+    filas = [f"- {r.get('pregunta') or r.get('criterio') or ''}: «{str(r.get('respuesta') or '')[:160]}» ({r.get('fuente') or 'antes'})"
+             for r in previas if isinstance(r, dict) and str(r.get("respuesta") or "").strip()][:25]
+    if not filas:
+        return ""
+    return ("LO QUE YA RESPONDIÓ (solicitud web y prefiltro) — REGLA DE ORO: NO vuelvas a preguntar nada de esto (puesto, "
+            "sueldo, ubicación, traslado, edad, colonia, requisitos); úsalo como contexto. Si en el cierre ya se dijeron puesto, "
+            "sueldo y ubicación, pregunta SOLO «¿Cuándo podrías empezar?». La única excepción es una pregunta del guion de la "
+            "vacante que pida confirmarlo de forma EXPRESA («¿Confirmas…?»); si su respuesta contradice lo que dijo antes, "
+            "regístralo como inconsistencia:\n" + "\n".join(filas) + "\n\n")
+
+
 TONO_CORPORATIVO = (
     "TONO (experto de RH, corporativo): (a) agradece BREVE y con variedad — «Gracias, {nombre}.», «Entendido.», «Anotado.» — "
     "y no en cada mensaje; (b) PROHIBIDO elogiar o calificar respuestas («¡Excelente!», «¡Muy bien!», «¡Perfecto!», «Buena "
@@ -2086,7 +2124,8 @@ def inconsistencias_demo(transcript: List[dict], previas: List[dict]) -> List[st
             if not any(w in d for w in claves):
                 continue
             nums_prev, nums_ent = _RE_NUM.findall(resp), _RE_NUM.findall(d)
-            negacion = resp.startswith("si") and re.search(r"\b(no tengo|nunca he|no he|no cuento|no se)\b", d)
+            negacion = resp.startswith("si") and re.search(r"\b(no tengo|nunca he|no he|no cuento|no se|no esta vigente|"
+                                                           r"ya no (esta|lo tengo|la tengo)|(se me |ya se |ya )?venci\w*)\b", d)
             if negacion or (nums_prev and nums_ent and nums_prev[0] != nums_ent[0]):
                 salida.append(f"En {r.get('fuente') or 'una respuesta previa'} respondió «{r.get('respuesta')}» a «{r.get('pregunta') or r.get('criterio')}»; "
                               f"en la entrevista dijo «{d[:160]}».")
@@ -2964,17 +3003,20 @@ def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[st
         base = (f"Te lo pregunto de otra forma: para esta vacante se necesita {req}. ¿Me cuentas con tus palabras si lo cumples?"
                 if intento <= 1 else f"En pocas palabras: ¿cumples con {req}? Con un «sí» o un «no» me basta.")
     else:
-        base = (f"Te lo pregunto de otra forma: para esta vacante se necesita {req}. ¿Cumples con eso? Respóndeme *Sí* o *No*."
-                if intento <= 1 else f"En pocas palabras: ¿tienes {req}? Con un «sí» o un «no» me basta.")
+        # Cambio 51 (2026-10-15): «No sé qué sea eso» → se REFRASEA (nunca se repite ni se pide «sí o no»: eso solo ante una
+        # respuesta ambigua)
+        base = (f"Te lo pregunto de otra forma: me refiero a esto: {req}. ¿Es tu caso?"
+                if intento <= 1 else f"En pocas palabras: ¿tienes {req}?")
     client = _client()
     if client is None or tipo != "si_no":
         return base
     try:
         resp = client.responses.create(
             model=MODEL,
-            instructions=("Reformula la pregunta de prefiltro para un candidato que dijo que no la entendió: UNA sola pregunta "
-                          "cerrada que se conteste con Sí o No, palabras sencillas, español mexicano, máximo 25 palabras, sin "
-                          "autopercepciones, sin «Para confirmar», sin elogios y sin ejemplos de formato. Termina con «Respóndeme Sí o No.»"),
+            instructions=("El candidato no entendió la pregunta del prefiltro («no sé qué sea eso»). REFRASÉALA: explica en "
+                          "palabras sencillas a qué te refieres y vuelve a preguntar; UNA sola pregunta, español mexicano, máximo "
+                          "30 palabras, sin autopercepciones, sin «Para confirmar», sin elogios, sin ejemplos de formato y sin "
+                          "pedir que conteste «sí o no». Nunca repitas la pregunta original con las mismas palabras."),
             input=f"Pregunta original: {pregunta}\nRequisito: {criterio}",
         )
         texto = (getattr(resp, "output_text", "") or "").strip()

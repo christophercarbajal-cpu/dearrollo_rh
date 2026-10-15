@@ -1541,6 +1541,9 @@ export function postular(datos: {
     whatsappLiga?: string;
     /** Cambio 42: carga de documentos en la misma página (token de la liga + solo faltantes). */
     documentos?: ({ token: string; liga: string } & Partial<ExpedientePublico>) | null;
+    /** Cambio 50: la solicitud web descartó al enviar (una respuesta coincide con «Descarta si»); mensaje genérico, sin motivo */
+    descartado?: boolean;
+    mensaje?: string;
   }>("/candidatos/postular", form);
 }
 

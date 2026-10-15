@@ -97,7 +97,8 @@ def accion_candidato(db: Session, p: Postulacion, paso: dict) -> Optional[dict]:
             return None
         faltan = p.expediente.pendientes if p.expediente else []
         detalle = f" Me falta: {', '.join(faltan)}." if faltan else ""
-        return _respuesta(f"Sube tus documentos desde tu expediente o mándamelos por aquí en PDF o foto.{detalle}", "Subir documentos", url)
+        # Cambio 54: los documentos se piden SOLO con la liga (nunca «por este medio»)
+        return _respuesta(f"Sube tus documentos en esta liga.{detalle}", "Subir documentos", url)
     if tipo in TIPOS_PASO_EVALUACION:
         ev = _evaluacion(db, p, paso.get("evaluacion"))
         if ev is None:

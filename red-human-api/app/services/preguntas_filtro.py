@@ -248,6 +248,10 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
     if d == "vigencia":
         # Cambio 47: el formulario web la pregunta como Si/No; el chat pide la FECHA de vencimiento
         item["pregunta_web"] = f"¿Tu {_min(info['tema'])} tiene vigencia de más de {int(info['meses_min'])} meses?"
+    elif previa and _texto(previa.get("pregunta_web")):
+        # 2026-10-15 (Fletes): RH puede pedir el requisito en «Unas preguntas» como Sí/No directo y en el chat el DATO
+        # (p. ej. web «¿Tienes experiencia como operador de 5ª rueda?» → chat «¿Cuántos años…?»); un «No» en la web descarta
+        item["pregunta_web"] = _texto(previa["pregunta_web"])
     if tipo == "numero":
         item["unidad"] = {"experiencia": "años", "transportes": "transportes", "edad": "años", "traslado": "minutos"}.get(d, "")
     if propuesto:
@@ -327,8 +331,26 @@ def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubic
         if it["dato"] in ("edad", "traslado"):
             ya.add(it["dato"])
         salida.append(it)
+    salida = _con_propias(salida, previas)
     salida += bases(titulo, sueldo, ubicacion, modalidad, ya, enfoque=enfoque, periodicidad=periodicidad)
     return [normalizar_item(q) for q in salida]
+
+
+def _con_propias(salida: List[dict], previas: Optional[List[dict]]) -> List[dict]:
+    """2026-10-15 (Fletes): preguntas PROPIAS de RH para el chat («¿En qué empresa trabajaste por última vez?», «¿Cuál es
+    tu número de licencia?»): abiertas, nunca descartan, solo se registran. Van después del requisito que indica
+    `despues_de` (o al final de los indispensables). No entran al formulario web."""
+    propias = [q for q in previas or [] if isinstance(q, dict) and q.get("propia") and _pregunta_valida(q.get("pregunta") or "")]
+    for n, q in enumerate(propias):
+        item = {"id": q.get("id") or f"propia{n + 1}", "requisito": _texto(q.get("requisito")) or _texto(q["pregunta"]),
+                "pregunta": _texto(q["pregunta"]), "tipo": "abierta", "dato": "propia", "descarta": False, "propia": True,
+                "base": False, "indispensable": False, "opciones": [],
+                **({"despues_de": _texto(q["despues_de"])} if q.get("despues_de") else {})}
+        i = next((k for k, x in enumerate(salida) if item.get("despues_de") and _norm_req(x.get("requisito") or "") == _norm_req(item["despues_de"])), None)
+        if i is None:
+            i = max((k for k, x in enumerate(salida) if x.get("indispensable") or x.get("propia")), default=len(salida) - 1)
+        salida.insert(i + 1, item)
+    return salida
 
 
 def normalizar_item(q: dict) -> dict:
@@ -349,7 +371,8 @@ def normalizar_item(q: dict) -> dict:
         # Cambio 48: la escolaridad siempre con su regla ordinal (también las guardadas como «no terminó la …»)
         q["regla"] = regla_de(q.get("requisito") or "", tipo_requisito(q.get("requisito") or ""), True)
     q["base"] = bool(q.get("base"))
-    q["etiqueta"] = ETIQUETA_BASE if q["base"] else ("Propuesto por Red Human" if q.get("propuesto") else "Requisito")
+    q["etiqueta"] = ETIQUETA_BASE if q["base"] else ("Pregunta de RH" if q.get("propia") else
+                                                    "Propuesto por Red Human" if q.get("propuesto") else "Requisito")
     if q["tipo"] == "si_no":
         q["opciones"] = ["Sí", "No"]
     return q
@@ -389,12 +412,13 @@ def web(lista: List[dict]) -> List[dict]:
     for q in lista:
         if not q.get("indispensable"):
             continue
-        if q.get("tipo") in TIPOS_WEB:
-            indisp.append(q)
-        elif q.get("tipo") == "fecha" and q.get("pregunta_web"):
+        if q.get("pregunta_web"):
             # Cambio 47: una vigencia (chat: fecha) entra al formulario web como Sí/No («¿Tu licencia … tiene vigencia de
-            # más de 3 meses?»); un «No» descarta y un «Sí» lo confirma el chat con la fecha
+            # más de 3 meses?»); un «No» descarta y un «Sí» lo confirma el chat con la fecha. 2026-10-15: igual para
+            # cualquier requisito al que RH le dio una pregunta web Sí/No (el chat pide el dato).
             indisp.append({**q, "id": f"{q['id']}-web", "pregunta": q["pregunta_web"], "tipo": "si_no", "opciones": ["Sí", "No"]})
+        elif q.get("tipo") in TIPOS_WEB:
+            indisp.append(q)
     salida = list(indisp)
     if len(salida) < MIN_WEB:
         orden = ("interes", "sueldo", "edad", "traslado")
@@ -792,6 +816,14 @@ def registrar_datos(p, c: dict, texto: str, extra: dict) -> None:
     elif dato == "vigencia" and extra.get("meses") is not None:
         d["vigencias"] = {**(d.get("vigencias") if isinstance(d.get("vigencias"), dict) else {}),
                           c["criterio"]: {"respuesta": texto.strip()[:80], "meses": extra["meses"]}}
+    elif dato == "propia":
+        # 2026-10-15: preguntas propias de RH en el chat (solo se registran)
+        d["respuestas_propias"] = {**(d.get("respuestas_propias") if isinstance(d.get("respuestas_propias"), dict) else {}),
+                                   (c.get("criterio") or c.get("pregunta") or "")[:120]: texto.strip()[:200]}
+    elif dato == "reubicacion":
+        # Cambio 51: vive en otro estado — se registra en el resumen (nunca descarta)
+        d["reubicacion"] = texto.strip()[:200]
+        d["otro_estado"] = c.get("otro_estado") or ""
     elif dato == "licencia" and extra.get("otra_letra"):
         puntos.append(f"Licencia tipo {extra.get('tipo')}; la vacante pide: {c['criterio']}")
     d["en"] = pc._ahora()

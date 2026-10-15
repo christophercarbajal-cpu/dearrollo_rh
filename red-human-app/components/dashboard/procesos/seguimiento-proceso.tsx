@@ -928,6 +928,7 @@ function ResultadosClave({ c }: { c: Candidato }) {
         ...(d.interesPuesto != null ? [{ k: "Le interesa el puesto", v: d.interesPuesto ? "Sí" : "No", tono: d.interesPuesto ? undefined : "text-bad" }] : []),
         ...(d.zona ? [{ k: "Zona", v: d.zona }] : []),
         ...(d.puedeTrasladarse != null ? [{ k: "Puede trasladarse", v: d.puedeTrasladarse ? "Sí" : "No", tono: d.puedeTrasladarse ? undefined : "text-bad" }] : []),
+        ...(d.otroEstado ? [{ k: `Vive en ${d.otroEstado}`, v: d.reubicacion || "Sin respuesta" }] : []),
         ...(d.trasladoMin != null || d.traslado
           ? [{
               k: "Traslado",

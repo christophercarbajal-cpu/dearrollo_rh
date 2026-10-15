@@ -310,6 +310,25 @@ async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: 
                                    cuenta_id=cuenta_id)
 
 
+# BYPASS TEMPORAL (demo Fletes 2026-10-15): la plantilla aprobada en Meta es `inicio_entrevista_rh` con UNA variable
+# (primer nombre) en Spanish (MEX). El inicio del prefiltro y la invitación al video salen con ella; la respuesta del
+# candidato abre la ventana de 24 h y el bot sigue en texto libre. Quitar cuando `entrevista_video_rh` esté aprobada.
+BYPASS_INICIO_DEMO = True
+PLANTILLA_INICIO_APROBADA = "inicio_entrevista_rh"
+
+
+def _bypass_inicio_demo(plantilla: str, params: List[str], idioma: str):
+    if not BYPASS_INICIO_DEMO:
+        return plantilla, params, idioma
+    nombres = {PLANTILLA_INICIO_APROBADA, "entrevista_video_rh", (settings.meta_plantilla_inicio or "").strip(),
+               (settings.meta_plantilla_video or "").strip()} - {""}
+    if plantilla not in nombres:
+        return plantilla, params, idioma
+    nombre = (params[0] if params else "").strip().split(" ")[0] or "-"
+    print(f"[whatsapp][HSM] bypass demo: «{plantilla}» → «{PLANTILLA_INICIO_APROBADA}» (1 variable, es_MX)", flush=True)
+    return PLANTILLA_INICIO_APROBADA, [nombre], "es_MX"
+
+
 async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametros: Optional[List[str]] = None,
                             idioma: Optional[str] = None, cuenta_id: Optional[int] = None) -> dict:
     """La cascada del Cambio 46, para cualquier mensaje que deba salir aunque el destinatario no haya escrito (avisos a
@@ -332,6 +351,7 @@ async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametro
         return libre
     params = [str(x or "-") for x in parametros or []]
     idioma = idioma or settings.meta_plantilla_idioma or "es_MX"
+    plantilla, params, idioma = _bypass_inicio_demo(plantilla, params, idioma)
     resultado = await enviar_plantilla(telefono, plantilla, params, idioma)
     resultado["plantilla"] = plantilla
     resultado["formato"] = "plantilla"

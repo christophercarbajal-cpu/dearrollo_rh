@@ -169,6 +169,7 @@ const cat = ['solicitud_sin_cv', 'solicitud_con_cv', 'prefiltro_whatsapp', 'docu
 r.menuPre = o.disponibles('Prefiltro', cat, pasos);
 r.menuPreSinSolicitud = o.disponibles('Prefiltro', cat, pasos.filter(x => x.id !== 'sol'));
 r.menuHumano = o.disponibles('Entrevista Humana', ['entrevista_humana', 'medica', 'otra'], [...pasos, P('o1', 'otra', 'Entrevista Humana')]);
+r.menuHumanoMed = o.disponibles('Entrevista Humana', ['entrevista_humana', 'medica', 'otra'], [...pasos, P('m1', 'medica', 'Entrevista Humana')]);
 console.log(JSON.stringify(r));
 """
     salida = subprocess.run([shutil.which("node"), "-e", programa, str(APP_DIR)], capture_output=True, text=True, encoding="utf-8")
@@ -182,7 +183,9 @@ console.log(JSON.stringify(r));
     check(r["fijo"] == ["s", "w", "d", "of", "cc"], f"Prefiltro: Solicitud → Prefiltro WhatsApp → Documentos ({r['fijo']})")
     check(r["menuPre"] == ["prefiltro_whatsapp", "documentos"], f"con una Solicitud web, el menú oculta ambas solicitudes ({r['menuPre']})")
     check(r["menuPreSinSolicitud"] == ["solicitud_sin_cv", "solicitud_con_cv", "prefiltro_whatsapp", "documentos"], "al borrar la Solicitud web vuelven a aparecer las dos")
-    check(r["menuHumano"] == ["medica", "otra"], f"el menú oculta lo que ya está en la etapa, salvo «Otra actividad» ({r['menuHumano']})")
+    check(r["menuHumano"] == ["entrevista_humana", "medica", "otra"],
+          f"el menú oculta lo que ya está en la etapa, salvo «Otra actividad» y «Entrevista humana» ({r['menuHumano']})")
+    check(r["menuHumanoMed"] == ["entrevista_humana", "otra"], f"una médica ya agregada sí se oculta ({r['menuHumanoMed']})")
     editor = (APP_DIR / "components/dashboard/procesos/editor-proceso.tsx").read_text(encoding="utf-8")
     check("disponiblesEn(e.valor, catalogoEtapa, pasos)" in editor and "Con mínimos por escala" in editor,
           "el editor usa el menú filtrado y ofrece la modalidad de la psicometría")

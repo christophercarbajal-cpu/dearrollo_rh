@@ -841,3 +841,8 @@ Reemplaza lo anterior en: `Expediente.progreso` (Fases 1-3 post-demo), «Solicit
 - Nunca al candidato: `routers.vacantes._con_logo` quita `CAMPOS_SOLO_RH` (`proceso`, `procesoNombre`) de `/vacantes/slug/{slug}`, `/vacantes/publicas` y la vista previa. Los mensajes y plantillas de WhatsApp usan solo `Vacante.titulo`. Nunca distinguir vacantes con sufijos en el título.
 - Fletes México: A y B se llaman «Operador de 5ª rueda»; el seed las reconoce por su PROCESO (`seed_fletes_mexico.buscar_vacante`) y renombra el título temporal de la B. Limpieza: `scripts/limpiar_titulo_fletes.py [--forzar]` (simulación por defecto; la liga publicada no cambia).
 - Regresión: `scripts/verificar_cambio58.py`.
+
+## Demo «Agencia del Centro» (2026-10-15)
+
+- `scripts/seed_agencia_centro.py [--aplicar] [--borrador]` (simulacro por defecto, una transacción, idempotente, cero mensajes): renombra la Cuenta «Agencia de talento» → «Agencia del Centro» (nombre y nombre comercial; el slug NO cambia), DESACTIVA «Operativos» y los dos «Masivos» (nunca borra; «Corporativos» queda) y crea 4 procesos: «Masivo Documentos y pruebas» (solicitud + documentos → prueba práctica que agenda el candidato → médica → contrato), «Operativo WhatsApp» (predeterminada), «Operativo Avatar» (avatar Operativo + psicometría Informativa) y «Administrativo Avatar» (solicitud con CV, avatar Profesional + personal, psicometría con mínimos CI ≥ 100, documentos → oferta → contrato en Contratación). Ubicación «Ciudad de México» (dirección de demo) para la autoagenda; pruebas Cleaver, Terman y Moss en el catálogo. Cinco vacantes en CDMX con «Unas preguntas» Sí/No que descartan con «No»; los gerentes piden sus documentos en Contratación.
+- Regresión: `scripts/verificar_agencia_centro.py`.

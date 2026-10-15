@@ -1595,13 +1595,16 @@ def _ultimo_del_bot(p: Postulacion) -> str:
 async def _con_gusto(db: Session, p: Postulacion, canal: str) -> dict:
     """Cambio 54: terminó la actividad y el candidato dice «Gracias» → «Con gusto, [nombre].» UNA vez y después silencio
     (nunca otro cierre, nunca saltar a otra vacante)."""
-    if _ultimo_del_bot(p).startswith("Con gusto"):
+    from ..services import respuestas_vacante as rva
+
+    if _ultimo_del_bot(p).startswith("Con gusto") or rva._ya_dijo_con_gusto(p):
         db.commit()
         return {"respuesta": "", "clasificacion": None, "ia": False, "whatsapp": {"enviado": False, "detalle": "Sin respuesta (ya se dijo «Con gusto»)"},
                 "silencio": True}
     nombre = nombre_ficha(p) or ""
     nombre = "" if not nombre or nombre.startswith("Candidato") else nombre.split(" ")[0]
     respuesta = f"Con gusto{', ' + nombre if nombre else ''}."
+    rva._marcar_con_gusto(p)  # Cambio 59: una sola vez por chat
     envio = await _enviar_whatsapp(p, respuesta, canal)
     guardar_mensaje(db, p, "assistant", respuesta, canal, envio)
     db.commit()
@@ -1633,6 +1636,17 @@ def _pregunta_en_curso(p: Postulacion) -> bool:
     return bool(sprop.esperando_respuesta(p))
 
 
+def _esperando_respuesta_del_candidato(p: Postulacion) -> bool:
+    """Cambio 59: el bot espera una respuesta concreta (pregunta en curso, propuesta de horario o autoagenda): ahí el chat
+    NO está pasivo."""
+    from ..services import agenda_chat, autoagenda
+
+    if _pregunta_en_curso(p) or autoagenda.esperando(p):
+        return True
+    cita = (p.analisis or {}).get("agenda_cita") or {}
+    return bool(cita and not p.videollamada_agendada_en and cita.get("propuesta"))
+
+
 async def _procesar_turno_post_completo(db: Session, p: Postulacion, texto: str, canal: str) -> dict:
     """No queda nada pendiente que la IA deba coordinar (no_cumple ya avisado, o cumple con
     videollamada ya agendada) — se responde con un mensaje fijo, sin volver a llamar al modelo.
@@ -1640,6 +1654,11 @@ async def _procesar_turno_post_completo(db: Session, p: Postulacion, texto: str,
     mensaje del bot, se calla."""
     if es_agradecimiento(texto) and not _liga_pendiente(db, p, canal):
         return await _con_gusto(db, p, canal)
+    from ..services import respuestas_vacante as rva
+
+    if rva.tema_pregunta(texto) or rva.es_que_sigue(texto) or rva.es_como_me_fue(texto):
+        # Cambio 59: dato de la vacante, siguiente paso o «¿cómo me fue?» — sin repetir el cierre ni preguntar nada
+        return await rva.turno_post_cierre(db, p, texto, canal)
     if p.videollamada_agendada_en:
         respuesta = "¡Ya tienes tu videollamada agendada! Si necesitas reagendar, avísame y lo vemos. 🙌"
     elif p.estado == "no_cumple":
@@ -1819,9 +1838,19 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     e_wa = sent.entrevista_whatsapp_activa(p)
     if e_wa is not None:
         return await sent.turno_whatsapp(db, p, e_wa, texto, canal)
-    if es_agradecimiento(texto) and not _pregunta_en_curso(p) and not _liga_pendiente(db, p, canal):
-        # Cambio 54: terminó la actividad y solo dice «Gracias» → «Con gusto, [nombre].» y silencio
-        return await _con_gusto(db, p, canal)
+    if not _esperando_respuesta_del_candidato(p):
+        # Cambio 59: después del cierre el chat queda PASIVO (nunca vuelve a preguntar ni repite el cierre); fuera de una
+        # actividad, una pregunta sobre la vacante se contesta con el dato en una línea
+        from ..services import respuestas_vacante as rva
+
+        liga = _liga_pendiente(db, p, canal)
+        if rva.en_post_cierre(p) and not liga:
+            return await rva.turno_post_cierre(db, p, texto, canal)
+        if rva.tema_pregunta(texto):
+            return await rva.turno_post_cierre(db, p, texto, canal)
+        if es_agradecimiento(texto) and not liga:
+            # Cambio 54: terminó la actividad y solo dice «Gracias» → «Con gusto, [nombre].» y silencio
+            return await _con_gusto(db, p, canal)
 
     # Seguro de ejecución (2026-10-09): el bot NUNCA arranca un prefiltro sin guion. Si la vacante (p. ej. de un candidato
     # antiguo) no tiene el de las actividades de prefiltro de SU ruta, se genera Just-In-Time antes del primer mensaje.

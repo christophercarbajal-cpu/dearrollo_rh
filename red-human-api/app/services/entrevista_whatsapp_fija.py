@@ -340,6 +340,9 @@ def _sin_experiencia(est: dict) -> None:
     est.pop("nunca_trabajo", None)
 
 
+SIN_RESPUESTA = "Sin respuesta"  # Cambio 59
+
+
 def no_es_dato(texto: str) -> bool:
     """Cambio 53: la respuesta no aporta un dato para el historial (una pregunta de vuelta, «no sé», vacía)."""
     from .preguntas_filtro import es_evasiva
@@ -397,7 +400,17 @@ def turno(e, texto: str) -> Tuple[str, bool]:
     if pid and es_negociacion(texto):
         # Cambio 51: nunca prometer nada fuera de la vacante; se retoma la MISMA pregunta
         return f"{texto_negociacion(p)} {texto_pregunta(pid, est, p)}", False
-    if pid and no_entiende(texto) and not (est.get("refraseada") or {}).get(pid):
+    from . import respuestas_vacante as rva
+
+    tema = rva.tema_pregunta(texto) if pid else None
+    if tema:
+        # Cambio 59: una pregunta sobre la vacante NUNCA se registra como respuesta — el dato y la MISMA pregunta pendiente
+        return rva.con_pendiente(p, tema, texto_pregunta(pid, est, p)), False
+    no_contesta = bool(pid) and (no_entiende(texto) or no_es_dato(texto))
+    if no_contesta and (est.get("refraseada") or {}).get(pid):
+        # Cambio 59: ya se repreguntó UNA vez y sigue sin contestar → «Sin respuesta» y se avanza
+        texto = SIN_RESPUESTA
+    elif no_contesta:
         est.setdefault("refraseada", {})[pid] = True
         _guardar(e, est)
         alt = ALTERNATIVAS.get(pid) or texto_pregunta(pid, est, p)

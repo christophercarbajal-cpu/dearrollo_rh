@@ -415,6 +415,10 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
         # Cambio 29: rutas Masivos — entrevista FIJA, sin IA generativa
         mensaje, terminada = ewf.turno(e, texto)
         e.transcript = historial + [{"rol": "assistant", "texto": mensaje}]
+        if terminada:
+            from . import respuestas_vacante as rva
+
+            rva.marcar_cierre(p, "entrevista_whatsapp", mensaje)  # Cambio 59: después del cierre el chat queda pasivo
         salida = await responder(mensaje, ia_entrevista=False)
         if terminada:
             db.refresh(e)
@@ -425,6 +429,10 @@ async def turno_whatsapp(db: Session, p: Postulacion, e: Entrevista, texto: str,
                                         operativo=bool((e.guion or {}).get("operativo")))
     e.transcript = historial + [{"rol": "assistant", "texto": turno.respuesta}]
     terminada = turno.terminada or ia.DESPEDIDA_ENTREVISTA.lower() in (turno.respuesta or "").lower()
+    if terminada:
+        from . import respuestas_vacante as rva
+
+        rva.marcar_cierre(p, "entrevista_whatsapp", turno.respuesta)  # Cambio 59
     salida = await responder(turno.respuesta, ia_entrevista=con_ia)
     if terminada:
         db.refresh(e)

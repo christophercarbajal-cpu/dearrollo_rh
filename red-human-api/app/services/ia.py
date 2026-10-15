@@ -1773,7 +1773,14 @@ def reglas_comprension_y_limites(empresa: str) -> str:
         "los datos de la vacante (sueldo distinto, bonos, horarios, cambios de turno, fechas): si pregunta «¿se puede "
         f"negociar?» o algo fuera de la vacante, responde EXACTAMENTE «Eso lo puedes platicar con el equipo de RH de {emp}.» "
         "y retoma tu pregunta; (d) si después de un tema sigue una actividad automática, NO digas que RH le escribirá: usa "
-        "la transición («Ahora te haré unas preguntas sobre tu experiencia…»)."
+        "la transición («Ahora te haré unas preguntas sobre tu experiencia…»); (e) Cambio 59 — si el candidato PREGUNTA algo "
+        "de la vacante (ubicación, sueldo, horario, prestaciones, actividades), responde con el dato EXACTO de la vacante en "
+        "UNA línea («El trabajo es en [ubicación].», «El sueldo es de [sueldo].»); si ese dato no está en la vacante, "
+        f"responde EXACTAMENTE «Eso lo puedes platicar con el equipo de RH de {emp}.»; NUNCA tomes su pregunta como respuesta a "
+        "la tuya y, en seguida, repite tu pregunta pendiente; (f) si su respuesta no contesta tu pregunta, repregúntala UNA sola "
+        "vez con otras palabras y en lenguaje natural (NUNCA con el nombre interno de un campo, p. ej. «tiempo de traslado»: "
+        "di «¿Cuánto tardarías en llegar de tu casa al trabajo, más o menos?»); si vuelve a no contestar, regístralo como "
+        "«Sin respuesta» y pasa a la siguiente pregunta."
     )
 
 
@@ -2989,14 +2996,55 @@ def es_autopercepcion(texto: str) -> bool:
     return bool(_RE_AUTOPERCEPCION.search(texto or ""))
 
 
+# Cambio 59 (2026-10-15): repreguntas de los DATOS base en lenguaje natural. Nunca se arma una repregunta con el nombre
+# interno del campo («¿cuántos años de experiencia tienes en tiempo de traslado?» está prohibido).
+PARAFRASIS_DATO = {
+    "traslado": "¿Cuánto tardarías en llegar de tu casa al trabajo, más o menos?",
+    "zona": "¿En qué colonia y municipio está tu casa?",
+    "edad": "¿Cuántos años cumpliste en tu último cumpleaños?",
+    "transporte": "¿En qué te moverías para llegar al trabajo: camión, metro, combi, auto?",
+    "transportes": "¿Cuántos camiones, metros o combis tomarías para llegar?",
+    "experiencia": "¿Cuánto tiempo llevas trabajando en algo parecido?",
+    "escolaridad": "¿Cuál fue el último año que terminaste en la escuela?",
+    "licencia": "¿Qué licencia de manejo tienes y de qué tipo es?",
+    "vigencia": "¿Hasta qué mes y año está vigente?",
+    "interes": "¿Te gustaría seguir con tu postulación para este puesto?",
+    "puede_trasladarse": "¿Podrías llegar hasta el lugar de trabajo todos los días?",
+    "disponibilidad": "¿Qué días y en qué horario podrías trabajar?",
+    "terminal": "¿En cuál de las terminales te gustaría trabajar?",
+    "sueldo": "Solo para tenerlo en cuenta, ¿el sueldo te parece bien?",
+}
+_RE_EXPERIENCIA = re.compile(r"(experiencia|anos|años|meses|tiempo trabajando)", re.IGNORECASE)
+
+
+_DATO_POR_ETIQUETA = (("traslado", "traslado"), ("colonia", "zona"), ("municipio", "zona"), ("transporte", "transporte"),
+                      ("edad", "edad"), ("sueldo", "sueldo"), ("interes en el puesto", "interes"), ("terminal", "terminal"))
+
+
+def _dato_de_criterio(criterio: str) -> str:
+    """Etiqueta interna de un dato base («Tiempo de traslado», «Colonia y municipio») → su clave de paráfrasis."""
+    import unicodedata
+
+    t = " ".join(unicodedata.normalize("NFKD", str(criterio or "")).encode("ascii", "ignore").decode().lower().split())
+    return next((d for k, d in _DATO_POR_ETIQUETA if k in t), "") if len(t.split()) <= 5 else ""
+
+
 def reformular_pregunta(pregunta: str, criterio: str, opciones: Optional[List[str]] = None, intento: int = 1,
-                        tipo: str = "si_no") -> str:
+                        tipo: str = "si_no", dato: str = "") -> str:
     """«No entiendo» / «¿qué procesos?»: la MISMA pregunta con OTRAS palabras (nunca el mismo texto: cambia en cada
-    intento), sencilla y sin opciones numeradas (especificación 2026-10-10). Determinista; la IA solo la pule."""
+    intento), sencilla y sin opciones numeradas (especificación 2026-10-10). Determinista; la IA solo la pule.
+    Cambio 59: un DATO base (traslado, colonia, edad…) se refrasea con su paráfrasis natural (`PARAFRASIS_DATO`): el
+    nombre interno del campo nunca llega al candidato."""
+    dato = dato or _dato_de_criterio(criterio)
+    if dato in PARAFRASIS_DATO:
+        return f"Te lo pregunto de otra forma: {PARAFRASIS_DATO[dato]}"
     req = (criterio or pregunta).strip().rstrip(".?¿")
     req = req[:1].lower() + req[1:]
     if tipo == "numero":
-        # Cambio 31: sin ejemplos de formato
+        # Cambio 31: sin ejemplos de formato. Cambio 59: «experiencia» solo si el requisito habla de experiencia
+        if not _RE_EXPERIENCIA.search(req):
+            return (f"Te lo pregunto de otra forma: sobre {req}, ¿qué cantidad sería en tu caso, más o menos?" if intento <= 1
+                    else f"En pocas palabras: ¿qué número me darías sobre {req}?")
         base = (f"Te lo pregunto de otra forma: ¿cuánto tiempo llevas con esto: {req}?"
                 if intento <= 1 else f"En pocas palabras: ¿cuántos años o meses de experiencia tienes en {req}?")
     elif tipo == "opcion":

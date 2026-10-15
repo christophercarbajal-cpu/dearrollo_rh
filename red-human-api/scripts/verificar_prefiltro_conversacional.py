@@ -276,11 +276,8 @@ with TestClient(app) as client:
     check(len(salida) == 1 and salida[0].startswith("Te lo pregunto de otra forma") and "rolar turnos" in salida[0].lower(),
           "«No entiendo» → reformula la MISMA pregunta (no la toma como «No»)")
     check(recargar(pt.codigo).activa, "…y no cierra la postulación")
-    salida = tg(text="Solo puedo en la mañana")
-    # Cambio 37: la aclaración pide el dato directo («Claro. Solo para tenerlo en cuenta…» es solo del sueldo)
-    check(len(salida) == 1 and not salida[0].startswith("Claro. Solo para tenerlo en cuenta") and "rolar turnos" in salida[0],
-          "respuesta ambigua → pide aclaración antes de decidir")
-    check(recargar(pt.codigo).activa, "…y todavía no decide")
+    # Cambio 59: la reformulación de «No entiendo» YA fue la única repregunta de esta pregunta (una respuesta ambigua ahora
+    # quedaría «Sin respuesta»; eso se prueba en verificar_cambio59.py y verificar_estres_prefiltro.py)
     salida = tg(text="/start")
     check(len(salida) == 1 and salida[0].endswith("\n\n¿Tienes disponibilidad para rolar turnos?") and salida[0].startswith("Retomemos"),
           "/start retoma la pregunta pendiente EXACTA (no la cuenta como respuesta)")

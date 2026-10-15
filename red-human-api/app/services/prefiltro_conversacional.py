@@ -55,7 +55,7 @@ ENTIDAD = "prefiltro_conversacional"
 MOTIVO_CIERRE = "descartado"
 MOTIVO_CIERRE_LEGADO = "prefiltro_no_aprobado"  # cierres anteriores a la especificación
 ACTOR = "Red Human (prefiltro)"
-MAX_ACLARACIONES = 2
+MAX_ACLARACIONES = 1  # Cambio 59: UNA sola repregunta; si sigue sin contestar → «Sin respuesta» y se avanza
 
 # ============================================================ criterios de la vacante
 
@@ -1178,9 +1178,25 @@ def punto_por_validar(p: Postulacion, texto: str) -> None:
     flag_modified(p, "analisis")
 
 
+SIN_RESPUESTA = "Sin respuesta"  # Cambio 59: lo que se registra tras la única repregunta sin contestar
+
+
+def sin_respuesta_dato(p: Postulacion, c: dict) -> None:
+    """Cambio 59: el dato de la ficha (colonia, traslado, transporte, sueldo) queda «Sin respuesta»."""
+    if c.get("dato") not in ("zona", "traslado", "transporte", "sueldo"):
+        return
+    a = dict(p.analisis or {})
+    d = dict(a.get("prefiltro_datos") or {})
+    d.setdefault(c["dato"], SIN_RESPUESTA)
+    a["prefiltro_datos"] = d
+    p.analisis = a
+
+
 def _no_concluyente(db: Session, p: Postulacion, e: dict, c: dict, respuesta: str, fuente: str) -> None:
     e["respuestas"] = {**(e.get("respuestas") or {}),
-                       c["id"]: {"respuesta": respuesta[:300], "valor": None, "fuente": fuente, "en": _ahora(), "no_concluyente": True}}
+                       c["id"]: {"respuesta": SIN_RESPUESTA if respuesta else "", "texto": respuesta[:300], "valor": None,
+                                 "fuente": fuente, "en": _ahora(), "no_concluyente": True, "sin_respuesta": bool(respuesta)}}
+    sin_respuesta_dato(p, c)
     punto_por_validar(p, f"Respuesta no concluyente en «{c['criterio']}»" + (f": «{respuesta[:120]}»" if respuesta else " (sin respuesta)"))
     registrar(db, ACTOR, "prefiltro_no_concluyente", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": respuesta[:200]})
 
@@ -1617,6 +1633,15 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         # Cambio 51: nunca prometer condiciones fuera de la vacante; se responde y se retoma la MISMA pregunta
         registrar(db, ACTOR, "prefiltro_negociacion", "postulacion", p.codigo, {"texto": texto[:200]})
         return await responder(f"{texto_negociacion(p)} {pendiente['chat']}", aclaracion=True)
+    if pendiente is not None:
+        # Cambio 59: una PREGUNTA del candidato sobre la vacante nunca se toma como respuesta — se contesta con el dato
+        # exacto y se repite la MISMA pregunta pendiente
+        from . import respuestas_vacante as rva
+
+        tema = rva.tema_pregunta(texto)
+        if tema:
+            registrar(db, ACTOR, "prefiltro_pregunta_candidato", "postulacion", p.codigo, {"tema": tema, "texto": texto[:200]})
+            return await responder(rva.con_pendiente(p, tema, pendiente["chat"]), aclaracion=True, pregunta_candidato=tema)
     if pendiente is not None and pendiente.get("unificado"):
         # Cambio 37 — «Preguntas filtro»: descarta SOLO una respuesta clara que no cumple; afirmativa sin dato, parcial,
         # ambigua o evasiva → UNA repregunta concreta y, si sigue sin resolverse, «Requiere revisión». Todo al historial.
@@ -1643,7 +1668,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
                       motivo="no entendió la pregunta", criterio=pendiente["criterio"])
             registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
             return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], None, intento=n,
-                                                          tipo=pendiente.get("tipo") if pendiente.get("tipo") in ("numero", "opcion") else "si_no"),
+                                                          tipo=pendiente.get("tipo") if pendiente.get("tipo") in ("numero", "opcion") else "si_no",
+                                                          dato=pendiente.get("dato") or ""),
                                    aclaracion=True)
         if extra.get("unidad") and pendiente["id"] not in unidad:
             # «uno» en una pregunta de tiempo: «¿Un año o un mes?» (no cuenta como la repregunta)
@@ -1669,9 +1695,13 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             valor, extra = "si", {"flexible": True, "evasiva": texto.strip()[:200]}  # Cambio 31: expectativa «Flexible»
         if valor is None:
             # segunda vez sin resolver: «Requiere revisión» (nunca se toma como «No»)
+            # Cambio 59: el campo queda «Sin respuesta» (lo que escribió se conserva aparte) y se avanza
             e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["id"]: {
-                "respuesta": texto.strip()[:300], "valor": None, "fuente": fuente, "en": _ahora(), "revision": True}}
-            punto_por_validar(p, f"Requiere revisión: «{pendiente['criterio']}» — respondió «{texto.strip()[:120]}»")
+                "respuesta": SIN_RESPUESTA, "texto": texto.strip()[:300], "valor": None, "fuente": fuente, "en": _ahora(),
+                "sin_respuesta": True, **({"revision": True} if pendiente.get("indispensable") else {})}}
+            sin_respuesta_dato(p, pendiente)
+            punto_por_validar(p, (f"Requiere revisión: «{pendiente['criterio']}» — respondió «{texto.strip()[:120]}»"
+                                  if pendiente.get("indispensable") else f"Sin respuesta en «{pendiente['criterio']}»"))
             historial(p, "prefiltro_sin_resolver", f"«{pendiente['criterio']}» sigue sin resolverse tras la repregunta: requiere "
                       f"revisión («{texto.strip()[:120]}»)", motivo="sin_resolver", criterio=pendiente["criterio"])
         else:
@@ -1692,7 +1722,8 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
 
             registrar(db, ACTOR, "prefiltro_pregunta_reformulada", "postulacion", p.codigo, {"criterio": pendiente["criterio"], "intento": n})
             return await responder(ia.reformular_pregunta(pendiente["pregunta"], pendiente["criterio"], None, intento=n,
-                                                          tipo=pendiente.get("tipo") or "si_no"), aclaracion=True)
+                                                          tipo=pendiente.get("tipo") or "si_no", dato=pendiente.get("dato") or ""),
+                                   aclaracion=True)
         # sigue sin entender: nunca se toma como «No» — pasa a «Puntos por validar» y el agente decide con lo demás
         _no_concluyente(db, p, e, pendiente, texto.strip(), canal_registro(canal))
         e["pendiente"] = None
@@ -1787,6 +1818,9 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     if resultado == "revision":
         # Cambio 37: un indispensable sin resolver tras su repregunta → «Requiere revisión»; la ruta se detiene para RH
         mensaje = resolver_revision(db, p, criterios, e, incumple)
+        from . import respuestas_vacante as rva
+
+        rva.marcar_cierre(p, "prefiltro_whatsapp", mensaje)  # Cambio 59: el chat queda pasivo
         return await responder(mensaje, clasificacion_final="revision")
     if siguiente is not None:
         primera = not e.get("preguntadas")
@@ -1817,4 +1851,7 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     _emp = empresa_de(p)  # Cambio 31: misma empresa que la presentación
     mensaje = (f"Gracias, {nombre_ficha(p).split(' ')[0]}. Registré tus respuestas; una persona del equipo de RH{' de ' + _emp if _emp else ''} te escribirá "
                "por este medio. 🙌")
+    from . import respuestas_vacante as rva
+
+    rva.marcar_cierre(p, "prefiltro_whatsapp", mensaje)  # Cambio 59: el chat queda pasivo
     return await responder(mensaje, clasificacion={"estado": "cumple", "evidencia": ""})

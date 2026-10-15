@@ -123,9 +123,16 @@ with TestClient(app) as client:
     print("\n--- 2. «no entiendo» → reformula, nunca repite ---")
     r1 = turno(P, "no entiendo")
     check(r1 and "¿Tienes disponibilidad para rolar turnos?" not in r1 and "turnos" in r1.lower(), "reformula la MISMA pregunta con otras palabras")
-    r2 = turno(P, "no entiendo")
-    check(r2 and r2 != r1 and "turnos" in r2.lower(), "un segundo «no entiendo» trae otra reformulación (no repite el texto)")
     check(post(P).activa and not respondida(P, "turnos"), "«no entiendo» nunca se toma como «No»")
+    # Cambio 59: máximo UNA repregunta — un segundo «no entiendo» registra «Sin respuesta» y pasa a la siguiente pregunta
+    P2 = nueva()
+    turno(P2, "Hola")
+    turno(P2, "ya la acabé")
+    ra = turno(P2, "no entiendo")
+    rb = turno(P2, "no entiendo")
+    r_t = respondida(P2, "turnos")
+    check(rb and rb != ra and "procesos de producción" in rb and r_t.get("respuesta") == "Sin respuesta" and r_t.get("valor") is None
+          and post(P2).activa, "un segundo «no entiendo» → «Sin respuesta» y sigue con la siguiente pregunta (nunca «No»)")
 
     print("\n--- 3. grosería con respuesta válida ---")
     r = turno(P, "ya te dije pinche bot, sí puedo rolar turnos")

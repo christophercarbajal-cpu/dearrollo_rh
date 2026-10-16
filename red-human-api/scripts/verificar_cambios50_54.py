@@ -203,11 +203,11 @@ with TestClient(app) as client:
 
     crit = vacante_dict(va)["criterios"]
     preguntas = [c["pregunta"] for c in crit]
-    check("El puesto es Operador de 5ª rueda. ¿Te interesa?" in preguntas,
-          f"«Unas preguntas» trae el interés en el puesto (con 5 terminales, la ciudad se dice al elegir la terminal) → {preguntas}")
-    check(any("sueldo" in q.lower() for q in preguntas), "«Unas preguntas» trae el sueldo")
-    q_int = next(q for q in preguntas if q.startswith("El puesto es"))
-    q_sue = next(q for q in preguntas if "sueldo" in q.lower())
+    # 2026-10-16: sin la confirmación «El puesto es… ¿Te interesa?»; el sueldo va UNA vez como expectativa
+    check(not any(q.startswith("El puesto es") for q in preguntas) and "¿Cuántos años tienes?" not in preguntas,
+          f"«Unas preguntas» sin confirmar el puesto ni pedir la edad → {preguntas}")
+    check("¿Cuál es tu expectativa de sueldo mensual?" in preguntas, "«Unas preguntas» trae la expectativa de sueldo")
+    q_sue = "¿Cuál es tu expectativa de sueldo mensual?"
 
     def postular(v, nombre, tel, respuestas):
         datos = {"vacante": v.slug, "nombre": nombre, "telefono": tel, "consentimiento": "true",
@@ -218,7 +218,7 @@ with TestClient(app) as client:
         return r.json()
 
     todo_si = {**{q: "Sí" for q in sf.PREGUNTAS_WEB.values()}, "¿En qué terminal te gustaría trabajar?": "Terminal Monterrey",
-               q_int: "Sí", q_sue: "Sí"}
+               q_sue: "20000"}
     antes = len(ENVIADOS)
     r = postular(va, "Raúl Rechazo", "5560000001", {**todo_si, sf.PREGUNTAS_WEB[sf.LICENCIA]: "No"})
     p_rech = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
@@ -236,7 +236,7 @@ with TestClient(app) as client:
     r = postular(va, "Mario Operador", "5560000002", todo_si)
     p_a = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
     check(not r.get("descartado") and p_a.activa, "todo «Sí» → la solicitud pasa")
-    check((p_a.analisis.get("prefiltro_datos") or {}).get("interes_puesto") is True, "el interés de la web queda registrado")
+    check((p_a.analisis.get("prefiltro_datos") or {}).get("sueldo_expectativa") == 20000, "la expectativa de la web queda registrada")
     check("inicio_entrevista_rh" in plantillas("5560000002", antes), "sale la plantilla de inicio del prefiltro")
     t = ultimo("5560000002", "Sí, empezar ahora")
     check(t == sf.PREGUNTAS_CHAT[sf.EXPERIENCIA], f"primera pregunta del chat: años de experiencia → «{t}»")
@@ -247,14 +247,15 @@ with TestClient(app) as client:
     check(t == f"Eso lo puedes platicar con el equipo de RH de Fletes México. {sf.PREGUNTAS_CHAT[sf.EXPERIENCIA]}",
           f"negociación → «{t}»")
     seguidas = []
-    for resp in ("6 años", "Transportes del Norte", "LFB-123456", "diciembre de 2030", "15/06/2031", "34"):
+    for resp in ("6 años", "Transportes del Norte", "LFB-123456", "diciembre de 2030", "15/06/2031"):  # 2026-10-16: sin edad
         seguidas.append(ultimo("5560000002", resp))
     check(sf.PROPIAS[0]["pregunta"] in seguidas[0] and sf.PROPIAS[1]["pregunta"] in seguidas[1], f"preguntas propias de RH en orden → {seguidas[:2]}")
     check(not any("te interesa" in x.lower() for x in seguidas) and not any("sueldo" in x.lower() for x in seguidas),
           "interés y sueldo NO se repiten: ya se contestaron en «Unas preguntas» (regla de oro)")
-    check("colonia" in seguidas[-1].lower(), f"tras la edad: la colonia → «{seguidas[-1]}»")
+    check("colonia" in seguidas[-1].lower() and not any("años tienes" in x for x in seguidas),
+          f"sin preguntar la edad: la colonia → «{seguidas[-1]}»")
     t = ultimo("5560000002", "Col. Centro, Hermosillo, Sonora")
-    check(t == "El trabajo es en Salinas Victoria, Nuevo León. ¿Vives ahí o te cambiarías de ciudad?",
+    check(t.endswith("El trabajo es en Salinas Victoria, Nuevo León. ¿Vives ahí o te cambiarías de ciudad?"),
           f"vive en otro estado → «{t}»")
     t = ultimo("5560000002", "Me cambiaría sin problema")
     check(t == f"La Terminal Monterrey está en {mty.direccion}. ¿Cuánto tiempo harías de tu casa?", f"tiempo a SU terminal → «{t}»")

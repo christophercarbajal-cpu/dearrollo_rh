@@ -185,7 +185,13 @@ def validar_minimo_web(db: Optional[Session], v, explicito: bool = False) -> Non
     """2026-10-11 (tarde): si la ruta de la vacante trae el prefiltro web, necesita al menos 3 preguntas clave. Vacío
     solo bloquea cuando el formulario lo mandó explícito (RH lo vació); las vacantes sin prefiltro configurado no cambian."""
     from . import ia
+    from . import preguntas_filtro as pfu
 
+    if pfu.aplica(v):
+        # 2026-10-16: con la entidad única el formulario web se DERIVA de los indispensables (su mínimo lo exige la
+        # publicación, Cambio 36) y ya no se rellena con edad ni «¿Te interesa?»: el mínimo de 3 solo aplica a un
+        # formulario web escrito a mano
+        return
     n = len([q for q in (getattr(v, "preguntas_filtro", None) or []) if isinstance(q, dict) and _texto(q.get("pregunta"))])
     if n >= ia.MIN_PREFILTRO_WEB or (n == 0 and not explicito):
         return

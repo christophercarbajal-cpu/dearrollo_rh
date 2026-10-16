@@ -288,9 +288,10 @@ with TestClient(app) as client:
     vo.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("masivos_sin_documentos")["pasos"]})
     db.commit()
     crit = pconv.criterios_de(vo)
-    check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "edad", "interes", "sueldo",
-                                                            "zona", "traslado"],
-          f"ruta Masivos: base fija en orden (indispensables → edad → puesto → sueldo → colonia → traslado) {[c['dato'] for c in crit]}")
+    # 2026-10-16: sin «¿Cuántos años tienes?» (la vacante no pide edad) ni «¿Te interesa?»; el sueldo es la expectativa
+    check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "sueldo", "zona", "traslado"]
+          and next(c for c in crit if c["dato"] == "sueldo").get("expectativa"),
+          f"ruta Masivos: base fija en orden (indispensables → expectativa de sueldo → colonia → traslado) {[c['dato'] for c in crit]}")
     check(not any(c["dato"] == "transporte" for c in crit) and not any("organizad" in c["chat"] or "equipo" in c["chat"].lower() for c in crit),
           "sin pregunta de transporte ni habilidades blandas (lo generado antes por IA se ignora)")
     check([c["indispensable"] for c in crit[:3]] == [True, True, True] and not crit[3]["indispensable"] and not crit[-1]["indispensable"],
@@ -300,9 +301,9 @@ with TestClient(app) as client:
           and crit[0]["chat"] == "¿Cuál es tu último grado de estudios?" and crit[1]["chat"].startswith("¿Cuánt"),
           f"los indispensables se preguntan directo ({[c['chat'] for c in crit[:3]]})")
     # Cambio 51: el puesto lleva ciudad y estado; ya no se pregunta «¿Puedes trasladarte?»
-    check(crit[4]["chat"] == "El puesto es Almacenista en Zapopan, Jalisco. ¿Te interesa?"
-          and crit[5]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"
-          and crit[7]["chat"] == "¿Cuánto tiempo harías de tu casa al trabajo?", f"textos fijos de puesto, sueldo y traslado {[c['chat'] for c in crit[4:]]}")
+    # 2026-10-16: sin «El puesto es… ¿Te interesa?» ni el sueldo afirmativo: el sueldo es la expectativa
+    check(crit[3]["chat"] == "¿Cuánto esperas ganar al mes?"
+          and crit[5]["chat"] == "¿Cuánto tiempo harías de tu casa al trabajo?", f"textos fijos de sueldo y traslado {[c['chat'] for c in crit[3:]]}")
     ficha = ia.FichaGuion(titulo="Almacenista", requisitos_indispensables=REQS.split(" · "), sueldo="Desde $9,500 MXN mensuales",
                           ubicacion="Zapopan, Jalisco", enfoque_entrevista="operativo", ruta_masiva=True)
     wa = ia.generar_guiones(ficha, ["prefiltro_whatsapp"], hay_whatsapp=True)[0]["prefiltro_whatsapp"]
@@ -333,12 +334,9 @@ with TestClient(app) as client:
     r = chat(q1, "2 años")
     check("rolar turnos" in r, f"→ «{r}»")
     r = chat(q1, "Puedo mañana y tarde")
-    check(r.endswith("¿Cuántos años tienes?"), f"edad después de los indispensables → «{r}»")
-    r = chat(q1, "17")
-    check(r.endswith("El puesto es Almacenista en Zapopan, Jalisco. ¿Te interesa?"), f"puesto (Cambio 51: con ciudad y estado) → «{r}»")
-    r = chat(q1, "sí")
-    check(r.endswith("El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?"), "sueldo")
-    r = chat(q1, "claro")
+    # 2026-10-16: la vacante no pide edad → no se pregunta; el sueldo va UNA vez como expectativa
+    check(r.endswith("¿Cuánto esperas ganar al mes?") and "años tienes" not in r, f"expectativa después de los indispensables → «{r}»")
+    r = chat(q1, "Unos 9 mil")
     check(r.endswith("¿En qué colonia y municipio vives?"), "colonia y municipio")
     r = chat(q1, "Colonia Centro, Zapopan")
     # Cambio 51: ya no se pregunta «¿Puedes trasladarte?» (la ciudad va en la pregunta del puesto)
@@ -347,9 +345,10 @@ with TestClient(app) as client:
     db.refresh(q1)
     datos = (q1.analisis or {}).get("prefiltro_datos") or {}
     puntos = (q1.analisis or {}).get("puntos_validar_prefiltro") or []
-    check(q1.activa and pconv.estado(q1).get("resultado") == "cumple" and datos.get("traslado_min") == 120 and datos.get("edad") == 17,
-          "sin límite de traslado en la vacante, 2 horas solo se registra y el prefiltro se cumple")
-    check(any("Menor de 18" in x for x in puntos), "menor de 18 → Puntos por validar")
+    check(q1.activa and pconv.estado(q1).get("resultado") == "cumple" and datos.get("traslado_min") == 120 and "edad" not in datos
+          and datos.get("sueldo_expectativa") == 9000,
+          "sin límite de traslado en la vacante, 2 horas solo se registra y el prefiltro se cumple (sin edad)")
+    check(not any("Menor de 18" in x for x in puntos), "sin edad en la vacante no hay punto de edad")
     textos = [m.texto for m in q1.mensajes if m.rol == "assistant"]
     check(not any("transporte" in t.lower() for t in textos), "nunca pregunta el transporte")
 
@@ -370,7 +369,7 @@ with TestClient(app) as client:
     check(trasl["indispensable"] and trasl["limite_min"] == 60 and edad["indispensable"] and edad["edad_min"] == 18,
           "con límite de traslado (y edad) en la vacante, esos datos sí descartan")
     q3 = postular_op("Rosa Lejana", "5512990003")
-    for t in ("Hola", "Terminé la secundaria", "3 años", "Fines de semana y entre semana", "30", "sí", "sí", "Las Águilas, Zapopan", "sí"):
+    for t in ("Hola", "Terminé la secundaria", "3 años", "Fines de semana y entre semana", "30", "9 mil", "Las Águilas, Zapopan"):
         chat(q3, t)
     r = chat(q3, "hora y media")
     db.refresh(q3)

@@ -283,6 +283,20 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
         # valoraciones ni promesas («Tu perfil es compatible» está prohibido).
         texto = (f"{saludo}Gracias por responder. El siguiente paso de tu proceso es una entrevista con Red Human (unos 10 "
                  f"minutos); entra cuando estés en un lugar tranquilo: {liga}")
+    if paso["tipo"] == "entrevista_agente":
+        # 2026-10-16: este es el ÚNICO mensaje (invitación + liga); la respuesta del candidato sigue la misma lógica de
+        # «¿La quieres hacer ahora?» («no puedo ahora» → la liga con 3 días), sin volver a proponer día y hora
+        from datetime import datetime, timezone
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from . import agenda_chat
+
+        a = dict(p.analisis or {})
+        a[agenda_chat.CLAVE] = {"pregunta_ahora": True, "liga_enviada": True, "entrevista": e.token,
+                                "en": datetime.now(timezone.utc).isoformat()}
+        p.analisis = a
+        flag_modified(p, "analisis")
     db.flush()
     entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", liga, motivo="entrevista", paso_id=paso["id"])
     return True, (f"Liga enviada por {detalle}" if entregado else f"Liga creada; el aviso no salió ({detalle})"), entregado

@@ -78,7 +78,14 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     from . import filtros_revision
 
     salida = _criterios_de(v, p)
-    return filtros_revision.anotar(salida, v) if v is not None else salida
+    if v is None:
+        return salida
+    salida = filtros_revision.anotar(salida, v)
+    regla = regla_expectativa(v)
+    for c in salida:
+        if regla and c.get("dato") == "sueldo" and c.get("expectativa") and not c.get("revision_regla"):
+            c["revision_regla"] = regla  # 2026-10-16: expectativa arriba del máximo de la vacante → «Requiere revisión»
+    return salida
 
 
 def _criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
@@ -311,11 +318,9 @@ def _criterios_base(v, p: Optional[Postulacion] = None) -> List[dict]:
     brechas = criterios_brecha(salida, p) if p is not None else []
     if not datos:
         return _con_brechas(salida + registro, brechas)
-    q_sueldo = ia.pregunta_sueldo(v.sueldo or "")
-    if q_sueldo and not any(d["dato"] == "sueldo" for d in datos):
-        # C2 (prueba del 11 de octubre): vacantes con los 4 datos ya guardados también preguntan el sueldo (sin regenerar)
-        datos.append({"id": "dato-sueldo", "clave": "sueldo", "dato": "sueldo", "criterio": f"Sueldo: {v.sueldo.strip()}",
-                      "pregunta": q_sueldo, "chat": q_sueldo, "indispensable": False, "esperada": "si", "tipo": "dato"})
+    # 2026-10-16 (decisión del usuario): el sueldo se pregunta UNA vez y como EXPECTATIVA (también en los prefiltros
+    # guardados antes con «El sueldo es… ¿Te parece bien?»); C2: aunque el prefiltro guardado no lo traiga
+    datos = [d for d in datos if d["dato"] != "sueldo"] + [dato_expectativa(v)]
     datos.sort(key=lambda d: ia.DATOS_PREFILTRO.index(d["dato"]))
     base = next((c for c in salida if c["indispensable"] and not c.get("reconfirma") and ia.RE_NIVEL_ESTUDIOS.search(c["criterio"])), None)
     esc = next((d for d in datos if d["dato"] == "escolaridad"), None)
@@ -351,7 +356,22 @@ def tope_sueldo(v) -> Optional[int]:
     return None
 
 
-MARGEN_EXPECTATIVA = 0.20  # Cambio 24: una expectativa 20 % arriba del sueldo de la vacante va a Puntos por validar
+# 2026-10-16 (decisión del usuario): una expectativa ARRIBA del máximo de la vacante → «Requiere revisión» (reemplaza el
+# margen de 20 % del Cambio 24, que solo la mandaba a Puntos por validar). Nunca descarta.
+MARGEN_EXPECTATIVA = 0.0
+
+
+def regla_expectativa(v) -> Optional[dict]:
+    """Regla de revisión (formato de `services/filtros_revision.py`) de la expectativa de sueldo; None sin sueldo capturado."""
+    tope = tope_sueldo(v)
+    if not tope:
+        return None
+    return {"pregunta": "", "tipo": "maximo", "valor": tope, "unidad": "pesos",
+            "motivo": f"Expectativa de sueldo arriba del máximo de la vacante (${tope:,})"}
+
+
+def texto_sobre_tope(monto: int, ofrecido: str, tope: int) -> str:
+    return f"Expectativa de sueldo: ${monto:,} (arriba del máximo de la vacante: {ofrecido or f'${tope:,}'})"
 
 
 def dato_expectativa(v) -> dict:
@@ -698,9 +718,9 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
         tope = c.get("tope")
         if extra.get("monto") and tope and extra["monto"] > tope * (1 + MARGEN_EXPECTATIVA):
             d["sueldo_sobre_tope"] = True
-            a["puntos_validar_prefiltro"] = list(a.get("puntos_validar_prefiltro") or []) + [
-                f"Expectativa de sueldo: ${extra['monto']:,} (más de 20 % arriba del sueldo de la vacante: "
-                f"{d['sueldo_ofrecido'] or f'${tope:,}'})"]
+            punto = texto_sobre_tope(extra["monto"], d["sueldo_ofrecido"], tope)
+            if punto not in (a.get("puntos_validar_prefiltro") or []):
+                a["puntos_validar_prefiltro"] = list(a.get("puntos_validar_prefiltro") or []) + [punto]
     elif c["dato"] == "sueldo":
         d["sueldo_acepta"] = extra.get("acepta")
         d["sueldo_ofrecido"] = str(c.get("criterio") or "").removeprefix("Sueldo: ").strip()
@@ -969,6 +989,20 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
     from . import solicitud_web as ssw
 
     for c in criterios:
+        if c["id"] not in respuestas and c.get("expectativa"):
+            # 2026-10-16: la expectativa de sueldo se pregunta UNA vez — si ya la dio en la solicitud, el chat no la repite
+            valor_x = ssw.respuesta_web(p, c)
+            monto_x = monto_de(valor_x or "")
+            if valor_x and monto_x:
+                extra_x = {"monto": monto_x}
+                respuestas[c["id"]] = {"respuesta": valor_x, "valor": "si", "fuente": "web", "en": _ahora(), **extra_x}
+                if c.get("unificado"):
+                    from . import preguntas_filtro as pfu
+
+                    pfu.registrar_datos(p, c, valor_x, extra_x)
+                else:
+                    guardar_datos(p, c, valor_x, extra_x)
+                continue
         if c["id"] not in respuestas and c.get("dato") in ("interes", "sueldo", "edad", "zona") and not c.get("expectativa"):
             # Cambio 50/52 (regla de oro): lo que ya contestó en «Unas preguntas» de la solicitud no se vuelve a preguntar
             valor_b = ssw.respuesta_web(p, c)
@@ -1296,7 +1330,11 @@ def resolver_revision(db: Session, p: Postulacion, criterios: List[dict], e: dic
     """Cambio 37: un indispensable quedó sin resolver tras su ÚNICA repregunta → «Requiere revisión». La postulación sigue
     activa, el estado es «revision» y la ruta se detiene hasta que RH decida. Regresa el mensaje al candidato."""
     respuesta = ((e.get("respuestas") or {}).get(c["id"]) or {}).get("respuesta", "")
-    motivo = f"Requiere revisión: «{c['criterio']}»" + (f" (respondió: «{str(respuesta)[:120]}»)" if respuesta else "")
+    from . import filtros_revision
+
+    por_regla = filtros_revision.falla(c.get("revision_regla"), str(respuesta)) if c.get("revision_regla") else None
+    motivo = (f"Requiere revisión: {por_regla}" if por_regla else
+              f"Requiere revisión: «{c['criterio']}»" + (f" (respondió: «{str(respuesta)[:120]}»)" if respuesta else ""))
     _resolver(db, p, criterios, e, "revision", motivo)
     historial(p, "requiere_revision", f"Prefiltro: {motivo}. RH decide si continúa o se descarta.", motivo=motivo, origen="prefiltro")
     registrar(db, ACTOR, "prefiltro_requiere_revision", "postulacion", p.codigo, {"criterio": c["criterio"], "respuesta": str(respuesta)[:200]})

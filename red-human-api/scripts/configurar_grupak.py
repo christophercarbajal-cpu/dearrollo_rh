@@ -296,7 +296,7 @@ def validar(db, v: Vacante) -> list:
         c = next((x for x in criterios if x["pregunta"] == q), None)
         if c is None or c.get("descarta"):
             problemas.append(f"«Unas preguntas»: «{q}» debe estar y NO descartar → {textos}")
-    for q in (ssw.PREGUNTA_EDAD, ssw.PREGUNTA_ZONA, ssw.pregunta_interes(v)):
+    for q in (ssw.PREGUNTA_EDAD, ssw.PREGUNTA_ZONA, ssw.pregunta_expectativa(v)):  # 2026-10-16: sin «¿Te interesa?»
         if q not in textos:
             problemas.append(f"«Unas preguntas» sin «{q}» → {textos}")
     if any(c.get("descarta") for c in criterios):

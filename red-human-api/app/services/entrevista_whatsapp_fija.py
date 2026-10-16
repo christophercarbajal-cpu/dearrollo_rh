@@ -180,10 +180,13 @@ def ya_dicho(p) -> Dict[str, bool]:
     """Cambio 52 (regla de oro): qué ya se le dijo / respondió antes (solicitud web o prefiltro) — puesto, sueldo y
     ubicación no se vuelven a confirmar en el bloque D."""
     d = ((p.analisis or {}).get("prefiltro_datos")) or {}
-    return {"conf_puesto": d.get("interes_puesto") is not None,
+    # 2026-10-16: ya no existe «El puesto es… ¿Te interesa?» — haber contestado la solicitud o el prefiltro de ESTA
+    # vacante (cuya página dice puesto y ubicación) cuenta como puesto y ubicación ya dichos
+    contesto = d.get("interes_puesto") is not None or any(k != "en" for k in d) or bool((p.analisis or {}).get("respuestas_web"))
+    return {"conf_puesto": contesto,
             "conf_sueldo": d.get("sueldo_acepta") is not None or bool(d.get("sueldo")),
             # Cambio 51: la pregunta del puesto ya dice la ciudad y el estado («El puesto es … en [ciudad, estado]»)
-            "conf_traslado": d.get("interes_puesto") is not None
+            "conf_traslado": contesto
             or any(d.get(k) not in (None, "") for k in ("traslado", "traslado_min", "puede_trasladarse", "reubicacion"))}
 
 

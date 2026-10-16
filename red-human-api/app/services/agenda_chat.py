@@ -225,7 +225,13 @@ def decidir(p: Postulacion, texto: str) -> dict:
     """Qué hacer con la respuesta del candidato. Regresa {"accion": "registrar", "cuando": dt} | {"accion": "ahora" |
     "plazo"} | {"accion": "responder", "texto": str}. Con la pregunta «¿La quieres hacer ahora?» vigente decide
     `decidir_ahora`; las propuestas de horario anteriores al Cambio 24 siguen funcionando."""
-    if ((p.analisis or {}).get(CLAVE) or {}).get("pregunta_ahora"):
+    estado = (p.analisis or {}).get(CLAVE) or {}
+    if estado.get("pregunta_ahora") and estado.get("liga_enviada"):
+        # 2026-10-16: la liga ya salió en el mensaje único del motor — «no puedo ahora» → la liga con 3 días; cualquier
+        # otra cosa («ok, gracias», «sí») → se le recuerda la liga (nunca se vuelve a preguntar ni a proponer horario)
+        d = decidir_ahora(texto)
+        return d if d["accion"] == "plazo" else {"accion": "ahora"}
+    if estado.get("pregunta_ahora"):
         return decidir_ahora(texto)
     vigente = propuesta(p)
     nuevo = extraer_horario(texto)

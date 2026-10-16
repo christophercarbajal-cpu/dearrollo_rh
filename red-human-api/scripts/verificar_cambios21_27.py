@@ -252,8 +252,10 @@ with TestClient(app) as client:
     d = (p4.analisis or {}).get("prefiltro_datos") or {}
     check(d.get("sueldo_expectativa") == 20000 and d.get("sueldo_sobre_tope"), "expectativa de 20 mil sobre un tope de 12 mil")
     pts = (p4.analisis or {}).get("puntos_validar_prefiltro") or []
-    check(any(x.startswith("Expectativa de sueldo: $20,000 (más de 20 %") for x in pts), f"→ Puntos por validar: {pts}")
-    check(p4.activa and pconv.estado(p4).get("resultado") == "cumple", "la expectativa alta nunca descarta")
+    check(any(x.startswith("Expectativa de sueldo: $20,000 (arriba del máximo") for x in pts), f"→ Puntos por validar: {pts}")
+    # 2026-10-16: una expectativa arriba del máximo de la vacante → «Requiere revisión» (nunca descarta)
+    check(p4.activa and pconv.estado(p4).get("resultado") == "revision" and p4.estado == "revision",
+          "la expectativa alta nunca descarta: queda «Requiere revisión»")
     ficha = postulacion_dict(p4, detalle=True)
     comp = {f["requisito"]: f for f in ficha["comparativoIndispensables"]}
     lic = next(f for k, f in comp.items() if "icencia" in k)
@@ -262,6 +264,22 @@ with TestClient(app) as client:
     ven = next(f for k, f in comp.items() if "ventas" in k.lower())
     check(ven["cv"] == "Acreditado" and ven["cumple"] is True and not ven["inconsistencia"], "experiencia: acreditada y confirmada")
     check(ficha["prefiltroDatos"]["sueldoExpectativa"] == 20000 and ficha["prefiltroDatos"]["sueldoSobreTope"], "la ficha muestra la expectativa")
+    # la invitación con la liga: otro candidato con una expectativa dentro del rango
+    p4 = postular("Rosa Salinas", "8111000014", ANALISIS, cv=True)
+    telegram.guardar_contacto(db, "5550014", "8111000014", "Rosa")
+    db.commit()
+    respuestas = []
+    for _ in range(10):
+        db.refresh(p4)
+        e = pconv.estado(p4)
+        if e.get("resultado"):
+            break
+        pend = next((x for x in pconv.criterios_de(v, p4) if x["id"] == e.get("pendiente")), None)
+        texto = "Hola" if pend is None else ("Unos 11 mil" if pend.get("dato") == "sueldo" else
+                                             "40 minutos" if pend.get("dato") == "traslado" else "Sí")
+        respuestas.append(responder(p4, texto))
+    db.refresh(p4)
+    check(pconv.estado(p4).get("resultado") == "cumple", "expectativa dentro del rango → cumple")
     ultimo = respuestas[-1]["respuesta"]
     # Cambio 42: la siguiente actividad inicia SOLA — la liga de la sala sale en el mismo turno (sin proponer horario)
     check("/entrevista/" in ultimo and "¿Te confirmo" not in ultimo,

@@ -194,8 +194,9 @@ with TestClient(app) as client:
     go = generar(client, CONTADOR, ruta(WHATS("operativo")))
     base_op = {q.get("dato"): q for q in go["filtro"] if q.get("base")}
     check("zona" in base_op and "traslado" in base_op, "Operativo: pregunta colonia y traslado")
-    check(base_op["sueldo"]["pregunta"].startswith("El sueldo es") and base_op["sueldo"]["pregunta"].endswith("¿Te interesa?"),
-          f"Operativo: sueldo afirmativo ({base_op['sueldo']['pregunta']})")
+    # 2026-10-16: el sueldo es la EXPECTATIVA en todos los enfoques (ya no «El sueldo es… ¿Te interesa?»)
+    check(base_op["sueldo"]["pregunta"] == "¿Cuál es tu expectativa de sueldo mensual?" and base_op["sueldo"].get("expectativa"),
+          f"Operativo: sueldo como expectativa ({base_op['sueldo']['pregunta']})")
     # la conversación usa la expectativa guardada
     v = Vacante(titulo="Abogado", sueldo="Desde $45,000 MXN mensuales", sueldo_periodicidad="mensual", enfoque_entrevista="profesional",
                 guiones={pfu.CLAVE: ga["filtro"]}, requisitos="")

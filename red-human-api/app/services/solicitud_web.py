@@ -87,19 +87,27 @@ def _es_sueldo(q: str) -> bool:
     return "sueldo" in t and ("te interesa" in t or "te parece" in t)
 
 
+def _es_expectativa(q: str) -> bool:
+    t = _n(q)
+    return ("expectativa" in t and "sueldo" in t) or "esperas ganar" in t
+
+
+def pregunta_expectativa(v) -> str:
+    from .preguntas_filtro import pregunta_expectativa as _pe
+
+    return _pe(getattr(v, "sueldo_periodicidad", "") or "")
+
+
 def preguntas_extra(v, actuales: List[dict]) -> List[dict]:
-    """Lo que «Unas preguntas» agrega a las preguntas filtro de la vacante: interés + sueldo (+ edad / colonia si la
-    vacante los pide). Nunca descartan. Una pregunta de interés ya derivada por la entidad se REESCRIBE al texto con
-    ciudad y estado (ver `criterios_web`)."""
+    """Lo que «Unas preguntas» agrega a las preguntas filtro de la vacante: la expectativa de sueldo (+ edad / colonia si
+    la vacante los pide). Nunca descartan. 2026-10-16 (decisión del usuario): sin «El puesto es… ¿Te interesa?» ni «El
+    sueldo es… ¿Te interesa?»: el sueldo se pregunta UNA vez como expectativa."""
     textos = [str(q.get("pregunta") or "") for q in actuales]
     salida = []
-    if not any(_es_interes(t) for t in textos):
-        salida.append({"id": "base-interes", "pregunta": pregunta_interes(v), "tipo": "si_no", "valida": "Interés en el puesto",
-                       "respuesta_esperada": "Sí", "descarta": False, "opciones": ["Sí", "No"], "base": True, "dato": "interes"})
-    q_s = pregunta_sueldo(v)
-    if q_s and not any(_es_sueldo(t) for t in textos):
-        salida.append({"id": "base-sueldo", "pregunta": q_s, "tipo": "si_no", "valida": f"Sueldo: {v.sueldo}",
-                       "respuesta_esperada": "Sí", "descarta": False, "opciones": ["Sí", "No"], "base": True, "dato": "sueldo"})
+    if not any(_es_expectativa(t) for t in textos):
+        salida.append({"id": "base-sueldo", "pregunta": pregunta_expectativa(v), "tipo": "numero", "valida": "Expectativa de sueldo",
+                       "respuesta_esperada": "", "descarta": False, "opciones": [], "unidad": "pesos", "base": True, "dato": "sueldo",
+                       "expectativa": True})
     extras = extras_de(v)
     if "edad" in extras and not any(_n(t) == _n(PREGUNTA_EDAD) for t in textos):
         salida.append({"id": "base-edad", "pregunta": PREGUNTA_EDAD, "tipo": "numero", "valida": "Edad", "respuesta_esperada": "",
@@ -113,14 +121,16 @@ def preguntas_extra(v, actuales: List[dict]) -> List[dict]:
 def criterios_web(v) -> List[dict]:
     """Las preguntas de «Unas preguntas» (sin la de la terminal, que agrega `serial`)."""
     from ..serial import _sin_parcial
+    from . import preguntas_filtro as pfu
 
-    base = [_sin_parcial(dict(q)) for q in (getattr(v, "preguntas_filtro", None) or []) if isinstance(q, dict)]
-    for q in base:
-        if _es_interes(q.get("pregunta")):
-            q["pregunta"] = pregunta_interes(v)
-            q["dato"] = "interes"
-        elif _es_sueldo(q.get("pregunta")):
-            q["dato"] = "sueldo"
+    guardadas = pfu.web(pfu.de_vacante(v)) if pfu.aplica(v) else (getattr(v, "preguntas_filtro", None) or [])
+    base = []
+    for q in (dict(x) for x in guardadas if isinstance(x, dict)):
+        if not q.get("descarta") and (_es_interes(q.get("pregunta")) or _es_sueldo(q.get("pregunta"))):
+            continue  # 2026-10-16: confirmaciones de puesto y sueldo retiradas (formularios guardados antes)
+        if _es_expectativa(q.get("pregunta")):
+            q.update({"dato": "sueldo", "expectativa": True})
+        base.append(_sin_parcial(q))
     return base + preguntas_extra(v, base)
 
 
@@ -132,6 +142,10 @@ def textos_web_de(c: dict, v) -> List[str]:
         salida += [pregunta_interes(v), f"El puesto es {getattr(v, 'titulo', '')}. ¿Te interesa?"]
     elif dato == "sueldo" and not c.get("expectativa"):
         salida.append(pregunta_sueldo(v))
+    elif dato == "sueldo":
+        from .prefiltro_conversacional import dato_expectativa
+
+        salida += [pregunta_expectativa(v), dato_expectativa(v)["pregunta"]]
     elif dato == "edad":
         salida.append(PREGUNTA_EDAD)
     elif dato == "zona":
@@ -240,6 +254,13 @@ def registrar_respuestas(p: Postulacion) -> None:
         respuesta = respuesta_web(p, {"pregunta": q["pregunta"]})
         if not respuesta:
             continue
+        if q.get("expectativa"):
+            # 2026-10-16: la expectativa de sueldo (una sola vez); la cifra contra el máximo de la vacante
+            from .prefiltro_conversacional import dato_expectativa, monto_de
+
+            monto = monto_de(respuesta)
+            pfu.registrar_datos(p, {**dato_expectativa(v), "pregunta": q["pregunta"]}, respuesta, {"monto": monto} if monto else {})
+            continue
         c = _criterio_unificado(v, q)
         if c is None and q.get("dato"):
             c = {"id": q["id"], "dato": q["dato"], "tipo": q.get("tipo") or "si_no", "criterio": q.get("valida") or q["pregunta"],
@@ -291,14 +312,24 @@ async def al_enviar(db: Session, p: Postulacion) -> Optional[dict]:
     if resultado != "no_cumple":
         # 2026-10-15 (UVAQ): reglas de revisión de la vacante (no excluyentes) → la solicitud queda «Requiere revisión»
         from . import filtros_revision
+        from . import prefiltro_conversacional as pconv_
 
         revision = filtros_revision.web(p)
+        # 2026-10-16: expectativa de sueldo arriba del máximo de la vacante. Con prefiltro por WhatsApp en la ruta, el chat
+        # sigue con TODAS sus preguntas y es él quien termina en «Requiere revisión» (no se frena aquí).
+        regla = pconv_.regla_expectativa(p.vacante)
+        if regla and not pconv_.aplica(p):
+            exp = next((respuesta_web(p, q) for q in criterios_web(p.vacante) if q.get("expectativa")), None)
+            motivo_exp = filtros_revision.falla(regla, exp or "")
+            if motivo_exp:
+                revision = list(revision) + [motivo_exp]
         if revision:
             a["solicitud_web"]["revision"] = revision
             p.historial = list(p.historial or []) + [{"evento": "requiere_revision", "usuario": ACTOR, "fecha": _ahora(),
                                                       "motivo": "; ".join(revision), "origen": "solicitud_web",
                                                       "texto": "Solicitud web: requiere revisión de RH — " + "; ".join(revision)}]
             registrar(db, ACTOR, "solicitud_web_requiere_revision", "postulacion", p.codigo, {"motivos": revision})
+            p.estado = "revision"
     p.analisis = a
     flag_modified(p, "analisis")
     registrar_respuestas(p)

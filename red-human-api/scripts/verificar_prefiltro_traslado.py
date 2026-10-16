@@ -187,16 +187,17 @@ with TestClient(app) as client:
     r = turno(p, "como 2 horas y media")
     check(r["respuesta"].endswith("¿En qué transporte llegarías?"), "4) al final el medio de transporte; el traslado largo NO descarta")
     r = turno(p, "En camión y metro")
-    check(r["respuesta"].endswith("El sueldo es desde $9,000 MXN mensuales. ¿Te parece bien?"), "5) al final el sueldo")
+    # 2026-10-16: el sueldo se pregunta UNA vez y como expectativa (ya no «El sueldo es… ¿Te parece bien?»)
+    check(r["respuesta"].endswith("¿Cuánto esperas ganar al mes?"), "5) al final la expectativa de sueldo")
     r = turno(p, "mmm")
-    check(r["respuesta"] == pconv.REPREGUNTA_DATO["sueldo"], "respuesta vaga sobre el sueldo → repregunta una vez")
-    r = turno(p, "No, está bajo")
+    check(r["respuesta"].startswith("Claro. Solo para tenerlo en cuenta,"), "respuesta vaga sobre el sueldo → repregunta una vez")
+    r = turno(p, "Unos 9 mil")
     p = fresca(p)
     d = p.analisis.get("prefiltro_datos") or {}
     check(p.activa and (p.analisis.get("prefiltro_web") or {}).get("resultado") == "cumple", "con la escolaridad cumplida el prefiltro aprueba")
     check(d.get("traslado_min") == 150 and d.get("nivel") == "Secundaria" and "Metro" in d.get("transporte_medio", "")
           and d.get("zona") == "por aquí", "los datos quedan guardados para la ficha (zona, minutos, transporte, escolaridad)")
-    check(d.get("sueldo_acepta") is False, "un «no» al sueldo se registra y NO descarta")
+    check(d.get("sueldo_expectativa") == 9000 and not d.get("sueldo_sobre_tope"), "la expectativa dentro del sueldo se registra y NO descarta")
 
     print("\n--- 3b. Transición natural a la entrevista (Bloque 2) ---")
     desde = 0
@@ -224,8 +225,8 @@ with TestClient(app) as client:
     d = f.get("prefiltroDatos") or {}
     check(d.get("zona") == "por aquí" and d.get("trasladoMin") == 150 and "Metro" in d.get("transporte", "") and d.get("alerta") is None,
           "la ficha trae zona, traslado (~150 min) y transporte — Cambio 19: sin alerta por minutos (solo se registra)")
-    check(d.get("sueldoAcepta") is False and d.get("sueldo") == "No, está bajo" and "9,000" in d.get("sueldoOfrecido", ""),
-          "C5: la ficha trae su respuesta sobre el sueldo (y lo ofrecido)")
+    check(d.get("sueldoExpectativa") == 9000 and d.get("sueldo") == "Unos 9 mil" and "9,000" in d.get("sueldoOfrecido", ""),
+          "C5: la ficha trae su expectativa de sueldo (y lo ofrecido)")
     check(not any("traslado" in x.lower() for x in f.get("puntosPorValidar") or []), "Cambio 19: el traslado no genera Puntos por validar")
     for _ in range(40):  # el resto de la entrevista (motor sin IA) hasta la despedida
         e = sent.entrevista_whatsapp_activa(fresca(p))
@@ -236,9 +237,10 @@ with TestClient(app) as client:
     ent = next(x for x in p.entrevistas if x.tipo == "whatsapp")
     ev = ent.evaluacion or {}
     op = ev.get("operativa") or {}
-    check(ent.estado == "evaluada" and any(x.startswith("Sueldo: no aceptó") for x in ev.get("riesgos") or [])
-          and not any("traslado" in x.lower() for x in ev.get("riesgos") or []) and op.get("recomendacion") != "recomendable",
-          "Cambio 19: el sueldo no aceptado es Punto por validar (→ no «Recomendable»); los 150 min de traslado no cuentan")
+    # 2026-10-16: el sueldo ya es la expectativa (9 mil, dentro del rango): no genera punto; el traslado tampoco cuenta
+    check(ent.estado == "evaluada" and not any(x.startswith(("Sueldo: no aceptó", "Expectativa de sueldo")) for x in ev.get("riesgos") or [])
+          and not any("traslado" in x.lower() for x in ev.get("riesgos") or []) and op.get("recomendacion"),
+          "Cambio 19: una expectativa dentro del rango no es Punto por validar; los 150 min de traslado no cuentan")
     check(p.activa and p.motivo_cierre in ("", None), "…y NO se descarta (RH decide)")
     check(not any(hasattr(eop, x) for x in ("aplicar_traslado", "alerta_traslado")), "sin umbrales fijos de traslado en el código")
 

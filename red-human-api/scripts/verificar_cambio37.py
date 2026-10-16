@@ -178,8 +178,11 @@ with TestClient(app) as client:
     check(not prohibidas, f"ninguna pregunta usa frases prohibidas («¿Cuál es tu caso?», «¿Cumples con…?») {prohibidas}")
     check(all(not q["descarta"] for q in todas if q["tipo"] == "abierta"), "las preguntas abiertas no descartan")
     check(all(not q["descarta"] for q in todas if q["base"] and not q.get("indispensable")), "las base no descartan")
-    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"edad", "interes", "sueldo", "zona", "traslado"}
-          and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]), "base: edad, interés, sueldo, colonia y traslado con etiqueta «Base»")
+    # 2026-10-16: sin edad ni «¿Te interesa?» (la edad solo si la vacante la pide); el sueldo es la expectativa
+    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"sueldo", "zona", "traslado"}
+          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes"}
+          and next(q for q in g["filtro"] if q["base"] and q["dato"] == "sueldo").get("expectativa")
+          and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]), "base: expectativa de sueldo, colonia y traslado con etiqueta «Base»")
     check(len(g2["preguntas_filtro"]) >= 3 and g2["preguntas_filtro_whatsapp"] == [], "web derivado con ≥ 3 preguntas; sin prefiltro de WhatsApp aparte")
     abierta = pfu.normalizar_item({"pregunta": "¿Qué hiciste?", "tipo": "abierta", "descarta": True})
     check(abierta["descarta"] is False and abierta["regla"] == pfu.REGLA_NO_DESCARTA, "una abierta marcada «descarta» se corrige en código")

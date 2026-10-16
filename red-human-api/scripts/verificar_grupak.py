@@ -129,7 +129,8 @@ with TestClient(app) as client:
     app.dependency_overrides[cuenta_actual] = lambda: cuenta
 
     def postular(nombre, tel, cambios=None):
-        resp = {c["pregunta"]: {"numero": "28", "abierta": "Col. Mitras Centro, Monterrey"}.get(c["tipo"], "Sí") for c in criterios}
+        resp = {c["pregunta"]: ("10000" if c.get("expectativa") else  # 2026-10-16: la expectativa de sueldo
+                                {"numero": "28", "abierta": "Col. Mitras Centro, Monterrey"}.get(c["tipo"], "Sí")) for c in criterios}
         resp.update(cambios or {})
         r = client.post("/candidatos/postular", data={"vacante": v.slug, "nombre": nombre, "telefono": tel, "consentimiento": "true",
                                                       "respuestas": json.dumps([{"pregunta": q, "respuesta": a} for q, a in resp.items()])})

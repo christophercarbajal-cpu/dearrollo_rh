@@ -1224,6 +1224,13 @@ def entrevista_por_liga(p: Postulacion) -> bool:
     return ruta_automatica(p.cuenta)
 
 
+def liga_por_motor(p: Postulacion) -> bool:
+    """2026-10-16: desde el Cambio 42 el motor de la ruta corre en TODAS las Cuentas y él manda UN mensaje con la invitación
+    y la liga de la Entrevista con avatar. Invitar además a «¿La quieres hacer ahora?» era el envío doble al terminar el
+    prefiltro. Solo con el motor pausado (candidatos sembrados de una demo) se conserva la invitación del chat."""
+    return not ((p.analisis or {}).get("motor_ruta") or {}).get("pausado")
+
+
 def _texto_apto(p: Postulacion) -> str:
     """Retro 2026-10-09: propone fecha y hora EXACTAS y pide confirmación (`services/agenda_chat`). Sin valoraciones ni
     promesas («Tu perfil es compatible» está prohibido). Deja la propuesta vigente en la postulación."""
@@ -1249,6 +1256,9 @@ async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
         # 2026-10-15 (Fletes «Entrevista en video»): sin prefiltro de por medio la invitación la manda el motor
         # («… entrevista en video de 5 minutos. ¿La quieres hacer ahora?»), nunca dos invitaciones
         return {"enviado": None, "detalle": "La invitación la manda el motor de la ruta", "texto": ""}
+    if paso_avatar is not None and liga_por_motor(p):
+        # 2026-10-16: UN solo mensaje con la invitación y la liga — lo manda el motor de la ruta (`_disparar_entrevista`)
+        return {"enviado": None, "detalle": "La invitación con la liga la manda el motor de la ruta", "texto": ""}
     texto = _texto_apto(p)
     # 2026-10-13: el candidato debe confirmar horario → plantilla `aviso_proceso_rh` (sirve fuera de la ventana de 24 h)
     from ..services import plantillas_meta
@@ -1436,10 +1446,16 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         # límite (el aviso de no-show sale si no la hizo en ese plazo).
         ahora_utc = datetime.now(timezone.utc)
         limite = ahora_utc + timedelta(days=agenda_chat.DIAS_PLAZO)
-        e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=ahora_utc)
-        db.flush()
+        # 2026-10-16: si el motor ya mandó la liga, se reutiliza ESA sala (nunca una segunda entrevista)
+        token_previo = ((p.analisis or {}).get(agenda_chat.CLAVE) or {}).get("entrevista")
+        e = next((x for x in p.entrevistas or [] if token_previo and x.token == token_previo
+                  and x.estado not in ("evaluada", "cancelada")), None)
+        if e is None:
+            e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=ahora_utc)
+            db.flush()
         liga = f"{settings.app_url}/entrevista/{e.token}"
-        p.videollamada_agendada_en = limite
+        if not (token_previo and d["accion"] == "ahora"):
+            p.videollamada_agendada_en = limite  # un simple recordatorio de la liga del motor no fija plazo
         p.videollamada_liga = liga
         if ETAPAS_CANDIDATO.index(p.etapa) < ETAPAS_CANDIDATO.index("Entrevista IA"):
             p.etapa = "Entrevista IA"

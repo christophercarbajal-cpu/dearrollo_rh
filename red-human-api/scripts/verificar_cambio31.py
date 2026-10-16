@@ -254,8 +254,8 @@ with TestClient(app) as client:
 
     print("\n--- Bloque 3 · evasivas: UNA repregunta suave; la segunda se registra («Flexible») y se avanza ---")
     vcorp = Vacante(codigo="VAC-C31E", titulo="Analista de compras", estado="Publicada", cuenta_id=cuenta.id,
-                    requisitos="3 años en compras · Inglés intermedio · Manejo de SAP", sueldo_desde=20000, sueldo_hasta=25000,
-                    sueldo_periodicidad="mensual")
+                    requisitos="3 años en compras · Inglés intermedio · Manejo de SAP",
+                    sueldo_periodicidad="a_convenir", sueldo="A convenir")  # 2026-10-16: sin sueldo publicado se pide la expectativa
     db.add(vcorp)
     db.flush()
     vcorp.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("corporativo")["pasos"]})

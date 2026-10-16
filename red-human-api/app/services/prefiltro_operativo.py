@@ -234,9 +234,9 @@ def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str], na
     if edad is not None:
         salida.append(_criterio("dato-edad", "edad", edad_req, "¿Cuántos años tienes?", True,
                                 edad_min=edad[0], edad_max=edad[1]))
-    salida.append({**_criterio("dato-sueldo", "sueldo", f"Sueldo: {sueldo.strip()}".rstrip(": ") if sueldo else "Expectativa de sueldo",
-                               "¿Cuál es tu expectativa de sueldo mensual?"), "operativo": False, "base_operativa": False,
-                   "expectativa": True})
+    if not re.search(r"\d", sueldo or ""):  # 2026-10-16 (bug del tester): con sueldo publicado no se pide la expectativa
+        salida.append({**_criterio("dato-sueldo", "sueldo", "Expectativa de sueldo", "¿Cuál es tu expectativa de sueldo mensual?"),
+                       "operativo": False, "base_operativa": False, "expectativa": True})
     salida.append({**_criterio("dato-zona", "zona", "Colonia y municipio", "¿En qué colonia y municipio vives?"), "operativo": False})
     # Cambio 51 (2026-10-15): orden Indispensables → Edad → Puesto («El puesto es [puesto] en [ciudad, estado]. ¿Te
     # interesa?», la ciudad la pone `prefiltro_conversacional.criterios_de`) → Sueldo → Colonia → Tiempo. Ya no se pregunta

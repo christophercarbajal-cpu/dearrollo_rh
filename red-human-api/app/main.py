@@ -150,6 +150,18 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[documentos] ⚠️ migración del catálogo de documentos no aplicada: {ex}", flush=True)
+        # 2026-10-16 (bug del tester): la CLABE de la configuración base ya no bloquea. Una sola vez, NO fatal.
+        try:
+            from .services import catalogo_documentos as _scat
+
+            with db.begin_nested():
+                clabe = _scat.clabe_opcional(db, aplicar=True)
+            db.commit()
+            if clabe["documentos"]:
+                print(f"[documentos] CLABE opcional en {len(clabe['documentos'])} expediente(s)", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[documentos] ⚠️ CLABE opcional no aplicada: {ex}", flush=True)
         # Cambio 37 (2026-10-14): «Preguntas filtro» — cada vacante recibe su entidad ÚNICA (una pregunta por indispensable
         # + las base) y el formulario web se deriva de ella. Una sola vez (marca en bitácora), NO fatal.
         try:

@@ -303,9 +303,8 @@ function CandidatosContenido() {
   const [orden, setOrden] = useState<OrdenTablero>("score");
   const [alerta, setAlerta] = useState<AlertaTablero | null>(null);
   const [metricas, setMetricas] = useState<MetricasTablero | null>(null);
-  // Vista por defecto (2026-10-07): sin ?vacante= el tablero abre en la vacante con MÁS candidatos activos
-  // (`Vacante.candidatos` = postulaciones activas, services/conteos). Se decide UNA vez al montar; si RH elige
-  // «Vacante: Todas» después, se respeta. El tablero no carga hasta decidirlo (evita una carga doble).
+  // Vista por defecto (2026-10-16, bug del tester): sin ?vacante= el tablero abre SIEMPRE en «Todas las vacantes»
+  // (antes abría en la vacante con más candidatos activos). Solo ?vacante= de la URL preselecciona una vacante.
   const [vacanteInicialLista, setVacanteInicialLista] = useState(false);
   const vacanteInicialDecidida = useRef(false);
 
@@ -315,20 +314,7 @@ function CandidatosContenido() {
     if (vParam) setFiltroVacante(vParam);
     if (!vacanteInicialDecidida.current) {
       vacanteInicialDecidida.current = true;
-      if (vParam) {
-        setVacanteInicialLista(true);
-      } else {
-        fetchVacantes()
-          .then((v) => {
-            if (!v) return;
-            setVacantes(v);
-            const mayor = v
-              .filter((x) => x.estado !== "Eliminada" && x.estado !== "Cerrada" && (x.candidatos ?? 0) > 0)
-              .reduce<Vacante | null>((m, x) => (!m || x.candidatos > m.candidatos ? x : m), null);
-            if (mayor) setFiltroVacante(mayor.id);
-          })
-          .finally(() => setVacanteInicialLista(true));
-      }
+      setVacanteInicialLista(true);
     }
 
     // Cambio 37: ligas «[n] descartados · [n] en revisión» del Resumen de la vacante

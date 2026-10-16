@@ -81,6 +81,11 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     if v is None:
         return salida
     salida = filtros_revision.anotar(salida, v)
+    if sueldo_publicado(v):
+        # 2026-10-16 (bug del tester): con sueldo publicado NO se pregunta la expectativa AUTOMÁTICA (ni por web ni por
+        # chat). Una expectativa que RH capturó como requisito propio (p. ej. UVAQ, con su filtro de revisión) se respeta.
+        salida = [c for c in salida if not (c.get("dato") == "sueldo" and c.get("expectativa")
+                                            and (c.get("base") or c.get("id") == "dato-sueldo"))]
     regla = regla_expectativa(v)
     for c in salida:
         if regla and c.get("dato") == "sueldo" and c.get("expectativa") and not c.get("revision_regla"):
@@ -387,10 +392,19 @@ def tope_sueldo(v) -> Optional[int]:
 MARGEN_EXPECTATIVA = 0.0
 
 
+def sueldo_publicado(v) -> bool:
+    """La vacante ya publica su sueldo (rango estructurado o texto con cifra): entonces la expectativa no se pregunta."""
+    if v is None:
+        return False
+    return tope_sueldo(v) is not None or bool(re.search(r"\d", str(getattr(v, "sueldo", "") or "")))
+
+
 def regla_expectativa(v) -> Optional[dict]:
-    """Regla de revisión (formato de `services/filtros_revision.py`) de la expectativa de sueldo; None sin sueldo capturado."""
+    """Regla de revisión (formato de `services/filtros_revision.py`) de la expectativa de sueldo; None sin sueldo capturado.
+    2026-10-16 (bug del tester): con sueldo publicado la expectativa ya no se pregunta, así que tampoco hay regla — una
+    expectativa nunca congela la ruta ni el envío por WhatsApp."""
     tope = tope_sueldo(v)
-    if not tope:
+    if not tope or sueldo_publicado(v):
         return None
     return {"pregunta": "", "tipo": "maximo", "valor": tope, "unidad": "pesos",
             "motivo": f"Expectativa de sueldo arriba del máximo de la vacante (${tope:,})"}

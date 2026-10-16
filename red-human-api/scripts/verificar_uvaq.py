@@ -301,13 +301,13 @@ with TestClient(app) as client:
         return p, salida
 
     p, sal = conversa("Pedro Pátzcuaro", "4439700001", ["Hola", "Vivo en Pátzcuaro", "sí", "de 8 a 4", "Terminé la secundaria", "2 años",
-                                                         "9 mil", "Centro, Pátzcuaro", "15 minutos"])
+                                                         "Centro, Pátzcuaro", "15 minutos"])  # 2026-10-16: sin expectativa (sueldo publicado)
     check(sal[1] == ["Tenemos sede en Pátzcuaro, ¿te queda bien?"], f"vive en Pátzcuaro → se le propone esa sede → {sal[1]}")
     check(sal[2][0].startswith(su.Q_TURNO) and p.ubicacion_id == db.query(Ubicacion).filter_by(cuenta_id=cu.id, nombre="Pátzcuaro").one().id,
           "«sí» elige Pátzcuaro y sigue con el turno")
     check(((p.analisis or {}).get("prefiltro_datos") or {}).get("turno_codigo") == "MAT-03", "«de 8 a 4» → turno MAT-03")
-    check(sal[7] == ["Entendido. ¿Cuánto tiempo harías de tu casa a la sede Pátzcuaro?"] or sal[7][0].endswith("a la sede Pátzcuaro?"),
-          f"el traslado nombra la sede elegida (sin «Conocido») → {sal[7]}")
+    check(sal[6] == ["Entendido. ¿Cuánto tiempo harías de tu casa a la sede Pátzcuaro?"] or sal[6][0].endswith("a la sede Pátzcuaro?"),
+          f"el traslado nombra la sede elegida (sin «Conocido») → {sal[6]}")
     check(len(sal[-1]) == 1 and sal[-1][0].startswith("Listo, Pedro. Ahora te haré unas preguntas") and p.etapa == "Entrevista IA"
           and not any("revisará" in t or "te escribirá" in t for t in sal[-1]),
           f"cumple → avanza solo a la entrevista con UN mensaje, sin el cierre de RH → {sal[-1]}")

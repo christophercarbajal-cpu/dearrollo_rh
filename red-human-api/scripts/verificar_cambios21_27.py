@@ -153,12 +153,13 @@ with TestClient(app) as client:
     cs = pconv.criterios_de(v, p1)
     datos = [c.get("dato") for c in cs if c.get("dato")]
     check("zona" not in datos and "transporte" not in datos, f"ruta corporativa: sin colonia ni transporte ({datos})")
-    exp = next(c for c in cs if c.get("dato") == "sueldo")
-    check(exp.get("expectativa") and exp["chat"] == "¿Cuánto esperas ganar al mes?", f"el sueldo pregunta la expectativa: {exp['chat']}")
+    # 2026-10-16 (bug del tester): la vacante publica su sueldo → la expectativa ya no se pregunta
+    check(not any(c.get("dato") == "sueldo" for c in cs), "sueldo publicado: el prefiltro corporativo NO pregunta la expectativa")
     # Cambio 42: el Análisis de CV ya no agrega preguntas (omisión = «No lo menciona el CV»; contradicción → Puntos por validar)
     check(not any(c.get("por_brecha") or c.get("brecha") for c in cs), "Cambio 42: las brechas del CV ya NO se vuelven preguntas del prefiltro")
     lic = next(c for c in cs if c["indispensable"] and "licencia" in c["criterio"].lower())
-    check(cs.index(lic) < cs.index(exp), "los indispensables van antes de los datos")
+    check(cs.index(lic) < min((cs.index(c) for c in cs if c.get("dato") and not c.get("indispensable")), default=len(cs)),
+          "los indispensables van antes de los datos")
     check(all("?" in c["chat"] and not c["chat"].startswith("¿Cumples con") for c in cs), "todas en lenguaje natural")
     check(pconv.monto_de("20 mil") == 20000 and pconv.monto_de("$15,500 al mes") == 15500 and pconv.monto_de("18k") == 18000
           and pconv.monto_de("lo que sea") is None, "la expectativa se lee en cifras")
@@ -250,12 +251,12 @@ with TestClient(app) as client:
         respuestas.append(responder(p4, texto))
     db.refresh(p4)
     d = (p4.analisis or {}).get("prefiltro_datos") or {}
-    check(d.get("sueldo_expectativa") == 20000 and d.get("sueldo_sobre_tope"), "expectativa de 20 mil sobre un tope de 12 mil")
+    # 2026-10-16 (bug del tester): con sueldo publicado no hay expectativa que comparar ni «Requiere revisión» por ella
     pts = (p4.analisis or {}).get("puntos_validar_prefiltro") or []
-    check(any(x.startswith("Expectativa de sueldo: $20,000 (arriba del máximo") for x in pts), f"→ Puntos por validar: {pts}")
-    # 2026-10-16: una expectativa arriba del máximo de la vacante → «Requiere revisión» (nunca descarta)
-    check(p4.activa and pconv.estado(p4).get("resultado") == "revision" and p4.estado == "revision",
-          "la expectativa alta nunca descarta: queda «Requiere revisión»")
+    check(d.get("sueldo_expectativa") is None and not any(x.startswith("Expectativa de sueldo") for x in pts),
+          f"sueldo publicado: sin expectativa registrada ni en Puntos por validar ({pts})")
+    check(p4.activa and pconv.estado(p4).get("resultado") == "cumple" and p4.estado != "revision",
+          "la expectativa ya no congela: el prefiltro termina «cumple»")
     ficha = postulacion_dict(p4, detalle=True)
     comp = {f["requisito"]: f for f in ficha["comparativoIndispensables"]}
     lic = next(f for k, f in comp.items() if "icencia" in k)
@@ -263,7 +264,7 @@ with TestClient(app) as client:
           "Cambio 42: «No acredita licencia» es omisión del CV → «No lo menciona el CV» (no es inconsistencia)")
     ven = next(f for k, f in comp.items() if "ventas" in k.lower())
     check(ven["cv"] == "Acreditado" and ven["cumple"] is True and not ven["inconsistencia"], "experiencia: acreditada y confirmada")
-    check(ficha["prefiltroDatos"]["sueldoExpectativa"] == 20000 and ficha["prefiltroDatos"]["sueldoSobreTope"], "la ficha muestra la expectativa")
+    check(not (ficha.get("prefiltroDatos") or {}).get("sueldoExpectativa"), "la ficha no muestra una expectativa que no se pidió")
     # la invitación con la liga: otro candidato con una expectativa dentro del rango
     p4 = postular("Rosa Salinas", "8111000014", ANALISIS, cv=True)
     telegram.guardar_contacto(db, "5550014", "8111000014", "Rosa")

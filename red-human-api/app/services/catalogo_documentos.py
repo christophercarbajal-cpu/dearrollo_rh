@@ -121,3 +121,41 @@ def migrar(db: Session, aplicar: bool = False) -> dict:
             "plantillasOnboarding": onboarding,
             "totales": {"renombrados": len(renombrados), "fusionados": len(fusionados), "vacantes": len(vacantes),
                         "plantillasVacante": len(plantillas), "plantillasOnboarding": len(onboarding)}}
+
+
+# 2026-10-16 (bug del tester): la CLABE de la configuración BASE ya no bloquea (`models.DOCUMENTOS_BASE_OPCIONALES`). Los
+# expedientes abiertos antes la traen como obligatoria: se corrige UNA vez (marca en bitácora) solo donde ni la plantilla
+# de Onboarding de la Cuenta ni la vacante la piden como obligatoria. Nunca toca una ya Aprobada ni borra nada. NO fatal.
+MARCA_CLABE = "clabe_opcional_2026_10_16"
+
+
+def clabe_opcional(db: Session, aplicar: bool = True, forzar: bool = False) -> dict:
+    """Regresa {"documentos": [ids], "yaAplicada": bool}. No hace commit."""
+    from ..models import Bitacora, Postulacion
+    from .onboarding import documentos_requeridos
+
+    if aplicar and not forzar and db.query(Bitacora.id).filter(Bitacora.accion == MARCA_CLABE).first():
+        return {"documentos": [], "yaAplicada": True}
+    cambiados = []
+    for d in db.query(Documento).filter(Documento.obligatorio.is_(True)).all():
+        if d.interno or d.aprobado or clave_documento(d.tipo) != "cuenta_bancaria":
+            continue
+        e = db.get(Expediente, d.expediente_id)
+        p = db.get(Postulacion, e.postulacion_id) if e is not None and e.postulacion_id else None
+        if p is None:
+            continue
+        try:
+            req = documentos_requeridos(db, p)
+        except Exception:  # noqa: BLE001 — sin tablas de Onboarding: la base (opcional)
+            req = []
+        if any(clave_documento(r["tipo"]) == "cuenta_bancaria" and r.get("obligatorio") for r in req):
+            continue  # la pide explícitamente la plantilla de la Cuenta o la vacante
+        cambiados.append(d.id)
+        if aplicar:
+            d.obligatorio = False
+            registrar(db, ACTOR, "documento_opcional", "postulacion", p.codigo,
+                      {"documento": d.id, "tipo": d.tipo, "motivo": "CLABE de la configuración base: ya no bloquea"})
+    if aplicar:
+        registrar(db, ACTOR, MARCA_CLABE, "sistema", "-", {"documentos": cambiados})
+        db.flush()
+    return {"documentos": cambiados, "yaAplicada": False}

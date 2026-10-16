@@ -296,9 +296,12 @@ def validar(db, v: Vacante) -> list:
         c = next((x for x in criterios if x["pregunta"] == q), None)
         if c is None or c.get("descarta"):
             problemas.append(f"«Unas preguntas»: «{q}» debe estar y NO descartar → {textos}")
-    for q in (ssw.PREGUNTA_EDAD, ssw.PREGUNTA_ZONA, ssw.pregunta_expectativa(v)):  # 2026-10-16: sin «¿Te interesa?»
+    for q in (ssw.PREGUNTA_EDAD, ssw.PREGUNTA_ZONA):  # 2026-10-16: sin «¿Te interesa?»
         if q not in textos:
             problemas.append(f"«Unas preguntas» sin «{q}» → {textos}")
+    # 2026-10-16 (bug del tester): la vacante publica su sueldo → no se pide la expectativa
+    if ssw.pregunta_expectativa(v) in textos:
+        problemas.append(f"«Unas preguntas» pide la expectativa aunque el sueldo está publicado → {textos}")
     if any(c.get("descarta") for c in criterios):
         problemas.append("ninguna pregunta de Grupak descarta")
     sim = Postulacion(proceso=dict(v.proceso or {}), analisis={"prefiltro_datos": {"interes_puesto": True, "sueldo_acepta": True}})

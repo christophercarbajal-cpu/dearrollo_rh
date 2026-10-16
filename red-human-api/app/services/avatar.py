@@ -10,6 +10,7 @@ neutrales del catálogo del proveedor, nunca clones de personas reales sin
 consentimiento expreso.
 """
 
+import re
 from typing import Optional
 
 import httpx
@@ -80,16 +81,48 @@ class AvatarError(RuntimeError):
         return self.status in (401, 402, 403, 404, 429)
 
 
+# 2026-10-16 (bug del tester): el TTS leía «$55,000 MXN mensuales» como «55 dólares con 0 centavos MXN mensuales». Todo
+# texto que va a la voz del avatar (systemPrompt e initialMessage) pasa por `texto_para_voz`: sin «$», sin separadores de
+# miles (la coma se lee como decimal), sin centavos en cero y con «pesos mexicanos» en lugar de MXN/MN.
+_NUM = r"\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?"
+_MXN = r"(?:MXN|M\.N\.|MN)\b"
+_RE_MONTO = re.compile(r"\$\s*(" + _NUM + r")(?:\s*(?:" + _MXN + r"|pesos(?:\s+mexicanos)?\b))?", re.IGNORECASE)
+_RE_MONTO_MXN = re.compile(r"(?<![\w$.,])(" + _NUM + r")\s*" + _MXN, re.IGNORECASE)
+_RE_RANGO = re.compile(r"(\d+) pesos mexicanos\s*(?:–|—|-|a)\s*(\d+ pesos mexicanos)")
+REGLA_VOZ_MONTOS = ("Cantidades de dinero (se dicen en voz alta): di siempre «[cantidad] pesos mexicanos» (por ejemplo «55000 "
+                    "pesos mexicanos mensuales»); nunca uses el símbolo $, «MXN», «dólares» ni centavos.")
+
+
+def _cifra(texto: str) -> str:
+    limpio = re.sub(r"[,\s]", "", texto)
+    if "." in limpio:
+        entero, dec = limpio.split(".", 1)
+        limpio = entero if not dec.strip("0") else f"{entero} punto {dec}"
+    return limpio
+
+
+def texto_para_voz(texto: str) -> str:
+    """Sanitiza montos para el TTS: «$55,000 MXN» → «55000 pesos mexicanos»; «$8,000 – $10,000 MXN» → «8000 a 10000
+    pesos mexicanos». Lo demás queda igual."""
+    if not texto:
+        return texto or ""
+    t = _RE_MONTO.sub(lambda m: f"{_cifra(m.group(1))} pesos mexicanos", texto)
+    t = _RE_MONTO_MXN.sub(lambda m: f"{_cifra(m.group(1))} pesos mexicanos", t)
+    t = _RE_RANGO.sub(lambda m: f"{m.group(1)} a {m.group(2)}", t)
+    t = re.sub(r"pesos mexicanos(?:\s+" + _MXN + r")+", "pesos mexicanos", t, flags=re.IGNORECASE)
+    return t
+
+
 def persona_config(nombre_persona: str, system_prompt: str, mensaje_inicial: str, extras: Optional[dict] = None) -> dict:
     """personaConfig que se manda a Anam. `extras` (Fase 4, Punto 4 — tras el spike) permite
     agregar `tools`/`voiceDetectionOptions` sin tocar este núcleo."""
     persona = {
         "name": nombre_persona,
         "avatarId": _limpio(settings.anam_avatar_id),
-        "systemPrompt": system_prompt,
+        "systemPrompt": texto_para_voz(system_prompt) + "\n\n" + REGLA_VOZ_MONTOS,
         "languageCode": "es",
         "maxSessionLengthSeconds": settings.anam_max_sesion_seg,
-        "initialMessage": mensaje_inicial,
+        "initialMessage": texto_para_voz(mensaje_inicial),
     }
     if _limpio(settings.anam_voice_id):
         persona["voiceId"] = _limpio(settings.anam_voice_id)

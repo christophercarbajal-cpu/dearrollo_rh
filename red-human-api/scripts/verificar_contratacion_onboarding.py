@@ -300,8 +300,9 @@ with TestClient(app) as client:
     check(tareas(pd.expediente.id)["contrato_firmado"]["estado"] == "realizada", "y en Onboarding la tarea ya llega Realizada")
 
     print("\n--- 9. Expediente parcial: solo se pide lo que falta ---")
-    pe = candidato("Eli Parcial", "eli.parcial@correo.mx", aprobados=5)
-    falta = [d.tipo for d in pe.expediente.documentos if not d.aprobado and not d.interno]
+    # 2026-10-16: la CLABE de la base es opcional (no se pide como faltante); falta un obligatorio de verdad
+    pe = candidato("Eli Parcial", "eli.parcial@correo.mx", aprobados=4)
+    falta = [d.tipo for d in pe.expediente.documentos if d.obligatorio and not d.aprobado and not d.interno]
     client.post(f"/onboarding/expedientes/{pe.expediente.id}/contrato-firmado", headers=H,
                 files={"archivo": ("contrato.pdf", io.BytesIO(pdf_firmado()), "application/pdf")})
     # 2026-10-09: el contrato firmado inicia el Onboarding SOLO (misma lógica que «Iniciar Onboarding»)

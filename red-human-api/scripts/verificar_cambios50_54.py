@@ -207,7 +207,8 @@ with TestClient(app) as client:
     # 2026-10-16: sin la confirmación «El puesto es… ¿Te interesa?»; el sueldo va UNA vez como expectativa
     check(not any(q.startswith("El puesto es") for q in preguntas) and "¿Cuántos años tienes?" not in preguntas,
           f"«Unas preguntas» sin confirmar el puesto ni pedir la edad → {preguntas}")
-    check("¿Cuál es tu expectativa de sueldo mensual?" in preguntas, "«Unas preguntas» trae la expectativa de sueldo")
+    # 2026-10-16 (bug del tester): Fletes publica su sueldo → «Unas preguntas» ya no pide la expectativa
+    check("¿Cuál es tu expectativa de sueldo mensual?" not in preguntas, "«Unas preguntas» sin expectativa (sueldo publicado)")
     q_sue = "¿Cuál es tu expectativa de sueldo mensual?"
 
     def postular(v, nombre, tel, respuestas):
@@ -242,7 +243,7 @@ with TestClient(app) as client:
     r = postular(va, "Mario Operador", "5560000002", todo_si)
     p_a = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
     check(not r.get("descartado") and p_a.activa, "todo «Sí» → la solicitud pasa")
-    check((p_a.analisis.get("prefiltro_datos") or {}).get("sueldo_expectativa") == 20000, "la expectativa de la web queda registrada")
+    check((p_a.analisis.get("prefiltro_datos") or {}).get("sueldo_expectativa") is None, "sin expectativa registrada (no se pidió)")
     check("inicio_entrevista_rh" in plantillas("5560000002", antes), "sale la plantilla de inicio del prefiltro")
     t = ultimo("5560000002", "Sí, empezar ahora")
     check(t == sf.PREGUNTAS_CHAT[sf.EXPERIENCIA], f"primera pregunta del chat: años de experiencia → «{t}»")

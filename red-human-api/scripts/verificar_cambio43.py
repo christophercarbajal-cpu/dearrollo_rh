@@ -186,23 +186,25 @@ with TestClient(app) as client:
     base_prof = {q.get("dato"): q for q in ga["filtro"] if q.get("base") and not q.get("indispensable")}
     check("zona" not in base_prof, "Profesional: OMITE la colonia")
     check("traslado" not in base_prof, "Profesional: sin indispensable de traslado, no pregunta el traslado")
-    check(base_prof.get("sueldo", {}).get("pregunta") == "¿Cuál es tu expectativa de sueldo mensual?",
-          f"Profesional: el sueldo es la expectativa ({base_prof.get('sueldo', {}).get('pregunta')})")
+    # 2026-10-16 (bug del tester): con sueldo publicado ($45,000) la expectativa ya no se pregunta
+    check("sueldo" not in base_prof, f"Profesional con sueldo publicado: sin expectativa ({base_prof.get('sueldo', {}).get('pregunta')})")
     gt = generar(client, {**ABOGADO, "requisitos_indispensables": ["Traslado máximo de 60 minutos"]}, ruta(AVATAR("profesional")))
     check(any(q.get("dato") == "traslado" and q.get("indispensable") for q in gt["filtro"]),
           "Profesional con indispensable de traslado: SÍ pregunta el traslado")
     go = generar(client, CONTADOR, ruta(WHATS("operativo")))
     base_op = {q.get("dato"): q for q in go["filtro"] if q.get("base")}
     check("zona" in base_op and "traslado" in base_op, "Operativo: pregunta colonia y traslado")
-    # 2026-10-16: el sueldo es la EXPECTATIVA en todos los enfoques (ya no «El sueldo es… ¿Te interesa?»)
-    check(base_op["sueldo"]["pregunta"] == "¿Cuál es tu expectativa de sueldo mensual?" and base_op["sueldo"].get("expectativa"),
-          f"Operativo: sueldo como expectativa ({base_op['sueldo']['pregunta']})")
+    check("sueldo" not in base_op, "Operativo con sueldo publicado: sin expectativa")
+    # 2026-10-16: sin sueldo publicado el sueldo es la EXPECTATIVA en todos los enfoques (ya no «El sueldo es… ¿Te interesa?»)
+    gs = generar(client, {**CONTADOR, "sueldo_desde": None, "sueldo_periodicidad": "a_convenir"}, ruta(WHATS("operativo")))
+    base_sin = {q.get("dato"): q for q in gs["filtro"] if q.get("base")}
+    check(base_sin.get("sueldo", {}).get("pregunta") == "¿Cuál es tu expectativa de sueldo mensual?" and base_sin["sueldo"].get("expectativa"),
+          f"Operativo sin sueldo publicado: sueldo como expectativa ({base_sin.get('sueldo', {}).get('pregunta')})")
     # la conversación usa la expectativa guardada
     v = Vacante(titulo="Abogado", sueldo="Desde $45,000 MXN mensuales", sueldo_periodicidad="mensual", enfoque_entrevista="profesional",
                 guiones={pfu.CLAVE: ga["filtro"]}, requisitos="")
     crit = {c.get("dato"): c for c in pfu.criterios(v)}
-    check(crit["sueldo"].get("expectativa") and crit["sueldo"]["pregunta"] == "¿Cuál es tu expectativa de sueldo mensual?" and "zona" not in crit,
-          "el bot pregunta la expectativa de sueldo y no la colonia")
+    check("sueldo" not in crit and "zona" not in crit, "sueldo publicado: el bot no pregunta la expectativa ni la colonia")
 
     # ===================================================== 6. Indispensables implícitos
     print("\n--- 6. Indispensables implícitos ---")
@@ -291,7 +293,8 @@ console.log(JSON.stringify(r));
     vac = db.query(Vacante).filter(Vacante.codigo == cod).first()
     check(vac.enfoque_entrevista == "profesional", "la vacante toma el enfoque nuevo de su ruta")
     check(not any(q.get("dato") == "zona" for q in pfu.de_vacante(vac))
-          and any(q.get("expectativa") for q in pfu.de_vacante(vac)), "y sus preguntas base se recalculan (sin colonia, sueldo como expectativa)")
+          and not any(q.get("expectativa") for q in pfu.de_vacante(vac)),
+          "y sus preguntas base se recalculan (sin colonia; con sueldo publicado, sin expectativa)")
 
     db.close()
     print(f"\n{OK} comprobaciones OK — Cambio 43 verificado.")

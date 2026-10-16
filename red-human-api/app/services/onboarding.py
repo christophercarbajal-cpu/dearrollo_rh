@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from ..models import (
-    DOCUMENTOS_BASE,
+    documentos_base_requeridos,
     PLAZOS_ONBOARDING_DEFAULT,
     TAREAS_FIJAS_ONBOARDING,
     TIPOS_RECURSO_ONBOARDING,
@@ -77,10 +77,18 @@ def normalizar_documentos(docs: List[dict]) -> List[dict]:
         if not crudo and not d.get("id"):
             continue
         tipo = nombre_documento({"id": d.get("id"), "nombre": crudo})
-        if not tipo or clave_documento(tipo) in vistos:
+        obligatorio = bool(d.get("obligatorio", True))
+        if not tipo:
+            continue
+        if clave_documento(tipo) in vistos:
+            # 2026-10-16: si otra fuente (p. ej. la vacante) lo pide como obligatorio, gana el obligatorio
+            if obligatorio:
+                for x in salida:
+                    if clave_documento(x["tipo"]) == clave_documento(tipo):
+                        x["obligatorio"] = True
             continue
         vistos.add(clave_documento(tipo))
-        salida.append({"tipo": tipo, "obligatorio": bool(d.get("obligatorio", True))})
+        salida.append({"tipo": tipo, "obligatorio": obligatorio})
     return salida
 
 
@@ -132,7 +140,7 @@ def normalizar_responsables(resp: dict) -> dict:
 
 def configuracion_predeterminada() -> dict:
     return {
-        "documentos": [{"tipo": t, "obligatorio": True} for t in DOCUMENTOS_BASE],
+        "documentos": documentos_base_requeridos(),  # 2026-10-16: la CLABE de la base no bloquea
         "recursos": [],
         "responsables": normalizar_responsables({}),
         "plazos": dict(PLAZOS_ONBOARDING_DEFAULT),

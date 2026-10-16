@@ -286,8 +286,11 @@ def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Opt
     Cambio 43 — enfoque Operativo: además colonia y traslado. Enfoques Profesional (+ personal): sin colonia y el traslado
     solo si un indispensable lo pide (esa pregunta ya es la del requisito)."""
     ya = ya or set()
-    salida = [{"id": "base-sueldo", "requisito": "Expectativa de sueldo", "pregunta": pregunta_expectativa(periodicidad), "tipo": "numero",
-               "unidad": "pesos", "dato": "sueldo", "expectativa": True}]
+    salida = []
+    if not re.search(r"\d", sueldo or ""):
+        # 2026-10-16 (bug del tester): con sueldo publicado la expectativa no se pregunta
+        salida.append({"id": "base-sueldo", "requisito": "Expectativa de sueldo", "pregunta": pregunta_expectativa(periodicidad),
+                       "tipo": "numero", "unidad": "pesos", "dato": "sueldo", "expectativa": True})
     if not es_profesional(enfoque):
         salida.append({"id": "base-zona", "requisito": "Colonia y municipio", "pregunta": "¿En qué colonia y municipio vives?",
                        "tipo": "abierta", "dato": "zona"})

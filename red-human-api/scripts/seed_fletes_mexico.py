@@ -438,7 +438,8 @@ def validar(db, v: Vacante, clave: str) -> list:
             if c is None or pfu.clasificar(c, "en un mes")[0] != "no" or pfu.clasificar(c, "diciembre de 2030")[0] != "si":
                 problemas.append(f"«{PREGUNTAS_CHAT[r]}»: no descarta una vigencia menor a 3 meses")
         datos = [c.get("dato") for c in criterios if c.get("base")]
-        if datos != ["sueldo", "zona", "traslado"]:  # 2026-10-16: sin edad ni «¿Te interesa?»; el sueldo es la expectativa
+        # 2026-10-16: sin edad ni «¿Te interesa?»; con sueldo publicado tampoco la expectativa (bug del tester)
+        if datos != ["zona", "traslado"]:
             problemas.append(f"Base operativa del WhatsApp: {datos}")
         sim.ubicacion_id = mty.id if mty is not None else None
         sim.vacante = v

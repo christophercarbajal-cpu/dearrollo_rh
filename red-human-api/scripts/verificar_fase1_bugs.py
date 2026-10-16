@@ -170,14 +170,14 @@ with TestClient(app) as client:
     check(r.status_code == 200 and r.json()["progreso"] == 0, "expediente nuevo al 0%")
     r = client.post(f"/contratacion/expedientes/{EXP}/documentos", data={"tipo": "CURP"}, files={"archivo": ("curp.pdf", PDF_MIN, "application/pdf")})
     check(r.status_code == 200 and r.json()["documento"]["estado"] in ("revision", "recibido"), f"subir CURP digital → {r.json()['documento']['estado']} (revisión sin IA; recibido si Modo Prueba está activo — 2026-09-18)")
-    check(r.json()["expediente"]["progreso"] == 17, f"el porcentaje sube SOLO con la subida digital: {r.json()['expediente']['progreso']}% (1 de 6)")
+    check(r.json()["expediente"]["progreso"] == 20, f"el porcentaje sube SOLO con la subida digital: {r.json()['expediente']['progreso']}% (1 de 5; CLABE opcional)")
     if r.json()["documento"]["estado"] == "recibido":
         # Onboarding v2 (2026-09-28): en Modo Prueba la subida queda «Aprobado» sola (revisado_por="Modo Prueba")
         check("CURP" not in r.json()["expediente"]["sinConfirmar"], "…y en Modo Prueba queda Aprobado sin confirmación (Onboarding v2)")
     else:
         check("CURP" in r.json()["expediente"]["sinConfirmar"], "…y queda listado para confirmación de RH (HITL)")
     r = client.get(f"/candidatos/{codigos[1]}")
-    check(r.json()["expedienteProgreso"] == 17, "la ficha del candidato refleja el mismo %")
+    check(r.json()["expedienteProgreso"] == 20, "la ficha del candidato refleja el mismo %")
     # alta con documentos incompletos → mensaje claro, sin forzar
     cfg = obtener(db)
     cfg.modo_prueba = False

@@ -179,10 +179,11 @@ with TestClient(app) as client:
     check(all(not q["descarta"] for q in todas if q["tipo"] == "abierta"), "las preguntas abiertas no descartan")
     check(all(not q["descarta"] for q in todas if q["base"] and not q.get("indispensable")), "las base no descartan")
     # 2026-10-16: sin edad ni «¿Te interesa?» (la edad solo si la vacante la pide); el sueldo es la expectativa
-    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"sueldo", "zona", "traslado"}
-          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes"}
-          and next(q for q in g["filtro"] if q["base"] and q["dato"] == "sueldo").get("expectativa")
-          and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]), "base: expectativa de sueldo, colonia y traslado con etiqueta «Base»")
+    # 2026-10-16 (bug del tester): la vacante publica su sueldo ($9,000) → sin pregunta de expectativa
+    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"zona", "traslado"}
+          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes", "sueldo"}
+          and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]),
+          "base: colonia y traslado con etiqueta «Base» (sueldo publicado: sin expectativa)")
     check(len(g2["preguntas_filtro"]) >= 3 and g2["preguntas_filtro_whatsapp"] == [], "web derivado con ≥ 3 preguntas; sin prefiltro de WhatsApp aparte")
     abierta = pfu.normalizar_item({"pregunta": "¿Qué hiciste?", "tipo": "abierta", "descarta": True})
     check(abierta["descarta"] is False and abierta["regla"] == pfu.REGLA_NO_DESCARTA, "una abierta marcada «descarta» se corrige en código")
@@ -376,9 +377,8 @@ with TestClient(app) as client:
     db.commit()
     crit = pconv.criterios_de(vc, pc)
     datos_c = [c.get("dato") for c in crit]
-    check(crit[0]["dato"] == "escolaridad" and "zona" not in datos_c and "traslado" not in datos_c
-          and next(c for c in crit if c.get("dato") == "sueldo").get("expectativa"),
-          f"corporativo: indispensables primero, sin colonia ni traslado, el sueldo es la expectativa ({datos_c})")
+    check(crit[0]["dato"] == "escolaridad" and "zona" not in datos_c and "traslado" not in datos_c and "sueldo" not in datos_c,
+          f"corporativo: indispensables primero, sin colonia ni traslado; sueldo publicado → sin expectativa ({datos_c})")
 
     # ===================================================== 7. Frase restringida y frontend
     print("\n--- 7. Frase de sueldo y frontend ---")

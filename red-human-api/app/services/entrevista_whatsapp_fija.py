@@ -184,7 +184,9 @@ def ya_dicho(p) -> Dict[str, bool]:
     # vacante (cuya página dice puesto y ubicación) cuenta como puesto y ubicación ya dichos
     contesto = d.get("interes_puesto") is not None or any(k != "en" for k in d) or bool((p.analisis or {}).get("respuestas_web"))
     return {"conf_puesto": contesto,
-            "conf_sueldo": d.get("sueldo_acepta") is not None or bool(d.get("sueldo")),
+            # 2026-10-16 (bug del tester): la página también publica el sueldo; ya no se pide la expectativa, así que
+            # contestar la solicitud o el prefiltro cuenta como sueldo dicho (no se vuelve a plantear)
+            "conf_sueldo": contesto or d.get("sueldo_acepta") is not None or bool(d.get("sueldo")),
             # Cambio 51: la pregunta del puesto ya dice la ciudad y el estado («El puesto es … en [ciudad, estado]»)
             "conf_traslado": contesto
             or any(d.get(k) not in (None, "") for k in ("traslado", "traslado_min", "puede_trasladarse", "reubicacion"))}

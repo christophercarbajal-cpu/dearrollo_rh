@@ -179,6 +179,12 @@ with TestClient(app) as client:
 
     antes = db.get(Expediente, EXP)
     db.refresh(antes)
+    # 2026-10-16: la CLABE de la base ya no es obligatoria; aquí RH la pide explícitamente para probar «No aplica»
+    for doc in antes.documentos:
+        if doc.tipo == "Cuenta bancaria / CLABE":
+            doc.obligatorio = True
+    db.commit()
+    db.refresh(antes)
     progreso_antes = antes.progreso
     r = client.post(f"/contratacion/expedientes/{EXP}/documentos/estado", json={"tipo": "Cuenta bancaria / CLABE", "estado": "no_aplica"})
     check(r.status_code == 400 and "motivo" in r.json()["detail"], "«No aplica» sin motivo → 400")
@@ -276,7 +282,7 @@ with TestClient(app) as client:
     x = client.get(f"/contratacion/expedientes/{EXP2}").json()
     check(x["progreso"] == 0 and "CURP" in x["noAprobados"], f"subido pero sin aprobar NO suma al porcentaje ({x['progreso']} %)")
     x = client.post(f"/contratacion/expedientes/{EXP2}/documentos/estado", json={"tipo": "CURP", "estado": "aprobado"}).json()
-    check(x["progreso"] == 17 and "CURP" not in x["noAprobados"], f"aprobado por RH sí suma ({x['progreso']} %)")
+    check(x["progreso"] == 20 and "CURP" not in x["noAprobados"], f"aprobado por RH sí suma ({x['progreso']} %; 1 de 5, CLABE opcional)")
     r = client.get(f"/contratacion/expedientes/{EXP2}/contrato")
     check(r.status_code == 409 and "Aprobados" in r.json()["detail"], "el contrato exige el 100 % de documentos Aprobados")
 

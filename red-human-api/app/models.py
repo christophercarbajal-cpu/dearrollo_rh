@@ -824,6 +824,14 @@ def nombre_documento(valor) -> str:
 
 # «Documentos de contratación» por defecto de la Cuenta (sin plantilla de Onboarding): del catálogo.
 DOCUMENTOS_BASE = [_DOC_POR_ID[i]["nombre"] for i in ("ine", "curp", "rfc", "nss", "comprobante_domicilio", "cuenta_bancaria")]
+# 2026-10-16 (bug del tester): en la base la CLABE se pide pero NO bloquea (contrato, alta, compuerta de «Documentos»).
+# Solo es obligatoria si RH la marca así en su plantilla de Onboarding o la vacante la pide en «Documentos y fotos».
+DOCUMENTOS_BASE_OPCIONALES = (_DOC_POR_ID["cuenta_bancaria"]["nombre"],)
+
+
+def documentos_base_requeridos() -> List[dict]:
+    """[{tipo, obligatorio}] de la base: todos obligatorios salvo `DOCUMENTOS_BASE_OPCIONALES`."""
+    return [{"tipo": t, "obligatorio": t not in DOCUMENTOS_BASE_OPCIONALES} for t in DOCUMENTOS_BASE]
 
 # Cambio 25 → Cambio 34: los sugeridos de la vacante SON el catálogo (sin «Otro»). `palabras` = cómo los menciona una
 # descripción (`ia.documentos_de_descripcion`).

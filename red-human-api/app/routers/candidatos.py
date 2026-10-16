@@ -29,7 +29,7 @@ from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_admin, usuario_decisor
 from ..models import (
     TIPO_CONTRATACION_DETERMINADO, UNIDADES_DURACION, calcular_fecha_termino,
-    DOCUMENTOS_BASE,
+    documentos_base_requeridos,
     ETAPAS_CANDIDATO,
     nombre_etapa,
     normalizar_etapa,
@@ -2416,7 +2416,7 @@ def _abrir_expediente(db: Session, p: Postulacion, u: Usuario) -> Expediente:
     try:
         requeridos = documentos_requeridos(db, p)
     except Exception:  # noqa: BLE001 — sin tablas de módulos: la base del catálogo
-        requeridos = [{"tipo": t, "obligatorio": True} for t in DOCUMENTOS_BASE]
+        requeridos = documentos_base_requeridos()
     for d in requeridos:  # por la relación: quien lea `exp.documentos` en esta misma sesión ya los ve (sin duplicar)
         exp.documentos.append(Documento(expediente_id=exp.id, tipo=d["tipo"], obligatorio=d["obligatorio"]))
     registrar(db, u.nombre, "expediente_abierto", "postulacion", p.codigo, {"candidato": p.candidato.codigo, "expediente": exp.id, "puesto": exp.puesto})

@@ -1111,7 +1111,138 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
         respuestas[c["id"]] = {"respuesta": valor, "valor": sentido, "fuente": "web", "en": _ahora()}
     e["respuestas"] = respuestas
     e["web_importada"] = True
+    return _por_confirmar(p, e, criterios)
+
+
+# ============================================================ confirmación de la web (2026-10-16, decisión del usuario)
+# La solicitud web nunca descarta: una respuesta excluyente a un indispensable queda POR CONFIRMAR y el chat la confirma
+# antes de preguntar lo demás («Me comentaste que no puedes trabajar de lunes a sábado, ¿es correcto?»). Si la confirma, se
+# descarta ahí con su motivo; si la corrige, el prefiltro sigue. Una vacante puede pedir un MÍNIMO de preguntas en el chat
+# (`Vacante.guiones["prefiltro_whatsapp_minimo"]`, p. ej. 3 en Agencia del Centro): si lo que falta no alcanza, el chat
+# confirma (en positivo, al final) los «Sí» de la web a los indispensables. Sin mínimo (default) el chat no repite nada
+# de lo contestado en la web (Punto 4).
+
+CLAVE_MINIMO = "prefiltro_whatsapp_minimo"
+CLAVE_CONFIRMAR = "confirmar_web"
+
+
+def minimo_chat(v) -> int:
+    try:
+        return max(0, int(((getattr(v, "guiones", None) or {}).get(CLAVE_MINIMO)) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _por_confirmar(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
+    respuestas = dict(e.get("respuestas") or {})
+    confirmar = dict(e.get(CLAVE_CONFIRMAR) or {})
+    for c in criterios:
+        r = respuestas.get(c["id"]) or {}
+        if r.get("fuente") == "web" and c.get("indispensable") and r.get("valor") and r["valor"] != c.get("esperada"):
+            confirmar[c["id"]] = {"tipo": "excluyente", "respuesta": str(r.get("respuesta") or ""), "registro": r,
+                                  "pregunta": c.get("pregunta_web") or c.get("pregunta") or c.get("criterio") or ""}
+            respuestas.pop(c["id"])
+    e["respuestas"] = respuestas
+    faltan = len(set(confirmar) | {c["id"] for c in criterios if _falta(c, respuestas)})
+    for c in criterios:
+        if faltan >= minimo_chat(p.vacante):
+            break
+        r = respuestas.get(c["id"]) or {}
+        if (r.get("fuente") == "web" and c.get("indispensable") and r.get("valor") == "si" and c["id"] not in confirmar
+                and c.get("dato") not in ("terminal", "turno") and _norm(r.get("respuesta")).startswith("si")):
+            confirmar[c["id"]] = {"tipo": "positiva", "respuesta": str(r.get("respuesta") or ""), "registro": r,
+                                  "pregunta": c.get("pregunta_web") or c.get("pregunta") or c.get("criterio") or ""}
+            respuestas.pop(c["id"])
+            faltan += 1
+    e["respuestas"] = respuestas
+    if confirmar:
+        e[CLAVE_CONFIRMAR] = confirmar
     return e
+
+
+def confirmacion(e: dict, c: Optional[dict]) -> Optional[dict]:
+    return (e.get(CLAVE_CONFIRMAR) or {}).get(c["id"]) if c else None
+
+
+_RE_VERBO_TU = re.compile(r"^[a-záéíóúñ]+(as|es|is)$")
+
+
+def _sin_signos(q: str) -> str:
+    q = str(q or "").strip().strip("¿?").strip()
+    return q[:1].lower() + q[1:]
+
+
+def _plural(termino: str) -> str:
+    return termino if termino.endswith("s") else termino + ("es" if termino[-1:] in "lnrd" else "s")
+
+
+def texto_confirmacion(c: dict, conf: dict, v=None) -> str:
+    """«Me comentaste que no puedes trabajar de lunes a sábado, ¿es correcto?» (o, en positivo, «…que puedes…»)."""
+    q = _sin_signos(conf.get("pregunta") or c.get("pregunta") or "")
+    resp = str(conf.get("respuesta") or "").strip()
+    if conf.get("tipo") == "excluyente" and c.get("dato") == "terminal":
+        from . import opciones_vacante as ov
+
+        return f"Me comentaste que ninguna de nuestras {_plural(ov.termino_ubicacion(v)) if v is not None else 'sedes'} te queda, ¿es correcto?"
+    if conf.get("tipo") == "excluyente" and c.get("dato") == "turno":
+        return "Me comentaste que ninguno de nuestros turnos te acomoda, ¿es correcto?"
+    primera = (q.split(" ") or [""])[0]
+    verbo = bool(_RE_VERBO_TU.match(primera)) and primera not in ("tus", "las", "los", "mas", "tres", "dos", "seis")
+    if conf.get("tipo") == "positiva" and verbo:
+        return f"Me comentaste que {q}, ¿es correcto?"
+    if conf.get("tipo") != "positiva" and verbo and _norm(resp) == "no":
+        return f"Me comentaste que no {q}, ¿es correcto?"
+    return f"En la solicitud respondiste «{resp}» a «¿{q[:1].upper()}{q[1:]}?». ¿Es correcto?"
+
+
+def texto_chat(p: Postulacion, e: dict, c: dict) -> str:
+    """Lo que el bot dice para preguntar este criterio: la confirmación de la web si la hay; si no, su pregunta."""
+    conf = confirmacion(e, c)
+    return texto_confirmacion(c, conf, p.vacante) if conf else c["chat"]
+
+
+_RE_CONF_NO = re.compile(r"\b(no es (correcto|cierto|verdad|asi)|incorrecto|me equivoque|me confundi|me equivoque al|"
+                         r"me salio mal|lo puse mal|le puse mal|esta mal|estuvo mal|marque mal|si (puedo|tengo|cuento|conozco|se|"
+                         r"manejo|soy|estoy|vivo|termine|lo tengo|la tengo))\b")
+_RE_CONF_SI = re.compile(r"^(si|sip|correcto|es correcto|asi es|exacto|cierto|efectivamente|en efecto|afirmativo|asi|tal cual|"
+                         r"claro|aja|ajam|eso|eso es)\b")
+_RE_REPITE_NO = re.compile(r"^no (puedo|tengo|cuento|conozco|se|manejo|soy|estoy|vivo|termine|me es posible|podria|tendria|"
+                           r"me queda|me acomoda)\b")
+
+
+def clasificar_confirmacion(conf: dict, texto: str) -> Optional[str]:
+    """«si» = confirma lo que dijo en la web · «no» = lo corrige · None = no se entiende (se repregunta una vez)."""
+    t = limpiar(texto)
+    if not t:
+        return None
+    if _RE_CONF_NO.search(t) or es_refutacion(texto):
+        return "no"
+    if conf.get("tipo") != "positiva" and _RE_REPITE_NO.match(t):
+        return "si"  # «No puedo» repite el «no» de la web: lo confirma
+    if conf.get("tipo") == "positiva" and _RE_REPITE_NO.match(t):
+        return "no"  # «No puedo»: lo de la web ya no es así
+    if _RE_CONF_SI.match(t) or any(t.startswith(x) for x in _EMOJI_SI):
+        return "si"
+    if _RE_NO.match(t) or any(t.startswith(x) for x in _EMOJI_NO):
+        return "no"
+    return None
+
+
+def _falta(c: dict, respuestas: dict) -> bool:
+    if c["id"] in respuestas:
+        return False
+    if c.get("por_brecha"):
+        # Cambio 22: brecha del CV en un indispensable — se pregunta si el formulario dijo «Sí» (si no, ya lo cubre la
+        # pregunta del indispensable)
+        base = respuestas.get(c["por_brecha"]) or {}
+        return base.get("valor") == "si" and base.get("fuente") == "web"
+    if c.get("dato") or c.get("registra") or c.get("unificado"):
+        return True  # los datos de WhatsApp y las condiciones de la descripción («Se registra») siempre se preguntan
+    if c.get("reconfirma"):
+        # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
+        base = respuestas.get(c["reconfirma"]) or {}
+        return base.get("valor") == "si" and base.get("fuente") == "web"
+    return c["indispensable"]  # retro 2026-10-09: el chat solo pregunta indispensables (lo demás se registra)
 
 
 def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[dict], Optional[dict]]:
@@ -1126,23 +1257,12 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         # secundaria» cuando se pide terminada), el agente DESCARTA — la contradicción queda además en Puntos por validar
         if r and c.get("reconfirma") and r.get("valor") == "no" and por_id.get(c["reconfirma"], {}).get("indispensable"):
             return "no_cumple", por_id[c["reconfirma"]], None
-    def falta(c: dict) -> bool:
-        if c["id"] in respuestas:
-            return False
-        if c.get("por_brecha"):
-            # Cambio 22: brecha del CV en un indispensable — se pregunta si el formulario dijo «Sí» (si no, ya lo cubre la
-            # pregunta del indispensable)
-            base = respuestas.get(c["por_brecha"]) or {}
-            return base.get("valor") == "si" and base.get("fuente") == "web"
-        if c.get("dato") or c.get("registra") or c.get("unificado"):
-            return True  # los datos de WhatsApp y las condiciones de la descripción («Se registra») siempre se preguntan
-        if c.get("reconfirma"):
-            # solo se reconfirma un «Sí» dado en el FORMULARIO (lo que ya contestó en el chat no se vuelve a preguntar)
-            base = respuestas.get(c["reconfirma"]) or {}
-            return base.get("valor") == "si" and base.get("fuente") == "web"
-        return c["indispensable"]  # retro 2026-10-09: el chat solo pregunta indispensables (lo demás se registra)
-
-    siguiente = next((c for c in criterios if falta(c)), None)
+    # 2026-10-16: lo que la web dejó POR CONFIRMAR va primero (una respuesta excluyente se confirma antes que lo demás)
+    confirmar = e.get(CLAVE_CONFIRMAR) or {}
+    # (las confirmaciones en positivo, que solo completan el mínimo de preguntas, van al final)
+    siguiente = next((c for c in criterios if (confirmar.get(c["id"]) or {}).get("tipo") == "excluyente" and c["id"] not in respuestas), None) \
+        or next((c for c in criterios if c["id"] not in confirmar and _falta(c, respuestas)), None) \
+        or next((c for c in criterios if c["id"] in confirmar and c["id"] not in respuestas), None)
     if siguiente:
         return None, None, siguiente
     # 2026-10-15 (UVAQ): una respuesta que cae en una regla de revisión de la vacante («< 6 meses de experiencia») →
@@ -1154,7 +1274,9 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
         if c.get("revision_regla") and filtros_revision.falla(c["revision_regla"], r.get("texto") or r.get("respuesta") or ""):
             return "revision", c, None
     # Cambio 37: un indispensable que siguió sin resolverse tras su repregunta → «Requiere revisión» (RH decide)
-    revision = next((c for c in criterios if c.get("unificado") and c["indispensable"] and (respuestas.get(c["id"]) or {}).get("revision")), None)
+    # 2026-10-16: también una confirmación de la web que siguió sin contestarse
+    revision = next((c for c in criterios if (c.get("unificado") or (respuestas.get(c["id"]) or {}).get("confirmacion_web"))
+                     and c["indispensable"] and (respuestas.get(c["id"]) or {}).get("revision")), None)
     return ("revision", revision, None) if revision else ("cumple", None, None)
 
 
@@ -1194,7 +1316,7 @@ def resumen(p: Postulacion) -> Optional[dict]:
         e = _sembrar_web(p, dict(e), criterios)
     resultado, _incumple, siguiente = _evaluar(criterios, e)
     return {"resultado": e.get("resultado") or None, "pendiente": (siguiente or {}).get("criterio") if not e.get("resultado") else None,
-            "preguntaPendiente": (siguiente or {}).get("chat") if not e.get("resultado") else None,
+            "preguntaPendiente": (texto_chat(p, e, siguiente) if siguiente else None) if not e.get("resultado") else None,
             "criterios": _criterios_resueltos(criterios, e), "iniciado": bool(e.get("pendiente") or e.get("respuestas"))}
 
 
@@ -1206,7 +1328,7 @@ def pregunta_pendiente(p: Postulacion) -> Optional[str]:
     if e.get("resultado"):
         return None
     c = next((x for x in criterios_de(p.vacante, p) if x["id"] == e.get("pendiente")), None)
-    return c["chat"] if c else None
+    return texto_chat(p, e, c) if c else None
 
 
 # ============================================================ resolución
@@ -1374,9 +1496,14 @@ def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: di
     """Incumple un indispensable: cierra la postulación (No aprobado) con el motivo EXACTO. No hace commit. Regresa el
     texto del mensaje de cierre (lo envía quien llama, por el canal de la conversación)."""
     motivo = f"No cumple el requisito indispensable: {c['criterio']}"
-    respuesta = ((e.get("respuestas") or {}).get(c["id"]) or {}).get("respuesta", "")
+    r_c = (e.get("respuestas") or {}).get(c["id"]) or {}
+    respuesta = r_c.get("respuesta", "")
     if respuesta:
         motivo += f" (respondió: «{str(respuesta)[:120]}»)"  # Cambio 37: el motivo del descarte queda con la respuesta
+    if r_c.get("confirmacion_web") == "confirmada":
+        motivo += f"; lo confirmó por {r_c.get('confirmada_en') or 'WhatsApp'}"  # 2026-10-16: la web no descarta, el chat confirma
+    elif r_c.get("confirmacion_web") == "corrige_si":
+        motivo += "; en la solicitud web había respondido que sí"
     _resolver(db, p, criterios, e, "no_cumple", motivo)
     sello = datetime.now(timezone.utc)
     p.historial = list(p.historial or []) + [{
@@ -1578,6 +1705,17 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
     if not p.telefono:
         # sin teléfono no se le puede preguntar: lo pendiente pasa a «Puntos por validar» y el agente decide con lo demás
         while siguiente is not None:
+            conf = confirmacion(e, siguiente)
+            if conf:
+                # 2026-10-16: sin WhatsApp nadie confirma lo de la web — un «Sí» queda como estaba; un excluyente, «Requiere
+                # revisión» (la web nunca descarta)
+                e[CLAVE_CONFIRMAR] = {k: x for k, x in (e.get(CLAVE_CONFIRMAR) or {}).items() if k != siguiente["id"]}
+                e["respuestas"] = {**(e.get("respuestas") or {}), siguiente["id"]: (
+                    conf["registro"] if conf.get("tipo") == "positiva" else
+                    {"respuesta": conf.get("respuesta") or "", "valor": None, "fuente": "web", "en": _ahora(), "sin_telefono": True,
+                     "confirmacion_web": "sin_telefono", "revision": True})}
+                resultado, incumple, siguiente = _evaluar(criterios, e)
+                continue
             if siguiente.get("dato"):
                 e["respuestas"] = {**(e.get("respuestas") or {}), siguiente["id"]: {"respuesta": "", "valor": None, "fuente": "web",
                                                                                    "en": _ahora(), "sin_telefono": True}}
@@ -1588,6 +1726,10 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
             texto = cerrar_no_aprobado(db, p, criterios, e, incumple)
             db.commit()
             return "no_cumple"
+        if resultado == "revision":
+            resolver_revision(db, p, criterios, e, incumple)
+            db.commit()
+            return "revision"
         _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables (con puntos por validar)")
         db.commit()
         return "cumple"
@@ -1779,11 +1921,11 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
     aclaraciones = dict(e.get("aclaraciones") or {})
     if pendiente is not None and (reconexion or es_saludo(texto)):
         # reconexión: la pregunta pendiente EXACTA, sin contarla como respuesta
-        return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{pendiente['chat']}", retomada=True)
+        return await responder(f"Retomemos tu postulación a *{vacante}* 👇\n\n{texto_chat(p, e, pendiente)}", retomada=True)
     if pendiente is not None and es_negociacion(texto):
         # Cambio 51: nunca prometer condiciones fuera de la vacante; se responde y se retoma la MISMA pregunta
         registrar(db, ACTOR, "prefiltro_negociacion", "postulacion", p.codigo, {"texto": texto[:200]})
-        return await responder(f"{texto_negociacion(p)} {pendiente['chat']}", aclaracion=True)
+        return await responder(f"{texto_negociacion(p)} {texto_chat(p, e, pendiente)}", aclaracion=True)
     if pendiente is not None:
         # Cambio 59: una PREGUNTA del candidato sobre la vacante nunca se toma como respuesta — se contesta con el dato
         # exacto y se repite la MISMA pregunta pendiente
@@ -1792,7 +1934,60 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         tema = rva.tema_pregunta(texto)
         if tema:
             registrar(db, ACTOR, "prefiltro_pregunta_candidato", "postulacion", p.codigo, {"tema": tema, "texto": texto[:200]})
-            return await responder(rva.con_pendiente(p, tema, pendiente["chat"]), aclaracion=True, pregunta_candidato=tema)
+            return await responder(rva.con_pendiente(p, tema, texto_chat(p, e, pendiente)), aclaracion=True, pregunta_candidato=tema)
+    conf = confirmacion(e, pendiente)
+    if pendiente is not None and conf:
+        # 2026-10-16 (decisión del usuario): confirmación de lo que contestó en la solicitud web. Excluyente confirmado →
+        # se descarta AQUÍ con su motivo; corregido → el prefiltro sigue (un Sí/No queda cumplido; un dato se pregunta).
+        fuente = canal_registro(canal)
+        sentido = clasificar_confirmacion(conf, texto)
+        texto_conf = texto_confirmacion(pendiente, conf, p.vacante)
+        if sentido is None and aclaraciones.get(pendiente["id"], 0) < MAX_ACLARACIONES:
+            aclaraciones[pendiente["id"]] = aclaraciones.get(pendiente["id"], 0) + 1
+            e["aclaraciones"] = aclaraciones
+            historial(p, "prefiltro_repregunta", f"Repregunta al confirmar «{pendiente['criterio']}»: «{texto.strip()[:120]}»",
+                      motivo="confirmacion_ambigua", criterio=pendiente["criterio"])
+            return await responder(f"¿Me confirmas con un sí o un no? {texto_conf}", aclaracion=True)
+        e[CLAVE_CONFIRMAR] = {k: x for k, x in (e.get(CLAVE_CONFIRMAR) or {}).items() if k != pendiente["id"]}
+        e["pendiente"] = None
+        respuestas_c = dict(e.get("respuestas") or {})
+        web_si_no = (_norm(conf.get("respuesta")) in ("si", "no") and (pendiente.get("tipo") or "si_no") == "si_no"
+                     and pendiente.get("dato") not in ("terminal", "turno", "sueldo", "zona", "traslado", "edad", "escolaridad")
+                     and not (pendiente.get("pregunta_web") and _norm(pendiente["pregunta_web"]) != _norm(pendiente["pregunta"])))
+        if sentido == "si":
+            respuestas_c[pendiente["id"]] = {**(conf.get("registro") or {}), "confirmacion_web": "confirmada", "texto": texto.strip()[:300],
+                                             "confirmada_en": fuente, "en": _ahora()}
+            historial(p, "prefiltro_confirma_web", f"Confirmó por {fuente} su respuesta de la solicitud web en «{pendiente['criterio']}» "
+                      f"(«{conf.get('respuesta')}»)", criterio=pendiente["criterio"])
+        elif sentido == "no" and conf.get("tipo") == "positiva":
+            # la web decía «Sí» y en el chat dice que no: no cumple el indispensable
+            respuestas_c[pendiente["id"]] = {"respuesta": texto.strip()[:300], "valor": "no", "fuente": fuente, "en": _ahora(),
+                                             "confirmacion_web": "corrige_si"}
+            punto_por_validar(p, f"Inconsistencia: en la solicitud respondió «{conf.get('respuesta')}» a «{conf.get('pregunta')}» "
+                              f"y en el chat «{texto.strip()[:120]}»")
+        elif sentido == "no" and web_si_no:
+            respuestas_c[pendiente["id"]] = {"respuesta": texto.strip()[:300], "valor": pendiente.get("esperada") or "si", "fuente": fuente,
+                                             "en": _ahora(), "confirmacion_web": "corregida", "web": conf.get("respuesta")}
+            punto_por_validar(p, f"Corrigió en el chat su respuesta de la solicitud web: «{conf.get('respuesta')}» a «{conf.get('pregunta')}»")
+            historial(p, "prefiltro_corrige_web", f"Corrigió por {fuente} su respuesta de la solicitud web en «{pendiente['criterio']}»: "
+                      f"«{texto.strip()[:120]}»", criterio=pendiente["criterio"])
+        elif sentido == "no":
+            # corrige un dato (número, opción, fecha): se le pregunta el dato de nuevo
+            historial(p, "prefiltro_corrige_web", f"Corrigió por {fuente} su respuesta de la solicitud web en «{pendiente['criterio']}»",
+                      criterio=pendiente["criterio"])
+            punto_por_validar(p, f"Corrigió en el chat su respuesta de la solicitud web: «{conf.get('respuesta')}» a «{conf.get('pregunta')}»")
+            e["respuestas"] = respuestas_c
+            e["pendiente"] = pendiente["id"]
+            return await responder(f"Entendido. {pendiente['chat']}", aclaracion=True)
+        else:
+            respuestas_c[pendiente["id"]] = {"respuesta": SIN_RESPUESTA, "texto": texto.strip()[:300], "valor": None, "fuente": fuente,
+                                             "en": _ahora(), "sin_respuesta": True, "confirmacion_web": "sin_respuesta",
+                                             **({"revision": True} if conf.get("tipo") != "positiva" else {})}
+            if conf.get("tipo") == "positiva":
+                respuestas_c[pendiente["id"]] = {**(conf.get("registro") or {}), "confirmacion_web": "sin_respuesta"}
+            punto_por_validar(p, f"No confirmó su respuesta de la solicitud web en «{pendiente['criterio']}»: «{texto.strip()[:120]}»")
+        e["respuestas"] = respuestas_c
+        pendiente = None
     if pendiente is not None and pendiente.get("unificado"):
         # Cambio 37 — «Preguntas filtro»: descarta SOLO una respuesta clara que no cumple; afirmativa sin dato, parcial,
         # ambigua o evasiva → UNA repregunta concreta y, si sigue sin resolverse, «Requiere revisión». Todo al historial.
@@ -1995,9 +2190,9 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         if primera:
             # Cambio 19: saludo EXACTO; la primera pregunta es un indispensable (orden de `criterios_de`) y nunca se
             # anuncia cuántas preguntas faltan
-            return await responder(saludo(p, siguiente["chat"], presentar=not post_plantilla))
+            return await responder(saludo(p, texto_chat(p, e, siguiente), presentar=not post_plantilla))
         _n = nombre_ficha(p) or ""
-        return await responder(con_acuse(e, siguiente["chat"], "" if _n.startswith("Candidato") else _n.split(" ")[0]))
+        return await responder(con_acuse(e, texto_chat(p, e, siguiente), "" if _n.startswith("Candidato") else _n.split(" ")[0]))
 
     # Cumple: se aprueba al instante y la ruta sigue sola (la liga de la entrevista sale por el canal conectado)
     _resolver(db, p, criterios, e, "cumple", "Cumple los requisitos indispensables de la vacante")

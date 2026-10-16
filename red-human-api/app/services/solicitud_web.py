@@ -2,9 +2,10 @@
 
 La solicitud web trae el paso «Unas preguntas»: las preguntas filtro de la vacante (`Vacante.preguntas_filtro`) + el
 interés en el puesto + el sueldo (y, si la vacante lo pide, edad o colonia: `Vacante.guiones["solicitud_web_extra"]`).
-Al ENVIAR, si una respuesta coincide con el «Descarta si» de una pregunta, la postulación se descarta en ese momento con
-el mensaje GENÉRICO (sin motivo; el motivo queda solo en el historial y en la bitácora). Lo que no descarta se registra en
-la ficha (`analisis.prefiltro_datos`) y ya no se vuelve a preguntar por WhatsApp (regla de oro del Cambio 52).
+2026-10-16 (decisión del usuario, REEMPLAZA el descarte al enviar): la solicitud web NUNCA descarta. Una respuesta que
+coincide con el «Descarta si» se registra y el Prefiltro por WhatsApp la confirma («Me comentaste que…, ¿es correcto?»);
+si la ruta no trae prefiltro por WhatsApp, la solicitud queda «Requiere revisión» (ver `al_enviar`). Lo que no descarta
+se registra en la ficha (`analisis.prefiltro_datos`) y ya no se vuelve a preguntar por WhatsApp (regla de oro del Cambio 52).
 
 La actividad «Prefiltro web» sale del catálogo; `migrar_cambio50` la quita de plantillas y vacantes (las rutas que la
 traían ya la cumplen con la solicitud) y resuelve a los candidatos que estaban detenidos en ella: sus respuestas web se
@@ -325,53 +326,66 @@ def descartar(db: Session, p: Postulacion, motivo: str, criterios: List[dict]) -
 
 
 async def al_enviar(db: Session, p: Postulacion) -> Optional[dict]:
-    """En `/candidatos/postular`, ya guardada la postulación: registra las respuestas y, si una coincide con «Descarta
-    si», descarta y avisa (mensaje genérico). Regresa {"descartado": True, "mensaje": …} o None. Hace commit."""
+    """En `/candidatos/postular`, ya guardada la postulación: registra las respuestas. Hace commit. Regresa None.
+
+    2026-10-16 (decisión del usuario): la solicitud web NUNCA descarta — el candidato siempre la termina. Una respuesta
+    que coincide con «Descarta si» se REGISTRA (`solicitud_web.excluyentes` + historial) y:
+      · con «Prefiltro por WhatsApp» en la ruta, el chat la CONFIRMA antes de preguntar lo demás («Me comentaste que no
+        puedes trabajar de lunes a sábado, ¿es correcto?»): si la confirma se descarta AHÍ con su motivo; si la corrige,
+        el prefiltro sigue (`prefiltro_conversacional._sembrar_web`);
+      · sin prefiltro por WhatsApp nadie la puede confirmar: la solicitud queda «Requiere revisión» (RH decide)."""
     if not (p.analisis or {}).get("respuestas_web"):
         return None
     resultado, motivo, criterios = evaluar(p)
     a = dict(p.analisis or {})
-    a["solicitud_web"] = {"resultado": resultado, "motivo": motivo, "en": _ahora(), "criterios": criterios}
-    if resultado != "no_cumple":
-        # 2026-10-15 (UVAQ): reglas de revisión de la vacante (no excluyentes) → la solicitud queda «Requiere revisión»
-        from . import filtros_revision
-        from . import prefiltro_conversacional as pconv_
+    excluyente = resultado == "no_cumple"
+    a["solicitud_web"] = {"resultado": "excluyente" if excluyente else resultado, "motivo": motivo, "en": _ahora(),
+                          "criterios": criterios, **({"excluyentes": [motivo]} if excluyente else {})}
+    if excluyente:
+        from . import prefiltro_conversacional as pconv
 
-        revision = filtros_revision.web(p)
-        # 2026-10-16: expectativa de sueldo arriba del máximo de la vacante. Con prefiltro por WhatsApp en la ruta, el chat
-        # sigue con TODAS sus preguntas y es él quien termina en «Requiere revisión» (no se frena aquí).
-        regla = pconv_.regla_expectativa(p.vacante)
-        if regla and not pconv_.aplica(p):
-            exp = next((respuesta_web(p, q) for q in criterios_web(p.vacante) if q.get("expectativa")), None)
-            motivo_exp = filtros_revision.falla(regla, exp or "")
-            if motivo_exp:
-                revision = list(revision) + [motivo_exp]
-        if revision:
-            a["solicitud_web"]["revision"] = revision
-            p.historial = list(p.historial or []) + [{"evento": "requiere_revision", "usuario": ACTOR, "fecha": _ahora(),
-                                                      "motivo": "; ".join(revision), "origen": "solicitud_web",
-                                                      "texto": "Solicitud web: requiere revisión de RH — " + "; ".join(revision)}]
-            registrar(db, ACTOR, "solicitud_web_requiere_revision", "postulacion", p.codigo, {"motivos": revision})
+        confirma_chat = pconv.aplica(p)
+        p.historial = list(p.historial or []) + [{
+            "evento": "respuesta_excluyente_web", "usuario": ACTOR, "fecha": _ahora(), "motivo": motivo, "origen": "solicitud_web",
+            "texto": ("Solicitud web: respuesta excluyente registrada (no descarta) — " + motivo
+                      + (". El Prefiltro por WhatsApp la confirmará con el candidato." if confirma_chat else ". Requiere revisión de RH.")),
+        }]
+        registrar(db, ACTOR, "solicitud_web_respuesta_excluyente", "postulacion", p.codigo, {"motivo": motivo, "confirma_chat": confirma_chat})
+        if not confirma_chat:
+            a["solicitud_web"]["revision"] = [motivo]
             p.estado = "revision"
+        p.analisis = a
+        flag_modified(p, "analisis")
+        registrar_respuestas(p)
+        db.commit()
+        if confirma_chat:
+            await pconv.desde_web(db, p)  # siembra las respuestas: lo excluyente queda por CONFIRMAR en el chat
+        return None
+    # 2026-10-15 (UVAQ): reglas de revisión de la vacante (no excluyentes) → la solicitud queda «Requiere revisión»
+    from . import filtros_revision
+    from . import prefiltro_conversacional as pconv_
+
+    revision = filtros_revision.web(p)
+    # 2026-10-16: expectativa de sueldo arriba del máximo de la vacante. Con prefiltro por WhatsApp en la ruta, el chat
+    # sigue con TODAS sus preguntas y es él quien termina en «Requiere revisión» (no se frena aquí).
+    regla = pconv_.regla_expectativa(p.vacante)
+    if regla and not pconv_.aplica(p):
+        exp = next((respuesta_web(p, q) for q in criterios_web(p.vacante) if q.get("expectativa")), None)
+        motivo_exp = filtros_revision.falla(regla, exp or "")
+        if motivo_exp:
+            revision = list(revision) + [motivo_exp]
+    if revision:
+        a["solicitud_web"]["revision"] = revision
+        p.historial = list(p.historial or []) + [{"evento": "requiere_revision", "usuario": ACTOR, "fecha": _ahora(),
+                                                  "motivo": "; ".join(revision), "origen": "solicitud_web",
+                                                  "texto": "Solicitud web: requiere revisión de RH — " + "; ".join(revision)}]
+        registrar(db, ACTOR, "solicitud_web_requiere_revision", "postulacion", p.codigo, {"motivos": revision})
+        p.estado = "revision"
     p.analisis = a
     flag_modified(p, "analisis")
     registrar_respuestas(p)
-    if resultado != "no_cumple":
-        db.commit()
-        return None
-    from . import prefiltro_conversacional as pconv
-
-    if pconv.aplica(p):
-        # la ruta trae prefiltro por WhatsApp: el MISMO descarte de siempre (entidad resuelta, así «Reactivar» la retoma)
-        db.commit()
-        await pconv.desde_web(db, p)
-        db.refresh(p)
-        if not p.activa:
-            return {"descartado": True, "mensaje": pconv.texto_descarte(pconv.empresa_de(p))}
-    texto = descartar(db, p, motivo, criterios)
     db.commit()
-    await pconv.avisar_descarte(db, p, texto)
-    return {"descartado": True, "mensaje": texto}
+    return None
 
 
 # ============================================================ Cambio 50: migración

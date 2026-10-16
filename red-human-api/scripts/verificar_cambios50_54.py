@@ -4,8 +4,8 @@ IA, Meta y Bot API SIMULADOS (sin red).
     PYTHONIOENCODING=utf-8 python scripts/verificar_cambios50_54.py
 
 1. Cambio 50: «Prefiltro web» fuera del catálogo; «Unas preguntas» de la solicitud = preguntas filtro + interés (con
-   ciudad y estado) + sueldo; un «No» que coincide con «Descarta si» descarta AL ENVIAR con el mensaje genérico (sin
-   motivo, sin plantilla de inicio); migración de plantillas, vacantes y candidatos detenidos en «Prefiltro web».
+   ciudad y estado) + sueldo; 2026-10-16: un «No» que coincide con «Descarta si» ya NO descarta al enviar — se registra,
+   sale la plantilla de inicio y el chat lo confirma (confirmado → «Descartado» con su motivo); migración de plantillas, vacantes y candidatos detenidos en «Prefiltro web».
 2. Cambio 51: «No sé qué sea eso» → se refrasea (nunca se repite ni se pide «sí o no»); «¿Se puede negociar?» → «Eso lo
    puedes platicar con el equipo de RH de [empresa].» + la misma pregunta; otro estado → «¿Vives ahí o te cambiarías de
    ciudad?»; reglas en el prompt del entrevistador.
@@ -223,13 +223,18 @@ with TestClient(app) as client:
     antes = len(ENVIADOS)
     r = postular(va, "Raúl Rechazo", "5560000001", {**todo_si, sf.PREGUNTAS_WEB[sf.LICENCIA]: "No"})
     p_rech = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
-    check(r.get("descartado") and r["mensaje"] == pconv.texto_descarte("Fletes México"),
-          f"un «No» a una pregunta con «Descarta si» descarta AL ENVIAR con el mensaje genérico → «{r.get('mensaje')}»")
-    check("licencia" not in r["mensaje"].lower(), "el mensaje al candidato no lleva el motivo")
+    # 2026-10-16 (decisión del usuario): la solicitud web NUNCA descarta — se registra y el WhatsApp la confirma
+    check(not r.get("descartado") and p_rech.activa
+          and any(h.get("evento") == "respuesta_excluyente_web" and "Licencia" in (h.get("motivo") or "") for h in p_rech.historial or []),
+          "un «No» a una pregunta con «Descarta si» NO descarta al enviar: queda registrado con su motivo")
+    check("inicio_entrevista_rh" in plantillas("5560000001", antes), "le sale la plantilla de inicio")
+    escribe("5560000001", "Sí, empezar ahora")
+    escribe("5560000001", "Sí, es correcto")
+    db.expire_all()
+    p_rech = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
     check(not p_rech.activa and p_rech.motivo_cierre == "descartado"
           and any(h.get("evento") == "descartado" and "Licencia" in (h.get("motivo") or "") for h in p_rech.historial or []),
-          "postulación cerrada como «Descartado» con el motivo en el historial")
-    check("inicio_entrevista_rh" not in plantillas("5560000001", antes), "al descartado no le sale la plantilla de inicio")
+          "confirmado en el chat → «Descartado» con el motivo en el historial")
 
     # ================= 6b. Fletes A: prefiltro por WhatsApp =================
     print("\n--- 6b. Fletes A: prefiltro por WhatsApp ---")

@@ -204,13 +204,18 @@ with TestClient(app) as client:
     vb = db.query(Vacante).filter(Vacante.cuenta_id == cu.id, Vacante.titulo == "Almacenista").one()
     tel = "5559000002"
     p = postular(vb, "Beto Almacén", tel, {c["pregunta"]: "Sí" for c in vacante_dict(vb)["criterios"]})
-    for d in p.expediente.documentos:
-        d.archivo, d.estado, d.revisado_por = "demo.pdf", "recibido", "RH"
-    db.commit()
-    asyncio.run(sproc.avanzar_seguro(db, p))
-    db.commit()
+    # 2026-10-16: «Operativo · WhatsApp» = solicitud → Prefiltro por WhatsApp → Entrevista por WhatsApp (los documentos van
+    # en Contratación): se contesta el prefiltro en el chat hasta que arranca la entrevista
+    q = ultimo(tel, "Sí, empezar ahora")
+    for _ in range(10):
+        db.expire_all()
+        if db.query(Entrevista).filter(Entrevista.postulacion_id == p.id).count():
+            break
+        t_ = q.lower()
+        q = ultimo(tel, "Colonia Roma, Cuauhtémoc" if "colonia" in t_ else "30 minutos" if "tiempo" in t_
+                   else "12000" if "sueldo" in t_ else "3 años" if "años" in t_ else "Sí")
     e_wa = db.query(Entrevista).filter(Entrevista.postulacion_id == p.id).one()
-    primera = ultimo(tel, "Sí")
+    primera = q if "¿Trabajas actualmente?" in q else ultimo(tel, "Sí")
     check("¿Trabajas actualmente?" in primera, f"arranca la entrevista → «{primera}»")
     t = ultimo(tel, "¿Cuánto pagan?")
     check(t == "El sueldo es de $11,000 - $13,000 mensuales. ¿Trabajas actualmente?" or
@@ -246,7 +251,8 @@ with TestClient(app) as client:
     t = escribe(tel, "¿Cuánto pagan?")
     check(len(t) == 1 and t[0] == f"El sueldo es de {vb.sueldo}." and "?" not in t[0], f"«¿Cuánto pagan?» → solo el sueldo → {t}")
     t = escribe(tel, "¿Cuándo me contactan?")
-    check(len(t) == 1 and t[0].startswith("Tu siguiente paso es una entrevista con el equipo de RH de Agencia del Centro.")
+    # 2026-10-16: en «Operativo · WhatsApp» después de la entrevista sigue la psicometría digital
+    check(len(t) == 1 and t[0].startswith("Tu siguiente paso es una evaluación psicométrica en línea.")
           and t[0] != cierre, f"«¿Cuándo me contactan?» → el siguiente paso (no el cierre) → {t}")
     t = escribe(tel, "¿Pasé?")
     check(t == ["Tus respuestas ya están con el equipo de RH de Agencia del Centro. Ellos te darán el siguiente paso."],

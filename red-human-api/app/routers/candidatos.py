@@ -989,8 +989,9 @@ async def postular(
     from ..services import telegram as tg
     from ..services.mensajeria import canal_de_cuenta
 
-    # Cambio 50: «Unas preguntas» de la solicitud ES el prefiltro web — una respuesta que coincide con «Descarta si»
-    # descarta AL ENVIAR (mensaje genérico, sin motivo; el motivo queda en el historial). No sale la plantilla de inicio.
+    # Cambio 50: «Unas preguntas» de la solicitud ES el prefiltro web. 2026-10-16: NUNCA descarta al enviar — una
+    # respuesta excluyente se registra y el Prefiltro por WhatsApp la confirma (sin él, «Requiere revisión»); la
+    # plantilla de inicio sale igual. `al_enviar` regresa None (la rama de descarte queda solo por compatibilidad).
     from ..services import solicitud_web as _ssw
 
     descarte = await _ssw.al_enviar(db, p) if p.activa else None

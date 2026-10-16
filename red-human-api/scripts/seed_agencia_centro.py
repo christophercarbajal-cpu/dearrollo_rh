@@ -7,23 +7,31 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `rout
      nombre comercial: «Soy Red Human, el agente virtual de Agencia del Centro.» (`ia.presentacion_bot`). Si no existe
      ninguna de las dos, se crea «Agencia del Centro».
   2. Procesos: se DESACTIVAN (nunca se borran) «Operativos», «Masivos con documentos (iniciales)» y «Masivos sin
-     documentos (iniciales)»; se crean / actualizan:
-       P1 «Masivo Documentos y pruebas»: Solicitud web sin CV → Documentos | Evaluación técnica o práctica (la agenda el
-          candidato) → Evaluación médica (la agenda RH) | Contrato y firma.
-       P2 «Operativo WhatsApp»: Solicitud web sin CV → Documentos | Entrevista Red Human por WhatsApp (Operativo) |
-          Entrevista humana | Contrato y firma.  ← predeterminada de la Cuenta
-       P3 «Operativo Avatar»: Solicitud web sin CV → Documentos | Entrevista con avatar (Operativo) → Psicometría digital
-          (Informativa: Cleaver) | Entrevista humana | Contrato y firma.
-       P4 «Administrativo Avatar»: Solicitud web con CV | Entrevista con avatar (Profesional + personal) → Psicometría
-          digital (Con mínimos por escala: Cleaver + Terman + Moss, CI ≥ 100) | Entrevista humana | Documentos → Oferta
-          laboral → Contrato y firma.
+     documentos (iniciales)»; se crean / actualizan (2026-10-16: los cuatro llevan «Prefiltro por WhatsApp», que es lo que
+     dispara la plantilla `inicio_entrevista_rh`; los de la primera versión, sin «·» en el nombre, se renombran):
+       P1 «Masivo · Documentos y pruebas»: Solicitud web sin CV → Prefiltro por WhatsApp → Documentos | (Filtro Red Human
+          vacío) | Evaluación técnica o práctica (la agenda el candidato, en la ubicación) → Evaluación médica (la agenda
+          RH) | Contrato y firma.
+       P2 «Operativo · WhatsApp»: Solicitud web sin CV → Prefiltro por WhatsApp | Entrevista Red Human por WhatsApp
+          (Operativo) → Psicometría digital (Informativa: Cleaver) | Entrevista humana | Documentos → Contrato y firma.
+          ← predeterminada de la Cuenta
+       P3 «Operativo · Avatar»: Solicitud web sin CV → Prefiltro por WhatsApp | Entrevista con avatar (Operativo) →
+          Psicometría digital (Informativa: Cleaver) | Entrevista humana | Documentos → Contrato y firma.
+       P4 «Administrativo · Avatar»: Solicitud web con CV → Prefiltro por WhatsApp | Entrevista con avatar (Profesional +
+          personal) → Psicometría digital (Con mínimos por escala: Cleaver + Terman + Moss, CI ≥ 100) | Entrevista humana |
+          Oferta laboral → Documentos → Contrato y firma.
+     Documentos: en Contratación, SALVO que la vacante los exija como filtro inicial (Chofer: licencia y fotos del auto);
+     entonces la copia de la ruta de ESA vacante lleva además «Documentos» en Prefiltro, después del Prefiltro por WhatsApp.
      Pruebas del catálogo (Configuración → Pruebas psicométricas): Cleaver (1), Terman (7) y Moss (15), integradas.
   3. Ubicación «Ciudad de México» (lunes a viernes 9:00 y 12:00, 8 lugares) para la autoagenda de la prueba práctica
      (solo la vacante de P1 la usa). Dirección de demo: RH la corrige en Configuración → Ubicaciones.
-  4. Vacantes (Ciudad de México, presencial, mensual MXN), cada una con su proceso, «Unas preguntas» Sí/No que
-     descartan con «No», y sus documentos en la etapa correcta:
-       Ayudante general (P1) · Almacenista (P2) · Chofer con auto propio (P3) — documentos en la solicitud (Prefiltro).
-       Gerente de Recursos Humanos y Gerente de Ventas (P4) — documentos «Se pide en: Contratación».
+  4. Vacantes (Ciudad de México, presencial, mensual MXN), cada una con su proceso, 3 «Unas preguntas» Sí/No
+     indispensables y sus documentos en la etapa correcta. La solicitud web NUNCA descarta: una respuesta excluyente se
+     registra y el Prefiltro por WhatsApp la CONFIRMA («Me comentaste que no puedes…, ¿es correcto?»).
+       Ayudante general (P1) — documentos en Prefiltro (después del WhatsApp).
+       Almacenista (P2) — documentos en Contratación.
+       Chofer con auto propio (P3) — licencia y fotos del auto en Prefiltro; INE, CURP y comprobante en Contratación.
+       Gerente de Recursos Humanos y Gerente de Ventas (P4) — documentos en Contratación.
      Guiones de entrevista generados con la ruta (Operativo = base fija; Profesional + personal = guion propio por vacante).
 
 Seguridad: sin `--aplicar` es un SIMULACRO (una transacción que al final se deshace); con `--aplicar` también es una sola
@@ -72,8 +80,11 @@ NOMBRE = "Agencia del Centro"
 PRESENTACION = "Soy Red Human, el agente virtual de Agencia del Centro."
 
 # ============================================================ 1. Procesos
-P1, P2, P3, P4 = "Masivo Documentos y pruebas", "Operativo WhatsApp", "Operativo Avatar", "Administrativo Avatar"
+P1, P2, P3, P4 = "Masivo · Documentos y pruebas", "Operativo · WhatsApp", "Operativo · Avatar", "Administrativo · Avatar"
+# 2026-10-16: nombres de la primera versión del seed (se renombran, no se duplican)
+NOMBRES_PREVIOS = {P1: "Masivo Documentos y pruebas", P2: "Operativo WhatsApp", P3: "Operativo Avatar", P4: "Administrativo Avatar"}
 PREDETERMINADO = P2  # el más parecido a «Masivos sin documentos», que era la predeterminada
+MINIMO_PREGUNTAS_CHAT = 3  # preguntas que hace como mínimo el Prefiltro por WhatsApp
 # Procesos viejos que se desactivan (por nombre, sin acentos ni mayúsculas, o por su ruta base)
 ANTERIORES = ("operativos", "masivos con documentos", "masivos sin documentos")
 RUTAS_BASE_ANTERIORES = ("masivos_con_documentos", "masivos_sin_documentos")
@@ -85,7 +96,15 @@ BATERIA_ADMINISTRATIVA = ["cleaver", "terman", "moss"]
 MINIMOS_ADMINISTRATIVO = {"CI": 100}  # Terman: coeficiente intelectual promedio o superior (RH lo ajusta en el editor)
 
 SOLICITUD_SIN_CV = {"id": "solicitud", "tipo": "solicitud_sin_cv", "etapa": "Prefiltro"}
+SOLICITUD_CON_CV = {"id": "solicitud", "tipo": "solicitud_con_cv", "etapa": "Prefiltro"}
+PREFILTRO_WA = {"id": "prefiltro-whatsapp", "tipo": "prefiltro_whatsapp", "nombre": "Prefiltro por WhatsApp", "etapa": "Prefiltro"}
 DOCUMENTOS_PREFILTRO = {"id": "documentos", "tipo": "documentos", "nombre": "Documentos", "etapa": "Prefiltro"}
+DOCUMENTOS_CONTRATACION = {"id": "documentos", "tipo": "documentos", "nombre": "Documentos", "etapa": "Contratación"}
+# documentos que la VACANTE exige como filtro inicial (en su copia de la ruta, después del Prefiltro por WhatsApp)
+DOCUMENTOS_INICIALES = {"id": "documentos-iniciales", "tipo": "documentos", "nombre": "Documentos", "etapa": "Prefiltro",
+                        "depende_de": ["prefiltro-whatsapp"]}
+ENTREVISTA_WA = {"id": "entrevista-whatsapp", "tipo": "entrevista_whatsapp", "nombre": "Entrevista Red Human por WhatsApp",
+                 "etapa": "Entrevista IA", "enfoque": "operativo", "tipo_entrevista": "operativo"}
 ENTREVISTA_HUMANA = {"id": "entrevista-humana", "tipo": "entrevista_humana", "nombre": "Entrevista humana",
                      "etapa": "Entrevista Humana", "tipo_entrevista": "general", "tipo_agenda": "rh"}
 CONTRATO = {"id": "contrato", "tipo": "carta_contrato", "nombre": "Contrato y firma", "etapa": "Contratación"}
@@ -96,9 +115,9 @@ def _avatar(enfoque: str) -> dict:
             "etapa": "Entrevista IA", "enfoque": enfoque, "tipo_entrevista": enfoque}
 
 
-def _psicometria(pruebas: list, evaluacion: dict) -> dict:
+def _psicometria(pruebas: list, evaluacion: dict, despues_de: str = "entrevista-avatar") -> dict:
     return {"id": "psicometria", "tipo": "psicometrica", "nombre": "Psicometría digital", "etapa": "Entrevista IA",
-            "pruebas": pruebas, "evaluacion_psicometria": evaluacion, "depende_de": ["entrevista-avatar"]}
+            "pruebas": pruebas, "evaluacion_psicometria": evaluacion, "depende_de": [despues_de]}
 
 
 def pasos_procesos(evaluador_id: int, pruebas: dict) -> dict:
@@ -106,41 +125,48 @@ def pasos_procesos(evaluador_id: int, pruebas: dict) -> dict:
     usuario de la Cuenta (el Administrador de la demo; RH lo cambia en el editor): sin él, la autoagenda no podría
     crear la evaluación al reservar."""
     ev = {"evaluador": {"tipo": "interno", "usuario_id": evaluador_id}}
+    informativa = [pruebas[k] for k in BATERIA_OPERATIVA]
     return {
-        P1: [SOLICITUD_SIN_CV, DOCUMENTOS_PREFILTRO,
+        P1: [SOLICITUD_SIN_CV, PREFILTRO_WA, DOCUMENTOS_PREFILTRO,
              {"id": "prueba-practica", "tipo": "tecnica", "nombre": "Evaluación técnica o práctica", "etapa": "Entrevista Humana",
               "tipo_agenda": "candidato", "config": ev},
              {"id": "medica", "tipo": "medica", "nombre": "Evaluación médica", "etapa": "Entrevista Humana", "tipo_agenda": "rh",
               "depende_de": ["prueba-practica"]},
              CONTRATO],
-        P2: [SOLICITUD_SIN_CV, DOCUMENTOS_PREFILTRO,
-             {"id": "entrevista-whatsapp", "tipo": "entrevista_whatsapp", "nombre": "Entrevista Red Human por WhatsApp",
-              "etapa": "Entrevista IA", "enfoque": "operativo", "tipo_entrevista": "operativo"},
-             ENTREVISTA_HUMANA, CONTRATO],
-        P3: [SOLICITUD_SIN_CV, DOCUMENTOS_PREFILTRO, _avatar("operativo"),
-             _psicometria([pruebas[k] for k in BATERIA_OPERATIVA], {"modalidad": "informativa"}),
-             ENTREVISTA_HUMANA, CONTRATO],
-        P4: [{"id": "solicitud", "tipo": "solicitud_con_cv", "etapa": "Prefiltro"}, _avatar("profesional_personal"),
+        P2: [SOLICITUD_SIN_CV, PREFILTRO_WA, ENTREVISTA_WA,
+             _psicometria(informativa, {"modalidad": "informativa"}, despues_de="entrevista-whatsapp"),
+             ENTREVISTA_HUMANA, DOCUMENTOS_CONTRATACION, CONTRATO],
+        P3: [SOLICITUD_SIN_CV, PREFILTRO_WA, _avatar("operativo"), _psicometria(informativa, {"modalidad": "informativa"}),
+             ENTREVISTA_HUMANA, DOCUMENTOS_CONTRATACION, CONTRATO],
+        P4: [SOLICITUD_CON_CV, PREFILTRO_WA, _avatar("profesional_personal"),
              _psicometria([pruebas[k] for k in BATERIA_ADMINISTRATIVA], {"modalidad": "minimos", "minimos": MINIMOS_ADMINISTRATIVO}),
              ENTREVISTA_HUMANA,
-             {"id": "documentos", "tipo": "documentos", "nombre": "Documentos", "etapa": "Contratación"},
              {"id": "oferta", "tipo": "oferta", "nombre": "Oferta laboral", "etapa": "Contratación"},
-             CONTRATO],
+             DOCUMENTOS_CONTRATACION, CONTRATO],
     }
 
 
 DESCRIPCIONES = {
-    P1: "Masivos: solicitud con documentos, prueba práctica que agenda el candidato y examen médico.",
-    P2: "Operativos: solicitud con documentos, entrevista por WhatsApp y entrevista humana.",
-    P3: "Operativos: solicitud con documentos, entrevista en video, psicometría informativa y entrevista humana.",
-    P4: "Administrativos: solicitud con CV, entrevista en video, psicometría con mínimos, entrevista humana y documentos al contratar.",
+    P1: "Masivos: solicitud, prefiltro por WhatsApp, documentos, prueba práctica que agenda el candidato y examen médico.",
+    P2: ("Operativos: solicitud, prefiltro y entrevista por WhatsApp, psicometría informativa, entrevista humana y documentos "
+         "al contratar."),
+    P3: ("Operativos: solicitud, prefiltro por WhatsApp, entrevista en video, psicometría informativa, entrevista humana y "
+         "documentos al contratar."),
+    P4: ("Administrativos: solicitud con CV, prefiltro por WhatsApp, entrevista en video, psicometría con mínimos, entrevista "
+         "humana, oferta y documentos al contratar."),
 }
 TIPOS_ESPERADOS = {
-    P1: ["solicitud_sin_cv", "documentos", "tecnica", "medica", "carta_contrato"],
-    P2: ["solicitud_sin_cv", "documentos", "entrevista_whatsapp", "entrevista_humana", "carta_contrato"],
-    P3: ["solicitud_sin_cv", "documentos", "entrevista_agente", "psicometrica", "entrevista_humana", "carta_contrato"],
-    P4: ["solicitud_con_cv", "entrevista_agente", "psicometrica", "entrevista_humana", "documentos", "oferta", "carta_contrato"],
+    P1: ["solicitud_sin_cv", "prefiltro_whatsapp", "documentos", "tecnica", "medica", "carta_contrato"],
+    P2: ["solicitud_sin_cv", "prefiltro_whatsapp", "entrevista_whatsapp", "psicometrica", "entrevista_humana", "documentos",
+         "carta_contrato"],
+    P3: ["solicitud_sin_cv", "prefiltro_whatsapp", "entrevista_agente", "psicometrica", "entrevista_humana", "documentos",
+         "carta_contrato"],
+    P4: ["solicitud_con_cv", "prefiltro_whatsapp", "entrevista_agente", "psicometrica", "entrevista_humana", "oferta", "documentos",
+         "carta_contrato"],
 }
+# la vacante que exige documentos como filtro inicial: «Documentos» en Prefiltro, después del Prefiltro por WhatsApp
+TIPOS_CON_DOCUMENTOS_INICIALES = {P3: ["solicitud_sin_cv", "prefiltro_whatsapp", "documentos", "entrevista_agente", "psicometrica",
+                                       "entrevista_humana", "documentos", "carta_contrato"]}
 
 # ============================================================ 2. Ubicación (autoagenda de la prueba práctica)
 UBICACION = {"nombre": "Ciudad de México", "estado": "Ciudad de México", "municipio": "",
@@ -151,10 +177,15 @@ UBICACION = {"nombre": "Ciudad de México", "estado": "Ciudad de México", "muni
 # ============================================================ 3. Vacantes
 DOCS_BASICOS = [{"nombre": "INE (frente y reverso)"}, {"nombre": "CURP"}, {"nombre": "Comprobante de domicilio"},
                 {"nombre": "Número de Seguridad Social (NSS)"}]
-DOCS_CHOFER = [{"nombre": "Licencia de conducir"},
-               {"nombre": "Foto del auto de frente", "cantidad": 1, "foto": True},
-               {"nombre": "Foto del auto costado izquierdo", "cantidad": 1, "foto": True},
-               {"nombre": "Foto del auto costado derecho", "cantidad": 1, "foto": True}]
+DOCS_BASICOS_CONTRATACION = [dict(d, etapa="Contratación") for d in DOCS_BASICOS]
+# Chofer: la licencia y las fotos del auto son FILTRO INICIAL (Prefiltro, después del WhatsApp); lo demás, al contratar
+DOCS_CHOFER = [dict(d, etapa="Prefiltro") for d in (
+    {"nombre": "Licencia de conducir"},
+    {"nombre": "Foto del auto de frente", "cantidad": 1, "foto": True},
+    {"nombre": "Foto del auto costado izquierdo", "cantidad": 1, "foto": True},
+    {"nombre": "Foto del auto costado derecho", "cantidad": 1, "foto": True})] + [
+    dict(d, etapa="Contratación") for d in ({"nombre": "INE (frente y reverso)"}, {"nombre": "CURP"},
+                                             {"nombre": "Comprobante de domicilio"})]
 DOCS_GERENTE = [dict(d, etapa="Contratación") for d in (
     {"nombre": "INE (frente y reverso)"}, {"nombre": "CURP"}, {"nombre": "Constancia de Situación Fiscal (RFC)"},
     {"nombre": "Número de Seguridad Social (NSS)"}, {"nombre": "Comprobante de domicilio"}, {"nombre": "Comprobante de estudios"})]
@@ -162,29 +193,35 @@ DOCS_GERENTE = [dict(d, etapa="Contratación") for d in (
 VACANTES = [
     {"titulo": "Ayudante general", "proceso": P1, "area": "Operaciones", "seniority": "Sin experiencia", "sueldo": (9500, 11000),
      "filtros": {"Disponibilidad para rolar turnos": "¿Tienes disponibilidad para rolar turnos?",
-                 "Disponibilidad para cargar material pesado": "¿Puedes cargar material pesado?"},
+                 "Disponibilidad para cargar material pesado": "¿Puedes cargar material pesado?",
+                 "Disponibilidad para trabajar de lunes a sábado": "¿Puedes trabajar de lunes a sábado?"},
      "descripcion": "Apoyo en carga, descarga y acomodo de materiales, y limpieza del área de trabajo.",
      "responsabilidades": ["Cargar y descargar material", "Acomodar materiales en el área asignada", "Mantener limpia el área de trabajo"],
      "beneficios": ["Prestaciones de ley"], "documentos": DOCS_BASICOS, "ubicacion": True},
     {"titulo": "Almacenista", "proceso": P2, "area": "Almacén", "seniority": "Junior", "sueldo": (11000, 13000),
      "filtros": {"Experiencia en almacén (recepción, acomodo o surtido)":
                  "¿Tienes experiencia en almacén (recepción, acomodo o surtido)?",
-                 "Disponibilidad para trabajar de lunes a sábado": "¿Puedes trabajar de lunes a sábado?"},
+                 "Disponibilidad para trabajar de lunes a sábado": "¿Puedes trabajar de lunes a sábado?",
+                 "Disponibilidad para rolar turnos": "¿Tienes disponibilidad para rolar turnos?"},
      "descripcion": "Recepción, acomodo y surtido de mercancía en almacén; control de entradas y salidas.",
      "responsabilidades": ["Recibir y revisar mercancía", "Acomodar mercancía en su ubicación", "Surtir pedidos",
                            "Registrar entradas y salidas"],
-     "beneficios": ["Prestaciones de ley"], "documentos": DOCS_BASICOS},
+     "beneficios": ["Prestaciones de ley"], "documentos": DOCS_BASICOS_CONTRATACION},
     {"titulo": "Chofer con auto propio", "proceso": P3, "area": "Logística", "seniority": "Junior", "sueldo": (15000, 18000),
      "filtros": {"Auto propio para trabajar": "¿Tienes auto propio para trabajar?",
-                 "Licencia de manejo vigente": "¿Tienes licencia de manejo vigente?"},
+                 "Licencia de manejo vigente": "¿Tienes licencia de manejo vigente?",
+                 "Conocimiento de las calles de Ciudad de México": "¿Conoces bien las calles de Ciudad de México?"},
      "descripcion": "Traslado de personal y paquetería en Ciudad de México con auto propio.",
      "responsabilidades": ["Trasladar personal y paquetería en las rutas asignadas", "Mantener el auto limpio y en buen estado",
                            "Cumplir con los horarios de entrega"],
-     "beneficios": ["Prestaciones de ley"], "documentos": DOCS_CHOFER},
+     "beneficios": ["Prestaciones de ley"], "documentos": DOCS_CHOFER, "documentos_iniciales": True},
     {"titulo": "Gerente de Recursos Humanos", "proceso": P4, "area": "Recursos Humanos", "seniority": "Jefatura",
      "sueldo": (45000, 55000),
      "filtros": {"5 años de experiencia en Recursos Humanos, con 2 o más a cargo de un equipo":
-                 "¿Tienes al menos 5 años de experiencia en Recursos Humanos, con 2 o más a cargo de un equipo?"},
+                 "¿Tienes al menos 5 años de experiencia en Recursos Humanos, con 2 o más a cargo de un equipo?",
+                 "Licenciatura en Psicología, Administración o afín": "¿Tienes licenciatura en Psicología, Administración o afín?",
+                 "Disponibilidad para trabajar en oficina de lunes a viernes":
+                 "¿Puedes trabajar en oficina de lunes a viernes en Ciudad de México?"},
      "descripcion": ("Dirigir el área de Recursos Humanos: reclutamiento, nómina, relaciones laborales, clima y desarrollo "
                      "del personal."),
      "responsabilidades": ["Dirigir los procesos de reclutamiento y selección", "Supervisar nómina y prestaciones",
@@ -192,7 +229,10 @@ VACANTES = [
      "beneficios": ["Prestaciones de ley"], "documentos": DOCS_GERENTE},
     {"titulo": "Gerente de Ventas", "proceso": P4, "area": "Ventas", "seniority": "Jefatura", "sueldo": (50000, 60000),
      "filtros": {"5 años de experiencia en ventas, con 2 o más dirigiendo un equipo":
-                 "¿Tienes al menos 5 años de experiencia en ventas, con 2 o más dirigiendo un equipo?"},
+                 "¿Tienes al menos 5 años de experiencia en ventas, con 2 o más dirigiendo un equipo?",
+                 "Licenciatura en Administración, Mercadotecnia o afín":
+                 "¿Tienes licenciatura en Administración, Mercadotecnia o afín?",
+                 "Disponibilidad para viajar dentro del país": "¿Tienes disponibilidad para viajar dentro del país?"},
      "descripcion": "Dirigir al equipo comercial, definir metas de venta y dar seguimiento a clientes clave. Sueldo más comisiones.",
      "responsabilidades": ["Definir y dar seguimiento a las metas de venta", "Dirigir y capacitar al equipo de ventas",
                            "Atender clientes clave", "Reportar resultados a la dirección"],
@@ -248,6 +288,18 @@ def asegurar_cuenta(db) -> Cuenta:
             ok(f"Cuenta {cu.id}: «{antes['nombre_comercial']}» → «{NOMBRE}» (slug {cu.slug} sin cambio)")
         else:
             nota(f"Cuenta existente: {NOMBRE} (id {cu.id}, slug {cu.slug})")
+    # 2026-10-16: el Prefiltro por WhatsApp SIEMPRE arranca con la plantilla aprobada `inicio_entrevista_rh` (botón «Sí,
+    # empezar ahora»). Si la Cuenta tiene política de plantillas, esa plantilla queda permitida.
+    from app.services import plantillas_cuenta, plantillas_meta
+
+    pol = dict(cu.plantillas_meta or {}) if isinstance(cu.plantillas_meta, dict) else {}
+    inicio = plantillas_meta.nombre_plantilla_inicio()
+    if pol.get("permitidas") and inicio not in pol["permitidas"]:
+        pol["permitidas"] = list(pol["permitidas"]) + [inicio]
+        cu.plantillas_meta = pol
+        flag_modified(cu, "plantillas_meta")
+        ok(f"Plantilla «{inicio}» permitida en la política de la Cuenta")
+    plantillas_cuenta.precargar(cu.id, pol if pol.get("permitidas") else {})
     with db.begin_nested():
         # las rutas base se siembran aquí (si faltan) para desactivarlas YA: si no, el arranque las crearía activas
         sproc.asegurar_rutas_base(db, cu.id, ACTOR)
@@ -267,7 +319,7 @@ def vincular_admins(db, cu: Cuenta) -> Usuario:
 
 
 def desactivar_anteriores(db, cu: Cuenta) -> None:
-    nuevos = {P1, P2, P3, P4}
+    nuevos = {P1, P2, P3, P4} | set(NOMBRES_PREVIOS.values())
     for pl in db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id).order_by(PlantillaProceso.id).all():
         if pl.nombre in nuevos:
             continue
@@ -311,6 +363,14 @@ def asegurar_proceso(db, cu: Cuenta, u: Usuario, nombre: str, crudos: list) -> P
     except sproc.ErrorProceso as e:
         raise Abortar(f"Proceso «{nombre}»: {e.mensaje}")
     pl = db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id, PlantillaProceso.nombre == nombre).first()
+    previo = NOMBRES_PREVIOS.get(nombre)
+    if pl is None and previo:
+        # 2026-10-16: el proceso de la primera versión del seed se RENOMBRA (las vacantes que lo usan siguen ligadas por id)
+        pl = db.query(PlantillaProceso).filter(PlantillaProceso.cuenta_id == cu.id, PlantillaProceso.nombre == previo).first()
+        if pl is not None:
+            pl.nombre = nombre
+            registrar(db, ACTOR, "plantilla_proceso_renombrada", "plantilla_proceso", str(pl.id), {"antes": previo, "despues": nombre})
+            ok(f"Proceso «{previo}» → «{nombre}»")
     if pl is None:
         pl = PlantillaProceso(cuenta_id=cu.id, nombre=nombre, descripcion=DESCRIPCIONES[nombre], pasos=pasos,
                               etapas=sproc.normalizar_etapas({}), predeterminada=False, version=1, creado_por=u.nombre,
@@ -384,10 +444,26 @@ def configurar_preguntas(v: Vacante, filtros: dict) -> None:
     pfu.sincronizar(v, entrada=previas)
 
 
-def _proceso_de(db, v: Vacante, pl: PlantillaProceso) -> None:
+def con_documentos_iniciales(pasos: list) -> list:
+    """La copia de la ruta de una vacante que exige documentos como filtro inicial: «Documentos» en Prefiltro, después del
+    Prefiltro por WhatsApp (la plantilla del proceso no cambia)."""
+    pasos = [dict(x) for x in pasos]
+    if any(x["tipo"] == "documentos" and x["etapa"] == "Prefiltro" for x in pasos):
+        return pasos
+    i = next(k for k, x in enumerate(pasos) if x["tipo"] == "prefiltro_whatsapp") + 1
+    try:
+        return sproc.normalizar_pasos(pasos[:i] + [dict(DOCUMENTOS_INICIALES)] + pasos[i:])
+    except sproc.ErrorProceso as e:
+        raise Abortar(f"Documentos iniciales: {e.mensaje}")
+
+
+def _proceso_de(db, v: Vacante, pl: PlantillaProceso, documentos_iniciales: bool = False) -> None:
     """La vacante toma la ruta VIGENTE de su proceso (nueva versión si cambió). Las postulaciones conservan su copia."""
     actual = v.proceso or {}
     vigente = sproc.proceso_desde_plantilla(pl)
+    if documentos_iniciales:
+        vigente["pasos"] = con_documentos_iniciales(vigente["pasos"])
+        vigente["personalizado"] = True
     if actual.get("plantilla_id") == pl.id and sproc._firma_pasos(actual.get("pasos")) == sproc._firma_pasos(vigente.get("pasos")) \
             and [x.get("nombre") for x in actual.get("pasos") or []] == [x.get("nombre") for x in vigente.get("pasos") or []] \
             and all(a.get(k) == b.get(k) for a, b in zip(actual.get("pasos") or [], vigente.get("pasos") or [])
@@ -432,8 +508,8 @@ def asegurar_vacante(db, cu: Cuenta, u: Usuario, pl: PlantillaProceso, ubic: Ubi
         subic.asignar(db, v, [ubic.id] if d.get("ubicacion") else [])
         if d.get("ubicacion"):
             v.ubicacion = "Ciudad de México"
-    _proceso_de(db, v, pl)
-    docs = normalizar_documentos_vacante(d["documentos"])
+    _proceso_de(db, v, pl, bool(d.get("documentos_iniciales")))
+    docs =normalizar_documentos_vacante(d["documentos"])
     if v.documentos_solicitados != docs:
         v.documentos_solicitados = docs
         flag_modified(v, "documentos_solicitados")
@@ -444,6 +520,12 @@ def asegurar_vacante(db, cu: Cuenta, u: Usuario, pl: PlantillaProceso, ubic: Ubi
     if secciones:
         sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=True, solo=secciones)
         nota(f"{v.codigo}: guion de la entrevista ({', '.join(secciones)}) con enfoque «{v.enfoque_entrevista}»")
+    # 2026-10-16: el Prefiltro por WhatsApp hace al menos 3 preguntas (lo que falta + confirmación de lo de la web)
+    from app.services import prefiltro_conversacional as pconv
+
+    if (v.guiones or {}).get(pconv.CLAVE_MINIMO) != MINIMO_PREGUNTAS_CHAT:
+        v.guiones = {**(v.guiones or {}), pconv.CLAVE_MINIMO: MINIMO_PREGUNTAS_CHAT}
+        flag_modified(v, "guiones")
     if publicar and v.estado != "Publicada":
         v.estado = "Publicada"
         v.publicada_en = v.publicada_en or datetime.now(timezone.utc)
@@ -472,8 +554,16 @@ def validar(db, cu: Cuenta, vacantes: dict) -> list:
         t = d["titulo"]
         pasos = v.proceso.get("pasos") or []
         tipos = [sproc.clave_catalogo(x) for x in pasos]
-        if tipos != TIPOS_ESPERADOS[d["proceso"]]:
-            problemas.append(f"{t}: ruta {tipos} ≠ {TIPOS_ESPERADOS[d['proceso']]}")
+        esperados = (TIPOS_CON_DOCUMENTOS_INICIALES[d["proceso"]] if d.get("documentos_iniciales") else TIPOS_ESPERADOS[d["proceso"]])
+        if tipos != esperados:
+            problemas.append(f"{t}: ruta {tipos} ≠ {esperados}")
+        if len(d["filtros"]) < 3 or (v.guiones or {}).get("prefiltro_whatsapp_minimo") != MINIMO_PREGUNTAS_CHAT:
+            problemas.append(f"{t}: el prefiltro necesita al menos 3 preguntas de la vacante (y mínimo 3 en el chat)")
+        from app.services import plantillas_cuenta, plantillas_meta
+
+        inicio = plantillas_meta.nombre_plantilla_inicio()
+        if plantillas_cuenta.aplicar(inicio, ["-"], cu.id).get("bloquear"):
+            problemas.append(f"{t}: la política de plantillas de la Cuenta bloquea «{inicio}»")
         if ia.presentacion_bot(nombre_empresa_candidato(v)) != PRESENTACION:
             problemas.append(f"{t}: presentación «{ia.presentacion_bot(nombre_empresa_candidato(v))}»")
         criterios = vacante_dict(v).get("criterios") or []
@@ -484,18 +574,14 @@ def validar(db, cu: Cuenta, vacantes: dict) -> list:
         sim = Postulacion(proceso=dict(v.proceso), analisis={})
         tempranos = [x["nombre"] for x in sdv.de_vacante(v, pasos, tempranos=True)]
         finales = [x["nombre"] for x in sdv.de_vacante(v, pasos, tempranos=False)]
-        if d["proceso"] == P4:
-            if tempranos or len(finales) != 6:
-                problemas.append(f"{t}: documentos al inicio {tempranos} / en Contratación {finales}")
-            if not ssv.exige_cv(pasos):
-                problemas.append(f"{t}: la solicitud no exige CV")
-            if sdv.siguen_a_solicitud(sim):
-                problemas.append(f"{t}: pide documentos en la solicitud")
-        else:
-            if len(tempranos) != 4 or finales:
-                problemas.append(f"{t}: documentos en la solicitud {tempranos} / después {finales}")
-            if not sdv.siguen_a_solicitud(sim):
-                problemas.append(f"{t}: los documentos no se piden en la misma página de la solicitud")
+        # documentos: en Contratación salvo P1 (Prefiltro) y la vacante que los exige como filtro inicial (Chofer)
+        esperado_docs = {"Ayudante general": (4, 0), "Almacenista": (0, 4), "Chofer con auto propio": (4, 3)}.get(t, (0, 6))
+        if (len(tempranos), len(finales)) != esperado_docs:
+            problemas.append(f"{t}: documentos en Prefiltro {tempranos} / en Contratación {finales} ≠ {esperado_docs}")
+        if sdv.siguen_a_solicitud(sim):
+            problemas.append(f"{t}: pide documentos en la página de la solicitud (deben ir después del Prefiltro por WhatsApp)")
+        if d["proceso"] == P4 and not ssv.exige_cv(pasos):
+            problemas.append(f"{t}: la solicitud no exige CV")
         enfoques = sproc.enfoques_de_ruta(v.proceso)
         esperado = {P2: {"entrevista_whatsapp": "operativo"}, P3: {"entrevista_agente": "operativo"},
                     P4: {"entrevista_agente": "profesional_personal"}}.get(d["proceso"], {})
@@ -508,7 +594,7 @@ def validar(db, cu: Cuenta, vacantes: dict) -> list:
             if any(x["tipo"] in sproc.TIPOS_PASO_ENTREVISTA_IA or x["tipo"] == "entrevista_humana" for x in pasos):
                 problemas.append(f"{t}: la ruta trae entrevistas")
         psi = next((x for x in pasos if x["tipo"] == "psicometrica"), None)
-        if d["proceso"] == P3 and (psi or {}).get("evaluacion_psicometria", {}).get("modalidad") != "informativa":
+        if d["proceso"] in (P2, P3) and (psi or {}).get("evaluacion_psicometria", {}).get("modalidad") != "informativa":
             problemas.append(f"{t}: la psicometría no es Informativa")
         if d["proceso"] == P4 and (psi or {}).get("evaluacion_psicometria", {}).get("minimos") != MINIMOS_ADMINISTRATIVO:
             problemas.append(f"{t}: la psicometría no tiene los mínimos {MINIMOS_ADMINISTRATIVO}")

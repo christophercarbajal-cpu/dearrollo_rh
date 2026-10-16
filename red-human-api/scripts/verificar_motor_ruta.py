@@ -170,6 +170,19 @@ with TestClient(app) as client:
     PB = postular("demo-grupak", "Beto No", "5512347002", "beto@correo.mx", respuestas("Sí", "No", "Sí"))
     db.expire_all()
     pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
+    # 2026-10-16: la solicitud web NUNCA descarta — lo excluyente se registra y el chat lo confirma («Sí» → descartado)
+    check(pb.activa and any(h.get("evento") == "respuesta_excluyente_web" for h in pb.historial or []),
+          "el «No» de la web NO descarta al enviar: queda registrado y por confirmar en el chat")
+    from app.routers import webhooks
+    from app.services.mensajeria import en_conversacion
+
+    for i, texto in enumerate(("Hola", "Sí, es correcto")):
+        with en_conversacion("whatsapp", "5215512347002"):
+            asyncio.run(webhooks.procesar_entrante(db, {"telefono": "5215512347002", "texto": texto, "nombre": "Beto No",
+                                                        "wa_id": f"wb{i}", "tipo": "text", "id_seleccionado": "",
+                                                        "numero_receptor": "", "canal": "whatsapp"}))
+    db.expire_all()
+    pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
     check(pb.estado == "no_cumple" and "Rolar turnos" in pb.analisis["prefiltro_web"]["motivo"], "No cumple con el criterio indispensable como motivo")
     check(not pb.activa and pb.motivo_cierre == "descartado" and pb.etapa == "Prefiltro"
           and any(h.get("evento") == "descartado" and "Rolar turnos" in h.get("motivo", "") for h in pb.historial),

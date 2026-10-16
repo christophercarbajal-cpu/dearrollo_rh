@@ -235,13 +235,18 @@ with TestClient(app) as client:
     paso = next(x for x in sproc.estado_pasos(p) if x["id"] == "solicitud")
     check(paso["estadoUnificado"] == "pendiente_revision", "2.5 años de experiencia → «Requiere revisión»")
     r, p = postular(v2, "Prueba Junior", "4439800003", {**base2, su.Q_EXP_MKT: "1", su.Q_SUELDO_MKT: "25000"})
-    check(r.get("descartado") and not p.activa, "1 año de experiencia (< 2) → descartado")
+    # 2026-10-16: la solicitud web NUNCA descarta — lo excluyente queda por confirmar en el chat (o «Requiere revisión»)
+    por_confirmar = ((p.analisis or {}).get("prefiltro_conversacional") or {}).get("confirmar_web") or {}
+    check(not r.get("descartado") and p.activa and (por_confirmar or p.estado == "revision")
+          and any(h.get("evento") == "respuesta_excluyente_web" for h in p.historial or []),
+          f"1 año de experiencia (< 2) → NO se descarta al enviar: se registra y se confirma por WhatsApp ({p.estado})")
     r, p = postular(v2, "Prueba Ok", "4439800004", {**base2, su.Q_EXP_MKT: "6", su.Q_SUELDO_MKT: "28000"})
     paso = next(x for x in sproc.estado_pasos(p) if x["id"] == "solicitud")
     check(not r.get("descartado") and paso["estadoUnificado"] in ("completada", "aprobada"), "6 años y $28,000 → la solicitud cumple")
     base3 = {c["pregunta"]: "Sí" for c in vacante_dict(v3)["criterios"]}
     r, p = postular(v3, "Prueba Maestría", "4439800005", {**base3, su.Q_MAESTRIA: "No"})
-    check(r.get("descartado"), "Director sin maestría → descartado")
+    check(not r.get("descartado") and p.activa and any(h.get("evento") == "respuesta_excluyente_web" for h in p.historial or []),
+          "Director sin maestría → se registra (la web no descarta; lo confirma el chat)")
     # prefiltro por WhatsApp (Intendencia): experiencia < 6 meses → revisión
     maria = postulacion_de("María López Hernández")
     crit = pconv.criterios_de(v1, maria)

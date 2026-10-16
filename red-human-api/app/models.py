@@ -120,6 +120,8 @@ class Vacante(Base):
     plataformas: Mapped[list] = mapped_column(JSON, default=list)
     # Fase 4 (Punto 6): qué cubre la Entrevista IA — ver ENFOQUES_ENTREVISTA (+ «operativo», 2026-10-10).
     enfoque_entrevista: Mapped[str] = mapped_column(String(30), default="profesional")
+    # 2026-10-15 (UVAQ): cómo le habla el agente al candidato de ESTA vacante: «tu» (default) | «usted» (`TRATOS`)
+    trato: Mapped[str] = mapped_column(String(10), default="tu")
     # Plantillas de conversación (2026-10-09): guiones de ESTA vacante por actividad de su ruta — nunca de la Cuenta ni de
     # la plantilla de vacante. {"secciones": {entrevista_whatsapp|entrevista_avatar|llamada: {enfoque, temas[],
     # preguntas[]}}, "meta": {seccion: {generado_en, generado_ia, editado, editado_por, editado_en, huella}}}. Los
@@ -1205,6 +1207,12 @@ class Cuenta(Base):
     canal_mensajeria: Mapped[str] = mapped_column(String(12), default="whatsapp")
     # 2026-10-09: modo de firma de carta + contrato (MODOS_FIRMA); vacío = automático (services/firma_documentos.modo_de)
     modo_firma: Mapped[str] = mapped_column(String(15), default="")
+    # 2026-10-15 (UVAQ): nombre con el que se presenta el agente de ESTA Cuenta («Vasco, asistente de Talento UVAQ»).
+    # Vacío = «Red Human, el agente virtual de [empresa]» (`ia.presentacion_bot`).
+    nombre_agente: Mapped[str] = mapped_column(String(150), default="")
+    # 2026-10-15 (UVAQ): plantillas de Meta que puede usar ESTA Cuenta (`services/plantillas_cuenta.py`). Vacío = las de
+    # siempre. {"permitidas": [...], "mapa": {origen: {"plantilla": destino, "params": transformación}}, "aviso_ventana": …}
+    plantillas_meta: Mapped[dict] = mapped_column(JSON, default=dict)
     estado: Mapped[str] = mapped_column(String(20), default="Activa")  # Activa | Inactiva | Eliminada
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)
@@ -2834,7 +2842,9 @@ ORDEN_FIJO_ETAPA = {
 }
 ACTIVIDAD_AL_FINAL = {"Contratación": "carta_contrato"}
 # Cambio 56: modalidad de evaluación de la Psicometría digital
-MODALIDADES_PSICOMETRIA = {"informativa": "Informativa", "minimos": "Con mínimos por escala"}
+MODALIDADES_PSICOMETRIA = {"informativa": "Informativa", "minimos": "Con mínimos por escala",
+                           "valores": "Escala de valores (1 a 5)"}  # 2026-10-15 (UVAQ): `services/escala_valores.py`
+TRATOS = ("tu", "usted")
 # Descripción fija debajo del nombre de cada etapa en el editor (Cambio 28).
 DESCRIPCION_ETAPA = {
     "Prefiltro": "Solicitud y primeras preguntas.",

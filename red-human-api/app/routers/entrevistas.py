@@ -319,6 +319,8 @@ async def sesion(token: str, datos: Optional[SesionIn] = None, db: Session = Dep
 
     p, v, empresa = _contexto(e)
     saludo = ia.mensaje_inicial_entrevista(v.titulo if v else "", empresa)  # Cambio 31: presentación unificada
+    if ia.trato_usted(v):
+        saludo = ia.a_usted(saludo)  # 2026-10-15 (UVAQ)
     if e.estado != "en_curso":
         e.estado = "en_curso"
         e.iniciada_en = datetime.now(timezone.utc)

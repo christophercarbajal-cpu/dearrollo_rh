@@ -1522,12 +1522,50 @@ AVISO_SILENCIO = "{nombre}, no te escuché. ¿Comenzamos?"
 ESPERA_INICIO = "Tómate tu tiempo, avísame cuando quieras comenzar."
 
 
+_AGENTES = {"en": 0.0, "por_empresa": {}}
+
+
+def agente_de_empresa(empresa: str) -> str:
+    """2026-10-15 (UVAQ): nombre del agente de la Cuenta cuyo nombre comercial es `empresa` («Vasco, asistente de Talento
+    UVAQ»); "" = Red Human. Se lee de la base con un caché de 60 s (la presentación se arma en muchos lugares)."""
+    import time
+
+    empresa = " ".join(str(empresa or "").split())
+    if not empresa:
+        return ""
+    if time.time() - _AGENTES["en"] > 60:
+        try:
+            from ..database import SessionLocal
+            from ..models import Cuenta
+
+            with SessionLocal() as db:
+                filas = db.query(Cuenta.nombre_comercial, Cuenta.nombre_agente).filter(Cuenta.nombre_agente != "").all()
+            _AGENTES["por_empresa"] = {" ".join((n or "").split()): (a or "").strip() for n, a in filas if n and a}
+        except Exception:  # noqa: BLE001 — sin base (pruebas unitarias) o columna aún sin crear: Red Human
+            _AGENTES["por_empresa"] = {}
+        _AGENTES["en"] = time.time()
+    return _AGENTES["por_empresa"].get(empresa, "")
+
+
+def refrescar_agentes() -> None:
+    _AGENTES["en"] = 0.0
+
+
+def precargar_agente(empresa: str, agente: str) -> None:
+    """Lo deja en el caché sin esperar al commit (scripts de configuración que validan dentro de su transacción)."""
+    agente_de_empresa(empresa)  # carga lo de la base si el caché está vencido
+    _AGENTES["por_empresa"][" ".join(str(empresa or "").split())] = (agente or "").strip()
+
+
 def presentacion_bot(empresa: str = "") -> str:
     """La presentación EXACTA del bot en TODAS las rutas (2026-10-13, checklist Grupak; antes «…agente virtual de RH de
     [empresa].»): «Soy Red Human, el agente virtual de [empresa].» La empresa es la de `serial.nombre_empresa_candidato`
     (el Cliente de la vacante si se muestra al candidato; si no, la Cuenta) — la MISMA que usa el cierre. Se dice UNA sola
     vez por postulación (`prefiltro_conversacional.ya_presentado`)."""
     empresa = " ".join(str(empresa or "").split())
+    agente = agente_de_empresa(empresa)
+    if agente:
+        return f"Soy {agente.rstrip('.')}."  # 2026-10-15 (UVAQ): nombre del agente de la Cuenta
     return f"Soy Red Human, el agente virtual de {empresa}." if empresa else "Soy Red Human, el agente virtual de RH."
 
 
@@ -1610,10 +1648,13 @@ def prompt_entrevistador(
     ) or "sin datos adicionales"
     empresa_txt = empresa or "la empresa"
     return (
-        f"Eres Red Human, la entrevistadora de RH (México). Si te presentas, usa EXACTAMENTE «{presentacion_bot(empresa)}» "
-        "(Cambio 31): nunca otro título — nunca como 'asistente virtual', 'agente de inteligencia artificial', 'asistente de "
-        "reclutamiento' ni con un nombre de persona. Si te preguntan directamente si eres una IA, respóndelo "
-        "con naturalidad y sigue. "
+        (f"Eres {agente_de_empresa(empresa).rstrip('.')}, la entrevistadora de RH de {empresa} (México). Si te presentas, usa "
+         f"EXACTAMENTE «{presentacion_bot(empresa)}» y nunca otro nombre. Si te preguntan directamente si eres una IA, respóndelo "
+         "con naturalidad y sigue. " if agente_de_empresa(empresa) else
+         f"Eres Red Human, la entrevistadora de RH (México). Si te presentas, usa EXACTAMENTE «{presentacion_bot(empresa)}» "
+         "(Cambio 31): nunca otro título — nunca como 'asistente virtual', 'agente de inteligencia artificial', 'asistente de "
+         "reclutamiento' ni con un nombre de persona. Si te preguntan directamente si eres una IA, respóndelo "
+         "con naturalidad y sigue. ") +
         f"Entrevistas a {candidato_nombre} para el puesto de {titulo} en {empresa_txt}. "
         f"Cuando hables de la empresa, llámala siempre «{empresa_txt}», nunca de otra forma.\n"
         f"Requisitos indispensables: {requisitos or 'no especificados'}.\n"
@@ -3014,7 +3055,7 @@ PARAFRASIS_DATO = {
     "terminal": "¿En cuál de las terminales te gustaría trabajar?",
     "sueldo": "Solo para tenerlo en cuenta, ¿el sueldo te parece bien?",
 }
-_RE_EXPERIENCIA = re.compile(r"(experiencia|anos|años|meses|tiempo trabajando)", re.IGNORECASE)
+_RE_EXPERIENCIA = re.compile(r"\b(experiencia|anos|años|meses|tiempo trabajando)\b", re.IGNORECASE)
 
 
 _DATO_POR_ETIQUETA = (("traslado", "traslado"), ("colonia", "zona"), ("municipio", "zona"), ("transporte", "transporte"),
@@ -3878,3 +3919,35 @@ def documentos_de_descripcion(*textos) -> list:
     from .documentos_vacante import detectar
 
     return detectar(*textos)
+
+
+# ============================================================ 2026-10-15 (UVAQ): trato de «usted»
+
+REGLA_USTED = ("TRATO (NO NEGOCIABLE): háblale al candidato de USTED en todo momento («¿Cuál es su experiencia…?», «Le "
+               "agradezco», «¿Podría contarme…?»); nunca lo tutees.")
+_USTED = (
+    (r"\btienes\b", "tiene"), (r"\bpuedes\b", "puede"), (r"\bquieres\b", "quiere"), (r"\beres\b", "es"),
+    (r"\bestás\b", "está"), (r"\bestas\b", "está"), (r"\btrabajas\b", "trabaja"), (r"\bharías\b", "haría"),
+    (r"\bpodrías\b", "podría"), (r"\bcuentas\b", "cuenta"), (r"\bvives\b", "vive"), (r"\bterminaste\b", "terminó"),
+    (r"\btrabajaste\b", "trabajó"), (r"\bestuviste\b", "estuvo"), (r"\bllevas\b", "lleva"), (r"\bnecesitas\b", "necesita"),
+    (r"\bte gustaría\b", "le gustaría"), (r"\bte interesa\b", "le interesa"), (r"\bte parece\b", "le parece"),
+    (r"\bte escribir", "le escribir"), (r"\bte contactar", "le contactar"), (r"\bte esperamos\b", "le esperamos"),
+    (r"\bte enviamos\b", "le enviamos"), (r"\bte ayudo\b", "le ayudo"), (r"\bte darán\b", "le darán"),
+    (r"\bte haré\b", "le haré"), (r"\bte lo pregunto\b", "se lo pregunto"), (r"\bte\b", "le"),
+    (r"\btus\b", "sus"), (r"\btu\b", "su"), (r"\bcontigo\b", "con usted"), (r"\bti\b", "usted"),
+    (r"\bescríbeme\b", "escríbame"), (r"\bdime\b", "dígame"), (r"\bsúbelos\b", "súbalos"), (r"\bsúbela\b", "súbala"),
+    (r"\bconfírmame\b", "confírmeme"), (r"\bentra\b", "entre"), (r"\bresponde\b", "responda"), (r"\bavísame\b", "avíseme"),
+)
+
+
+def a_usted(texto: str) -> str:
+    """Pasa un mensaje FIJO del bot de «tú» a «usted» (los generados por la IA ya vienen en usted por `REGLA_USTED`)."""
+    salida = texto or ""
+    for patron, nuevo in _USTED:
+        salida = re.sub(patron, lambda m, n=nuevo: (n[:1].upper() + n[1:]) if m.group(0)[:1].isupper() else n, salida,
+                        flags=re.IGNORECASE)
+    return salida
+
+
+def trato_usted(v) -> bool:
+    return (getattr(v, "trato", "") or "") == "usted"

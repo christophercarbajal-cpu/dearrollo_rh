@@ -1144,7 +1144,15 @@ def dictaminar_automatico(db: Session, ev: Evaluacion) -> Optional[str]:
     if conf is None or ev.tipo != "psicometrica" or ev.conclusion_vigente:
         return None
     datos = dict(ev.resultado_json or {})
-    if conf["modalidad"] == "minimos":
+    if conf["modalidad"] == "valores":
+        # 2026-10-15 (UVAQ): escala de valores 1-5 por nivel — cumple → «Favorable» y avanza; promedio bajo, alerta o
+        # sin dato → «Con observaciones» = «Requiere revisión» (la ruta se detiene; RH decide, nunca descarta sola)
+        from . import escala_valores
+
+        r = escala_valores.evaluar(datos, conf.get("nivel") or "operativo")
+        conclusion, detalle = ("favorable" if r["cumple"] else "con_observaciones"), r["detalle"]
+        datos["evaluacion_red_human"] = r
+    elif conf["modalidad"] == "minimos":
         r = psi.evaluar_minimos(datos, conf.get("minimos") or {})
         conclusion = "favorable" if r["cumple"] else "desfavorable"
         detalle = ("Cumple todos los mínimos por escala" if r["cumple"] else

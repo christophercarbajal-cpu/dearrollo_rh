@@ -173,6 +173,8 @@ def guardar_mensaje(
     Solo un mensaje ENTRANTE del candidato (rol "user") fija la conversación en esa
     postulación; los salientes (rol "assistant") nunca la mueven — ver fijar_conversacion."""
     envio = envio or {}
+    if rol == "assistant":
+        texto = con_trato(p, texto)  # 2026-10-15 (UVAQ): el historial guarda lo MISMO que se envió
     m = Mensaje(
         candidato_id=p.candidato_id, postulacion_id=p.id, rol=rol, texto=texto, canal=canal_registro(canal),
         enviado=envio.get("enviado", False), wa_id=envio.get("wa_id", "") or wa_id,
@@ -183,8 +185,15 @@ def guardar_mensaje(
     return m
 
 
+def con_trato(p: Postulacion, texto: str) -> str:
+    """2026-10-15 (UVAQ): con la vacante en trato de «usted», los mensajes fijos del bot pasan a usted (`ia.a_usted`)."""
+    v = p.vacante if p is not None else None
+    return ia.a_usted(texto) if ia.trato_usted(v) else texto
+
+
 async def _enviar_whatsapp(p: Postulacion, texto: str, canal: str = "whatsapp") -> dict:
     """Envía por WhatsApp si el canal es whatsapp y hay teléfono; que Meta falle nunca tumba el flujo."""
+    texto = con_trato(p, texto)
     if canal != "whatsapp" or not p.telefono:
         return {"enviado": False, "proveedor": "demo"}
     try:

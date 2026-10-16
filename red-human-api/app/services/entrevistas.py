@@ -196,7 +196,8 @@ def system_prompt(e: Entrevista, historial: Optional[list] = None) -> str:
         canal=e.tipo, guion_de_vacante=bool(guion.get("seccion")), bloque_operativo=bloque,
         ya_respondido=[] if bloque else previas,  # Cambio 52 (el bloque operativo ya trae lo respondido)
     ) + (f"\nLA PRIMERA PREGUNTA («{PRIMERA_PREGUNTA_FIJA}») YA SE HIZO en el mensaje de transición: no la repitas ni "
-         "vuelvas a presentarte; toma su respuesta y continúa con la SIGUIENTE pregunta del guion.\n" if e.tipo == "whatsapp" else "")
+         "vuelvas a presentarte; toma su respuesta y continúa con la SIGUIENTE pregunta del guion.\n" if e.tipo == "whatsapp" else "") + (
+        f"\n{ia.REGLA_USTED}\n" if ia.trato_usted(v) else "")  # 2026-10-15 (UVAQ): trato de «usted» por vacante
 
 
 def preguntas_de(e: Entrevista, historial: Optional[list] = None) -> list:

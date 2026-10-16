@@ -288,6 +288,17 @@ async def al_enviar(db: Session, p: Postulacion) -> Optional[dict]:
     resultado, motivo, criterios = evaluar(p)
     a = dict(p.analisis or {})
     a["solicitud_web"] = {"resultado": resultado, "motivo": motivo, "en": _ahora(), "criterios": criterios}
+    if resultado != "no_cumple":
+        # 2026-10-15 (UVAQ): reglas de revisión de la vacante (no excluyentes) → la solicitud queda «Requiere revisión»
+        from . import filtros_revision
+
+        revision = filtros_revision.web(p)
+        if revision:
+            a["solicitud_web"]["revision"] = revision
+            p.historial = list(p.historial or []) + [{"evento": "requiere_revision", "usuario": ACTOR, "fecha": _ahora(),
+                                                      "motivo": "; ".join(revision), "origen": "solicitud_web",
+                                                      "texto": "Solicitud web: requiere revisión de RH — " + "; ".join(revision)}]
+            registrar(db, ACTOR, "solicitud_web_requiere_revision", "postulacion", p.codigo, {"motivos": revision})
     p.analisis = a
     flag_modified(p, "analisis")
     registrar_respuestas(p)

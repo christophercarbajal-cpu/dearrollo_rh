@@ -73,6 +73,15 @@ def ubicacion_vacante(v) -> str:
 
 
 def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
+    """`_criterios_de` + 2026-10-15 (UVAQ): las preguntas con regla de «Requiere revisión» de la vacante
+    (`services/filtros_revision.py`) quedan marcadas con `revision_regla`."""
+    from . import filtros_revision
+
+    salida = _criterios_de(v, p)
+    return filtros_revision.anotar(salida, v) if v is not None else salida
+
+
+def _criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     """Criterios del prefiltro (`_criterios_base`) + Cambio 47: con varias ubicaciones, «¿En qué terminal te gustaría
     trabajar?» justo después de los indispensables (si el candidato no la eligió ya en el formulario web); con la
     terminal elegida, las preguntas de traslado nombran ESA terminal."""
@@ -1035,6 +1044,14 @@ def _evaluar(criterios: List[dict], e: dict) -> Tuple[Optional[str], Optional[di
     siguiente = next((c for c in criterios if falta(c)), None)
     if siguiente:
         return None, None, siguiente
+    # 2026-10-15 (UVAQ): una respuesta que cae en una regla de revisión de la vacante («< 6 meses de experiencia») →
+    # «Requiere revisión» (nunca descarta)
+    from . import filtros_revision
+
+    for c in criterios:
+        r = respuestas.get(c["id"]) or {}
+        if c.get("revision_regla") and filtros_revision.falla(c["revision_regla"], r.get("texto") or r.get("respuesta") or ""):
+            return "revision", c, None
     # Cambio 37: un indispensable que siguió sin resolverse tras su repregunta → «Requiere revisión» (RH decide)
     revision = next((c for c in criterios if c.get("unificado") and c["indispensable"] and (respuestas.get(c["id"]) or {}).get("revision")), None)
     return ("revision", revision, None) if revision else ("cumple", None, None)

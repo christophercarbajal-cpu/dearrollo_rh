@@ -670,6 +670,18 @@ def _valores_plantilla_documentos(c: Postulacion, liga: str, extra: dict) -> dic
     }
 
 
+def ia_trato_usted(p: Postulacion) -> bool:
+    from . import ia
+
+    return ia.trato_usted(p.vacante if p is not None else None)
+
+
+def _ia_a_usted(texto: str) -> str:
+    from . import ia
+
+    return ia.a_usted(texto)
+
+
 async def _enviar_y_registrar(
     db: Session, p: Postulacion, evento: str, destinatario_tipo: str, canal: str, destino: str, contenido,
     plantilla_valores: Optional[dict] = None,
@@ -696,6 +708,13 @@ async def _enviar_y_registrar(
 
     rol = _tg.como_rol(destinatario_tipo)  # Cambio 17: encabezado por rol si el chat de Telegram es candidato Y entrevistador
     rol.__enter__()
+    # 2026-10-15 (UVAQ): la política de plantillas de la Cuenta aplica también a evaluadores (sin cambiarles el canal)
+    from . import plantillas_cuenta as _pc
+
+    ctx_pl = _pc.de_cuenta_plantillas(cuenta_id)
+    ctx_pl.__enter__()
+    if destinatario_tipo == "candidato" and canal == "whatsapp" and isinstance(contenido, str) and ia_trato_usted(p):
+        contenido = _ia_a_usted(contenido)  # 2026-10-15 (UVAQ): trato de «usted» de la vacante
     try:
         if canal == "whatsapp" and plantilla_valores is not None:
             with de_cuenta(cuenta_canal):
@@ -730,6 +749,7 @@ async def _enviar_y_registrar(
         envio = {"enviado": False, "proveedor": "error", "detalle": str(ex)}
     finally:
         rol.__exit__(None, None, None)
+        ctx_pl.__exit__(None, None, None)
     pendiente = envio.get("estado") == "pendiente" and not envio.get("enviado")
     fila = NotificacionEnviada(
         cuenta_id=cuenta_id, candidato_id=candidato_id, evento=evento, destinatario_tipo=destinatario_tipo,

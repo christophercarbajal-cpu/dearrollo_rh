@@ -167,6 +167,17 @@ async def enviar_plantilla(
         resultado = await telegram.enviar_texto(telefono, texto or " ".join(str(x) for x in (parametros or [])))
         resultado["formato"] = "texto"
         return resultado
+    # 2026-10-15 (UVAQ): política de plantillas POR CUENTA — se traduce a una aprobada o no se llama a Meta y el texto
+    # queda pendiente hasta que la persona escriba (`services/plantillas_cuenta.py`)
+    from . import plantillas_cuenta
+
+    decision = plantillas_cuenta.aplicar(plantilla, list(parametros or []))
+    if decision["bloquear"]:
+        plantillas_cuenta.guardar_pendiente(telefono, texto or " ".join(str(x) for x in (parametros or [])), plantilla)
+        print(f"[whatsapp][HSM] «{plantilla}» no está aprobada para esta Cuenta: no se llama a Meta; queda pendiente", flush=True)
+        return {**_resultado(False, decision["detalle"], prov="meta"), "formato": "plantilla", "estado": plantillas_cuenta.ESTADO_VENTANA,
+                "plantilla_bloqueada": plantilla, "error": decision["detalle"]}
+    plantilla, parametros = decision["plantilla"], decision["parametros"]
     componentes = []
     if parametros:
         componentes.append({
@@ -186,6 +197,7 @@ async def enviar_plantilla(
     }
     resultado = await _meta_post(cuerpo)
     resultado["formato"] = "plantilla"
+    resultado["plantilla"] = plantilla  # la que salió de verdad (ya traducida por la política de la Cuenta)
     return resultado
 
 
@@ -210,7 +222,7 @@ async def enviar_plantilla_documentos(telefono: str, valores: dict, texto_fallba
     if settings.whatsapp_provider == "meta" and plantilla:
         claves = [k.strip().lower() for k in (settings.meta_plantilla_documentos_params or "").split(",") if k.strip()]
         parametros = [str(valores.get(k, "") or "-") for k in claves if k in PARAMS_PLANTILLA_DOCUMENTOS]
-        resultado = await enviar_plantilla(telefono, plantilla, parametros, settings.meta_plantilla_idioma)
+        resultado = await enviar_plantilla(telefono, plantilla, parametros, settings.meta_plantilla_idioma, texto=texto_fallback)
         if resultado.get("enviado"):
             resultado["plantilla"] = plantilla
             return resultado
@@ -360,12 +372,12 @@ async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametro
         if libre.get("enviado"):
             libre["formato"] = "texto"
             return libre
-    resultado = await enviar_plantilla(telefono, plantilla, params, idioma)
-    resultado["plantilla"] = plantilla
+    resultado = await enviar_plantilla(telefono, plantilla, params, idioma, texto=texto)
+    resultado["plantilla"] = resultado.get("plantilla_bloqueada") or resultado.get("plantilla") or plantilla
     resultado["formato"] = "plantilla"
     resultado["texto_libre"] = str(libre.get("detalle") or "")
-    if resultado.get("enviado"):
-        return resultado
+    if resultado.get("enviado") or resultado.get("plantilla_bloqueada"):
+        return resultado  # 2026-10-15: bloqueada por la política de la Cuenta → ya quedó pendiente de la ventana
     if es_plantilla_pendiente(resultado):
         resultado["estado"] = "pendiente"
         resultado["pendiente_plantilla"] = True
@@ -391,7 +403,8 @@ async def enviar_plantilla_entrevista(telefono: str, parametros: List[str], text
     if settings.whatsapp_provider == "meta":
         if len(parametros) != 8:
             raise ValueError(f"La plantilla {plantilla} requiere 8 parámetros; llegaron {len(parametros)}")
-        resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma)
+        resultado = await enviar_plantilla(telefono, plantilla, [str(x or "-") for x in parametros], settings.meta_plantilla_idioma,
+                                           texto=texto_fallback)
         if resultado.get("enviado"):
             resultado["plantilla"] = plantilla
             return resultado
@@ -483,6 +496,21 @@ async def enviar_mensaje(telefono: str, texto: str, cuenta_id: Optional[int] = N
         # Fuera de la ventana de 24 h el texto libre no pasa: reintenta con la
         # plantilla aprobada si está configurada.
         if not resultado["enviado"] and resultado.get("codigo") in CODIGOS_FUERA_DE_VENTANA:
+            from . import plantillas_cuenta
+
+            if plantillas_cuenta.politica(plantillas_cuenta.cuenta_actual()):
+                # 2026-10-15 (UVAQ): el texto completo queda pendiente (sale cuando escriba) y, si la Cuenta tiene plantilla
+                # de aviso SIN variables (`aviso_proceso_rh`), se manda para que abra la conversación
+                plantillas_cuenta.guardar_pendiente(telefono, texto)
+                from . import mensajeria
+
+                aviso = plantillas_cuenta.aviso_ventana() if mensajeria._CUENTA.get() else ""  # solo al CANDIDATO
+                if aviso:
+                    alterno = await enviar_plantilla(telefono, aviso, [], texto=texto)
+                    alterno["motivo_fallback"] = resultado["detalle"]
+                    alterno["texto_pendiente"] = True
+                    return alterno
+                return {**resultado, "estado": plantillas_cuenta.ESTADO_VENTANA, "detalle": plantillas_cuenta.TEXTO_VENTANA}
             if settings.meta_plantilla_aviso:
                 alterno = await enviar_plantilla(telefono, settings.meta_plantilla_aviso, [texto])
                 alterno["motivo_fallback"] = resultado["detalle"]

@@ -228,6 +228,11 @@ def normalizar_pasos(pasos: Iterable[dict], previos: Optional[Iterable[dict]] = 
             curso = str(crudo.get("curso") or "").strip()[:40]
             if curso:
                 paso["curso"] = curso  # código del curso (CUR-####); se valida al asignarlo
+        if tipo == "medica":
+            # 2026-10-15 (UVAQ, decisión del usuario): «No apto» descarta solo; «Apto con restricciones» → «Requiere revisión»
+            for bandera in ("no_apto_descarta", "restricciones_revision"):
+                if crudo.get(bandera):
+                    paso[bandera] = True
         if tipo == "documentos" and crudo.get("documentos"):
             paso["documentos"] = [str(d).strip()[:120] for d in crudo["documentos"] if str(d).strip()]
         for bandera in ("adhoc", "heredado", "documentos_vacante"):  # ad hoc / fuera del proceso vigente / docs de la vacante (C25)
@@ -330,6 +335,15 @@ def normalizar_evaluacion_psicometria(crudo, por_defecto: bool = False) -> Optio
     if modalidad not in MODALIDADES_PSICOMETRIA:
         raise ErrorProceso(400, f"Modalidad de la psicometría inválida. Usa una de: {', '.join(MODALIDADES_PSICOMETRIA)}.")
     salida = {"modalidad": modalidad}
+    if modalidad == "valores":
+        # 2026-10-15 (UVAQ): escala de valores 1-5 con reglas por nivel (`services/escala_valores.py`)
+        from .escala_valores import NIVELES, nivel_valido
+
+        nivel = nivel_valido(crudo.get("nivel") or "")
+        if nivel is None:
+            raise ErrorProceso(400, f"La escala de valores necesita el nivel del puesto: {', '.join(NIVELES)}.")
+        salida["nivel"] = nivel
+        return salida
     if modalidad == "minimos":
         minimos = {}
         for escala, valor in (crudo.get("minimos") or {}).items():
@@ -1188,7 +1202,15 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
     revisado = f"Revisado por: {ev.revisada_por}" if ev.revisada_en and ev.revisada_por else (
         f"Resultado de: {ev.realizada_por}" if completada and ev.realizada_por else "Pendiente de revisión")
     extra = {}
-    if completada and ev.tipo == "psicometrica":
+    if completada and ev.tipo == "psicometrica" and revision_valores(ev):
+        # 2026-10-15 (UVAQ): escala de valores bajo el promedio o con alerta → «Requiere revisión» (nunca descarta)
+        extra = {"requiere_revision": True}
+        cumple, espera, legible = False, "Requiere revisión de RH", revision_valores(ev)
+    elif completada and ev.tipo == "medica" and paso.get("restricciones_revision") and conclusion == "apto_con_restricciones":
+        # 2026-10-15 (UVAQ): «Apto con restricciones» → «Requiere revisión»; RH decide si continúa
+        extra = {"requiere_revision": True}
+        cumple, espera = False, "Requiere revisión de RH (apto con restricciones)"
+    elif completada and ev.tipo == "psicometrica":
         from .evaluaciones import TEXTO_NO_CUMPLE_PARAMETRO, no_cumple_parametro
 
         falla = no_cumple_parametro(ev)
@@ -1211,6 +1233,15 @@ def _paso_evaluacion(paso: dict, ev: Optional[Evaluacion]) -> dict:
         "programada": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None) and bool(ev.enviada_en),
         "sin_iniciar_visible": ev.estado == "pendiente" and not getattr(ev, "iniciada_en", None) and not ev.enviada_en,
     }
+
+
+def revision_valores(ev: Optional[Evaluacion]) -> Optional[str]:
+    """Detalle de la escala de valores que requiere revisión (2026-10-15) o None. Si una persona ya cambió el dictamen
+    («Favorable»), manda la persona."""
+    er = ((ev.resultado_json or {}) if ev is not None else {}).get("evaluacion_red_human") or {}
+    if er.get("modalidad") == "valores" and er.get("requiere_revision") and ev.conclusion_vigente == "con_observaciones":
+        return er.get("detalle") or "Requiere revisión"
+    return None
 
 
 def bloque_psicometria(paso: dict, ev: Optional[Evaluacion], ahora: Optional[datetime] = None) -> dict:
@@ -1405,6 +1436,13 @@ def _paso_solicitud(paso: dict, p: Postulacion) -> dict:
     if paso.get("con_cv") and not (p.cv_datos or {}):
         return {**base, "estado": "en_curso", "espera": "Falta el CV del candidato"}
     via = {"formulario": "web", "web": "web", "whatsapp": "WhatsApp", "telegram": "Telegram"}.get(p.origen or "", p.origen or "web")
+    revision = ((p.analisis or {}).get("solicitud_web") or {}).get("revision") or []
+    if revision:
+        # 2026-10-15 (UVAQ): una respuesta de «Unas preguntas» cae en una regla de revisión (p. ej. 2-3 años de
+        # experiencia, expectativa > $30,000): la ruta se detiene y RH decide — nunca descarta
+        return {**base, "estado": "completada", "resultado": "con_observaciones", "cumple": False, "requiere_revision": True,
+                "detalle": "; ".join(revision), "espera": "Requiere revisión de RH", "revisadoPor": "Pendiente de revisión",
+                "terminado_en": _aware(p.consentimiento_fecha or p.creado_en)}
     return {**base, "estado": "completada", "resultado": "favorable", "cumple": True, "detalle": f"Solicitud recibida por {via}",
             "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(p.consentimiento_fecha or p.creado_en)}
 
@@ -3101,6 +3139,11 @@ async def avanzar_seguro(db: Session, p: Optional[Postulacion]) -> List[str]:
     if p is None:
         return []
     try:
+        # 2026-10-15 (UVAQ): «No apto» con la regla de la ruta → descartado (decisión del usuario)
+        from . import dictamen_medico
+
+        if await dictamen_medico.revisar(db, p):
+            return []
         restaurar_tras_agregadas(db, p)  # C12: actividad agregada resuelta → vuelve a su columna original
         # Cambio 42: avance automático en TODAS las Cuentas — la siguiente actividad inicia sola (motor de ruta)
         from . import motor_ruta

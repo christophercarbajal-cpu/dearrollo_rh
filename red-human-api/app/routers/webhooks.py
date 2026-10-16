@@ -890,6 +890,15 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     id_seleccionado = msg.get("id_seleccionado", "")
 
     print(f"[agente] Procesando mensaje de {nombre_wa} ({telefono}): '{texto}' (id_sel='{id_seleccionado}')")
+    if (msg.get("canal") or "whatsapp") == "whatsapp":
+        # 2026-10-15 (UVAQ): la persona escribió (ventana de 24 h abierta) → sale en texto libre lo que quedó pendiente por
+        # no tener plantilla aprobada (`services/plantillas_cuenta.py`)
+        from ..services import plantillas_cuenta
+
+        try:
+            await plantillas_cuenta.entregar_pendientes(db, telefono)
+        except Exception as ex:  # noqa: BLE001 — nunca tumba el turno
+            print(f"[agente] pendientes de ventana: {ex}", flush=True)
 
     forzada = _postulacion_forzada(db, msg)
     if forzada is not None:

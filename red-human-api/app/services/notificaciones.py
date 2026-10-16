@@ -216,6 +216,28 @@ def parametros_plantilla_evaluador(d_eh: dict, d_ev: Optional[dict] = None) -> L
     ]
 
 
+def es_plantilla_medico(nombre: Optional[str]) -> bool:
+    return bool(nombre) and nombre == ((settings.meta_plantilla_medico or "").strip() or _PLANTILLA_ROL_DEFAULT["medico"])
+
+
+def parametros_plantilla_medico(d_eh: dict, d_ev: Optional[dict] = None) -> List[str]:
+    """2026-10-15: `aviso_medico` (aprobada en Meta) lleva 7 variables: {{1}} médico · {{2}} candidato · {{3}} vacante ·
+    {{4}} fecha · {{5}} hora (con zona) · {{6}} lugar · {{7}} liga a SU evaluación. Fecha y hora van separadas."""
+    from ..fechas import ETIQUETA_ZONA
+
+    d_ev = d_ev or {}
+    base = parametros_plantilla_evaluador(d_eh, d_ev)
+    fecha = d_ev.get("fecha_texto") or d_eh.get("fecha") or ""
+    hora = d_ev.get("horario_texto") or d_eh.get("hora") or ""
+    hora = f"{hora} ({ETIQUETA_ZONA})" if hora and ETIQUETA_ZONA not in hora else hora
+    return [base[0], base[1], base[2], fecha or "Por confirmar", hora or "Por confirmar", base[4], base[5]]
+
+
+def parametros_de_plantilla(nombre: Optional[str], d_eh: dict, d_ev: Optional[dict] = None) -> List[str]:
+    """Las variables según la plantilla: 7 para `aviso_medico`, 6 para las demás de evaluador."""
+    return parametros_plantilla_medico(d_eh, d_ev) if es_plantilla_medico(nombre) else parametros_plantilla_evaluador(d_eh, d_ev)
+
+
 def _html_correo_candidato(eh: EntrevistaHumana, c: Postulacion) -> str:
     cuando = _fecha_hora_legible_mx(eh.fecha) if eh.fecha else "fecha por confirmar"
     detalle = _detalle_modalidad(eh, c)
@@ -925,7 +947,7 @@ async def disparar(
             # Cambio 35: todo aviso de cita al evaluador (nuevo, «Reenviar», recordatorio, «Tu cita cambió», cancelación)
             # sale con plantilla de Meta de 6 variables; los demás eventos al entrevistador conservan su texto
             nombre_pl = plantilla_evaluador(evento, d_ev)
-            pl = ((nombre_pl, parametros_plantilla_evaluador(extra.get("_datos_entrevista") or {}, d_ev))
+            pl = ((nombre_pl, parametros_de_plantilla(nombre_pl, extra.get("_datos_entrevista") or {}, d_ev))
                   if nombre_pl and texto else None)
             resultados.append(await _enviar_y_registrar(
                 db, c, evento, "entrevistador", "whatsapp", _whatsapp_entrevistador(db, eh), texto, plantilla_evaluador_=pl,

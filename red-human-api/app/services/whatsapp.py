@@ -315,11 +315,20 @@ async def enviar_plantilla_evaluador(telefono: str, plantilla: str, parametros: 
        plantilla, NUNCA fallido) y `reintento` con lo necesario para volver a intentarlo. Cualquier otro rechazo
        (número inválido, token) es definitivo: `error` legible.
 
-    Por Telegram (sin plantillas) sale `texto`."""
-    if len(parametros) != 6 and settings.whatsapp_provider == "meta" and not _por_telegram(telefono, cuenta_id):
-        raise ValueError(f"La plantilla {plantilla} requiere 6 parámetros; llegaron {len(parametros)}")
+    Por Telegram (sin plantillas) sale `texto`.
+
+    2026-10-15: `aviso_medico` ya está aprobada en Meta — al médico le sale DIRECTO esa plantilla con sus 7 variables
+    [médico, candidato, vacante, fecha, hora, lugar, liga], sin intento de texto libre."""
+    medico = plantilla == PLANTILLA_MEDICO_APROBADA or plantilla == (settings.meta_plantilla_medico or "").strip()
+    esperadas = 7 if medico else 6
+    if len(parametros) != esperadas and settings.whatsapp_provider == "meta" and not _por_telegram(telefono, cuenta_id):
+        raise ValueError(f"La plantilla {plantilla} requiere {esperadas} parámetros; llegaron {len(parametros)}")
     return await enviar_en_cascada(telefono, texto, plantilla, parametros, settings.meta_plantilla_evaluador_idioma or "es_MX",
-                                   cuenta_id=cuenta_id)
+                                   cuenta_id=cuenta_id, directa=medico)
+
+
+# 2026-10-15: plantilla aprobada en Meta para avisar al médico (7 variables)
+PLANTILLA_MEDICO_APROBADA = "aviso_medico"
 
 
 # BYPASS TEMPORAL (demo Fletes 2026-10-15): la plantilla aprobada en Meta es `inicio_entrevista_rh` con UNA variable
@@ -344,7 +353,7 @@ def _bypass_inicio_demo(plantilla: str, params: List[str], idioma: str):
 
 
 async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametros: Optional[List[str]] = None,
-                            idioma: Optional[str] = None, cuenta_id: Optional[int] = None) -> dict:
+                            idioma: Optional[str] = None, cuenta_id: Optional[int] = None, directa: bool = False) -> dict:
     """La cascada del Cambio 46, para cualquier mensaje que deba salir aunque el destinatario no haya escrito (avisos a
     evaluadores, inicio del prefiltro y descarte — Cambio 48):
 
@@ -353,6 +362,8 @@ async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametro
     3. Plantilla inexistente o en revisión (132001…) → `estado="pendiente"` («Pendiente de plantilla», NUNCA fallido) con
        `reintento` {telefono, plantilla, parametros, texto, idioma} para `services/reintento_plantillas.py`. Cualquier otro
        rechazo es definitivo: `error` legible.
+
+    `directa=True` (plantilla ya aprobada, p. ej. `aviso_medico`) salta el paso 1: sale la plantilla sin texto libre.
 
     Por Telegram (sin plantillas) sale `texto`; con otro proveedor, `enviar_mensaje`."""
     if _por_telegram(telefono, cuenta_id):
@@ -363,7 +374,9 @@ async def enviar_en_cascada(telefono: str, texto: str, plantilla: str, parametro
     idioma = idioma or settings.meta_plantilla_idioma or "es_MX"
     forzada = BYPASS_INICIO_DEMO and _es_plantilla_bypass(plantilla)
     plantilla, params, idioma = _bypass_inicio_demo(plantilla, params, idioma)
-    if forzada:
+    if directa and not forzada:
+        libre = _resultado(False, "plantilla aprobada: envío directo sin texto libre")
+    elif forzada:
         # BYPASS demo: primer contacto DIRECTO con la plantilla. Meta responde 200 al texto libre aunque la ventana esté
         # cerrada (el 131047 llega después por el webhook de estados), así que la cascada lo daba por enviado.
         libre = _resultado(False, "bypass demo: sin texto libre")

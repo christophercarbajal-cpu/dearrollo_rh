@@ -85,8 +85,13 @@ whatsapp._meta_post = _meta_falso
 PARAMS = ["Mariana", "Luisa Pérez", "Almacenista", "jueves 15 de octubre, 10:30", "Av. Patria 100", "https://app/evaluacion/x"]
 
 
+PARAMS_MEDICO = ["Mariana", "Luisa Pérez", "Almacenista", "jueves 15 de octubre", "10:30 (hora de Ciudad de México)", "Av. Patria 100",
+                 "https://app/evaluacion/x"]
+
+
 def enviar(plantilla="aviso_evaluador_rh"):
-    return asyncio.run(whatsapp.enviar_plantilla_evaluador("3399998888", plantilla, PARAMS, "Hola Mariana, tienes una entrevista."))
+    params = PARAMS_MEDICO if plantilla == "aviso_medico" else PARAMS
+    return asyncio.run(whatsapp.enviar_plantilla_evaluador("3399998888", plantilla, params, "Hola Mariana, tienes una entrevista."))
 
 
 # ================= Cambio 46 · mapeo de plantillas =================
@@ -120,7 +125,7 @@ print("\n--- Cambio 46 · plantilla en revisión = «Pendiente de plantilla», n
 MODO.update(texto=False, plantilla="pendiente")
 r = enviar("aviso_medico")
 check(not r.get("enviado") and r.get("estado") == "pendiente" and r.get("pendiente_plantilla")
-      and r["reintento"]["plantilla"] == "aviso_medico" and r["reintento"]["parametros"] == PARAMS,
+      and r["reintento"]["plantilla"] == "aviso_medico" and r["reintento"]["parametros"] == PARAMS_MEDICO,
       "132001 → estado «pendiente» con lo necesario para reintentar")
 check(whatsapp.es_plantilla_pendiente({"enviado": False, "detalle": "(#132001) Template name does not exist"})
       and whatsapp.es_plantilla_pendiente({"enviado": False, "detalle": "Template is pending review", "codigo": 100})

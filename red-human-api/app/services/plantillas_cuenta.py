@@ -101,10 +101,20 @@ TRANSFORMACIONES = {
 }
 
 
+def aprobadas_globales() -> set:
+    """Plantillas que Meta ya aprobó para la plataforma: salen tal cual en TODAS las Cuentas (la política de una Cuenta
+    no las traduce ni las bloquea). 2026-10-15: `aviso_medico` (7 variables)."""
+    from ..config import settings
+
+    return {"aviso_medico", (settings.meta_plantilla_medico or "").strip()} - {""}
+
+
 def aplicar(plantilla: str, parametros: Optional[List[str]], cuenta_id: Optional[int] = None) -> dict:
     """{"bloquear": bool, "plantilla", "parametros", "detalle"} según la política de la Cuenta del envío."""
-    pol = politica(cuenta_id if cuenta_id is not None else cuenta_actual())
     params = list(parametros or [])
+    if plantilla in aprobadas_globales():
+        return {"bloquear": False, "plantilla": plantilla, "parametros": params}
+    pol = politica(cuenta_id if cuenta_id is not None else cuenta_actual())
     if not pol:
         return {"bloquear": False, "plantilla": plantilla, "parametros": params}
     destino = (pol.get("mapa") or {}).get(plantilla)

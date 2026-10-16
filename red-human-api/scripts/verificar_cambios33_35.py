@@ -223,11 +223,13 @@ with TestClient(app) as client:
                 json={"nombre": "Carla Cita", "acepto": True})
     al_medico = [c for c in ENVIADOS[desde:] if c.get("to") == "523311112222"]
     check(al_medico and al_medico[-1].get("type") == "template"
-          and al_medico[-1]["template"]["name"] == "aviso_medico" and len(al_medico[-1]["template"]["components"][0]["parameters"]) == 6,
-          f"fuera de la ventana de 24 h al médico le llega la plantilla «aviso_medico» de 6 variables ({[c.get('type') for c in al_medico]})")
+          and al_medico[-1]["template"]["name"] == "aviso_medico" and len(al_medico[-1]["template"]["components"][0]["parameters"]) == 7,
+          f"al médico le llega la plantilla aprobada «aviso_medico» de 7 variables ({[c.get('type') for c in al_medico]})")
+    check(all(c.get("type") == "template" for c in al_medico), "el médico no recibe intento de texto libre: la plantilla sale directa")
     ps = [x["text"] for x in al_medico[-1]["template"]["components"][0]["parameters"]]
-    check(ps[0] == "Dra. Paula Médica" and ps[1] == "Carla Cita" and ps[2] == "Repartidor" and "Clínica Centro" in ps[4] and "/evaluacion/" in ps[5],
-          f"[nombre_evaluador, candidato, puesto, fecha_y_hora, lugar, liga] → {ps}")
+    check(ps[0] == "Dra. Paula Médica" and ps[1] == "Carla Cita" and ps[2] == "Repartidor" and "," not in ps[3] and ":" in ps[4]
+          and "Ciudad de México" in ps[4] and "Clínica Centro" in ps[5] and "/evaluacion/" in ps[6],
+          f"[médico, candidato, vacante, fecha, hora, lugar, liga] → {ps}")
     RECHAZAR["plantilla"] = "aviso_medico"
     r = client.post(f"/evaluaciones/{ev}/ligas/evaluador/enviar")
     RECHAZAR["plantilla"] = None

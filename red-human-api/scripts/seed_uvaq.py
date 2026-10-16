@@ -740,7 +740,7 @@ def validar(db, cu: Cuenta, vacantes: dict, con_candidatos: bool = True) -> list
     for origen in ("inicio_entrevista_rh", "entrevista_video_rh", "aviso_evaluador_rh", "aviso_medico", "alerta_entrevista_asig",
                    "oferta_laboral_rh", "aviso_proceso_rh"):
         r = plantillas_cuenta.aplicar(origen, ["Juan Pérez", "x", "y", "lunes 20, 10:00 (hora de Ciudad de México)", "z", "w", "v", "u"], cu.id)
-        if r["bloquear"] or r["plantilla"] not in PLANTILLAS_APROBADAS:
+        if r["bloquear"] or r["plantilla"] not in set(PLANTILLAS_APROBADAS) | plantillas_cuenta.aprobadas_globales():
             problemas.append(f"Plantilla «{origen}» → «{r['plantilla']}» no anclada a las aprobadas")
     for origen in ("descarte_postulacion_rh", "solicitud_documentos_rh", "recordatorio_psicometria_rh", "cita_cambio_evaluador_rh",
                    "cita_cancelada_evaluador_rh"):

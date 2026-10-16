@@ -145,6 +145,13 @@ with TestClient(app) as client:
                                                                                 "10:00 (hora de Ciudad de México)", "https://x/ev"])],
           f"aviso al jefe → «alerta_entrevista_asignada» (6 variables) → {plantillas_a('4439900098', desde)}")
     desde = len(ENVIADOS)
+    medico = ["Dr. Juan", "Eduardo Rodríguez", su.V2, "martes 20 de octubre", "10:00 (hora de Ciudad de México)", "Campus Morelia",
+              "https://x/ev"]
+    with plantillas_cuenta.de_cuenta_plantillas(cu.id):
+        r = asyncio.run(whatsapp.enviar_plantilla_evaluador("4439900097", "aviso_medico", medico, "Tienes un examen médico"))
+    check(plantillas_a("4439900097", desde) == [("aviso_medico", medico)],
+          f"aviso al médico → «aviso_medico» aprobada (7 variables) → {plantillas_a('4439900097', desde)}")
+    desde = len(ENVIADOS)
     with mensajeria.de_cuenta(cu.id):
         r = asyncio.run(whatsapp.enviar_en_cascada(tel, "Gracias por tu interés en UVAQ…", "descarte_postulacion_rh", ["UVAQ"]))
     check(not plantillas_a(tel, desde) and r.get("estado") == plantillas_cuenta.ESTADO_VENTANA,

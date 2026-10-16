@@ -188,7 +188,8 @@ with TestClient(app) as client:
     cdmx = next(t for t in terminales if t.nombre == "Terminal CDMX")
     check("Supermanzana Km 2.1" in mty.direccion and "Tultepec" in cdmx.direccion and cdmx.ubicacion_estado == "Estado de México",
           "terminales con dirección real (Monterrey, CDMX en Tultepec)")
-    check(next(t for t in terminales if t.nombre == "Terminal Guadalajara").direccion == sf.DEMO, "Guadalajara con «(dirección de demo)»")
+    check(next(t for t in terminales if t.nombre == "Terminal Guadalajara").direccion == "Conocido, Guadalajara, Jalisco",
+          "Guadalajara sin dirección exacta: «Conocido, Guadalajara, Jalisco» (nunca «(dirección de demo)»)")
     sf.asegurar_ubicaciones(db, cu)
     sf.asegurar_proceso(db, cu, u, sf.PROCESO_A, sf.pasos_proceso_a(u.id), "A")
     sf.asegurar_vacante(db, cu, cl, u, pa, terminales, sf.VACANTES[0], publicar=True)

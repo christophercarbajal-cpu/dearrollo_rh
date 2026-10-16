@@ -1213,6 +1213,9 @@ class Cuenta(Base):
     # 2026-10-15 (UVAQ): plantillas de Meta que puede usar ESTA Cuenta (`services/plantillas_cuenta.py`). Vacío = las de
     # siempre. {"permitidas": [...], "mapa": {origen: {"plantilla": destino, "params": transformación}}, "aviso_ventana": …}
     plantillas_meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 2026-10-16: cómo llama ESTA Cuenta a sus ubicaciones al hablar con el candidato («sede», «campus», «terminal»…).
+    # Vacío = se infiere de los nombres de sus ubicaciones (`services/opciones_vacante.termino_ubicacion`).
+    termino_ubicacion: Mapped[str] = mapped_column(String(30), default="")
     estado: Mapped[str] = mapped_column(String(20), default="Activa")  # Activa | Inactiva | Eliminada
     creada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora)
     actualizada_en: Mapped[datetime] = mapped_column(FechaUTC(), default=ahora, onupdate=ahora)

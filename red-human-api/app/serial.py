@@ -152,6 +152,14 @@ def _criterios_solicitud(v) -> list:
     return ssw.criterios_web(v)
 
 
+def _con_pregunta_ubicacion(criterios: list, v) -> list:
+    """2026-10-16: la pregunta de ubicación va UNA vez — si un requisito de la vacante ya es la elección de sede (en su
+    lugar), no se agrega otra al final."""
+    if any(q.get("dato") == "terminal" or q.get("ubicacion") for q in criterios):
+        return criterios
+    return criterios + _pregunta_terminal(v)
+
+
 def _pregunta_terminal(v) -> list:
     """Cambio 47: con varias ubicaciones, el formulario web pregunta «¿En qué terminal te gustaría trabajar?» (opción)."""
     from .services import ubicaciones as subic
@@ -243,7 +251,7 @@ def vacante_dict(
         "preguntas_filtro": texto_preguntas(v.preguntas_filtro),
         # Cambio 27: los formularios web solo ofrecen Sí / No — un «Parcial» guardado antes nunca llega a la pantalla
         # Cambio 50: «Unas preguntas» = preguntas filtro + interés + sueldo (+ edad / colonia si la vacante los pide)
-        "criterios": _criterios_solicitud(v) + _pregunta_terminal(v),
+        "criterios": _con_pregunta_ubicacion(_criterios_solicitud(v), v),
         # Cambio 47: ubicaciones de la vacante (muchos-a-muchos)
         "ubicaciones": _ubicaciones(v),
         "posiciones": getattr(v, "posiciones", None),

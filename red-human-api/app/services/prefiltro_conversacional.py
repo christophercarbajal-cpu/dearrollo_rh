@@ -89,37 +89,63 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
 
 
 def _criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
-    """Criterios del prefiltro (`_criterios_base`) + Cambio 47: con varias ubicaciones, «¿En qué terminal te gustaría
+    """Criterios del prefiltro (`_criterios_base`) + Cambio 47: con varias ubicaciones, «¿En qué [sede] te gustaría
     trabajar?» justo después de los indispensables (si el candidato no la eligió ya en el formulario web); con la
-    terminal elegida, las preguntas de traslado nombran ESA terminal."""
+    ubicación elegida, las preguntas de traslado nombran ESA ubicación.
+    2026-10-16: un requisito de sede de la vacante ES esa pregunta (nunca dos preguntas de sede; si es indispensable,
+    «ninguna» descarta) y un requisito de turno con turnos capturados se pregunta como opción («¿En qué turno…?»). Si el
+    candidato ya dijo dónde vive y ahí hay sede, se le PROPONE esa sede («Tenemos sede en Pátzcuaro, ¿te queda bien?»)."""
     salida = _criterios_base(v, p)
     if v is None:
         return salida
+    from . import opciones_vacante as ov
     from . import solicitud_web as ssw
     from . import ubicaciones as subic
 
+    salida = [ov.criterio_turno(v, c) if ov.es_requisito_turno(v, c.get("criterio"), c.get("pregunta")) else c for c in salida]
+    i_sede = next((k for k, c in enumerate(salida) if c.get("dato") not in ("terminal", "turno")
+                   and ov.es_requisito_sede(v, c.get("criterio"), c.get("pregunta"))), None)
+    sede_base = salida.pop(i_sede) if i_sede is not None else None
     elegida = subic.ubicacion_de(None, p) if p is not None and p.ubicacion_id else None
     for c in salida:
         if c.get("dato") == "interes":
-            # Cambio 51: «El puesto es [puesto] en [ciudad, estado]. ¿Te interesa?» (la terminal elegida manda)
+            # Cambio 51: «El puesto es [puesto] en [ciudad, estado]. ¿Te interesa?» (la ubicación elegida manda)
             c["chat"] = c["pregunta"] = ssw.pregunta_interes(v, elegida)
     salida = _con_reubicacion(salida, v, p, elegida)
     if elegida is not None:
         for c in salida:
             if c.get("dato") == "traslado":
                 # Fletes (2026-10-15): «La Terminal [ciudad] está en [dirección]. ¿Cuánto tiempo harías de tu casa?»
-                c["chat"] = c["pregunta"] = (f"La {elegida.nombre} está en {elegida.direccion.strip().rstrip('.')}. ¿Cuánto tiempo harías "
-                                             f"de tu casa?" if (elegida.direccion or "").strip() else
-                                             f"¿Cuánto tiempo harías de tu casa a {elegida.nombre}?")
+                # 2026-10-16: con el término de la Cuenta («La sede Morelia está en…», nunca «La Morelia»)
+                from .autoagenda import con_articulo
+
+                lugar = con_articulo(ov.nombre_largo(elegida))
+                direccion = ov.direccion_util(elegida)
+                c["chat"] = c["pregunta"] = (f"{lugar[:1].upper()}{lugar[1:]} está en {direccion}. ¿Cuánto tiempo harías de tu casa?"
+                                             if direccion else f"¿Cuánto tiempo harías de tu casa a {lugar}?")
             elif c.get("dato") == "puede_trasladarse":
                 c["chat"] = c["pregunta"] = f"El trabajo es en {elegida.nombre}. ¿Puedes trasladarte?"
         return salida
     terminal = subic.criterio_chat(None, v)
     if terminal is None:
-        return salida
+        return salida if sede_base is None else salida[:i_sede] + [sede_base] + salida[i_sede:]
+    if sede_base is not None:
+        # el requisito de sede de la vacante (su texto y si descarta) con la pregunta de opción
+        terminal.update({"criterio": sede_base["criterio"], "indispensable": bool(sede_base.get("indispensable")),
+                         "textos_web": [x for x in (sede_base.get("pregunta"), sede_base.get("pregunta_web")) if x]})
+        if terminal["indispensable"]:
+            terminal.pop("registra", None)
+    if p is not None:
+        prop = (estado(p).get("propuesta_sede") or
+                ov.propuesta_por_zona(v, str(((p.analisis or {}).get("prefiltro_datos") or {}).get("zona") or "")))
+        if prop:
+            corto = next((subic.corto(u) for u in subic.de_vacante(None, v) if u.id == prop.get("id")), prop.get("nombre"))
+            terminal.update({"propuesta": prop, "chat": ov.texto_propuesta(v, corto)})
+    if sede_base is not None:
+        return salida[:i_sede] + [terminal] + salida[i_sede:]
     i = 0
     while i < len(salida) and ((salida[i].get("indispensable") and not salida[i].get("base")) or salida[i].get("dato") == "propia"):
-        i += 1  # 2026-10-15: las preguntas propias de RH van con su requisito (antes de la terminal)
+        i += 1  # 2026-10-15: las preguntas propias de RH van con su requisito (antes de la ubicación)
     return salida[:i] + [terminal] + salida[i:]
 
 
@@ -662,11 +688,32 @@ def clasificar_dato_prefiltro(c: dict, texto: str) -> Tuple[Optional[str], dict]
 
         return pop.clasificar(c, texto)
     if dato == "terminal":
-        # Cambio 47: la terminal donde quiere trabajar (nombre, ciudad o estado); ambigua → se repregunta una vez
+        # Cambio 47: la ubicación donde quiere trabajar (nombre, ciudad o estado); ambigua → se repregunta una vez.
+        # 2026-10-16: «vivo en Pátzcuaro» → se PROPONE esa sede; con una propuesta vigente, «sí» la elige y «no» vuelve a
+        # preguntar; «ninguna» = no cumple (si el requisito de sede es indispensable, descarta).
+        from . import opciones_vacante as ov
         from . import ubicaciones as subic
 
         o = subic.elegir_en(c.get("ubicaciones") or [], texto)
-        return (None, {}) if o is None else ("si", {"ubicacion": o})
+        prop = c.get("propuesta")
+        if prop:
+            if o is not None and o.get("id") != prop.get("id"):
+                return "si", {"ubicacion": o}
+            sentido = clasificar({"criterio": "", "pregunta": "", "chat": ""}, texto)
+            if o is not None or sentido == "si":
+                return "si", {"ubicacion": prop}
+            if sentido == "no":
+                return None, {"rechaza_propuesta": True}
+        if o is None:
+            return ("no", {}) if ov.niega(texto) else (None, {})
+        if ov.vive_en(texto) and not prop:
+            return None, {"propuesta": o}
+        return "si", {"ubicacion": o}
+    if dato == "turno":
+        # 2026-10-16: el turno de la vacante como opción (código, horario o «matutino»/«mixto»); «ninguno» = no cumple
+        from . import opciones_vacante as ov
+
+        return ov.clasificar_turno(c.get("turnos") or [], texto)
     if dato == "escolaridad":
         nivel, terminado = nivel_estudios(texto)
         if nivel is None:
@@ -704,6 +751,8 @@ def guardar_datos(p: Postulacion, c: dict, texto: str, extra: dict) -> None:
     a = dict(p.analisis or {})
     d = dict(a.get("prefiltro_datos") or {})
     d[c["dato"]] = texto.strip()[:200]
+    if c["dato"] == "turno" and extra.get("turno"):
+        d["turno_codigo"] = extra["turno"]  # 2026-10-16: el turno que eligió (la ficha lo muestra)
     if c["dato"] == "traslado":
         d["traslado_min"] = extra.get("minutos")
     elif c["dato"] == "transporte":
@@ -989,6 +1038,23 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
     from . import solicitud_web as ssw
 
     for c in criterios:
+        if c["id"] not in respuestas and c.get("dato") in ("turno", "terminal") and c.get("textos_web"):
+            # 2026-10-16: turno o sede ya contestados en la solicitud (también con la pregunta Sí/No de antes) → el chat no
+            # los repite. La sede solo se toma si dijo cuál (o «No» a un requisito de sede); un «Sí» a secas se pregunta.
+            from . import opciones_vacante as ov
+
+            valor_o = next((web.get(_norm(t)) for t in c["textos_web"] + [c["pregunta"]] if web.get(_norm(t))), None)
+            if valor_o:
+                if c["dato"] == "turno":
+                    sentido_o, extra_o = ov.clasificar_turno(c.get("turnos") or [], valor_o)
+                    if sentido_o is None and _norm(valor_o).split(" ")[0] in ("si", "no"):
+                        sentido_o, extra_o = ("si" if _norm(valor_o).startswith("si") else "no"), {}
+                else:
+                    sentido_o, extra_o = ("no", {}) if (ov.niega(valor_o) or _norm(valor_o) == "no") else (None, {})
+                if sentido_o is not None:
+                    respuestas[c["id"]] = {"respuesta": valor_o, "valor": sentido_o, "fuente": "web", "en": _ahora(), **extra_o}
+                    guardar_datos(p, c, valor_o, extra_o)
+                    continue
         if c["id"] not in respuestas and c.get("expectativa"):
             # 2026-10-16: la expectativa de sueldo se pregunta UNA vez — si ya la dio en la solicitud, el chat no la repite
             valor_x = ssw.respuesta_web(p, c)
@@ -1017,8 +1083,9 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
             # Cambio 22: la brecha del CV se pregunta en el chat aunque el formulario dijera «Sí»; Cambio 29: en el
             # prefiltro operativo cada indispensable se confirma con un dato concreto en el chat
             continue
-        if c.get("unificado") and c.get("pregunta_web"):
-            # Cambio 47: vigencia — el web es Sí/No: un «No» descarta; un «Sí» se confirma en el chat con la FECHA
+        if c.get("unificado") and c.get("pregunta_web") and _norm(c["pregunta_web"]) != _norm(c["pregunta"]):
+            # Cambio 47: vigencia (2026-10-16: solo si el chat pide un dato DISTINTO; si es la misma pregunta Sí/No, la
+            # respuesta de la web basta y el chat no la repite) — el web es Sí/No: un «No» descarta; un «Sí» se confirma en el chat con la FECHA
             valor_w = web.get(_norm(c["pregunta_web"]))
             if valor_w and _norm(valor_w) == "no":
                 respuestas[c["id"]] = {"respuesta": valor_w, "valor": "no", "fuente": "web", "en": _ahora()}
@@ -1530,6 +1597,35 @@ async def desde_web(db: Session, p: Postulacion) -> Optional[str]:
 
 # ============================================================ turno del chat
 
+# 2026-10-16: actividades que la ruta ejecuta sola (el agente o el candidato, sin una persona de RH)
+TIPOS_AUTOMATICOS = ("psicometrica", "entrevista_agente", "entrevista_whatsapp", "llamada_agente", "solicitud_documentos", "referencias",
+                     "documentos", "solicitud_web", "prefiltro_whatsapp", "induccion")
+
+
+def paso_siguiente_automatico(p: Postulacion) -> Optional[dict]:
+    """La siguiente actividad de la ruta SI es automática (la hace el agente o el candidato); None si lo que sigue es una
+    acción manual de RH, no hay ruta o ya no quedan pasos (entonces sí va el cierre «una persona de RH te escribirá»)."""
+    from . import proceso as sproc
+
+    try:
+        if not sproc.tiene_proceso(p):
+            return None
+        pasos = sproc.estado_pasos(p)
+        if sproc.accion_humana(p, pasos) is not None:
+            return None
+        corto = sproc.siguiente_actividad(p, pasos=pasos)
+        x = next((y for y in pasos if corto and y["id"] == corto["id"]), None)
+    except Exception:  # noqa: BLE001 — ante la duda, el cierre de siempre
+        return None
+    if x is None:
+        return None
+    if x.get("tipo") in TIPOS_AUTOMATICOS and not (x.get("tipo") == "psicometrica" and x.get("modalidad") == "fisica"):
+        return x
+    if sproc.es_presencial(x) and x.get("tipo_agenda") == "candidato":
+        return x  # la agenda el candidato (autoagenda)
+    return None
+
+
 def empresa_de(p: Postulacion) -> str:
     """Cambio 31: la empresa de la presentación y del cierre (una sola regla: `serial.nombre_empresa_candidato`)."""
     from ..serial import nombre_empresa_candidato
@@ -1788,6 +1884,21 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         # concreto; si sigue vaga queda en Puntos por validar y se continúa. Nunca se toma como «No».
         valor, extra = (None, {}) if (_RE_NO_ENTIENDE.fullmatch(limpiar(texto)) or es_pregunta_de_vuelta(texto)) \
             else clasificar_dato_prefiltro(pendiente, texto)
+        if pendiente.get("dato") == "terminal" and (extra.get("propuesta") or extra.get("rechaza_propuesta")):
+            # 2026-10-16: «vivo en Pátzcuaro» → «Tenemos sede en Pátzcuaro, ¿te queda bien?»; si no le queda, las opciones
+            from types import SimpleNamespace
+
+            from . import opciones_vacante as ov
+            from . import ubicaciones as subic
+
+            if extra.get("propuesta"):
+                e["propuesta_sede"] = extra["propuesta"]
+                corto = subic.corto(SimpleNamespace(nombre=extra["propuesta"].get("nombre") or ""))
+                return await responder(ov.texto_propuesta(p.vacante, corto), aclaracion=True)
+            e.pop("propuesta_sede", None)
+            return await responder(pendiente.get("repregunta") or "¿En cuál te gustaría trabajar?", aclaracion=True)
+        if pendiente.get("dato") == "terminal":
+            e.pop("propuesta_sede", None)
         if valor is None and not aclaraciones.get(pendiente["id"]):
             aclaraciones[pendiente["id"]] = 1
             e["aclaraciones"] = aclaraciones
@@ -1902,6 +2013,15 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         # la ruta ya mandó el siguiente paso (Entrevista por WhatsApp en este chat, liga o propuesta de cita)
         return {"respuesta": ultimo.texto, "clasificacion": {"estado": "cumple", "evidencia": ""}, "ia": False,
                 "whatsapp": {"enviado": bool(ultimo.enviado)}, "prefiltro": "cumple"}
+    # 2026-10-16 (decisión del usuario): el cierre «una persona de RH te escribirá» SOLO si lo que sigue es manual (o ya
+    # no hay más pasos). Si lo que sigue es automático y todavía no salió (p. ej. falta el CV), se dice qué falta.
+    siguiente_auto = paso_siguiente_automatico(p)
+    if siguiente_auto is not None:
+        _n1 = (nombre_ficha(p) or "").split(" ")[0]
+        falta = str(siguiente_auto.get("espera") or "").strip().rstrip(".")
+        mensaje = (f"Gracias{', ' + _n1 if _n1 and not _n1.startswith('Candidato') else ''}. Registré tus respuestas."
+                   + (f" Para continuar: {falta[:1].lower()}{falta[1:]}." if falta else ""))
+        return await responder(mensaje, clasificacion={"estado": "cumple", "evidencia": ""})
     # retro 2026-10-09: sin valoraciones ni promesas de avance («Tu perfil es compatible» está prohibido)
     _emp = empresa_de(p)  # Cambio 31: misma empresa que la presentación
     mensaje = (f"Gracias, {nombre_ficha(p).split(' ')[0]}. Registré tus respuestas; una persona del equipo de RH{' de ' + _emp if _emp else ''} te escribirá "

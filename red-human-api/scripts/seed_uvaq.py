@@ -10,7 +10,7 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `proc
      candidato de su cita con el jefe / Rectoría; `alerta_entrevista_asignada` para el jefe o el panel (el aviso al
      evaluador `aviso_evaluador_rh` se traduce a ella); `oferta_laboral_rh`. Ninguna otra sale: lo demás va en texto
      libre dentro de la ventana de 24 h (si está cerrada, queda pendiente y sale en cuanto la persona escriba).
-  2. 13 sedes (Ubicaciones, «dirección de demo», L-V 9:00 y 12:00). Turnos MAT-01 (06:00–14:00 L-V), MAT-03
+  2. 13 sedes (Ubicaciones, dirección «Conocido, [municipio], [estado]», L-V 9:00 y 12:00; la Cuenta las llama «sede»). Turnos MAT-01 (06:00–14:00 L-V), MAT-03
      (08:00–16:00 L-V), MIX-02 (13:00–21:00 L-V) y ADM-01 (09:00–18:00 L-V) en la vacante (`Vacante.guiones["turnos"]`) y en
      la pregunta de horario.
   3. Escala de valores UVAQ 1-5 (Dignidad, Espíritu de servicio, Honestidad, Responsabilidad, Compromiso, Trabajo en
@@ -96,7 +96,14 @@ POLITICA_PLANTILLAS = {
 }
 
 # ============================================================ 2. sedes y turnos
-DEMO = "(dirección de demo)"
+TERMINO_UBICACION = "sede"  # 2026-10-16: vocabulario de la Cuenta («¿En qué sede te gustaría trabajar?»)
+
+
+def direccion_sede(nombre: str, municipio: str, estado: str) -> str:
+    """Sin la dirección exacta: «Conocido, Pátzcuaro, Michoacán» (2026-10-16: nunca «(dirección de demo)»)."""
+    return ", ".join(x for x in ("Conocido", municipio or nombre, estado) if x)
+
+
 HORARIOS_CITAS = [{"dias": [0, 1, 2, 3, 4], "horas": ["09:00", "12:00"], "cupo": 5}]
 SEDES = [  # (nombre, estado, municipio)
     ("Morelia", "Michoacán", "Morelia"), ("Pátzcuaro", "Michoacán", "Pátzcuaro"), ("Quiroga", "Michoacán", "Quiroga"),
@@ -175,8 +182,9 @@ V1, V2, V3 = "Auxiliar de Intendencia", "Jefe(a) de Departamento de Mercadotecni
 CASO_ZAMORA = "La matrícula de primer ingreso en Zamora bajó 15 %. ¿Qué haría en los próximos 90 días?"
 CASO_RECTORIA = ("Rectoría le pide decidir si abre o cierra la oferta de licenciaturas en una sede con baja matrícula. ¿Qué "
                  "información pide y cómo decide?")
-Q_SEDE = "¿Puedes trabajar en Morelia, Pátzcuaro o Zamora?"
-Q_TURNO = "¿Puedes trabajar en alguno de estos turnos de lunes a viernes: 6:00 a 14:00, 8:00 a 16:00 o 13:00 a 21:00?"
+# 2026-10-16: sede y turno se preguntan como OPCIÓN y se evalúan (`services/opciones_vacante.py`); «ninguna» descarta
+Q_SEDE = "¿En qué sede te gustaría trabajar?"
+Q_TURNO = "¿En qué turno te gustaría trabajar?"
 Q_ESTUDIOS = "¿Cuál es tu último grado de estudios?"
 Q_EXP_INT = "¿Cuánto tiempo de experiencia tienes en limpieza o intendencia?"
 Q_TITULO = "¿Tienes licenciatura titulada?"
@@ -271,6 +279,7 @@ def asegurar_cuenta(db) -> Cuenta:
     else:
         nota(f"Cuenta existente: {cu.nombre_visible} (id {cu.id}, slug {cu.slug})")
     cu.nombre, cu.nombre_comercial, cu.canal_mensajeria = NOMBRE, NOMBRE, "whatsapp"
+    cu.termino_ubicacion = TERMINO_UBICACION
     if cu.nombre_agente != AGENTE or (cu.plantillas_meta or {}) != POLITICA_PLANTILLAS:
         cu.nombre_agente = AGENTE
         cu.plantillas_meta = dict(POLITICA_PLANTILLAS)
@@ -304,12 +313,14 @@ def asegurar_sedes(db, cu: Cuenta) -> dict:
     for nombre, estado, municipio in SEDES:
         u = db.query(Ubicacion).filter(Ubicacion.cuenta_id == cu.id, Ubicacion.nombre == nombre).first()
         if u is None:
-            u = Ubicacion(cuenta_id=cu.id, nombre=nombre, direccion=f"Campus {nombre} {DEMO}", indicaciones="Presenta tu INE original.",
-                          ubicacion_estado=estado, ubicacion_municipio=municipio,
+            u = Ubicacion(cuenta_id=cu.id, nombre=nombre, direccion=direccion_sede(nombre, municipio, estado),
+                          indicaciones="Presenta tu INE original.", ubicacion_estado=estado, ubicacion_municipio=municipio,
                           horarios_citas=subic.normalizar_horarios(HORARIOS_CITAS), activa=True)
             db.add(u)
             db.flush()
             registrar(db, ACTOR, "ubicacion_creada", "ubicacion", str(u.id), {"nombre": nombre})
+        elif "dirección de demo" in (u.direccion or ""):
+            u.direccion = direccion_sede(nombre, municipio, estado)  # 2026-10-16: limpia la dirección sembrada antes
         u.activa = True
         salida[nombre] = u
     ok(f"{len(SEDES)} sedes: {', '.join(n for n, _, _ in SEDES)}")
@@ -343,6 +354,8 @@ def configurar_preguntas(v: Vacante, d: dict) -> None:
         q.pop("pregunta_web", None)
         if pregunta in (Q_EXP_INT, Q_EXP_MKT, Q_SUELDO_MKT):
             q["tipo"] = "numero" if pregunta != Q_EXP_INT else "abierta"  # el número se compara con su regla (no Sí/No)
+        elif pregunta in (Q_SEDE, Q_TURNO):
+            q["tipo"] = "opcion"  # las opciones salen de las sedes y los turnos de la vacante
         elif pregunta != Q_ESTUDIOS:
             q["tipo"], q["pregunta_web"] = "si_no", pregunta
         previas.append(q)
@@ -505,7 +518,7 @@ def _cita(dias=1, hora=10):
 
 def _humana(db, p, paso_id, u, nombre_evaluador, resultado=None):
     campos = dict(evaluador_tipo="interno", evaluador_usuario_id=u.id, evaluador_nombre=nombre_evaluador, evaluador_correo=u.correo or "",
-                  cita_fecha_hora=_cita(1, 10), cita_hasta=_cita(1, 11), cita_modalidad="Presencial", cita_direccion=f"Campus Morelia {DEMO}")
+                  cita_fecha_hora=_cita(1, 10), cita_hasta=_cita(1, 11), cita_modalidad="Presencial", cita_direccion=direccion_sede("Morelia", "Morelia", "Michoacán"))
     if resultado:
         campos.update(estado="con_resultado", conclusion=resultado, realizada_por=nombre_evaluador, registrada_en=_ahora())
     return _evaluacion(db, p, "entrevista_humana", paso_id, **campos)
@@ -519,7 +532,7 @@ def _referencias(db, p):
 def _medica(db, p, conclusion=None):
     campos = dict(evaluador_tipo="externo", evaluador_nombre="Clínica de la UVAQ (demo)", consentimiento="otorgado",
                   consentimiento_en=_ahora() - timedelta(days=1), cita_fecha_hora=_cita(1, 9), cita_hasta=_cita(1, 10),
-                  cita_modalidad="Presencial", cita_direccion=f"Clínica UVAQ, Campus Morelia {DEMO}")
+                  cita_modalidad="Presencial", cita_direccion="Clínica UVAQ, " + direccion_sede("Morelia", "Morelia", "Michoacán"))
     if conclusion:
         campos.update(estado="con_resultado", conclusion=conclusion, realizada_por="Clínica de la UVAQ (demo)", registrada_en=_ahora(),
                       revisada_en=_ahora(), revisada_por="RH UVAQ")

@@ -334,8 +334,10 @@ def texto_confirmacion(u: Ubicacion, dia: date, hora: str, actividades: List[str
     """2026-10-15 (Fletes): «Perfecto, te esperamos el [día] a las [hora] en la Terminal [ciudad], [dirección]. Mapa: [liga].
     Ese día harás la prueba de manejo, una entrevista con el jefe de operadores y una entrevista con el sindicato. Trae tu
     licencia y tu apto médico originales.» (las indicaciones de la ubicación van al final)."""
-    partes = [f"Perfecto, te esperamos el {subic.texto_dia(dia)} a las {subic.texto_hora(hora)} en {con_articulo(u.nombre)}"
-              + (f", {u.direccion.strip().rstrip('.')}." if (u.direccion or "").strip() else ".")]
+    from .opciones_vacante import direccion_util, nombre_largo
+
+    partes = [f"Perfecto, te esperamos el {subic.texto_dia(dia)} a las {subic.texto_hora(hora)} en {con_articulo(nombre_largo(u))}"
+              + (f", {direccion_util(u)}." if direccion_util(u) else ".")]
     partes.append(f"Mapa: {subic.liga_mapa(u)}.")
     if len(actividades) > 1:
         partes.append(f"Ese día harás {lista_es([frase_actividad(x) for x in actividades])}.")
@@ -458,7 +460,9 @@ def texto_recordatorio(p: Postulacion, u: Ubicacion, inicio: datetime, horas: in
     n = _nombre(p)
     local = inicio.astimezone(TZ_ORG)
     hora = subic.texto_hora(local.strftime("%H:%M"))
-    donde = f"{u.nombre}" + (f", {u.direccion.strip().rstrip('.')}" if (u.direccion or "").strip() else "")
+    from .opciones_vacante import direccion_util
+
+    donde = f"{u.nombre}" + (f", {direccion_util(u)}" if direccion_util(u) else "")
     if horas == 2:
         texto = f"Hola{', ' + n if n else ''}. Tu cita es hoy a las {hora} en {donde}. Te esperamos. Mapa: {subic.liga_mapa(u)}"
     else:

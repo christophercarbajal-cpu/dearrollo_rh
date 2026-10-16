@@ -98,8 +98,10 @@ def liga_mapa(u: Ubicacion) -> str:
         return u.mapa.strip()
     from .citas import liga_mapa as armar
 
+    from .opciones_vacante import direccion_util
+
     contexto = ", ".join(x for x in (u.ubicacion_municipio, u.ubicacion_estado) if x)
-    return armar(u.direccion or u.nombre, contexto)
+    return armar(direccion_util(u) or u.nombre, contexto)  # 2026-10-16: «Conocido, …» no es dirección para el mapa
 
 
 def ubicacion_dict(u: Ubicacion) -> dict:
@@ -150,23 +152,29 @@ def pide_terminal(db: Optional[Session], v) -> bool:
 
 
 def pregunta_web(db: Optional[Session], v) -> Optional[dict]:
-    """Pregunta de opción del formulario web («¿En qué terminal…?»). Nunca descarta."""
+    """Pregunta de opción del formulario web («¿En qué [sede/terminal…] te gustaría trabajar?», vocabulario de la Cuenta,
+    2026-10-16). Nunca descarta."""
+    from .opciones_vacante import pregunta_ubicacion
+
     ubics = de_vacante(db, v)
     if len(ubics) < 2:
         return None
-    return {"id": ID_PREGUNTA, "pregunta": PREGUNTA_TERMINAL, "tipo": "opcion", "valida": "Ubicación elegida",
+    return {"id": ID_PREGUNTA, "pregunta": pregunta_ubicacion(v), "tipo": "opcion", "valida": "Ubicación elegida",
             "respuesta_esperada": "", "descarta": False, "opciones": [u.nombre for u in ubics], "ubicacion": True, "base": True}
 
 
 def criterio_chat(db: Optional[Session], v) -> Optional[dict]:
     """Criterio del prefiltro conversacional. Las opciones se dicen en una frase natural (no lista numerada)."""
+    from .opciones_vacante import pregunta_ubicacion
+
     ubics = de_vacante(db, v)
     if len(ubics) < 2:
         return None
     cortos = [corto(u) for u in ubics]
     lista = ", ".join(cortos[:-1]) + f" y {cortos[-1]}"
+    pregunta = pregunta_ubicacion(v)
     return {"id": ID_PREGUNTA, "clave": "terminal", "dato": "terminal", "criterio": "Ubicación elegida",
-            "pregunta": PREGUNTA_TERMINAL, "chat": f"{PREGUNTA_TERMINAL} Tenemos {lista}.", "indispensable": False,
+            "pregunta": pregunta, "chat": f"{pregunta} Tenemos {lista}.", "indispensable": False,
             "esperada": "si", "tipo": "dato", "opciones": [u.nombre for u in ubics], "ubicaciones": [opcion(u) for u in ubics],
             "registra": True,
             "repregunta": f"¿Cuál prefieres: {lista}?"}
@@ -174,7 +182,8 @@ def criterio_chat(db: Optional[Session], v) -> Optional[dict]:
 
 def corto(u: Ubicacion) -> str:
     """«Terminal Monterrey» → «Monterrey» (para decirlo en una frase)."""
-    n = re.sub(r"^(terminal|cedis|sucursal|planta|sede|oficina)\s+", "", (u.nombre or "").strip(), flags=re.IGNORECASE)
+    n = re.sub(r"^(terminal|cedis|sucursal|planta|sede|oficina|campus|plantel|tienda|bodega)\s+", "", (u.nombre or "").strip(),
+               flags=re.IGNORECASE)
     return n or u.nombre
 
 
@@ -232,11 +241,14 @@ def fijar(p: Postulacion, u, fuente: str) -> None:
 
 
 def desde_respuestas_web(db: Session, p: Postulacion, respuestas: List[dict]) -> Optional[Ubicacion]:
-    """La respuesta del formulario web a `PREGUNTA_TERMINAL` (si la vacante pide elegir)."""
+    """La respuesta del formulario web a la pregunta de ubicación (si la vacante pide elegir)."""
+    from .opciones_vacante import pregunta_ubicacion
+
     ubics = de_vacante(db, p.vacante)
     if len(ubics) < 2:
         return None
-    r = next((x for x in respuestas or [] if _norm(x.get("pregunta")) == _norm(PREGUNTA_TERMINAL)), None)
+    textos = {_norm(PREGUNTA_TERMINAL), _norm(pregunta_ubicacion(p.vacante))}
+    r = next((x for x in respuestas or [] if _norm(x.get("pregunta")) in textos), None)
     u = elegir(ubics, (r or {}).get("respuesta", "")) if r else None
     if u is not None:
         fijar(p, u, "formulario web")

@@ -3052,7 +3052,7 @@ PARAFRASIS_DATO = {
     "interes": "¿Te gustaría seguir con tu postulación para este puesto?",
     "puede_trasladarse": "¿Podrías llegar hasta el lugar de trabajo todos los días?",
     "disponibilidad": "¿Qué días y en qué horario podrías trabajar?",
-    "terminal": "¿En cuál de las terminales te gustaría trabajar?",
+    "terminal": "¿En cuál de nuestras ubicaciones te gustaría trabajar?",  # 2026-10-16: sin «terminal» (es de Fletes)
     "sueldo": "Solo para tenerlo en cuenta, ¿el sueldo te parece bien?",
 }
 _RE_EXPERIENCIA = re.compile(r"\b(experiencia|anos|años|meses|tiempo trabajando)\b", re.IGNORECASE)

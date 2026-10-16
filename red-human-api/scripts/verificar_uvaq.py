@@ -253,8 +253,74 @@ with TestClient(app) as client:
     e["respuestas"][exp["id"]] = {"respuesta": "2 años", "valor": "si"}
     check(pconv._evaluar(crit, e)[0] == "cumple", "«2 años» → cumple")
     preguntas = [c["chat"] for c in crit]
-    check(su.Q_SEDE in preguntas and su.Q_TURNO in preguntas and any(c.get("indispensable") and c.get("descarta", True) for c in crit),
-          "prefiltro por WhatsApp: sede y horario (excluyentes)")
+    sede_c = next((c for c in crit if c.get("dato") == "terminal"), {})
+    turno_c = next((c for c in crit if c.get("dato") == "turno"), {})
+    check(sede_c.get("chat", "").startswith(su.Q_SEDE) and turno_c.get("chat", "").startswith(su.Q_TURNO)
+          and sede_c.get("indispensable") and turno_c.get("indispensable"),
+          f"prefiltro por WhatsApp: sede y turno como OPCIÓN y excluyentes → {preguntas[:2]}")
+
+    # ===================================================== 9. Punto 4 (2026-10-16): sede, turno, vocabulario y continuidad
+    print("\n--- 9. Sede y turno como opción, vocabulario por Cuenta y continuidad del prefiltro ---")
+    from app.models import Ubicacion
+    from app.routers.candidatos import _crear_candidato, crear_postulacion, procesar_prefiltro
+    from app.services import ubicaciones as subic
+
+    check(not any("dirección de demo" in (u.direccion or "") for u in db.query(Ubicacion).filter(Ubicacion.cuenta_id == cu.id))
+          and db.query(Ubicacion).filter_by(cuenta_id=cu.id, nombre="Pátzcuaro").one().direccion == "Conocido, Pátzcuaro, Michoacán",
+          "sedes sin «(dirección de demo)»: «Conocido, Pátzcuaro, Michoacán»")
+    web1 = vacante_dict(v1)["criterios"]
+    textos_web = [q["pregunta"] for q in web1]
+    check(textos_web.count(su.Q_SEDE) == 1 and not any("terminal" in t.lower() for t in textos_web)
+          and next(q for q in web1 if q["pregunta"] == su.Q_SEDE)["opciones"] == ["Morelia", "Pátzcuaro", "Zamora", "Ninguna de estas"],
+          f"solicitud web: UNA sola pregunta de sede, con «sede» (no «terminal») y sus opciones → {textos_web}")
+    q_t = next((q for q in web1 if q["pregunta"] == su.Q_TURNO), {})
+    check(q_t.get("tipo") == "opcion" and q_t.get("opciones", [None])[0] == "De 6:00 a 14:00 (lunes a viernes)" and q_t.get("descarta"),
+          f"solicitud web: el turno es una opción → {q_t.get('opciones')}")
+
+    def conversa(nombre, tel, respuestas, web=None):
+        c = _crear_candidato(db, cu.id, nombre, "Portal", False, telefono=tel)
+        p = crear_postulacion(db, c, v1, cu.id, "web", consentimiento=True)
+        if web:
+            resp = [{"pregunta": q, "respuesta": a} for q, a in web.items()]
+            p.analisis = {"respuestas_web": resp}
+            subic.desde_respuestas_web(db, p, resp)
+        db.commit()
+        VENTANA.add("52" + tel)
+        salida = []
+        for t in respuestas:
+            db.refresh(p)
+            antes = len(p.mensajes)
+            asyncio.run(procesar_prefiltro(db, p, t, "whatsapp"))
+            db.refresh(p)
+            salida.append([m.texto for m in p.mensajes[antes:] if m.rol == "assistant"])
+        return p, salida
+
+    p, sal = conversa("Pedro Pátzcuaro", "4439700001", ["Hola", "Vivo en Pátzcuaro", "sí", "de 8 a 4", "Terminé la secundaria", "2 años",
+                                                         "9 mil", "Centro, Pátzcuaro", "15 minutos"])
+    check(sal[1] == ["Tenemos sede en Pátzcuaro, ¿te queda bien?"], f"vive en Pátzcuaro → se le propone esa sede → {sal[1]}")
+    check(sal[2][0].startswith(su.Q_TURNO) and p.ubicacion_id == db.query(Ubicacion).filter_by(cuenta_id=cu.id, nombre="Pátzcuaro").one().id,
+          "«sí» elige Pátzcuaro y sigue con el turno")
+    check(((p.analisis or {}).get("prefiltro_datos") or {}).get("turno_codigo") == "MAT-03", "«de 8 a 4» → turno MAT-03")
+    check(sal[7] == ["Entendido. ¿Cuánto tiempo harías de tu casa a la sede Pátzcuaro?"] or sal[7][0].endswith("a la sede Pátzcuaro?"),
+          f"el traslado nombra la sede elegida (sin «Conocido») → {sal[7]}")
+    check(len(sal[-1]) == 1 and sal[-1][0].startswith("Listo, Pedro. Ahora te haré unas preguntas") and p.etapa == "Entrevista IA"
+          and not any("revisará" in t or "te escribirá" in t for t in sal[-1]),
+          f"cumple → avanza solo a la entrevista con UN mensaje, sin el cierre de RH → {sal[-1]}")
+    p, sal = conversa("Nadia Ninguna", "4439700002", ["Hola", "Ninguna, vivo en Guadalajara"])
+    check(not p.activa and "no continuaremos" in sal[-1][0], "«ninguna» sede (requisito excluyente) → descartado")
+    p, sal = conversa("Toño Turno", "4439700003", ["Hola", "Zamora", "no puedo en ninguno"])
+    check(not p.activa and "no continuaremos" in sal[-1][0], "ningún turno (excluyente) → descartado")
+    p, sal = conversa("Wendy Web", "4439700004", ["Hola", "4 años", "Centro, Zamora", "30 minutos"],
+                      web={su.Q_SEDE: "Zamora", su.Q_TURNO: "De 8:00 a 16:00 (lunes a viernes)", su.Q_ESTUDIOS: "Preparatoria",
+                           "¿Cuál es tu expectativa de sueldo mensual?": "9000"})
+    hechas = " ".join(t for x in sal for t in x)
+    check(su.Q_SEDE not in hechas and su.Q_TURNO not in hechas and su.Q_ESTUDIOS not in hechas and "expectativa" not in hechas,
+          "lo contestado en la web (sede, turno, estudios, sueldo) NO se vuelve a preguntar en WhatsApp")
+    check(p.etapa == "Entrevista IA" and pconv.estado(p).get("resultado") == "cumple", "y avanza sola a la entrevista")
+    # vocabulario: Fletes conserva «terminal»; las demás Cuentas dicen «sede»
+    from app.services import opciones_vacante as ov
+
+    check(ov.termino_ubicacion(v1) == "sede" and cu.termino_ubicacion == "sede", "UVAQ: «sede»")
     db.close()
 
 print(f"\n{OK} verificaciones OK")

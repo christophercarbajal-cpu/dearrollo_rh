@@ -7,7 +7,7 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `rout
   2. Terminales (lunes a viernes, 9:00 y 12:00, 8 lugares por horario) con sus direcciones reales: Monterrey
      (Supermanzana Km 2.1, Entronque Laredo–Salinas Victoria, NL, 65500), Hermosillo (Blvd. de los Seris #34, Parque
      Industrial, Hermosillo, Son, 83299) y CDMX (Av. Joaquín Montenegro #178, Col. Santiago Teyahualco, Tultepec, Edomex,
-     54900); Guadalajara y Querétaro con «(dirección de demo)». Indicación de la cita: «Trae tu licencia y tu apto médico
+     54900); Guadalajara y Querétaro con «Conocido, [municipio], [estado]» (2026-10-16: sin «dirección de demo»). Indicación de la cita: «Trae tu licencia y tu apto médico
      originales.»
   3. Proceso A «Fletes operadores»: Solicitud web sin CV → Prefiltro por WhatsApp → Documentos → Prueba de manejo (la
      agenda el candidato, misma cita) → Entrevista con el jefe de operadores (misma cita) → Entrevista con el sindicato
@@ -80,14 +80,14 @@ SLUG = "fletes-mexico"
 # ============================================================ 1. Terminales (Estado / Municipio del catálogo INEGI)
 HORARIOS = [{"dias": [0, 1, 2, 3, 4], "horas": ["09:00", "12:00"], "cupo": 8}]
 INDICACIONES = "Trae tu licencia y tu apto médico originales."
-DEMO = "(dirección de demo)"
+SIN_DIRECCION = "Conocido"  # 2026-10-16: sin la dirección exacta, nunca «(dirección de demo)»
 TERMINALES = [
-    ("Terminal Guadalajara", "Jalisco", "Guadalajara", DEMO),
+    ("Terminal Guadalajara", "Jalisco", "Guadalajara", "Conocido, Guadalajara, Jalisco"),
     ("Terminal Monterrey", "Nuevo León", "Salinas Victoria",
      "Supermanzana Km 2.1, Entronque Laredo–Salinas Victoria, Nuevo León, C.P. 65500"),
     ("Terminal CDMX", "Estado de México", "Tultepec",
      "Av. Joaquín Montenegro #178, Col. Santiago Teyahualco, Tultepec, Estado de México, C.P. 54900"),
-    ("Terminal Querétaro", "Querétaro", "Querétaro", DEMO),
+    ("Terminal Querétaro", "Querétaro", "Querétaro", "Conocido, Querétaro, Querétaro"),
     ("Terminal Hermosillo", "Sonora", "Hermosillo", "Blvd. de los Seris #34, Parque Industrial, Hermosillo, Sonora, C.P. 83299"),
 ]
 

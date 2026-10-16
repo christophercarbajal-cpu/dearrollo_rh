@@ -119,8 +119,10 @@ def preguntas_extra(v, actuales: List[dict]) -> List[dict]:
 
 
 def criterios_web(v) -> List[dict]:
-    """Las preguntas de «Unas preguntas» (sin la de la terminal, que agrega `serial`)."""
+    """Las preguntas de «Unas preguntas» (sin la de ubicación, que agrega `serial` si ningún requisito ya la pide).
+    2026-10-16: un requisito de sede se pregunta como la ELECCIÓN de sede y uno de turno como opción («¿En qué turno…?»)."""
     from ..serial import _sin_parcial
+    from . import opciones_vacante as ov
     from . import preguntas_filtro as pfu
 
     guardadas = pfu.web(pfu.de_vacante(v)) if pfu.aplica(v) else (getattr(v, "preguntas_filtro", None) or [])
@@ -130,6 +132,12 @@ def criterios_web(v) -> List[dict]:
             continue  # 2026-10-16: confirmaciones de puesto y sueldo retiradas (formularios guardados antes)
         if _es_expectativa(q.get("pregunta")):
             q.update({"dato": "sueldo", "expectativa": True})
+        if ov.es_requisito_sede(v, q.get("valida"), q.get("pregunta")):
+            if any(x.get("dato") == "terminal" for x in base):
+                continue  # nunca dos preguntas de sede
+            q = ov.pregunta_web_sede(v, bool(q.get("descarta")), q)
+        elif ov.es_requisito_turno(v, q.get("valida"), q.get("pregunta")):
+            q = ov.pregunta_web_turno(v, bool(q.get("descarta")), q)
         base.append(_sin_parcial(q))
     return base + preguntas_extra(v, base)
 
@@ -231,6 +239,11 @@ def evaluar(p: Postulacion) -> Tuple[str, str, List[dict]]:
                     valor = "no"
                 else:
                     valor = None
+            if q.get("dato") in ("terminal", "turno"):
+                # 2026-10-16: sede / turno como opción — «Ninguna de estas» / «Ninguno de estos» no cumple
+                from . import opciones_vacante as ov_
+
+                valor = "no" if _n(respuesta) in (_n(ov_.NINGUNA), _n(ov_.NINGUNO)) else "si"
             veredicto = {"si": "cumple", "no": "no_cumple"}.get(valor, "no_concluyente")
             if valor == "no":
                 incumple.append((q.get("valida") or q["pregunta"], respuesta))
@@ -253,6 +266,16 @@ def registrar_respuestas(p: Postulacion) -> None:
     for q in criterios_web(v):
         respuesta = respuesta_web(p, {"pregunta": q["pregunta"]})
         if not respuesta:
+            continue
+        if q.get("dato") == "terminal":
+            continue  # la elección de sede la guarda `ubicaciones.desde_respuestas_web` (en `/candidatos/postular`)
+        if q.get("dato") == "turno":
+            # 2026-10-16: el turno elegido en la solicitud queda en la ficha (el chat ya no lo pregunta)
+            from . import opciones_vacante as ov
+            from .prefiltro_conversacional import guardar_datos
+
+            _sentido, extra_t = ov.clasificar_turno(ov.turnos(v), respuesta)
+            guardar_datos(p, {"dato": "turno"}, respuesta, extra_t)
             continue
         if q.get("expectativa"):
             # 2026-10-16: la expectativa de sueldo (una sola vez); la cifra contra el máximo de la vacante

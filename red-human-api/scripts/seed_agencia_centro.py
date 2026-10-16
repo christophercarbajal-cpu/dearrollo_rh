@@ -144,7 +144,7 @@ TIPOS_ESPERADOS = {
 
 # ============================================================ 2. Ubicación (autoagenda de la prueba práctica)
 UBICACION = {"nombre": "Ciudad de México", "estado": "Ciudad de México", "municipio": "",
-             "direccion": "Ciudad de México (dirección de demo)",
+             "direccion": "Conocido, Ciudad de México",  # 2026-10-16: sin «(dirección de demo)»
              "indicaciones": "Trae tu INE original y ropa cómoda para la prueba práctica.",
              "horarios": [{"dias": [0, 1, 2, 3, 4], "horas": ["09:00", "12:00"], "cupo": 8}]}
 
@@ -356,9 +356,11 @@ def asegurar_ubicacion(db, cu: Cuenta) -> Ubicacion:
         db.add(u)
         db.flush()
         registrar(db, ACTOR, "ubicacion_creada", "ubicacion", str(u.id), {"nombre": d["nombre"]})
-        ok(f"Ubicación «{d['nombre']}»: {subic.texto_horarios(u.horarios_citas)} (dirección de demo)")
+        ok(f"Ubicación «{d['nombre']}»: {subic.texto_horarios(u.horarios_citas)}")
     else:
         u.activa = True
+        if "dirección de demo" in (u.direccion or ""):
+            u.direccion = d["direccion"]  # 2026-10-16: limpia la dirección sembrada antes
         if not u.horarios_citas:
             u.horarios_citas = subic.normalizar_horarios(d["horarios"])
             ok(f"Ubicación «{u.nombre}»: horarios de citas {subic.texto_horarios(u.horarios_citas)}")

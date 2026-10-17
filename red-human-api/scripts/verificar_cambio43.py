@@ -186,25 +186,26 @@ with TestClient(app) as client:
     base_prof = {q.get("dato"): q for q in ga["filtro"] if q.get("base") and not q.get("indispensable")}
     check("zona" not in base_prof, "Profesional: OMITE la colonia")
     check("traslado" not in base_prof, "Profesional: sin indispensable de traslado, no pregunta el traslado")
-    # 2026-10-16 (bug del tester): con sueldo publicado ($45,000) la expectativa ya no se pregunta
-    check("sueldo" not in base_prof, f"Profesional con sueldo publicado: sin expectativa ({base_prof.get('sueldo', {}).get('pregunta')})")
+    # 2026-10-16 (QA): la expectativa ya no existe; con sueldo publicado ($45,000) «El sueldo es… ¿Te interesa?»
+    check("sueldo" in base_prof and not base_prof["sueldo"].get("expectativa") and base_prof["sueldo"]["pregunta"].endswith("¿Te interesa?"),
+          f"Profesional con sueldo publicado: «El sueldo es… ¿Te interesa?», sin expectativa ({base_prof.get('sueldo', {}).get('pregunta')})")
     gt = generar(client, {**ABOGADO, "requisitos_indispensables": ["Traslado máximo de 60 minutos"]}, ruta(AVATAR("profesional")))
     check(any(q.get("dato") == "traslado" and q.get("indispensable") for q in gt["filtro"]),
           "Profesional con indispensable de traslado: SÍ pregunta el traslado")
     go = generar(client, CONTADOR, ruta(WHATS("operativo")))
     base_op = {q.get("dato"): q for q in go["filtro"] if q.get("base")}
     check("zona" in base_op and "traslado" in base_op, "Operativo: pregunta colonia y traslado")
-    check("sueldo" not in base_op, "Operativo con sueldo publicado: sin expectativa")
-    # 2026-10-16: sin sueldo publicado el sueldo es la EXPECTATIVA en todos los enfoques (ya no «El sueldo es… ¿Te interesa?»)
+    check("sueldo" in base_op and not base_op["sueldo"].get("expectativa"), "Operativo con sueldo publicado: «El sueldo es… ¿Te interesa?» (sin expectativa)")
     gs = generar(client, {**CONTADOR, "sueldo_desde": None, "sueldo_periodicidad": "a_convenir"}, ruta(WHATS("operativo")))
     base_sin = {q.get("dato"): q for q in gs["filtro"] if q.get("base")}
-    check(base_sin.get("sueldo", {}).get("pregunta") == "¿Cuál es tu expectativa de sueldo mensual?" and base_sin["sueldo"].get("expectativa"),
-          f"Operativo sin sueldo publicado: sueldo como expectativa ({base_sin.get('sueldo', {}).get('pregunta')})")
+    # 2026-10-16 (QA): la expectativa ya no existe — sin sueldo publicado no hay pregunta de sueldo
+    check("sueldo" not in base_sin, f"Operativo sin sueldo publicado: sin pregunta de sueldo ({base_sin.get('sueldo', {}).get('pregunta')})")
     # la conversación usa la expectativa guardada
     v = Vacante(titulo="Abogado", sueldo="Desde $45,000 MXN mensuales", sueldo_periodicidad="mensual", enfoque_entrevista="profesional",
                 guiones={pfu.CLAVE: ga["filtro"]}, requisitos="")
     crit = {c.get("dato"): c for c in pfu.criterios(v)}
-    check("sueldo" not in crit and "zona" not in crit, "sueldo publicado: el bot no pregunta la expectativa ni la colonia")
+    check(not (crit.get("sueldo") or {}).get("expectativa") and "zona" not in crit,
+          "sueldo publicado: el bot no pregunta la expectativa ni la colonia (el sueldo, si va, es «¿Te interesa?»)")
 
     # ===================================================== 6. Indispensables implícitos
     print("\n--- 6. Indispensables implícitos ---")
@@ -223,8 +224,10 @@ with TestClient(app) as client:
           "Contador Junior: cédula sí, años de experiencia no")
     check(ia.indispensables_implicitos("Almacenista", "Operaciones", "Jefatura") == ["7 años de experiencia en operaciones"],
           "Jefatura (no regulada): solo «7 años de experiencia en [área]»")
-    check(ia.reglas_indispensables(["5 años en litigio"], [], seniority="Senior", titulo="Abogado")[1] == ["Cédula profesional"],
-          "si RH ya capturó experiencia, no se duplica la de años")
+    # 2026-10-16 (Bloque 2): Red Human completa hasta 3 requisitos; la cédula va primero y la experiencia no se duplica
+    _prop = ia.reglas_indispensables(["5 años en litigio"], [], seniority="Senior", titulo="Abogado")[1]
+    check(_prop[:1] == ["Cédula profesional"] and not any("años de experiencia" in x for x in _prop),
+          f"si RH ya capturó experiencia, no se duplica la de años ({_prop})")
 
     # ===================================================== 7. Textos por plataforma (Markdown) y «Copiar»
     print("\n--- 7. Textos por plataforma ---")

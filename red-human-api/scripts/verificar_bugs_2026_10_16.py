@@ -3,7 +3,7 @@
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_bugs_2026_10_16.py
 
 1. Expectativa de sueldo: con sueldo publicado NO se pregunta (ni en la solicitud web ni en el chat) y no hay regla de
-   «Requiere revisión» por expectativa; sin sueldo se sigue preguntando.
+   «Requiere revisión» por expectativa (2026-10-16 QA: la expectativa ya no se pregunta en ningún caso).
 2. TTS del avatar: los montos del systemPrompt / initialMessage se dicen «X pesos mexicanos» (sin «$», sin comas de
    miles, sin centavos en cero, sin MXN).
 3. Tablero de Candidatos: sin ?vacante= abre en «Todas las vacantes» (no autoselecciona la de más candidatos).
@@ -74,7 +74,10 @@ def main():
         v.sueldo_periodicidad, v.sueldo = "a_convenir", "A convenir"
         db.flush()
         check(not pconv.sueldo_publicado(v), "«A convenir» no es sueldo publicado")
-        check(any(q.get("expectativa") for q in ssw.criterios_web(v)), "sin sueldo publicado la solicitud SÍ pide la expectativa")
+        # 2026-10-16 (QA): la expectativa ya no existe en ningún caso — sin sueldo publicado no hay pregunta de sueldo
+        check(not any(q.get("expectativa") or q.get("dato") == "sueldo" for q in ssw.criterios_web(v)),
+              "sin sueldo publicado: ni expectativa ni pregunta de sueldo en la solicitud")
+        check(not any(c.get("dato") == "sueldo" for c in pconv.criterios_de(v)), "sin sueldo publicado: el chat no pregunta sueldo")
         db.rollback()
 
         # ===================================================== 2. TTS del avatar

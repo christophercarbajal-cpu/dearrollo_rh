@@ -209,7 +209,6 @@ with TestClient(app) as client:
           f"«Unas preguntas» sin confirmar el puesto ni pedir la edad → {preguntas}")
     # 2026-10-16 (bug del tester): Fletes publica su sueldo → «Unas preguntas» ya no pide la expectativa
     check("¿Cuál es tu expectativa de sueldo mensual?" not in preguntas, "«Unas preguntas» sin expectativa (sueldo publicado)")
-    q_sue = "¿Cuál es tu expectativa de sueldo mensual?"
 
     def postular(v, nombre, tel, respuestas):
         datos = {"vacante": v.slug, "nombre": nombre, "telefono": tel, "consentimiento": "true",
@@ -219,8 +218,8 @@ with TestClient(app) as client:
         db.expire_all()
         return r.json()
 
-    todo_si = {**{q: "Sí" for q in sf.PREGUNTAS_WEB.values()}, "¿En qué terminal te gustaría trabajar?": "Terminal Monterrey",
-               q_sue: "20000"}
+    # 2026-10-16 (QA): la web solo pregunta los requisitos (la terminal y el sueldo los pregunta el WhatsApp de la ruta A)
+    todo_si = {q: "Sí" for q in sf.PREGUNTAS_WEB.values()}
     antes = len(ENVIADOS)
     r = postular(va, "Raúl Rechazo", "5560000001", {**todo_si, sf.PREGUNTAS_WEB[sf.LICENCIA]: "No"})
     p_rech = db.query(Postulacion).filter(Postulacion.codigo == r["postulacion"]).one()
@@ -257,15 +256,19 @@ with TestClient(app) as client:
     for resp in ("6 años", "Transportes del Norte", "LFB-123456", "diciembre de 2030", "15/06/2031"):  # 2026-10-16: sin edad
         seguidas.append(ultimo("5560000002", resp))
     check(sf.PROPIAS[0]["pregunta"] in seguidas[0] and sf.PROPIAS[1]["pregunta"] in seguidas[1], f"preguntas propias de RH en orden → {seguidas[:2]}")
-    check(not any("te interesa" in x.lower() for x in seguidas) and not any("sueldo" in x.lower() for x in seguidas),
-          "interés y sueldo NO se repiten: ya se contestaron en «Unas preguntas» (regla de oro)")
-    check("colonia" in seguidas[-1].lower() and not any("años tienes" in x for x in seguidas),
-          f"sin preguntar la edad: la colonia → «{seguidas[-1]}»")
+    # 2026-10-16 (QA): con más de una terminal el WhatsApp la pregunta (la web ya no)
+    check("terminal" in seguidas[-1].lower(), f"después de los requisitos, la terminal → «{seguidas[-1]}»")
+    t = ultimo("5560000002", "Monterrey")
+    check(t.endswith("¿Te interesa?") and "El sueldo es" in t and "expectativa" not in t.lower(),
+          f"sueldo publicado → «El sueldo es… ¿Te interesa?» (nunca la expectativa) → «{t}»")
+    t = ultimo("5560000002", "Sí")
+    seguidas.append(t)
+    check("colonia" in t.lower() and not any("años tienes" in x for x in seguidas), f"sin preguntar la edad: la colonia → «{t}»")
     t = ultimo("5560000002", "Col. Centro, Hermosillo, Sonora")
     check(t.endswith("El trabajo es en Salinas Victoria, Nuevo León. ¿Vives ahí o te cambiarías de ciudad?"),
           f"vive en otro estado → «{t}»")
     t = ultimo("5560000002", "Me cambiaría sin problema")
-    check(t == f"La Terminal Monterrey está en {mty.direccion}. ¿Cuánto tiempo harías de tu casa?", f"tiempo a SU terminal → «{t}»")
+    check(t.endswith(f"La Terminal Monterrey está en {mty.direccion}. ¿Cuánto tiempo harías de tu casa?"), f"tiempo a SU terminal → «{t}»")
     escribe("5560000002", "40 minutos")
     p_a = db.query(Postulacion).filter(Postulacion.id == p_a.id).one()
     d = p_a.analisis.get("prefiltro_datos") or {}

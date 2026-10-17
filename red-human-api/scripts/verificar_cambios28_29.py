@@ -290,8 +290,9 @@ with TestClient(app) as client:
     crit = pconv.criterios_de(vo)
     # 2026-10-16: sin «¿Cuántos años tienes?» (la vacante no pide edad) ni «¿Te interesa?»; el sueldo es la expectativa
     # 2026-10-16 (bug del tester): la vacante publica su sueldo ($9,500) → la expectativa ya no se pregunta
-    check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "zona", "traslado"],
-          f"ruta Masivos: base fija en orden (indispensables → colonia → traslado; sueldo publicado, sin expectativa) {[c['dato'] for c in crit]}")
+    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» (la expectativa ya no existe)
+    check(pop.aplica(vo) and [c["dato"] for c in crit] == ["escolaridad", "experiencia", "disponibilidad", "sueldo", "zona", "traslado"],
+          f"ruta Masivos: base fija en orden (indispensables → sueldo → colonia → traslado; sin expectativa) {[c['dato'] for c in crit]}")
     check(not any(c["dato"] == "transporte" for c in crit) and not any("organizad" in c["chat"] or "equipo" in c["chat"].lower() for c in crit),
           "sin pregunta de transporte ni habilidades blandas (lo generado antes por IA se ignora)")
     check([c["indispensable"] for c in crit[:3]] == [True, True, True] and not crit[3]["indispensable"] and not crit[-1]["indispensable"],
@@ -302,8 +303,9 @@ with TestClient(app) as client:
           f"los indispensables se preguntan directo ({[c['chat'] for c in crit[:3]]})")
     # Cambio 51: el puesto lleva ciudad y estado; ya no se pregunta «¿Puedes trasladarte?»
     # 2026-10-16: sin «El puesto es… ¿Te interesa?» ni el sueldo afirmativo: el sueldo es la expectativa
-    check(crit[3]["chat"] == "¿En qué colonia y municipio vives?"
-          and crit[4]["chat"] == "¿Cuánto tiempo harías de tu casa al trabajo?", f"textos fijos de colonia y traslado {[c['chat'] for c in crit[3:]]}")
+    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» antes de la colonia
+    check(crit[3]["chat"] == "El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?" and crit[4]["chat"] == "¿En qué colonia y municipio vives?"
+          and crit[5]["chat"] == "¿Cuánto tiempo harías de tu casa al trabajo?", f"textos fijos de sueldo, colonia y traslado {[c['chat'] for c in crit[3:]]}")
     ficha = ia.FichaGuion(titulo="Almacenista", requisitos_indispensables=REQS.split(" · "), sueldo="Desde $9,500 MXN mensuales",
                           ubicacion="Zapopan, Jalisco", enfoque_entrevista="operativo", ruta_masiva=True)
     wa = ia.generar_guiones(ficha, ["prefiltro_whatsapp"], hay_whatsapp=True)[0]["prefiltro_whatsapp"]
@@ -334,9 +336,11 @@ with TestClient(app) as client:
     r = chat(q1, "2 años")
     check("rolar turnos" in r, f"→ «{r}»")
     r = chat(q1, "Puedo mañana y tarde")
-    # 2026-10-16: la vacante no pide edad → no se pregunta; con sueldo publicado tampoco la expectativa
-    check(r.endswith("¿En qué colonia y municipio vives?") and "años tienes" not in r and "esperas ganar" not in r,
-          f"colonia y municipio después de los indispensables → «{r}»")
+    # 2026-10-16: la vacante no pide edad → no se pregunta · 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?»
+    check(r.endswith("El sueldo es desde $9,500 MXN mensuales. ¿Te interesa?") and "años tienes" not in r and "esperas ganar" not in r,
+          f"sueldo después de los indispensables → «{r}»")
+    r = chat(q1, "Sí")
+    check(r.endswith("¿En qué colonia y municipio vives?"), f"colonia y municipio después del sueldo → «{r}»")
     r = chat(q1, "Colonia Centro, Zapopan")
     # Cambio 51: ya no se pregunta «¿Puedes trasladarte?» (la ciudad va en la pregunta del puesto)
     check(r.endswith("¿Cuánto tiempo harías de tu casa al trabajo?"), f"tiempo de traslado → «{r}»")
@@ -368,7 +372,7 @@ with TestClient(app) as client:
     check(trasl["indispensable"] and trasl["limite_min"] == 60 and edad["indispensable"] and edad["edad_min"] == 18,
           "con límite de traslado (y edad) en la vacante, esos datos sí descartan")
     q3 = postular_op("Rosa Lejana", "5512990003")
-    for t in ("Hola", "Terminé la secundaria", "3 años", "Fines de semana y entre semana", "30", "9 mil", "Las Águilas, Zapopan"):
+    for t in ("Hola", "Terminé la secundaria", "3 años", "Fines de semana y entre semana", "30", "Sí", "Las Águilas, Zapopan"):  # «Sí» al sueldo
         chat(q3, t)
     r = chat(q3, "hora y media")
     db.refresh(q3)
@@ -418,9 +422,11 @@ with TestClient(app) as client:
              ("Bodega del Centro", "¿Qué puesto tenías?"), ("Almacenista", "¿Qué hacías ahí?"),
              ("Surtía pedidos y acomodaba mercancía", "¿Cuánto tiempo trabajaste ahí?"), ("2 años", "¿Por qué saliste?"),
              ("Me despidieron", "¿Por qué te despidieron?"), ("Por faltas", "¿Tuviste otro trabajo antes de ese?"),
-             ("Sí", "¿En qué empresa fue?"), ("Tiendas Oxxo", "¿Qué puesto tenías?"), ("Cajero", "¿Qué hacías ahí?"),
-             ("Cobraba", "¿Cuánto tiempo trabajaste ahí?"), ("1 año", "¿Por qué saliste?"), ("Renuncié", "¿Por qué renunciaste?"),
-             ("Me cambié de ciudad", "¿Tuviste otro trabajo antes de ese?"), ("No", "¿Has manejado montacargas?")]
+             # 2026-10-16 (QA): máximo 2 trabajos; el segundo con OTRAS palabras; después «¿En cuántos trabajos…?»
+             ("Sí", "¿Y antes de ese, en qué empresa estuviste?"), ("Tiendas Oxxo", "¿Qué cargo tenías en ese lugar?"),
+             ("Cajero", "¿A qué te dedicabas en ese empleo?"), ("Cobraba", "¿Cuánto duraste en ese empleo?"),
+             ("1 año", "¿Qué te hizo dejar ese empleo?"), ("Renuncié", "¿Por qué renunciaste?"),
+             ("Me cambié de ciudad", "¿En cuántos trabajos has estado en los últimos 3 años?"), ("2", "¿Has manejado montacargas?")]
     ok = True
     for resp, esperada in pasos:
         r = chat(q4, resp)
@@ -428,11 +434,13 @@ with TestClient(app) as client:
             ok = False
             print(f"   respuesta «{resp}» → «{r}» (se esperaba «{esperada}»)")
             break
-    check(ok, "A → B (hasta 3 trabajos, repregunta de despido y renuncia) → C (pregunta propia de RH), una por mensaje")
+    check(ok, "A → B (hasta 2 trabajos, repregunta de despido y renuncia, cuántos trabajos) → C (pregunta propia de RH), una por mensaje")
     empresa = nombre_empresa_candidato(vo)
     r = chat(q4, "Un poco")
-    # Cambio 52: puesto, sueldo y ubicación ya se dijeron (prefiltro / página de la vacante) → el bloque D solo pregunta el inicio
-    check(r == "¿Cuándo podrías empezar?", f"D. sin repetir puesto/sueldo/ubicación → «{r}»")
+    # 2026-10-16 (QA): D = UNA confirmación («Antes de terminar… ¿Sigues interesado?») y después el inicio
+    check(r.startswith("Antes de terminar, te confirmo: puesto ") and r.endswith("¿Sigues interesado?"), f"D. confirmación única → «{r}»")
+    r = chat(q4, "Sí")
+    check(r == "¿Cuándo podrías empezar?", f"D. sigue interesado → inicio → «{r}»")
     r = chat(q4, "El lunes")
     check(r == f"Con esto terminamos, Mario. Gracias por tu tiempo. El equipo de Recursos Humanos de {empresa} te contactará para "
               "agendar una entrevista.", f"cierre exacto → «{r}»")

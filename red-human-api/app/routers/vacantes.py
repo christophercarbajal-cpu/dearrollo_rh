@@ -19,7 +19,7 @@ from ..services import bolsas, conteos, notificaciones
 from ..deps import cuenta_actual, usuario_actual, usuario_decisor
 from ..models import (
     ENFOQUES_ENTREVISTA, MONEDAS_SUELDO, PERIODICIDADES_SUELDO, PLATAFORMAS, Cliente, Cuenta, Curso, Plantilla, PlantillaProceso, Postulacion,
-    Usuario, UsuarioCuenta, Vacante, normalizar_documentos_vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
+    SUELDO_COMPETITIVO, Usuario, UsuarioCuenta, Vacante, normalizar_documentos_vacante, registrar, slugificar, texto_sueldo, texto_ubicacion,
 )
 from ..services.mensajeria import canales_publicos
 from ..serial import nombre_empresa, nombre_empresa_candidato, vacante_dict
@@ -160,6 +160,9 @@ def _con_logo(db: Session, salida: dict, v: Vacante) -> dict:
     Cambio 58 (2026-10-15): el proceso de selección es INTERNO — su nombre y su ruta (`CAMPOS_SOLO_RH`) nunca salen en
     estos payloads (portal, /aplicar, vista previa)."""
     salida = {k: x for k, x in salida.items() if k not in CAMPOS_SOLO_RH}
+    if getattr(v, "mostrar_sueldo", True) is False:
+        # 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación» desmarcado → el candidato ve «Sueldo competitivo»
+        salida.update({"sueldo": SUELDO_COMPETITIVO, "sueldoPublico": SUELDO_COMPETITIVO, "sueldoDesde": None, "sueldoHasta": None})
     return {
         **salida,
         "logoUrl": v.cuenta.logo if v.cuenta else "",
@@ -288,6 +291,7 @@ class GenerarIn(BaseModel):
     sueldo_hasta: Optional[int] = None
     sueldo_moneda: str = "MXN"
     sueldo_periodicidad: str = ""
+    mostrar_sueldo: bool = True  # 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación»
     # guía opcional para Red Human (reemplaza a las "notas para la IA")
     descripcion: str = ""  # descripción breve → la IA la expande
     requisitos: str = ""  # legado: indispensables en texto separados por « · »
@@ -365,7 +369,7 @@ def _empresa_resuelta(db: Session, cuenta: Cuenta, cliente_id: Optional[int], mo
 def _ficha(datos: GenerarIn, empresa: str) -> ia.FichaVacante:
     return ia.FichaVacante(
         titulo=datos.titulo.strip(), area=datos.area, seniority=datos.seniority, ubicacion=datos.ubicacion_texto(),
-        modalidad=datos.modalidad, sueldo_texto=datos.sueldo_texto(), empresa=empresa,
+        modalidad=datos.modalidad, sueldo_texto=datos.sueldo_texto() if datos.mostrar_sueldo else SUELDO_COMPETITIVO, empresa=empresa,
         descripcion_breve=datos.descripcion, requisitos_indispensables=datos.indispensables(),
         requisitos_deseables=[x for x in datos.requisitos_deseables if x.strip()],
         beneficios=[x for x in datos.beneficios if x.strip()],
@@ -427,12 +431,12 @@ def generar(
     from ..services import preguntas_filtro as pfu
 
     filtro = pfu.armar(list(resultado.requisitos_indispensables), titulo=datos.titulo.strip(),
-                       sueldo="" if (datos.sueldo_texto() or "A convenir") == "A convenir" else datos.sueldo_texto(),
+                       sueldo="" if ((datos.sueldo_texto() or "A convenir") == "A convenir" or not datos.mostrar_sueldo) else datos.sueldo_texto(),
                        ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
                        modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
                        naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
                        previas=datos.filtro or (actuales.get("filtro") or []), propuestos=list(resultado.indispensables_propuestos),
-                       enfoque=datos_g["enfoque_entrevista"], periodicidad=datos.sueldo_periodicidad or "")
+                       enfoque=datos_g["enfoque_entrevista"], periodicidad=datos.sueldo_periodicidad or "", descripcion=datos.descripcion)
     salida["filtro"] = filtro
     salida["preguntas_filtro"] = pfu.web(filtro)
     salida["preguntas_filtro_whatsapp"] = []
@@ -440,6 +444,38 @@ def generar(
                          "meta": g["meta"], "aplican": g["aplican"], "conservadas": g["conservadas"], "generadas": g["generadas"],
                          "huella": g["huella"], "ia": g["ia"]}
     return salida
+
+
+@router.post("/preguntas-filtro/regenerar")
+def regenerar_preguntas_filtro(
+    datos: GenerarIn, db: Session = Depends(get_db), _: Usuario = Depends(usuario_decisor), cuenta: Cuenta = Depends(cuenta_actual)
+):
+    """2026-10-16 (Bloque 2): «Regenerar» en la vista previa de las preguntas. Conserva lo «Agregado por ti» (requisitos que
+    capturó RH y sus preguntas ajustadas) y vuelve a proponer el resto desde la descripción (mínimo 3, máximo 5). No guarda
+    nada: el formulario recibe la lista nueva y RH decide."""
+    from ..services import guiones as sgui
+    from ..services import preguntas_filtro as pfu
+    from ..services import proceso as sproc
+
+    empresa = _empresa_resuelta(db, cuenta, datos.cliente_id, datos.mostrar_cliente_candidato)
+    propuestos_previos = {ia._norm_req(x) for x in datos.indispensables_propuestos or []}
+    rh = [r for r in datos.indispensables() if ia._norm_req(r) not in propuestos_previos][:pfu.MAX_PREGUNTAS]
+    entrada = datos.model_copy(update={"requisitos_indispensables": rh, "requisitos": ""})
+    pasos_ruta = _pasos_de_formulario(db, cuenta.id, datos.proceso)
+    resultado, con_ia = _generar(entrada, empresa, pide_cv=sgui.pide_cv(pasos_ruta) if pasos_ruta else None)
+    previas = [q for q in datos.filtro or [] if isinstance(q, dict)
+               and (q.get("base") or q.get("propia") or (q.get("indispensable") and ia._norm_req(q.get("requisito") or "") not in propuestos_previos))]
+    enfoque = sproc.enfoque_de_ruta(pasos_ruta) or (datos.enfoque_entrevista if datos.enfoque_entrevista in ENFOQUES_ENTREVISTA else "profesional")
+    filtro = pfu.armar(list(resultado.requisitos_indispensables), titulo=datos.titulo.strip(),
+                       sueldo="" if ((datos.sueldo_texto() or "A convenir") == "A convenir" or not datos.mostrar_sueldo) else datos.sueldo_texto(),
+                       ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
+                       modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
+                       naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
+                       previas=previas, propuestos=list(resultado.indispensables_propuestos), enfoque=enfoque,
+                       periodicidad=datos.sueldo_periodicidad or "", descripcion=datos.descripcion)
+    return {"ia": con_ia, "filtro": filtro, "requisitos": list(resultado.requisitos_indispensables),
+            "indispensables_propuestos": list(resultado.indispensables_propuestos), "preguntas_filtro": pfu.web(filtro),
+            "preguntas_requisitos": [x.model_dump() for x in resultado.preguntas_requisitos]}
 
 
 def _pasos_de_formulario(db: Session, cuenta_id: int, proceso: Optional[dict]) -> list:
@@ -581,6 +617,7 @@ async def crear(
         sueldo_hasta=datos.sueldo_hasta,
         sueldo_moneda=(datos.sueldo_moneda or "MXN").upper(),
         sueldo_periodicidad=datos.sueldo_periodicidad,
+        mostrar_sueldo=datos.mostrar_sueldo,
         estado="Publicada" if datos.publicar else "Borrador",
         requisitos=SEPARADOR_REQUISITOS.join(datos.indispensables()),
         descripcion=datos.descripcion,
@@ -871,6 +908,7 @@ class ActualizarIn(BaseModel):
     sueldo_hasta: Optional[int] = None
     sueldo_moneda: Optional[str] = None
     sueldo_periodicidad: Optional[str] = None
+    mostrar_sueldo: Optional[bool] = None  # 2026-10-16 (Bloque 2)
     requisitos: Optional[str] = None
     descripcion: Optional[str] = None
     resumen: Optional[str] = None
@@ -996,7 +1034,7 @@ async def actualizar(
         cambios.update({k: True for k, x in (("guiones", entrada_guiones), ("preguntas_filtro", web_nuevo),
                                              ("preguntas_filtro_whatsapp", whatsapp_nuevo)) if x is not None})
     if filtro_nuevo is not None or (_pfu.aplica(v) and any(k in cambios for k in (
-            "requisitos", "titulo", "sueldo", "sueldo_desde", "sueldo_hasta", "sueldo_periodicidad", "modalidad", "ubicacion",
+            "requisitos", "titulo", "sueldo", "sueldo_desde", "sueldo_hasta", "sueldo_periodicidad", "mostrar_sueldo", "modalidad", "ubicacion",
             "ubicacion_estado", "ubicacion_municipio", "seniority"))) or (propuestos_nuevos is not None and _pfu.aplica(v)):
         if any(k in cambios for k in ("sueldo_desde", "sueldo_hasta", "sueldo_moneda", "sueldo_periodicidad")):
             v.sueldo = texto_sueldo(v.sueldo_desde, v.sueldo_hasta, v.sueldo_moneda, v.sueldo_periodicidad)

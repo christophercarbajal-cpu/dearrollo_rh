@@ -19,7 +19,8 @@ Solo DATOS, con las MISMAS funciones de los endpoints (`normalizar_pasos`, `rout
      distingue por el nombre del proceso; el candidato solo ve el título). Se reconocen por su proceso, no por el título;
      la B con el título temporal «Operador de 5ª rueda · Entrevista en video» se renombra. Las 5 terminales, presencial, 20 posiciones, $25,000 - $32,000 mensuales. Indispensables: licencia federal tipo B con
      vigencia mayor a 3 meses, apto médico con vigencia mayor a 3 meses y experiencia como operador de 5ª rueda.
-     «Unas preguntas» (ambas): Sí/No eliminatorias de los tres indispensables + «¿En qué terminal te gustaría trabajar?»
+     «Unas preguntas» (ambas): Sí/No eliminatorias de los tres indispensables (+ «¿En qué terminal te gustaría trabajar?» solo
+     en la B; en la A la terminal la pregunta el WhatsApp)
      (+ interés y sueldo, Cambio 50).
      Prefiltro por WhatsApp (solo A): años de experiencia → última empresa → número de licencia → vigencia de la licencia
      (vence en menos de 3 meses → descarta) → vigencia del apto (ídem) → edad, interés, sueldo, colonia y tiempo a SU
@@ -403,8 +404,11 @@ def validar(db, v: Vacante, clave: str) -> list:
         c = next((x for x in criterios_web if x["pregunta"] == q), None)
         if c is None or not c.get("descarta") or c.get("tipo") != "si_no":
             problemas.append(f"«Unas preguntas» sin «{q}» como Sí/No eliminatoria → {preguntas_web}")
-    if subic.PREGUNTA_TERMINAL not in preguntas_web:
+    # 2026-10-16 (QA): con «Prefiltro por WhatsApp» (A) la terminal la pregunta el chat; sin él (B) la solicitud web
+    if clave == "B" and subic.PREGUNTA_TERMINAL not in preguntas_web:
         problemas.append("«Unas preguntas» no pregunta la terminal")
+    if clave == "A" and subic.PREGUNTA_TERMINAL in preguntas_web:
+        problemas.append("«Unas preguntas» pregunta la terminal (la pregunta el WhatsApp)")
     if any(q.lower().startswith("cuéntame") for q in preguntas_web):
         problemas.append("Una pregunta web empieza con «Cuéntame»")
     pasos = (v.proceso or {}).get("pasos") or []
@@ -438,8 +442,8 @@ def validar(db, v: Vacante, clave: str) -> list:
             if c is None or pfu.clasificar(c, "en un mes")[0] != "no" or pfu.clasificar(c, "diciembre de 2030")[0] != "si":
                 problemas.append(f"«{PREGUNTAS_CHAT[r]}»: no descarta una vigencia menor a 3 meses")
         datos = [c.get("dato") for c in criterios if c.get("base")]
-        # 2026-10-16: sin edad ni «¿Te interesa?»; con sueldo publicado tampoco la expectativa (bug del tester)
-        if datos != ["zona", "traslado"]:
+        # 2026-10-16 (QA): sin edad ni expectativa; con sueldo publicado «El sueldo es… ¿Te interesa?»
+        if datos != ["sueldo", "zona", "traslado"]:
             problemas.append(f"Base operativa del WhatsApp: {datos}")
         sim.ubicacion_id = mty.id if mty is not None else None
         sim.vacante = v

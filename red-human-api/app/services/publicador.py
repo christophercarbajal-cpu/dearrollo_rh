@@ -96,9 +96,12 @@ def _vista(e: Optional[dict]) -> dict:
 
 
 def _cuerpo(v, accion: str, canal: str) -> dict:
+    from ..serial import sueldo_publico
+
     return {"accion": accion, "canal": canal, "vacante": {
         "codigo": v.codigo, "titulo": v.titulo, "descripcion": v.descripcion or "", "ubicacion": v.ubicacion or "",
-        "modalidad": v.modalidad or "", "sueldo": v.sueldo or "", "requisitos": v.requisitos or "",
+        "modalidad": v.modalidad or "", "sueldo": sueldo_publico(v),  # 2026-10-16 (Bloque 2): «Sueldo competitivo» si no se muestra
+        "requisitos": v.requisitos or "",
         "publicacion": (v.publicaciones or {}).get(canal) or (v.publicaciones or {}).get("portal") or {},
         "liga": liga(v, canal)}}
 

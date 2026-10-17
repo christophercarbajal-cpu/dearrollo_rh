@@ -151,6 +151,27 @@ def _paginas(pdf: bytes) -> int:
     return len(PdfReader(io.BytesIO(pdf)).pages)
 
 
+DOMINIO_FIRMANTE_SIN_CORREO = "sin-correo.redhuman.mx"
+
+
+def correo_real_candidato(e: Expediente) -> str:
+    p = e.postulacion
+    return ((p.correo if p else "") or (e.candidato.correo if e.candidato else "") or "").strip()
+
+
+def correo_firmante_candidato(e: Expediente) -> str:
+    """2026-10-16 (QA, decisión del usuario): el contrato se genera y firma solo con el TELÉFONO del candidato. Dropbox Sign
+    exige un correo para identificar al firmante; sin correo real se usa un identificador técnico del expediente (la firma
+    es INCRUSTADA: el candidato firma en su liga `/expediente/{token}` que le llega por WhatsApp y Dropbox Sign no le
+    escribe a esa dirección)."""
+    real = correo_real_candidato(e)
+    if real:
+        return real
+    p = e.postulacion
+    codigo = (p.codigo if p else f"exp-{e.id}").lower()
+    return f"candidato-{codigo}@{DOMINIO_FIRMANTE_SIN_CORREO}"
+
+
 class CrearFirmaIn(BaseModel):
     documento: str  # carta | contrato
 
@@ -185,9 +206,7 @@ def crear_firma(exp_id: int, datos: CrearFirmaIn, db: Session = Depends(get_db),
     if datos.documento == "contrato" and not _documentos_listos(e) and not prueba:
         raise HTTPException(409, f"El contrato se firma cuando el expediente tiene el 100 % de documentos Aprobados (hoy {e.progreso} %).")
     p = e.postulacion
-    correo_cand = (p.correo if p else "") or (e.candidato.correo if e.candidato else "")
-    if not correo_cand:
-        raise HTTPException(409, "El candidato no tiene correo: Dropbox Sign lo necesita para identificar al firmante.")
+    correo_cand = correo_firmante_candidato(e)
     if not u.correo:
         raise HTTPException(409, "Tu usuario no tiene correo para firmar como representante de la empresa.")
     if u.correo.strip().lower() == correo_cand.strip().lower():
@@ -348,14 +367,13 @@ def firmar_documentos(exp_id: int, db: Session = Depends(get_db), u: Usuario = D
         return {**firma_dict(viva), "signUrl": _sign_url(db, viva, "rh"), "reutilizada": True}
     p = e.postulacion
     nombre_cand = (p.nombre if p else "") or (e.candidato.nombre if e.candidato else "Candidato")
-    correo_cand = (p.correo if p else "") or (e.candidato.correo if e.candidato else "")
+    correo_cand = correo_real_candidato(e)
     if modo == "demo":
         f = fdoc.crear_demo(db, e, cuenta.id, u, nombre_cand, correo_cand)
         db.commit()
         return {**firma_dict(f), "signUrl": None, "reutilizada": False}
-    # electrónica
-    if not correo_cand:
-        raise HTTPException(409, "El candidato no tiene correo: Dropbox Sign lo necesita para identificar al firmante.")
+    # electrónica — 2026-10-16 (QA): el correo del candidato YA NO es obligatorio (basta su teléfono)
+    correo_cand = correo_firmante_candidato(e)
     if not u.correo:
         raise HTTPException(409, "Tu usuario no tiene correo para firmar como representante de la empresa.")
     if u.correo.strip().lower() == correo_cand.strip().lower():

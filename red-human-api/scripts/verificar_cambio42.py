@@ -286,7 +286,9 @@ with TestClient(app) as client:
     a = dict(p2.analisis)
     a["brechas"] = ["Secundaria terminada: su CV indica que solo cursó primaria"]
     crit = next(c for c in pconv.criterios_de(p2.vacante, p2) if c.get("indispensable"))
-    a["respuestas_web"] = [{"pregunta": crit["pregunta"], "respuesta": "Sí" if crit.get("tipo") not in ("numero", "opcion", "abierta") else "Secundaria terminada"}]
+    # 2026-10-16 (Bloque 2): el requisito puede entrar a la web con su versión Sí/No (`pregunta_web`)
+    a["respuestas_web"] = [{"pregunta": crit.get("pregunta_web") or crit["pregunta"],
+                            "respuesta": "Sí" if crit.get("pregunta_web") or crit.get("tipo") not in ("numero", "opcion", "abierta") else "Secundaria terminada"}]
     estado_pf = dict(a.get(pconv.ENTIDAD) or {})
     estado_pf.pop("web_importada", None)
     a[pconv.ENTIDAD] = estado_pf

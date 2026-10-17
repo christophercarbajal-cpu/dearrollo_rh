@@ -153,8 +153,10 @@ with TestClient(app) as client:
     cs = pconv.criterios_de(v, p1)
     datos = [c.get("dato") for c in cs if c.get("dato")]
     check("zona" not in datos and "transporte" not in datos, f"ruta corporativa: sin colonia ni transporte ({datos})")
-    # 2026-10-16 (bug del tester): la vacante publica su sueldo → la expectativa ya no se pregunta
-    check(not any(c.get("dato") == "sueldo" for c in cs), "sueldo publicado: el prefiltro corporativo NO pregunta la expectativa")
+    # 2026-10-16 (QA): la expectativa ya no existe; con sueldo publicado el chat dice «El sueldo es… ¿Te interesa?»
+    check(not any(c.get("dato") == "sueldo" and c.get("expectativa") for c in cs)
+          and any(c.get("dato") == "sueldo" and "¿Te interesa?" in (c.get("chat") or "") for c in cs),
+          "sueldo publicado: el prefiltro corporativo pregunta «El sueldo es… ¿Te interesa?» (nunca la expectativa)")
     # Cambio 42: el Análisis de CV ya no agrega preguntas (omisión = «No lo menciona el CV»; contradicción → Puntos por validar)
     check(not any(c.get("por_brecha") or c.get("brecha") for c in cs), "Cambio 42: las brechas del CV ya NO se vuelven preguntas del prefiltro")
     lic = next(c for c in cs if c["indispensable"] and "licencia" in c["criterio"].lower())

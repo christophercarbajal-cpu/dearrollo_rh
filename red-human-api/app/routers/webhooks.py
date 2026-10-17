@@ -343,6 +343,12 @@ async def _resolver_postulacion(
     # 0.5 Cambio 37: la respuesta a la plantilla de inicio es de SU postulación (la conversación queda ligada a la vacante
     # de la plantilla): se elige antes que cualquier otra y sin preguntar «¿Sobre qué vacante me escribes?».
     plantilla = _con_plantilla_pendiente(activas, conv)
+    # 0.4 2026-10-16 (QA): una oferta (o propuesta) enviada esperando el «Sí» del candidato gana sobre otras conversaciones;
+    # solo una plantilla de inicio enviada DESPUÉS de la oferta va antes (su respuesta es de esa otra vacante).
+    oferta = _con_oferta_pendiente(activas)
+    if oferta is not None and (plantilla is None or _enviada_oferta(oferta) >= _enviada_plantilla(plantilla)):
+        fijar_conversacion(oferta)
+        return oferta, "respuesta_oferta"
     if plantilla is not None:
         fijar_conversacion(plantilla)
         return plantilla, "respuesta_plantilla"
@@ -400,6 +406,23 @@ async def _resolver_postulacion(
     return p, "postulacion_nueva"
 
 
+async def _transcribir_nota(msg: dict) -> str:
+    """Descarga la nota de voz (Graph o Telegram) y la transcribe. "" si no se pudo."""
+    import asyncio as _asyncio
+
+    from ..services import ia as _ia
+
+    media = msg.get("media") or {}
+    try:
+        d = await descargar_media(media.get("id", ""), media.get("mime_type", ""))
+        if not d.get("ok") or not d.get("contenido"):
+            return ""
+        return await _asyncio.to_thread(_ia.transcribir_audio, d["contenido"], d.get("mime") or media.get("mime_type", ""))
+    except Exception as ex:  # noqa: BLE001 — nunca tumba el turno
+        print(f"[webhook] nota de voz no transcrita: {str(ex)[:200]}", flush=True)
+        return ""
+
+
 def texto_cambio_vacante(p: Postulacion) -> str:
     """Cambio 54: «Ahora seguimos con tu postulación a [puesto] en [empresa].»"""
     from ..serial import nombre_empresa_candidato
@@ -433,6 +456,34 @@ def _con_plantilla_pendiente(activas: List[Postulacion], conv: Optional[Postulac
         if ultimo is not None and ultimo > t:
             return None
     return p
+
+
+def _iso_utc(valor) -> datetime:
+    try:
+        return _utc(datetime.fromisoformat(str(valor).replace("Z", "+00:00")))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _enviada_oferta(p: Postulacion) -> datetime:
+    a = p.analisis or {}
+    return _iso_utc((a.get("oferta") or {}).get("enviada_en") or (a.get("propuesta") or {}).get("enviada_en"))
+
+
+def _enviada_plantilla(p: Postulacion) -> datetime:
+    from ..services import plantillas_meta
+
+    return _iso_utc(plantillas_meta.estado(p).get("enviada_en"))
+
+
+def _con_oferta_pendiente(activas: List[Postulacion]) -> Optional[Postulacion]:
+    """2026-10-16 (QA): la postulación activa con la oferta laboral (o la propuesta del flujo anterior) enviada y sin
+    respuesta más reciente."""
+    from ..services import oferta as soferta
+    from ..services import propuesta as sprop
+
+    pendientes = [p for p in activas if soferta.esperando_respuesta(p) or sprop.esperando_respuesta(p)]
+    return max(pendientes, key=_enviada_oferta) if pendientes else None
 
 
 def _conversacion_descartada(personas: List[Candidato]) -> Optional[Postulacion]:
@@ -886,6 +937,14 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
     """Procesamiento COMÚN de un mensaje entrante ya normalizado (WhatsApp o Telegram, ver docstring del módulo)."""
     telefono = msg["telefono"]
     texto = msg["texto"].strip()
+    if msg.get("tipo") in ("audio", "voice") and not texto and msg.get("media"):
+        # 2026-10-16 (QA): la nota de voz se TRANSCRIBE y el turno sigue como si la hubiera escrito (modismos y faltas de
+        # ortografía los interpreta el mismo agente). Si no se puede (sin clave, falla de descarga), se pide por escrito.
+        transcrito = await _transcribir_nota(msg)
+        if transcrito:
+            texto = transcrito
+            msg = {**msg, "texto": transcrito, "tipo": "text", "transcrito": True}
+            print(f"[agente] Nota de voz transcrita ({len(transcrito)} caracteres)", flush=True)
     nombre_wa = msg.get("nombre", "")
     id_seleccionado = msg.get("id_seleccionado", "")
 
@@ -974,7 +1033,7 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
         resultado = await _recibir_documento_whatsapp(db, p, msg, telefono)
         return {"ok": True, "accion": "documento_whatsapp", "candidato": c.codigo, "postulacion": p.codigo, **resultado}
     if msg.get("tipo") in ("audio", "voice") and not texto:
-        # especificación 2026-10-10: mensaje de voz — el bot no escucha audios; pide que lo escriba y repite la pregunta
+        # especificación 2026-10-10: mensaje de voz sin transcripción — pide que lo escriba y repite la pregunta
         from ..services import prefiltro_conversacional as _pconv
 
         pendiente = _pconv.pregunta_pendiente(p) if p.vacante_id and p.consentimiento else None

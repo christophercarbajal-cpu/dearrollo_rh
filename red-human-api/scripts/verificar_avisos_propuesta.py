@@ -188,9 +188,11 @@ with TestClient(app) as client:
     cuerpo = {**{k: d[k] for k in ("puesto", "sueldo", "ubicacion", "jefe_directo")}, "tipo_contratacion": "Tiempo indeterminado", "fecha_ingreso": "2026-11-03"}
     r = client.post(f"/candidatos/{P2}/propuesta", json=cuerpo)
     msgs = a(t2)
-    check(r.status_code == 200 and msgs and "• Puesto: Almacenista" in msgs[-1] and "• Sueldo: $11,000 mensuales" in msgs[-1]
-          and "• Jefe directo: Laura Jefa" in msgs[-1] and msgs[-1].endswith("¿Aceptas? Responde sí o no."),
-          "la propuesta sale con sus datos y «¿Aceptas? Responde sí o no.»")
+    # 2026-10-16 (QA): «Mensaje 2» definido por el usuario
+    check(r.status_code == 200 and msgs and "¡felicidades! Esta es tu propuesta formal" in msgs[-1] and "Puesto: Almacenista" in msgs[-1]
+          and "Sueldo: $11,000 mensuales" in msgs[-1] and "Jefe directo: Laura Jefa" in msgs[-1]
+          and msgs[-1].endswith("¿Estás de acuerdo? Responde Sí para confirmar tu lugar y enviarte tu contrato para firma."),
+          "la propuesta sale con sus datos y «¿Estás de acuerdo? Responde Sí…»")
     check(paso(P2, "condiciones")["estado"] == "en_curso", "la actividad espera la respuesta del candidato")
     # deja 2 documentos aprobados: el «sí» debe pedir SOLO los que faltan
     p2 = post(P2)

@@ -3,7 +3,7 @@
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/verificar_cambio47.py
 
 1. Ubicaciones con dirección, mapa, indicaciones y horarios con cupo (API); una vacante con varias ubicaciones.
-2. «¿En qué terminal te gustaría trabajar?»: en el formulario web y en el prefiltro de WhatsApp; se guarda en la ficha y
+2. «¿En qué terminal te gustaría trabajar?»: en el prefiltro de WhatsApp (en la web solo si la ruta no lo trae); se guarda en la ficha y
    el traslado se pregunta hacia ESA terminal. Filtro del tablero por ubicación.
 3. Vigencia > 3 meses (licencia, apto médico): la fecha se extrae del chat y una vigencia corta descarta.
 4. Autoagenda: el motor ofrece 3 días hábiles con cupo, nunca un horario lleno; al agendar resta 1 al cupo, crea UNA
@@ -208,8 +208,13 @@ with TestClient(app) as client:
           "muchos-a-muchos: la vacante guarda sus ubicaciones (en orden) y sus posiciones")
     v = db.query(Vacante).filter_by(codigo=vac["id"]).one()
     terminal_web = next((c for c in vac["criterios"] if c["pregunta"] == subic.PREGUNTA_TERMINAL), None)
+    # 2026-10-16 (QA): con «Prefiltro por WhatsApp» en la ruta, la terminal la pregunta el chat (no la solicitud web)
+    check(terminal_web is None, "formulario web: sin «¿En qué terminal…?» (la ruta trae prefiltro por WhatsApp: la pregunta el chat)")
+    from app.serial import _pregunta_terminal
+
+    terminal_web = (_pregunta_terminal(v) or [None])[0]
     check(terminal_web is not None and terminal_web["tipo"] == "opcion" and terminal_web["opciones"] == ["Terminal Monterrey", "Terminal Guadalajara"]
-          and not terminal_web["descarta"], "formulario web: «¿En qué terminal te gustaría trabajar?» con las ubicaciones (no descarta)")
+          and not terminal_web["descarta"], "sin prefiltro por WhatsApp la web pregunta la terminal con las ubicaciones (no descarta)")
     web_si_no = [c["pregunta"] for c in vac["criterios"] if c.get("tipo") == "si_no"]
     check("¿Tu licencia federal tipo B tiene vigencia de más de 3 meses?" in web_si_no and
           "¿Tu apto médico tiene vigencia de más de 3 meses?" in web_si_no and not any(q.lower().startswith("cuéntame") for q in web_si_no),

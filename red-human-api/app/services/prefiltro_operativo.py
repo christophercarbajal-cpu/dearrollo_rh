@@ -8,7 +8,7 @@ pregunta por mensaje y SIEMPRE en este orden:
    estudiaste?»), experiencia («¿Cuánto tiempo de experiencia…?»), licencia («¿Qué tipo de licencia tienes?»),
    disponibilidad; cualquier otro, Sí/No directa (Cambio 48: «¿Puedes cargar material pesado?»). Si no lo cumple → descarta.
 3. «¿Cuántos años tienes?» — SOLO si la vacante pide una edad (indispensable; 2026-10-16).
-4. La expectativa de sueldo, una vez (2026-10-16: ya no «El puesto es… ¿Te interesa?» ni «El sueldo es… ¿Te interesa?»).
+4. Con sueldo publicado, «El sueldo es… ¿Te interesa?» (2026-10-16, QA: ya no hay expectativa; un «no» confirmado descarta).
 6. Colonia y municipio · 7. «El trabajo es en [ubicación]. ¿Puedes trasladarte?» · 8. «¿Cuánto tiempo harías de tu
    casa al trabajo?» — descarta SOLO si la vacante tiene un indispensable con límite de traslado.
 Sin pregunta de transporte y sin validar habilidades blandas (autopercepciones o «soft skills» de los indispensables).
@@ -234,9 +234,11 @@ def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str], na
     if edad is not None:
         salida.append(_criterio("dato-edad", "edad", edad_req, "¿Cuántos años tienes?", True,
                                 edad_min=edad[0], edad_max=edad[1]))
-    if not re.search(r"\d", sueldo or ""):  # 2026-10-16 (bug del tester): con sueldo publicado no se pide la expectativa
-        salida.append({**_criterio("dato-sueldo", "sueldo", "Expectativa de sueldo", "¿Cuál es tu expectativa de sueldo mensual?"),
-                       "operativo": False, "base_operativa": False, "expectativa": True})
+    if _texto_sueldo(sueldo):
+        # 2026-10-16 (QA, decisión del usuario): ya no hay expectativa — con sueldo publicado «El sueldo es… ¿Te interesa?»;
+        # un «no» se confirma y, confirmado, descarta (`prefiltro_conversacional.turno`)
+        salida.append({**_criterio("dato-sueldo", "sueldo", "Sueldo", _texto_sueldo(sueldo)),
+                       "operativo": False, "base_operativa": False, "confirma_descarte": True})
     salida.append({**_criterio("dato-zona", "zona", "Colonia y municipio", "¿En qué colonia y municipio vives?"), "operativo": False})
     # Cambio 51 (2026-10-15): orden Indispensables → Edad → Puesto («El puesto es [puesto] en [ciudad, estado]. ¿Te
     # interesa?», la ciudad la pone `prefiltro_conversacional.criterios_de`) → Sueldo → Colonia → Tiempo. Ya no se pregunta
@@ -257,12 +259,8 @@ def criterios(v) -> List[dict]:
 
     from .guiones import preguntas_requisitos
 
-    from .prefiltro_conversacional import dato_expectativa
-
-    salida = base(getattr(v, "titulo", "") or "", getattr(v, "sueldo", "") or "", ubicacion_vacante(v),
-                  requisitos_lista(getattr(v, "requisitos", "") or ""), preguntas_requisitos(v))
-    # la expectativa con la periodicidad y el tope de la vacante (mismo criterio que el resto de las rutas)
-    return [dato_expectativa(v) if c["id"] == "dato-sueldo" else c for c in salida]
+    return base(getattr(v, "titulo", "") or "", getattr(v, "sueldo", "") or "", ubicacion_vacante(v),
+                requisitos_lista(getattr(v, "requisitos", "") or ""), preguntas_requisitos(v))
 
 
 def preguntas_guardables(ficha) -> List[dict]:

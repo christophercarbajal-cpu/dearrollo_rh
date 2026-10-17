@@ -735,7 +735,23 @@ export interface PreguntaFiltroU {
   unidad?: string;
   /** Cambio 48: escolaridad — índice ordinal del nivel requerido (1 Primaria … 5 Posgrado). */
   nivel?: number;
+  /** 2026-10-16 (Bloque 2): de dónde salió la pregunta del requisito. */
+  origen?: OrigenPregunta;
+  /** Versión Sí/No para la solicitud web (sin ella, la web usa `pregunta`). */
+  pregunta_web?: string;
+  /** Pregunta base que RH quitó con la «X» (se conserva para poder restaurarla). */
+  quitada?: boolean;
 }
+/** 2026-10-16 (Bloque 2): origen de una pregunta de requisito en la vista previa. */
+export type OrigenPregunta = "descripcion" | "red_human" | "rh";
+export const ETIQUETA_ORIGEN: Record<OrigenPregunta, string> = {
+  descripcion: "De tu descripción",
+  red_human: "Propuesto por Red Human",
+  rh: "Agregado por ti",
+};
+/** Red Human propone siempre 3 preguntas obligatorias; RH puede llegar a 5. */
+export const MIN_PREGUNTAS_FILTRO = 3;
+export const MAX_PREGUNTAS_FILTRO = 5;
 /** Cambio 48: jerarquía ordinal de estudios (misma que `prefiltro_conversacional.NOMBRE_NIVEL` del backend). */
 export const NIVELES_ESTUDIO = ["Primaria", "Secundaria", "Preparatoria", "Licenciatura", "Posgrado"];
 /** Texto de la columna «Descarta si»: escolaridad → «Menor que Secundaria»; lo demás, la regla sin «Descarta si». */
@@ -793,6 +809,8 @@ export interface SueldoEstructurado {
   sueldo_hasta?: number | null;
   sueldo_moneda?: string;
   sueldo_periodicidad?: PeriodicidadSueldo | "";
+  /** 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación» (false → lo público dice «Sueldo competitivo»). */
+  mostrar_sueldo?: boolean;
 }
 
 /** Ficha capturada por RH ANTES de generar (Parte 3). Es la ÚNICA fuente de condiciones reales:
@@ -836,6 +854,8 @@ export interface DatosVacante extends SueldoEstructurado {
   documentos_solicitados?: DocumentoSolicitado[];
   /** Cambio 31: pregunta natural por requisito indispensable (el bot la usa tal cual). */
   preguntas_requisitos?: PreguntaRequisito[];
+  /** Cambio 37: indispensables que propuso Red Human (los demás son «Agregado por ti»). */
+  indispensables_propuestos?: string[];
 }
 
 export function fetchVacantes(filtros?: {
@@ -908,6 +928,12 @@ export function fetchVacantePorSlug(slug: string) {
 
 export function generarVacanteIA(datos: DatosVacante) {
   return post<VacanteGenerada>("/vacantes/generar", datos);
+}
+
+/** 2026-10-16 (Bloque 2): «Regenerar» las preguntas filtro — conserva lo «Agregado por ti» y vuelve a proponer el resto. */
+export function regenerarPreguntasFiltro(datos: DatosVacante) {
+  return post<{ filtro: PreguntaFiltroU[]; requisitos: string[]; indispensables_propuestos: string[]; preguntas_requisitos: PreguntaRequisito[] }>(
+    "/vacantes/preguntas-filtro/regenerar", datos);
 }
 
 export function crearVacante(
@@ -1146,6 +1172,7 @@ export interface Plantilla {
   sueldoHasta?: number | null;
   sueldoMoneda?: string;
   sueldoPeriodicidad?: PeriodicidadSueldo | "";
+  mostrarSueldo?: boolean;
   requisitos: string;
   descripcion: string;
   resumen: string;

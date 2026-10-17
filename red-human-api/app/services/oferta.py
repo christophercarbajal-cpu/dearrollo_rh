@@ -7,6 +7,7 @@ con «Propuesta y aceptación» siguen con su flujo (`services/propuesta.py`); u
 oferta.
 """
 
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -93,7 +94,7 @@ def precarga(p: Postulacion) -> dict:
     return {
         "puesto": de(e.puesto if e else "", v.titulo if v else ""),
         "empresa": de(e.empresa if e else "", nombre_empresa_candidato(v) if v else ""),
-        "sueldo": de(e.sueldo if e else "", (v.sueldo if v and v.sueldo != "A convenir" else "") if v else ""),
+        "sueldo": sueldo_exacto(de(e.sueldo if e else "", (v.sueldo if v and v.sueldo != "A convenir" else "") if v else "")),
         "ubicacion": de(e.ubicacion if e else "", v.ubicacion if v else ""),
         "modalidad": (v.modalidad if v else "") or "",
         "horario": "",
@@ -126,8 +127,111 @@ def nombre_corto(p: Postulacion) -> str:
 
 
 def texto_aviso(p: Postulacion, url: str) -> str:
-    """«[nombre], tenemos una oferta para ti. Revísala aquí: [liga]» (texto definido por el usuario)."""
-    return f"{nombre_corto(p) or 'Hola'}, tenemos una oferta para ti. Revísala aquí: {url}"
+    """Mensaje 1 (2026-10-16, QA — texto definido por el usuario)."""
+    nombre = nombre_corto(p)
+    return (f"¡Buenas noticias{', ' + nombre if nombre else ''}! Fuiste seleccionado para el puesto. Revisa aquí tu sueldo, "
+            f"horario y fecha de inicio para confirmar tu contratación: {url} ¡Gracias!")
+
+
+_RE_DESDE = re.compile(r"^\s*desde\s+", re.IGNORECASE)
+
+
+def sueldo_exacto(texto: str) -> str:
+    """2026-10-16 (QA): en la oferta el sueldo va con la cifra exacta, sin «Desde»: «$8,000 MXN mensuales». Un número
+    suelto se formatea; un texto ya formateado solo pierde el «Desde»."""
+    t = _RE_DESDE.sub("", (texto or "").strip())
+    if not t or t.lower() == "a convenir":
+        return ""
+    solo = re.sub(r"[,\s$]", "", t)
+    if re.fullmatch(r"\d+(?:\.\d+)?", solo):
+        return f"${int(float(solo)):,} MXN mensuales"
+    return t
+
+
+def _fecha_larga(valor: str) -> str:
+    try:
+        d = datetime.fromisoformat(str(valor)[:10])
+    except (TypeError, ValueError):
+        return str(valor or "")
+    meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    return f"{d.day} de {meses[d.month - 1]} de {d.year}"
+
+
+def texto_propuesta_formal(nombre: str, empresa: str, puesto: str, sueldo: str, ubicacion: str, fecha: str, tipo: str, jefe: str) -> str:
+    """Mensaje 2 (2026-10-16, QA — texto definido por el usuario). Los datos que no estén capturados se omiten (nunca se
+    inventan condiciones)."""
+    partes = [f"Hola{' ' + nombre if nombre else ''}, ¡felicidades! Esta es tu propuesta formal{' en ' + empresa if empresa else ''}:"]
+    if puesto:
+        partes.append(f"Puesto: {puesto}")
+    if sueldo:
+        partes.append(f"Sueldo: {sueldo}")
+    if ubicacion:
+        partes.append(f"Ubicación: {ubicacion}.")
+    if fecha:
+        partes.append(f"Fecha de ingreso: {fecha}")
+    if tipo:
+        partes.append(f"Tipo de puesto: {tipo}")
+    if jefe:
+        partes.append(f"Jefe directo: {jefe}.")
+    partes.append("¿Estás de acuerdo? Responde Sí para confirmar tu lugar y enviarte tu contrato para firma.")
+    return " ".join(partes)
+
+
+def texto_mensaje_2(p: Postulacion, carta: dict) -> str:
+    return texto_propuesta_formal(nombre_corto(p), carta.get("empresa", ""), carta.get("puesto", ""), sueldo_exacto(carta.get("sueldo", "")),
+                                  carta.get("ubicacion", ""), _fecha_larga(carta["fecha_ingreso"]) if carta.get("fecha_ingreso") else "",
+                                  carta.get("tipo_contratacion", ""), carta.get("jefe_directo", ""))
+
+
+# ============================================================ respuesta por el chat (2026-10-16, QA)
+
+# «ok», «va» o «sale» solos son acuses, no una aceptación (mismo criterio que la agenda): se repite la pregunta
+_RE_ACEPTA = re.compile(r"\b(si|sii+|sip|simon|claro|acepto|aceptar|aceptamos|de acuerdo|deacuerdo|"
+                        r"perfecto|por supuesto|desde luego|confirmo|me interesa|estoy de acuerdo|con gusto|adelante)\b")
+_RE_RECHAZA = re.compile(r"^(no|nop|nel|nah)\b|\bno (acepto|me interesa|estoy de acuerdo|gracias|puedo|quiero)\b|\brechazo\b|\bdeclino\b")
+
+
+def _norm(texto: str) -> str:
+    import unicodedata
+
+    t = unicodedata.normalize("NFD", (texto or "").lower())
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^\w\s]", " ", t).strip()
+
+
+def clasificar_respuesta(texto: str) -> Optional[bool]:
+    """True = acepta, False = no acepta, None = no se entiende. 👍 cuenta como sí."""
+    if "👍" in (texto or "") or "✅" in (texto or ""):
+        return True
+    t = _norm(texto)
+    if _RE_RECHAZA.search(t):
+        return False
+    if _RE_ACEPTA.search(t):
+        return True
+    return None
+
+
+def esperando_respuesta(p: Postulacion) -> bool:
+    """La oferta ya salió y el candidato no ha respondido: su siguiente mensaje es la respuesta a la oferta."""
+    o = estado(p)
+    return bool(p.activa and o.get("enviada_en") and not o.get("respuesta"))
+
+
+async def turno(db: Session, p: Postulacion, texto_candidato: str, canal: str) -> dict:
+    """Mensaje del candidato mientras la oferta espera respuesta. «Sí» → Oferta aceptada y la ruta sigue DE INMEDIATO a
+    «Contrato y firma» (antes el «Sí» se iba a otra postulación o mandaba la liga de la entrevista). «No» → Oferta no
+    aceptada (aviso a RH, nunca descarta). Otra cosa → se repite la pregunta."""
+    from ..routers.candidatos import _enviar_whatsapp, guardar_mensaje
+
+    decision = clasificar_respuesta(texto_candidato)
+    if decision is None:
+        msg = "Para continuar necesito tu respuesta a la oferta. ¿Estás de acuerdo? Responde Sí para confirmar tu lugar."
+        envio = await _enviar_whatsapp(p, msg, canal)
+        guardar_mensaje(db, p, "assistant", msg, canal, envio)
+        db.commit()
+        return {"respuesta": msg, "oferta": "enviada", "clasificacion": None, "ia": False, "whatsapp": envio}
+    r = await responder(db, p, decision, canal="whatsapp", por=p.nombre or "candidato", texto=texto_candidato)
+    return {"respuesta": r.get("mensaje", ""), "oferta": r["respuesta"], "clasificacion": None, "ia": False}
 
 
 def publica(p: Postulacion) -> Optional[dict]:
@@ -190,17 +294,37 @@ async def enviar(db: Session, p: Postulacion, actor: str, datos: Optional[dict] 
                                            motivo="oferta", actor=actor)
     o["entregada"] = bool(entregado)
     o["detalle_envio"] = str(detalle or "")[:200]
+    texto_2 = ""
+    if entregado and p.telefono:
+        # Mensaje 2 (2026-10-16, QA): la propuesta formal con «¿Estás de acuerdo? Responde Sí…»; su respuesta en el chat
+        # la atiende `turno`. Best effort: si no sale (p. ej. fuera de la ventana de 24 h), la liga del mensaje 1 basta.
+        from ..routers.candidatos import guardar_mensaje
+        from .whatsapp import enviar_mensaje
+
+        texto_2 = texto_mensaje_2(p, carta)
+        try:
+            with de_cuenta(p.cuenta_id):
+                r2 = await enviar_mensaje(p.telefono, texto_2)
+            guardar_mensaje(db, p, "assistant", texto_2, "whatsapp", r2)
+            o["mensaje_2"] = bool(r2.get("enviado"))
+        except Exception as ex:  # noqa: BLE001
+            o["mensaje_2"] = False
+            print(f"[oferta] mensaje 2 de {p.codigo} no salió: {str(ex)[:200]}", flush=True)
     _guardar(p, o)
     p.historial = list(p.historial or []) + [{"evento": "oferta_enviada", "usuario": actor, "fecha": ahora,
                                               "texto": f"Oferta laboral enviada por {actor}" + ("" if entregado else f" (no se entregó: {detalle})")}]
     registrar(db, actor, "oferta_enviada", "postulacion", p.codigo, {"entregada": bool(entregado), "detalle": str(detalle)[:200], "en_ruta": en_ruta})
     db.commit()
-    return {"enviada": bool(entregado), "detalle": detalle, "texto": texto, "liga": url}
+    return {"enviada": bool(entregado), "detalle": detalle, "texto": texto, "texto2": texto_2, "liga": url}
 
 
-async def responder(db: Session, p: Postulacion, acepta: bool, canal: str = "liga", por: str = "") -> dict:
-    """«Acepto» → la actividad se cumple y la ruta sigue. «No acepto» → «Oferta no aceptada» (aviso a RH; nunca descarta)."""
+async def responder(db: Session, p: Postulacion, acepta: bool, canal: str = "liga", por: str = "", texto: str = "") -> dict:
+    """«Acepto» → la actividad se cumple y la ruta sigue. «No acepto» → «Oferta no aceptada» (aviso a RH; nunca descarta).
+
+    2026-10-16 (QA): respondida por el CHAT, el candidato recibe el siguiente paso en el mismo turno — sus documentos de
+    ingreso si faltan (liga, solo lo pendiente) o la firma del contrato — y la ruta avanza de inmediato a «Contrato y firma»."""
     from . import proceso as sproc
+    from .motor_ruta import _avisar, _disparar_documentos
     from .propuesta import avisar_rh_rechazo
 
     o = estado(p)
@@ -213,10 +337,30 @@ async def responder(db: Session, p: Postulacion, acepta: bool, canal: str = "lig
         "evento": "oferta_aceptada" if acepta else "oferta_no_aceptada", "usuario": quien, "fecha": ahora,
         "texto": ("Oferta aceptada" if acepta else "Oferta no aceptada") + f" — {fechas.con_zona(fechas.local(ahora_dt).strftime('%d/%m/%Y %H:%M'))}"}]
     registrar(db, quien, "oferta_aceptada" if acepta else "oferta_no_aceptada", "postulacion", p.codigo, {"canal": canal})
-    aviso = None if acepta else await avisar_rh_rechazo(db, p, "No aceptó la oferta laboral")
+    aviso = None if acepta else await avisar_rh_rechazo(db, p, (f"No aceptó la oferta laboral: «{texto[:200]}»" if texto else "No aceptó la oferta laboral"))
     db.commit()
-    await sproc.avanzar_seguro(db, p)
-    return {"respuesta": o["respuesta"], "respondidaEn": ahora, "avisoRh": aviso}
+    mensaje, documentos = "", None
+    if canal == "whatsapp":
+        if acepta:
+            # los documentos de ingreso van primero SOLO si la ruta los pide en Contratación (Masivos: «Documentos de
+            # ingreso» antes de «Contrato y firma»); si no, lo que sigue es el contrato
+            paso_docs = next((x for x in (p.proceso or {}).get("pasos", []) if x.get("tipo") in ("documentos", "solicitud_documentos")
+                              and x.get("etapa") == "Contratación" and not x.get("heredado")), None)
+            faltan = list(p.expediente.pendientes) if p.expediente and paso_docs else []
+            mensaje = ("Gracias, registramos tu aceptación. Siguiente paso: " +
+                       ("sube tus documentos de ingreso; en seguida te mando la liga con solo los que faltan." if faltan
+                        else "la firma de tu contrato; en breve te lo enviamos para firma."))
+            await _avisar(db, p, mensaje, "Tu oferta laboral", "", motivo="oferta", actor=ACTOR)
+            if faltan:
+                ok, detalle, entregado = await _disparar_documentos(db, p, paso_docs)
+                documentos = {"ok": ok, "detalle": detalle, "enviado": entregado, "pendientes": faltan}
+        else:
+            mensaje = "Gracias por avisarnos. Lo comparto con el equipo de RH, que se pondrá en contacto contigo."
+            await _avisar(db, p, mensaje, "Tu oferta laboral", "", motivo="oferta", actor=ACTOR)
+        db.commit()
+    movidas = await sproc.avanzar_seguro(db, p)
+    return {"respuesta": o["respuesta"], "respondidaEn": ahora, "avisoRh": aviso, "mensaje": mensaje, "documentos": documentos,
+            "movidas": movidas}
 
 
 def postulacion_por_token(db: Session, token: str) -> Optional[Postulacion]:

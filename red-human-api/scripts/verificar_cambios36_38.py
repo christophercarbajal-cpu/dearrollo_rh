@@ -283,8 +283,9 @@ with TestClient(app) as client:
           "sin selector de enfoque ni de oficio y sin avisos de «Cumplimiento»")
     check("Sin capturar: no se publican prestaciones" in form and "{conDocumentos && (" in form
           and "reqRuta.etapasDocumentos.length > 0" in form, "errores en línea; «Documentos y fotos» solo si la ruta trae «Documentos»")
-    check(all(t in form for t in ('titulo="Responsabilidades"', 'titulo="Requisitos"', 'titulo="Preguntas base"', 'titulo="Entrevista"',
-                                  'titulo="Textos por plataforma"', "Descarta si")), "Bloque 2: responsabilidades, requisitos, base, entrevista y textos")
+    # 2026-10-16 (Bloque 2): el Bloque 2 sigue el orden de la ruta (3.1 Solicitud web · 3.2 Prefiltro por WhatsApp · 3.3 Entrevista)
+    check(all(t in form for t in ('titulo="Responsabilidades"', 'Solicitud web`}', 'Prefiltro por WhatsApp`}', 'Entrevista`}',
+                                  'titulo="Textos por plataforma"', "Descarta si")), "Bloque 2: responsabilidades, preguntas por ruta, entrevista y textos")
     sec = (APP / "components/dashboard/procesos/seccion-proceso-vacante.tsx").read_text(encoding="utf-8")
     check("disabled={Boolean(bloqueado)}" in sec and "predeterminada.pasos" in sec, "proceso preseleccionado y bloqueado con candidatos")
     pub = (APP / "components/dashboard/vacantes/publicar-en.tsx").read_text(encoding="utf-8")

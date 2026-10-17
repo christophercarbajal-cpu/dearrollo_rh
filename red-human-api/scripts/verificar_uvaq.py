@@ -300,14 +300,15 @@ with TestClient(app) as client:
             salida.append([m.texto for m in p.mensajes[antes:] if m.rol == "assistant"])
         return p, salida
 
+    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» («Sí») antes de la colonia
     p, sal = conversa("Pedro Pátzcuaro", "4439700001", ["Hola", "Vivo en Pátzcuaro", "sí", "de 8 a 4", "Terminé la secundaria", "2 años",
-                                                         "Centro, Pátzcuaro", "15 minutos"])  # 2026-10-16: sin expectativa (sueldo publicado)
+                                                         "Sí", "Centro, Pátzcuaro", "15 minutos"])
     check(sal[1] == ["Tenemos sede en Pátzcuaro, ¿te queda bien?"], f"vive en Pátzcuaro → se le propone esa sede → {sal[1]}")
     check(sal[2][0].startswith(su.Q_TURNO) and p.ubicacion_id == db.query(Ubicacion).filter_by(cuenta_id=cu.id, nombre="Pátzcuaro").one().id,
           "«sí» elige Pátzcuaro y sigue con el turno")
     check(((p.analisis or {}).get("prefiltro_datos") or {}).get("turno_codigo") == "MAT-03", "«de 8 a 4» → turno MAT-03")
-    check(sal[6] == ["Entendido. ¿Cuánto tiempo harías de tu casa a la sede Pátzcuaro?"] or sal[6][0].endswith("a la sede Pátzcuaro?"),
-          f"el traslado nombra la sede elegida (sin «Conocido») → {sal[6]}")
+    check(sal[7] == ["Entendido. ¿Cuánto tiempo harías de tu casa a la sede Pátzcuaro?"] or sal[7][0].endswith("a la sede Pátzcuaro?"),
+          f"el traslado nombra la sede elegida (sin «Conocido») → {sal[7]}")
     check(len(sal[-1]) == 1 and sal[-1][0].startswith("Listo, Pedro. Ahora te haré unas preguntas") and p.etapa == "Entrevista IA"
           and not any("revisará" in t or "te escribirá" in t for t in sal[-1]),
           f"cumple → avanza solo a la entrevista con UN mensaje, sin el cierre de RH → {sal[-1]}")
@@ -315,7 +316,7 @@ with TestClient(app) as client:
     check(not p.activa and "no continuaremos" in sal[-1][0], "«ninguna» sede (requisito excluyente) → descartado")
     p, sal = conversa("Toño Turno", "4439700003", ["Hola", "Zamora", "no puedo en ninguno"])
     check(not p.activa and "no continuaremos" in sal[-1][0], "ningún turno (excluyente) → descartado")
-    p, sal = conversa("Wendy Web", "4439700004", ["Hola", "4 años", "Centro, Zamora", "30 minutos"],
+    p, sal = conversa("Wendy Web", "4439700004", ["Hola", "4 años", "Sí", "Centro, Zamora", "30 minutos"],
                       web={su.Q_SEDE: "Zamora", su.Q_TURNO: "De 8:00 a 16:00 (lunes a viernes)", su.Q_ESTUDIOS: "Preparatoria",
                            "¿Cuál es tu expectativa de sueldo mensual?": "9000"})
     hechas = " ".join(t for x in sal for t in x)

@@ -36,6 +36,22 @@ def ia_activa() -> bool:
     return bool(settings.openai_api_key)
 
 
+def transcribir_audio(contenido: bytes, mime: str = "") -> str:
+    """2026-10-16 (QA): nota de voz del candidato → texto (español). Sin clave de OpenAI o si falla, regresa "" (el webhook
+    le pide que lo escriba, como antes). Nunca lanza."""
+    cli = _client()
+    if cli is None or not contenido:
+        return ""
+    ext = {"audio/ogg": "ogg", "audio/opus": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac",
+           "audio/amr": "amr", "audio/wav": "wav", "audio/webm": "webm"}.get((mime or "").split(";")[0].strip().lower(), "ogg")
+    try:
+        r = cli.audio.transcriptions.create(model=settings.openai_transcribe_model, file=(f"nota.{ext}", contenido), language="es")
+        return " ".join(str(getattr(r, "text", "") or "").split())[:1000]
+    except Exception as ex:  # noqa: BLE001 — sin transcripción se pide el texto
+        print(f"[ia] transcripción de nota de voz falló: {str(ex)[:200]}", flush=True)
+        return ""
+
+
 # ============================================================
 # 1) Generador de publicaciones de vacante (módulo 3.5)
 # ============================================================
@@ -251,6 +267,8 @@ def _unir_capturado(capturados: List[str], generados: List[str], excluir: Option
 # ============================================================ Cambio 37: reglas de los requisitos indispensables
 
 MAX_INDISPENSABLES = 5
+# 2026-10-16 (Bloque 2): Red Human deja SIEMPRE al menos 3 requisitos (= 3 preguntas obligatorias); RH puede llegar a 5 a mano
+MIN_INDISPENSABLES = 3
 _RE_PREFERENTE = re.compile(r"\b(preferentemente|de preferencia|preferible\w*|deseable\w*|se valora\w*|valorable|es un plus|plus)\b",
                             re.IGNORECASE)
 # Verbos con los que SÍ empieza un requisito («Saber leer y escribir», «Contar con licencia»); cualquier otro infinitivo al
@@ -357,6 +375,17 @@ def indispensables_implicitos(titulo: str, area: str = "", seniority: str = "") 
     return salida
 
 
+def respaldo_indispensables(titulo: str, modalidad: str, ubicacion: str, sin_experiencia: bool) -> List[str]:
+    """2026-10-16 (Bloque 2): lo que Red Human propone para llegar al mínimo de 3 cuando la descripción no da más
+    (determinista; nunca una condición real como sueldo u horario)."""
+    salida = [indispensable_por_defecto(modalidad, ubicacion)]
+    puesto = " ".join(str(titulo or "").split())
+    if puesto and not sin_experiencia:
+        salida.append(f"Experiencia como {_minuscula_inicial(puesto)}")
+    salida += ["Disponibilidad para iniciar de inmediato", "Documentos personales en regla para trabajar"]
+    return salida
+
+
 def reglas_indispensables(capturados: List[str], generados: List[str], *, seniority: str = "", descripcion: str = "",
                           responsabilidades: Optional[List[str]] = None, deseables: Optional[List[str]] = None,
                           modalidad: str = "", ubicacion: str = "", titulo: str = "",
@@ -365,7 +394,9 @@ def reglas_indispensables(capturados: List[str], generados: List[str], *, senior
     * máximo 5 indispensables (lo de RH nunca se recorta; lo propuesto solo completa hasta 5);
     * seniority «Sin experiencia» → PROHIBIDO proponer indispensables de experiencia;
     * una tarea o responsabilidad nunca es indispensable; lo «preferentemente…» va a deseables;
-    * sin indispensables de RH → SOLO las condiciones explícitas de la descripción; si no hay, el de disponibilidad."""
+    * sin indispensables de RH → primero las condiciones explícitas de la descripción;
+    * 2026-10-16 (Bloque 2): SIEMPRE al menos `MIN_INDISPENSABLES` (3): lo propuesto completa hasta 3 con lo que la IA sacó
+      de la descripción y, si no alcanza, con `respaldo_indispensables`; más de 3 solo si RH los captura (máximo 5)."""
     sin_exp = (seniority or "").strip().lower() == "sin experiencia"
     capt = [x.strip() for x in capturados or [] if x.strip()]
     preferentes = preferentes_de(descripcion)
@@ -384,17 +415,20 @@ def reglas_indispensables(capturados: List[str], generados: List[str], *, senior
     implicitos = [x for x in indispensables_implicitos(titulo, area, seniority)
                   if not (x == CEDULA_PROFESIONAL and any("cedula" in _clave_texto(c) for c in capt))
                   and not (x != CEDULA_PROFESIONAL and any(es_de_experiencia(c) for c in capt)) and admisible(x)]
+    de_ia = [g for g in generados or [] if admisible(g)
+             and not (implicitos and es_de_experiencia(g) and any(es_de_experiencia(i) for i in implicitos))]
     if capt:
-        candidatos = implicitos + [g for g in generados or [] if admisible(g)
-                                   and not (implicitos and es_de_experiencia(g) and any(es_de_experiencia(i) for i in implicitos))]
+        candidatos = implicitos + de_ia
     else:
-        candidatos = implicitos + [c for c in condiciones_explicitas(descripcion) if admisible(c)]
-        if not candidatos:
-            candidatos = [indispensable_por_defecto(modalidad, ubicacion)]
+        candidatos = implicitos + [c for c in condiciones_explicitas(descripcion) if admisible(c)] + de_ia
+    con_exp = any(es_de_experiencia(c) for c in capt + candidatos)
+    candidatos += [x for x in respaldo_indispensables(titulo, modalidad, ubicacion, sin_exp)
+                   if (admisible(x) or x.startswith("Disponibilidad")) and not (con_exp and es_de_experiencia(x))]
     vistos = {_clave_texto(x) for x in capt}
     propuestos: List[str] = []
+    tope = min(MAX_INDISPENSABLES, max(MIN_INDISPENSABLES, len(capt)))
     for g in candidatos:
-        if len(capt) + len(propuestos) >= MAX_INDISPENSABLES:
+        if len(capt) + len(propuestos) >= tope:
             break
         if _clave_texto(g) not in vistos:
             vistos.add(_clave_texto(g))

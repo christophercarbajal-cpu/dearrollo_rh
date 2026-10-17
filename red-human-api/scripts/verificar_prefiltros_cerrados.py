@@ -57,8 +57,10 @@ check("PREGUNTAS FILTRO" in fuente and "UNA pregunta por requisito indispensable
 from app.services import preguntas_filtro as _pfu  # noqa: E402
 
 _lista = _pfu.armar(["Secundaria terminada", "Manejo de efectivo"], titulo="Cajero", sueldo="$9,000 mensuales")
-check(all(q["tipo"] in ("si_no", "numero", "opcion") for q in _pfu.web(_lista)) and len(_pfu.web(_lista)) >= 3,
-      "regla 5b: el formulario web (derivado) solo trae preguntas cerradas o numéricas, mínimo 3")
+# 2026-10-16 (QA): la web solo registra los requisitos (sin preguntas base de relleno)
+check(all(q["tipo"] in ("si_no", "numero", "opcion") for q in _pfu.web(_lista)) and len(_pfu.web(_lista)) == 2
+      and not any(q.get("base") for q in _pfu.web(_lista)),
+      "regla 5b: el formulario web (derivado) solo trae las preguntas cerradas o numéricas de los requisitos")
 check("UN solo criterio por pregunta" in _insp.getsource(ia.prefiltro_turno), "el agente de WhatsApp también recibe la regla en cada turno")
 
 print("\n--- 2. Web: cierre garantizado en código ---")

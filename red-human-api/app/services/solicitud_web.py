@@ -100,17 +100,12 @@ def pregunta_expectativa(v) -> str:
 
 
 def preguntas_extra(v, actuales: List[dict]) -> List[dict]:
-    """Lo que «Unas preguntas» agrega a las preguntas filtro de la vacante: la expectativa de sueldo (+ edad / colonia si
-    la vacante los pide). Nunca descartan. 2026-10-16 (decisión del usuario): sin «El puesto es… ¿Te interesa?» ni «El
-    sueldo es… ¿Te interesa?»: el sueldo se pregunta UNA vez como expectativa."""
-    from .prefiltro_conversacional import sueldo_publicado
-
+    """Lo que «Unas preguntas» agrega a las preguntas filtro de la vacante: edad / colonia solo si la vacante los pide.
+    Nunca descartan. 2026-10-16 (QA): sin sueldo, expectativa, puesto ni ubicación."""
     textos = [str(q.get("pregunta") or "") for q in actuales]
     salida = []
-    if not sueldo_publicado(v) and not any(_es_expectativa(t) for t in textos):
-        salida.append({"id": "base-sueldo", "pregunta": pregunta_expectativa(v), "tipo": "numero", "valida": "Expectativa de sueldo",
-                       "respuesta_esperada": "", "descarta": False, "opciones": [], "unidad": "pesos", "base": True, "dato": "sueldo",
-                       "expectativa": True})
+    # 2026-10-16 (QA, decisión del usuario): la web nunca pregunta sueldo (ni expectativa), puesto ni ubicación — solo los
+    # requisitos. Edad / colonia SOLO si la vacante los configuró explícitamente (`solicitud_web_extra`).
     extras = extras_de(v)
     if "edad" in extras and not any(_n(t) == _n(PREGUNTA_EDAD) for t in textos):
         salida.append({"id": "base-edad", "pregunta": PREGUNTA_EDAD, "tipo": "numero", "valida": "Edad", "respuesta_esperada": "",
@@ -127,7 +122,6 @@ def criterios_web(v) -> List[dict]:
     from ..serial import _sin_parcial
     from . import opciones_vacante as ov
     from . import preguntas_filtro as pfu
-    from .prefiltro_conversacional import sueldo_publicado
 
     guardadas = pfu.web(pfu.de_vacante(v)) if pfu.aplica(v) else (getattr(v, "preguntas_filtro", None) or [])
     base = []
@@ -135,8 +129,8 @@ def criterios_web(v) -> List[dict]:
         if not q.get("descarta") and (_es_interes(q.get("pregunta")) or _es_sueldo(q.get("pregunta"))):
             continue  # 2026-10-16: confirmaciones de puesto y sueldo retiradas (formularios guardados antes)
         if _es_expectativa(q.get("pregunta")):
-            if q.get("base") and not q.get("descarta") and sueldo_publicado(v):
-                continue  # 2026-10-16: con sueldo publicado no se pregunta la expectativa automática
+            if not q.get("descarta") and q.get("base"):
+                continue  # 2026-10-16 (QA): la web ya no pregunta la expectativa (formularios guardados antes)
             q.update({"dato": "sueldo", "expectativa": True})
         if ov.es_requisito_sede(v, q.get("valida"), q.get("pregunta")):
             if any(x.get("dato") == "terminal" for x in base):

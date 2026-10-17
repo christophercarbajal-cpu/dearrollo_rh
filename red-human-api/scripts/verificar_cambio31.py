@@ -252,35 +252,25 @@ with TestClient(app) as client:
     check("TONO_CORPORATIVO" in fuentes["app/services/ia.py"] and "PROHIBIDO elogiar" in ia.TONO_CORPORATIVO and "Para confirmar" in ia.TONO_CORPORATIVO,
           "el prompt del entrevistador lleva el tono corporativo (sin elogios ni frases de formulario)")
 
-    print("\n--- Bloque 3 · evasivas: UNA repregunta suave; la segunda se registra («Flexible») y se avanza ---")
+    print("\n--- Bloque 3 · sueldo: sin sueldo publicado no se pregunta (2026-10-16, QA: la expectativa ya no existe) ---")
     vcorp = Vacante(codigo="VAC-C31E", titulo="Analista de compras", estado="Publicada", cuenta_id=cuenta.id,
                     requisitos="3 años en compras · Inglés intermedio · Manejo de SAP",
-                    sueldo_periodicidad="a_convenir", sueldo="A convenir")  # 2026-10-16: sin sueldo publicado se pide la expectativa
+                    sueldo_periodicidad="a_convenir", sueldo="A convenir")
     db.add(vcorp)
     db.flush()
     vcorp.proceso = sproc.proceso_para_vacante(db, cuenta.id, {}, {"pasos": sproc.ruta_base("corporativo")["pasos"]})
     db.commit()
     pe2 = nuevo("Elsa Evasiva", "5531310009", vcorp)
     r = chat(pe2, "Hola")
-    sueldo_visto = False
+    vistos = [r]
     for _ in range(12):
-        if "esperas ganar" in r:
-            sueldo_visto = True
+        db.expire_all()
+        if pconv.estado(db.get(type(pe2), pe2.id)).get("resultado"):
             break
-        r = chat(pe2, "Sí")
-    check(sueldo_visto, f"el prefiltro llega a la expectativa de sueldo → «{r}»")
-    r1 = chat(pe2, "Lo que ustedes ofrezcan")
-    check(r1 == "Claro. Solo para tenerlo en cuenta, ¿con qué cantidad al mes te sentirías cómodo?", f"1.ª evasiva → repregunta suave → «{r1}»")
-    r2 = chat(pe2, "La verdad lo que sea, soy flexible")
-    db.expire_all()
-    pe2 = db.get(type(pe2), pe2.id)
-    est = (pe2.analisis or {}).get("prefiltro_conversacional") or {}
-    resp = (est.get("respuestas") or {}).get("dato-sueldo") or {}
-    datos = (pe2.analisis or {}).get("prefiltro_datos") or {}
-    check(resp.get("flexible") and datos.get("sueldo") == "Flexible", f"2.ª evasiva → se registra «Flexible» → {datos.get('sueldo')}")
-    check("cantidad" not in r2 and "esperas ganar" not in r2, f"…y se avanza sin volver a preguntar → «{r2[:80]}»")
-    pts = " ".join(str(x) for x in ((pe2.analisis or {}).get("puntos_validar_prefiltro") or []))
-    check("sueldo" not in pts.lower(), "la evasiva no se manda a Puntos por validar")
+        r = chat(pe2, "Sí, 5 años")
+        vistos.append(r)
+    check(not any("esperas ganar" in x or "expectativa" in x.lower() or "sueldo" in x.lower() for x in vistos),
+          f"«A convenir»: el prefiltro nunca pregunta sueldo ni expectativa → {vistos[-1][:80]}")
 
     # ================= Bloque 4 · traslado en corporativos solo con indispensable de traslado =================
     print("\n--- Bloque 4 · generación: «¿Cuánto tiempo haces de tu casa a…?» solo si es indispensable ---")

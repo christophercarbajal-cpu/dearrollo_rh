@@ -351,7 +351,7 @@ def configurar_preguntas(v: Vacante, d: dict) -> None:
     for req, pregunta, descarta in d["filtros"]:
         q = next((x for x in lista if x.get("requisito") == req and not x.get("propia")), {"requisito": req, "indispensable": True})
         q = {**q, "pregunta": pregunta, "descarta": descarta}
-        q.pop("pregunta_web", None)
+        q["pregunta_web"] = ""  # 2026-10-16 (Bloque 2): la web pide el mismo DATO (sin versión Sí/No automática)
         if pregunta in (Q_EXP_INT, Q_EXP_MKT, Q_SUELDO_MKT):
             q["tipo"] = "numero" if pregunta != Q_EXP_INT else "abierta"  # el número se compara con su regla (no Sí/No)
         elif pregunta in (Q_SEDE, Q_TURNO):

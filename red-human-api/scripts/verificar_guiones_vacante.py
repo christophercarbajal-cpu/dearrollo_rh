@@ -166,7 +166,9 @@ with TestClient(app) as client:
     check(web_g and wa_g == [] and all(q["tipo"] in ("si_no", "numero", "opcion") and (q.get("opciones") or q["tipo"] == "numero")
                                        for q in web_g), "prefiltros web y WhatsApp: solo preguntas cerradas")
     indisp = [q for q in web_g if q["descarta"]]
-    check(sorted(q["valida"] for q in indisp) == sorted(FICHA["requisitos_indispensables"]),
+    # 2026-10-16 (Bloque 2): Red Human completa hasta 3 requisitos; los de RH van todos y primero
+    check(sorted(q["valida"] for q in indisp) == sorted(g["requisitos_indispensables"])
+          and set(FICHA["requisitos_indispensables"]) <= {q["valida"] for q in indisp},
           "eliminatorias del web = exactamente los requisitos indispensables")
     # Cambio 37: «Preguntas filtro» = UNA lista — primero una pregunta por indispensable (con su regla de descarte), después
     # las base (edad, interés, sueldo, colonia, traslado), que no descartan
@@ -175,7 +177,8 @@ with TestClient(app) as client:
     check(orden == sorted(orden, key=lambda x: x != "indisp") and all(q["regla"].startswith("Descarta si") for q in filtro_g if q["descarta"])
           and all(not q["descarta"] for q in filtro_g if q["base"] and not q.get("indispensable")),
           "Preguntas filtro: primero los indispensables con «Descarta si…», después las base que no descartan")
-    check(sorted(q["requisito"] for q in filtro_g if q.get("indispensable")) == sorted(FICHA["requisitos_indispensables"])
+    check(sorted(q["requisito"] for q in filtro_g if q.get("indispensable")) == sorted(g["requisitos_indispensables"])
+          and set(FICHA["requisitos_indispensables"]) <= {q["requisito"] for q in filtro_g if q.get("indispensable")}
           and not any("inventarios" in q["requisito"].lower() for q in filtro_g),
           "una pregunta por indispensable (lo deseable no entra a las preguntas filtro)")
     exp = next(q for q in filtro_g if "montacargas" in q["requisito"] and "años" in q["requisito"])

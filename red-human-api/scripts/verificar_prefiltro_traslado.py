@@ -187,8 +187,10 @@ with TestClient(app) as client:
     r = turno(p, "como 2 horas y media")
     check(r["respuesta"].endswith("¿En qué transporte llegarías?"), "4) al final el medio de transporte; el traslado largo NO descarta")
     r = turno(p, "En camión y metro")
-    # 2026-10-16 (bug del tester): la vacante publica su sueldo → el prefiltro ya no pide la expectativa
-    check("esperas ganar" not in r["respuesta"] and "expectativa" not in r["respuesta"], "5) sueldo publicado: sin pregunta de expectativa")
+    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» (nunca la expectativa)
+    check("esperas ganar" not in r["respuesta"] and "expectativa" not in r["respuesta"] and r["respuesta"].endswith("¿Te interesa?"),
+          "5) sueldo publicado: «El sueldo es… ¿Te interesa?» (sin expectativa)")
+    r = turno(p, "Sí")
     p = fresca(p)
     d = p.analisis.get("prefiltro_datos") or {}
     check(p.activa and (p.analisis.get("prefiltro_web") or {}).get("resultado") == "cumple", "con la escolaridad cumplida el prefiltro aprueba")

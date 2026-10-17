@@ -218,7 +218,8 @@ with TestClient(app) as client:
     check("[plantilla inicio_entrevista_rh]" in enviados_a("5561000001", desde),
           f"sale la plantilla inicio_entrevista_rh → {enviados_a('5561000001', desde)}")
     salida = escribe("5561000001", "Sí, empezar ahora")
-    check(salida and "Me comentaste que no puedes cargar material pesado, ¿es correcto?" in salida[-1],
+    # 2026-10-16 (QA): el «No» de la web se retoma con una pregunta ABIERTA
+    check(salida and "En tu solicitud indicaste que no puedes cargar material pesado. Cuéntame, ¿cuál es tu situación con eso?" in salida[-1],
           f"el WhatsApp CONFIRMA la respuesta excluyente de la web → {salida}")
     salida = escribe("5561000001", "Sí, es correcto")
     p = db.get(Postulacion, p.id)

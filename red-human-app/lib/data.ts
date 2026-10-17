@@ -347,6 +347,15 @@ export interface Candidato {
   /** Zona, traslado y transporte del prefiltro de WhatsApp (solo se registran; el límite de traslado sale del indispensable). */
   /** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos). */
   historialLaboral?: { empresa: string; puesto: string; tareas: string; duracion: string; motivo: string; actual: boolean }[];
+  /** 2026-10-16 (QA): ficha estructurada de la entrevista por WhatsApp (A · B · C · D · alertas). */
+  fichaEntrevista?: {
+    A: { trabajaActualmente: string; respuesta: string; tiempoSinTrabajar: string; sinExperiencia: boolean };
+    B: { trabajos: { empresa: string; puesto: string; tareas: string; duracion: string; motivo: string; actual: boolean }[]; trabajosUltimos3Anios: string };
+    C: { pregunta: string; respuesta: string }[];
+    D: { confirmacion: string; respuesta: string; interesado: boolean | null; motivoNoInteres: string; detalleNoInteres: string; fechaInicio: string };
+    alertas: string[];
+    terminada: boolean;
+  } | null;
   /** Cambio 30: oferta laboral (de la ruta o del botón «Generar carta oferta»). */
   oferta?: OfertaResumen | null;
   prefiltroDatos?: {
@@ -626,6 +635,9 @@ export interface Vacante {
   sueldoHasta?: number | null;
   sueldoMoneda?: string;
   sueldoPeriodicidad?: string;
+  /** 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación»; `sueldoPublico` es lo que ve el candidato. */
+  mostrarSueldo?: boolean;
+  sueldoPublico?: string;
   estado: "Publicada" | "Borrador" | "En revisión" | "Pausada" | "Cerrada" | "Eliminada";
   candidatos: number;
   nuevos: number;

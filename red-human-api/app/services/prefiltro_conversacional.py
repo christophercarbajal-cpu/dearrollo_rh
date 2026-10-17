@@ -81,15 +81,13 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     if v is None:
         return salida
     salida = filtros_revision.anotar(salida, v)
-    if sueldo_publicado(v):
-        # 2026-10-16 (bug del tester): con sueldo publicado NO se pregunta la expectativa AUTOMÁTICA (ni por web ni por
-        # chat). Una expectativa que RH capturó como requisito propio (p. ej. UVAQ, con su filtro de revisión) se respeta.
-        salida = [c for c in salida if not (c.get("dato") == "sueldo" and c.get("expectativa")
-                                            and (c.get("base") or c.get("id") == "dato-sueldo"))]
-    regla = regla_expectativa(v)
-    for c in salida:
-        if regla and c.get("dato") == "sueldo" and c.get("expectativa") and not c.get("revision_regla"):
-            c["revision_regla"] = regla  # 2026-10-16: expectativa arriba del máximo de la vacante → «Requiere revisión»
+    # 2026-10-16 (QA, decisión del usuario): la expectativa de sueldo AUTOMÁTICA ya no existe en ninguna ruta (una que RH
+    # capturó como requisito propio, p. ej. UVAQ con su filtro de revisión, se respeta). El sueldo se pregunta solo si está
+    # PUBLICADO («El sueldo es… ¿Te interesa?»); con «Mostrar sueldo» apagado o sin cifra, no se pregunta.
+    salida = [c for c in salida if not (c.get("dato") == "sueldo" and c.get("expectativa")
+                                        and (c.get("base") or c.get("id") == "dato-sueldo"))]
+    if not sueldo_publicado(v):
+        salida = [c for c in salida if not (c.get("dato") == "sueldo" and not c.get("expectativa") and not c.get("indispensable"))]
     return salida
 
 
@@ -339,8 +337,7 @@ def _criterios_base(v, p: Optional[Postulacion] = None) -> List[dict]:
     corporativa = p is not None and _es_corporativa(p)
     if corporativa:
         # Cambio 24: ruta corporativa — sin colonia ni transporte; el sueldo pregunta la EXPECTATIVA del candidato
-        datos = [d for d in datos if d["dato"] not in ("zona", "transporte", "sueldo")]
-        datos.append(dato_expectativa(v))
+        datos = [d for d in datos if d["dato"] not in ("zona", "transporte")]
         # Cambio 31 (Bloque 4): el tiempo de traslado solo se pregunta si la vacante lo tiene como INDISPENSABLE
         from ..routers.vacantes import requisitos_lista
 
@@ -351,7 +348,7 @@ def _criterios_base(v, p: Optional[Postulacion] = None) -> List[dict]:
         return _con_brechas(salida + registro, brechas)
     # 2026-10-16 (decisión del usuario): el sueldo se pregunta UNA vez y como EXPECTATIVA (también en los prefiltros
     # guardados antes con «El sueldo es… ¿Te parece bien?»); C2: aunque el prefiltro guardado no lo traiga
-    datos = [d for d in datos if d["dato"] != "sueldo"] + [dato_expectativa(v)]
+    datos = [d for d in datos if d["dato"] != "sueldo"] + ([dato_sueldo(v)] if sueldo_publicado(v) else [])
     datos.sort(key=lambda d: ia.DATOS_PREFILTRO.index(d["dato"]))
     base = next((c for c in salida if c["indispensable"] and not c.get("reconfirma") and ia.RE_NIVEL_ESTUDIOS.search(c["criterio"])), None)
     esc = next((d for d in datos if d["dato"] == "escolaridad"), None)
@@ -393,21 +390,30 @@ MARGEN_EXPECTATIVA = 0.0
 
 
 def sueldo_publicado(v) -> bool:
-    """La vacante ya publica su sueldo (rango estructurado o texto con cifra): entonces la expectativa no se pregunta."""
-    if v is None:
+    """La vacante PUBLICA su sueldo: tiene cifra (rango estructurado o texto) y «Mostrar sueldo en la publicación» está
+    encendido (2026-10-16, QA). Solo entonces el chat dice «El sueldo es… ¿Te interesa?»."""
+    if v is None or getattr(v, "mostrar_sueldo", True) is False:
         return False
     return tope_sueldo(v) is not None or bool(re.search(r"\d", str(getattr(v, "sueldo", "") or "")))
 
 
 def regla_expectativa(v) -> Optional[dict]:
-    """Regla de revisión (formato de `services/filtros_revision.py`) de la expectativa de sueldo; None sin sueldo capturado.
-    2026-10-16 (bug del tester): con sueldo publicado la expectativa ya no se pregunta, así que tampoco hay regla — una
-    expectativa nunca congela la ruta ni el envío por WhatsApp."""
-    tope = tope_sueldo(v)
-    if not tope or sueldo_publicado(v):
-        return None
-    return {"pregunta": "", "tipo": "maximo", "valor": tope, "unidad": "pesos",
-            "motivo": f"Expectativa de sueldo arriba del máximo de la vacante (${tope:,})"}
+    """2026-10-16 (QA, decisión del usuario): la expectativa de sueldo automática ya no existe — nunca hay regla de
+    revisión por expectativa (se conserva la función por compatibilidad)."""
+    return None
+
+
+def dato_sueldo(v) -> dict:
+    """«El sueldo es… ¿Te interesa?» (sueldo publicado). Un «no» se CONFIRMA y, confirmado, descarta."""
+    from .preguntas_filtro import _texto_sueldo
+
+    q = _texto_sueldo(getattr(v, "sueldo", "") or "")
+    return {"id": "dato-sueldo", "clave": "sueldo", "dato": "sueldo", "criterio": "Sueldo", "pregunta": q, "chat": q,
+            "indispensable": False, "esperada": "si", "tipo": "dato", "confirma_descarte": True}
+
+
+PREGUNTA_CONFIRMA_SUELDO = "Entiendo. ¿Entonces prefieres no continuar con la postulación por el sueldo?"
+_RE_NO_SIGUE = re.compile(r"\b(no me interesa|prefiero no|no gracias|asi no|no continuo|no sigo|mejor no)\b")
 
 
 def texto_sobre_tope(monto: int, ofrecido: str, tope: int) -> str:
@@ -568,6 +574,12 @@ def comparativo_indispensables(p: Postulacion) -> List[dict]:
         # la respuesta más reciente: la del chat por la brecha, la reconfirmación o la del indispensable
         r = (respuestas.get(f"cv-{c['id']}") or next((respuestas[x["id"]] for x in criterios if x.get("reconfirma") == c["id"] and x["id"] in respuestas), None)
              or respuestas.get(c["id"]) or {})
+        if not r and c.get("pregunta_web"):
+            # 2026-10-16 (QA): la web preguntó el requisito como Sí/No y el chat todavía no pide el dato
+            web_r = next((str(x.get("respuesta") or "").strip() for x in a.get("respuestas_web") or []
+                          if isinstance(x, dict) and _norm(x.get("pregunta", "")) == _norm(c["pregunta_web"])), "")
+            if _norm(web_r) in ("si", "no"):
+                r = {"respuesta": web_r, "valor": _norm(web_r), "fuente": "web"}
         valor = r.get("valor")
         cumple = None if valor is None else valor == c["esperada"]
         filas.append({"requisito": c["criterio"], "cv": texto_cv, "omision": texto_cv == NO_LO_MENCIONA,
@@ -1191,6 +1203,21 @@ def _plural(termino: str) -> str:
 
 
 def texto_confirmacion(c: dict, conf: dict, v=None) -> str:
+    """2026-10-16 (QA, decisión del usuario): un «No» de la web a un requisito se retoma con una pregunta ABIERTA, en modo
+    conversación («En tu solicitud indicaste que no tienes licencia tipo B. Cuéntame, ¿cuál es tu situación con eso?»). Sede,
+    turno y las confirmaciones en positivo conservan su forma. La repregunta (si no se entiende) es la cerrada."""
+    if conf.get("tipo") == "excluyente" and c.get("dato") not in ("terminal", "turno"):
+        q = _sin_signos(conf.get("pregunta") or c.get("pregunta") or "")
+        resp = str(conf.get("respuesta") or "").strip()
+        primera = (q.split(" ") or [""])[0]
+        verbo = bool(_RE_VERBO_TU.match(primera)) and primera not in ("tus", "las", "los", "mas", "tres", "dos", "seis")
+        if verbo and _norm(resp) == "no":
+            return f"En tu solicitud indicaste que no {q}. Cuéntame, ¿cuál es tu situación con eso?"
+        return f"En tu solicitud respondiste «{resp}» a «¿{q[:1].upper()}{q[1:]}?». Cuéntame un poco más sobre eso."
+    return texto_confirmacion_cerrada(c, conf, v)
+
+
+def texto_confirmacion_cerrada(c: dict, conf: dict, v=None) -> str:
     """«Me comentaste que no puedes trabajar de lunes a sábado, ¿es correcto?» (o, en positivo, «…que puedes…»)."""
     q = _sin_signos(conf.get("pregunta") or c.get("pregunta") or "")
     resp = str(conf.get("respuesta") or "").strip()
@@ -1506,10 +1533,11 @@ async def enviar_descarte(db: Session, p: Postulacion, texto: str, canal: str = 
     return envio
 
 
-def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict) -> str:
+def cerrar_no_aprobado(db: Session, p: Postulacion, criterios: List[dict], e: dict, c: dict, motivo_base: str = "") -> str:
     """Incumple un indispensable: cierra la postulación (No aprobado) con el motivo EXACTO. No hace commit. Regresa el
-    texto del mensaje de cierre (lo envía quien llama, por el canal de la conversación)."""
-    motivo = f"No cumple el requisito indispensable: {c['criterio']}"
+    texto del mensaje de cierre (lo envía quien llama, por el canal de la conversación). `motivo_base` reemplaza el
+    «No cumple el requisito indispensable: …» (p. ej. el sueldo no aceptado)."""
+    motivo = motivo_base or f"No cumple el requisito indispensable: {c['criterio']}"
     r_c = (e.get("respuestas") or {}).get(c["id"]) or {}
     respuesta = r_c.get("respuesta", "")
     if respuesta:
@@ -1949,19 +1977,56 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
         if tema:
             registrar(db, ACTOR, "prefiltro_pregunta_candidato", "postulacion", p.codigo, {"tema": tema, "texto": texto[:200]})
             return await responder(rva.con_pendiente(p, tema, texto_chat(p, e, pendiente)), aclaracion=True, pregunta_candidato=tema)
+    if pendiente is not None and pendiente.get("dato") == "sueldo" and pendiente.get("confirma_descarte"):
+        # 2026-10-16 (QA, decisión del usuario): «El sueldo es… ¿Te interesa?» → un «no» se CONFIRMA; confirmado, se
+        # descarta con su motivo (mensaje genérico). Si dice que sí sigue, queda en Puntos por validar y se avanza.
+        fuente_s = canal_registro(canal)
+        sentido_s = clasificar({"criterio": "", "pregunta": "", "chat": ""}, texto)
+        if e.get("confirmar_sueldo"):
+            e.pop("confirmar_sueldo", None)
+            e["pendiente"] = None
+            if sentido_s == "si" or _RE_NO_SIGUE.search(limpiar(texto)):
+                e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["id"]: {
+                    "respuesta": texto.strip()[:300], "valor": "no", "fuente": fuente_s, "en": _ahora(), "confirmado": True}}
+                guardar_datos(p, pendiente, texto, {"sueldo_acepta": False})
+                ofrecido = (p.vacante.sueldo if p.vacante else "") or "el de la vacante"
+                mensaje = cerrar_no_aprobado(db, p, criterios, e, pendiente,
+                                             motivo_base=f"No le interesa el sueldo ofrecido ({ofrecido}); lo confirmó por "
+                                                         f"{ {'telegram': 'Telegram'}.get(fuente_s, 'WhatsApp') }")
+                return await responder(mensaje, _descarte=True, clasificacion_final="no_cumple")
+            e["respuestas"] = {**(e.get("respuestas") or {}), pendiente["id"]: {
+                "respuesta": texto.strip()[:300], "valor": "si", "fuente": fuente_s, "en": _ahora(), "dudo": True}}
+            guardar_datos(p, pendiente, "sí", {"sueldo_acepta": True})
+            punto_por_validar(p, f"Dudó con el sueldo: primero dijo que no le interesa y después que sí sigue («{texto.strip()[:120]}»)")
+            pendiente = None
+        elif sentido_s == "no" and not es_negociacion(texto):
+            e["confirmar_sueldo"] = True
+            historial(p, "prefiltro_repregunta", f"Confirma su «no» al sueldo: «{texto.strip()[:120]}»", motivo="sueldo_no",
+                      criterio=pendiente["criterio"])
+            return await responder(PREGUNTA_CONFIRMA_SUELDO, aclaracion=True)
     conf = confirmacion(e, pendiente)
     if pendiente is not None and conf:
         # 2026-10-16 (decisión del usuario): confirmación de lo que contestó en la solicitud web. Excluyente confirmado →
         # se descarta AQUÍ con su motivo; corregido → el prefiltro sigue (un Sí/No queda cumplido; un dato se pregunta).
         fuente = canal_registro(canal)
         sentido = clasificar_confirmacion(conf, texto)
-        texto_conf = texto_confirmacion(pendiente, conf, p.vacante)
+        if sentido is None and conf.get("tipo") == "excluyente" and pendiente.get("dato") not in ("terminal", "turno"):
+            # la pregunta es ABIERTA: lo que contó se evalúa contra el propio requisito (cumple = corrige; no = confirma)
+            if pendiente.get("unificado"):
+                from . import preguntas_filtro as pfu
+
+                v_req = pfu.clasificar(pendiente, texto)[0]
+            else:
+                v_req = clasificar(pendiente, texto)
+            if v_req in ("si", "no"):
+                sentido = "no" if v_req == (pendiente.get("esperada") or "si") else "si"
+        texto_conf = texto_confirmacion_cerrada(pendiente, conf, p.vacante)
         if sentido is None and aclaraciones.get(pendiente["id"], 0) < MAX_ACLARACIONES:
             aclaraciones[pendiente["id"]] = aclaraciones.get(pendiente["id"], 0) + 1
             e["aclaraciones"] = aclaraciones
             historial(p, "prefiltro_repregunta", f"Repregunta al confirmar «{pendiente['criterio']}»: «{texto.strip()[:120]}»",
                       motivo="confirmacion_ambigua", criterio=pendiente["criterio"])
-            return await responder(f"¿Me confirmas con un sí o un no? {texto_conf}", aclaracion=True)
+            return await responder(texto_conf, aclaracion=True)
         e[CLAVE_CONFIRMAR] = {k: x for k, x in (e.get(CLAVE_CONFIRMAR) or {}).items() if k != pendiente["id"]}
         e["pendiente"] = None
         respuestas_c = dict(e.get("respuestas") or {})

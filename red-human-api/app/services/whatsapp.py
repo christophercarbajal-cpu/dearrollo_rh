@@ -656,7 +656,7 @@ def parsear_webhook(payload: dict) -> Optional[dict]:
                 # expediente cuando la postulación está en Contratación/Onboarding.
                 media = None
                 tipo_m = m.get("type", "text")
-                if tipo_m in ("image", "document") and isinstance(m.get(tipo_m), dict):
+                if tipo_m in ("image", "document", "audio", "voice") and isinstance(m.get(tipo_m), dict):
                     cuerpo_m = m[tipo_m]
                     media = {
                         "id": cuerpo_m.get("id", ""),

@@ -20,7 +20,7 @@
    «demo-grupak») las filas psicométricas muestran SOLO Sin enviar / Esperando candidato / Completada; su acción (Enviar prueba /
    Reenviar / Ver resultado) vive en el «…» y un bloqueo de avance por psicometría lo dice claro. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { BotonCartaOferta, ModalOferta } from "@/components/dashboard/candidatos/oferta-laboral";
 import { ModalCapacitacionPresencial } from "@/components/dashboard/procesos/capacitacion-presencial";
 import { AccionesOnboarding } from "@/components/dashboard/onboarding/acciones-onboarding";
@@ -500,7 +500,7 @@ export function SeguimientoProceso({ c, live, version, onCambio, onIniciarEvalua
 
       {/* 2. Resultados clave */}
       <ResultadosClave c={c} />
-      <HistorialLaboral c={c} />
+      <FichaEntrevista c={c} />
       <ComparativoIndispensables c={c} />
 
       {/* 2026-10-08: tareas de Onboarding en la ficha, cada una con su acción directa */}
@@ -976,13 +976,53 @@ function ResultadosClave({ c }: { c: Candidato }) {
 }
 
 /** Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato; «Inconsistencia» si difieren. */
-/** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos); la recomendación se calcula sobre él. */
-function HistorialLaboral({ c }: { c: Candidato }) {
-  const filas = c.historialLaboral ?? [];
-  if (!filas.length) return null;
+/** 2026-10-16 (QA): «Ficha de candidato» de la entrevista por WhatsApp — A situación actual, B historial, C preguntas de
+ *  RH, D confirmación final y alertas de contradicciones. Sin ficha (entrevistas previas) queda el historial de siempre. */
+function FichaEntrevista({ c }: { c: Candidato }) {
+  const f = c.fichaEntrevista;
+  if (!f) return <HistorialLaboral c={c} />;
+  const fila = (k: string, v: ReactNode) => (
+    <div className="flex gap-2 text-[12.5px]"><span className="w-44 shrink-0 text-ink-3">{k}</span><span className="text-ink-2">{v || "Sin dato"}</span></div>
+  );
   return (
     <Card className="p-3.5">
-      <Eyebrow>Historial laboral</Eyebrow>
+      <Eyebrow>Ficha de candidato · Entrevista por WhatsApp</Eyebrow>
+      {f.alertas.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-1 rounded-md bg-[var(--kb-amber-bg)] p-2 text-[12px] text-ink-2">
+          {f.alertas.map((a, i) => <li key={i}>⚠ {a}</li>)}
+        </ul>
+      )}
+      <div className="mt-3 flex flex-col gap-1">
+        <p className="text-[12px] font-semibold text-ink">A. Situación actual</p>
+        {fila("¿Trabaja actualmente?", f.A.sinExperiencia ? "Sin experiencia laboral" : f.A.trabajaActualmente)}
+        {f.A.tiempoSinTrabajar ? fila("Tiempo sin trabajar", f.A.tiempoSinTrabajar) : null}
+      </div>
+      <div className="mt-3 flex flex-col gap-1">
+        <p className="text-[12px] font-semibold text-ink">B. Historial laboral</p>
+        {fila("Trabajos en los últimos 3 años", f.B.trabajosUltimos3Anios)}
+      </div>
+      <HistorialLaboral c={c} sinMarco />
+      {f.C.length > 0 && (
+        <div className="mt-3 flex flex-col gap-1">
+          <p className="text-[12px] font-semibold text-ink">C. Preguntas de RH</p>
+          {f.C.map((x, i) => <div key={i}>{fila(x.pregunta, x.respuesta)}</div>)}
+        </div>
+      )}
+      <div className="mt-3 flex flex-col gap-1">
+        <p className="text-[12px] font-semibold text-ink">D. Confirmación final</p>
+        {fila("¿Sigue interesado?", f.D.interesado == null ? (f.D.respuesta || "Sin dato") : f.D.interesado ? "Sí" : `No interesado · ${f.D.motivoNoInteres || "sin motivo"}`)}
+        {f.D.detalleNoInteres ? fila("Lo que dijo", f.D.detalleNoInteres) : null}
+        {f.D.interesado !== false ? fila("Fecha de inicio", f.D.fechaInicio) : null}
+      </div>
+    </Card>
+  );
+}
+
+/** Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos); la recomendación se calcula sobre él. */
+function HistorialLaboral({ c, sinMarco = false }: { c: Candidato; sinMarco?: boolean }) {
+  const filas = c.historialLaboral ?? [];
+  if (!filas.length) return null;
+  const tabla = (
       <div className="scroll-x mt-1.5">
         <table className="w-full text-left text-[12px]">
           <thead className="text-ink-3">
@@ -1003,6 +1043,12 @@ function HistorialLaboral({ c }: { c: Candidato }) {
           </tbody>
         </table>
       </div>
+  );
+  if (sinMarco) return tabla;
+  return (
+    <Card className="p-3.5">
+      <Eyebrow>Historial laboral</Eyebrow>
+      {tabla}
     </Card>
   );
 }
@@ -1088,7 +1134,7 @@ function ResumenSinRuta({ c }: { c: Candidato }) {
   return (
     <div className="flex flex-col gap-3">
       <ResultadosClave c={c} />
-      <HistorialLaboral c={c} />
+      <FichaEntrevista c={c} />
       <ComparativoIndispensables c={c} />
       <FortalezasYPuntos c={c} />
     </div>

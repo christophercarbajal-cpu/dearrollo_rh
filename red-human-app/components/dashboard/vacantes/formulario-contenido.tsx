@@ -52,10 +52,12 @@ import { PestanasTextoPlataforma } from "@/components/dashboard/vacantes/texto-p
 import { ligaCanal, markdownATexto, slugificar } from "@/lib/markdown-texto";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import { CampoUbicaciones } from "@/components/dashboard/vacantes/campo-ubicaciones";
+import { VistaPreviaPreguntas, type CambioPreguntas } from "@/components/dashboard/vacantes/vista-previa-preguntas";
 import {
   ETAPAS_PIPELINE,
   nombreEtapa,
   generarVacanteIA,
+  regenerarPreguntasFiltro,
   ORDEN_GUIONES,
   TITULOS_GUION,
   type ClaveGuion,
@@ -97,6 +99,8 @@ export interface ContenidoVacante {
   sueldo_hasta: string;
   sueldo_moneda: string;
   sueldo_periodicidad: PeriodicidadSueldo | "";
+  /** 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación»; desmarcado → lo público dice «Sueldo competitivo». */
+  mostrar_sueldo: boolean;
   /* --- 2/4. guía → contenido generado (mismos campos) --- */
   descripcion: string;
   responsabilidades: string[];
@@ -166,6 +170,7 @@ export const CONTENIDO_VACIO: ContenidoVacante = {
   sueldo_hasta: "",
   sueldo_moneda: "MXN",
   sueldo_periodicidad: "",
+  mostrar_sueldo: true,
   descripcion: "",
   responsabilidades: [],
   requisitos: [],
@@ -243,6 +248,7 @@ export function contenidoDesdePlantilla(p: Plantilla): ContenidoVacante {
     sueldo_hasta: p.sueldoHasta ? String(p.sueldoHasta) : "",
     sueldo_moneda: p.sueldoMoneda || "MXN",
     sueldo_periodicidad: p.sueldoPeriodicidad ?? "",
+    mostrar_sueldo: p.mostrarSueldo !== false,
     descripcion: p.descripcion,
     responsabilidades: [...(p.responsabilidades ?? [])],
     requisitos: requisitosLista(p.requisitos),
@@ -307,6 +313,7 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
     sueldo_hasta: v.sueldoHasta ? String(v.sueldoHasta) : "",
     sueldo_moneda: v.sueldoMoneda || "MXN",
     sueldo_periodicidad: (v.sueldoPeriodicidad as PeriodicidadSueldo | undefined) ?? "",
+    mostrar_sueldo: v.mostrarSueldo !== false,
     descripcion: v.descripcion ?? "",
     responsabilidades: [...(v.responsabilidades ?? [])],
     requisitos: requisitosLista(v.requisitos),
@@ -450,6 +457,7 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     sueldo_hasta: c.sueldo_periodicidad === "a_convenir" ? null : hasta,
     sueldo_moneda: c.sueldo_moneda || "MXN",
     sueldo_periodicidad: c.sueldo_periodicidad,
+    mostrar_sueldo: c.mostrar_sueldo,
     requisitos: c.requisitos.join(SEPARADOR_REQUISITOS),
     requisitos_indispensables: c.requisitos,
     descripcion: c.descripcion,
@@ -657,6 +665,8 @@ export function FormularioContenidoVacante({
   // Cambio 36: la firma del Bloque 1 al generar (o al abrir una vacante ya generada); si cambia → «Volver a generar»
   const [firmaGen, setFirmaGen] = useState<string | null>(() => (tieneContenidoManual(value) ? firmaBloque1(value) : null));
   const [confirmar, setConfirmar] = useState<ClaveGuion[] | null>(null);
+  const [regenerando, setRegenerando] = useState(false);
+  const [errorPreguntas, setErrorPreguntas] = useState("");
   const bloque2 = useRef<HTMLDivElement>(null);
   const [bajar, setBajar] = useState(false);
   useEffect(() => {
@@ -758,6 +768,48 @@ export function FormularioContenidoVacante({
     if (r.data.empresa) setEmpresaIA(r.data.empresa);
   }
 
+  /** 2026-10-16 (Bloque 2): editar, borrar o agregar en la vista previa de las preguntas NO es «cambiaste los datos de arriba». */
+  function cambiarPreguntas(c: CambioPreguntas) {
+    const alDia = firmaGen !== null && firmaGen === firmaBloque1(value);
+    const nuevo = { ...value, ...c };
+    onChange(nuevo);
+    if (alDia) setFirmaGen(firmaBloque1(nuevo));
+  }
+
+  async function regenerarPreguntas() {
+    setRegenerando(true);
+    setErrorPreguntas("");
+    const p = contenidoComoPayload(value);
+    const r = await regenerarPreguntasFiltro({
+      titulo: p.titulo, area: p.area, seniority: p.seniority, ubicacion: p.ubicacion, ubicacion_estado: p.ubicacion_estado,
+      ubicacion_municipio: p.ubicacion_municipio, modalidad: p.modalidad, sueldo_desde: p.sueldo_desde, sueldo_hasta: p.sueldo_hasta,
+      sueldo_moneda: p.sueldo_moneda, sueldo_periodicidad: p.sueldo_periodicidad, mostrar_sueldo: p.mostrar_sueldo,
+      descripcion: p.descripcion, requisitos_indispensables: p.requisitos_indispensables, requisitos_deseables: p.requisitos_deseables,
+      beneficios: p.beneficios, responsabilidades: p.responsabilidades, cliente_id: clienteId ?? null, mostrar_cliente_candidato: mostrarCliente,
+      enfoque_entrevista: value.enfoque_entrevista, filtro: value.filtro, indispensables_propuestos: value.indispensables_propuestos,
+      ...(rutaGeneracion ? { proceso: rutaGeneracion } : {}),
+    });
+    setRegenerando(false);
+    if (!r.ok) {
+      setErrorPreguntas(r.error);
+      return;
+    }
+    cambiarPreguntas({ filtro: r.data.filtro, requisitos: r.data.requisitos, indispensables_propuestos: r.data.indispensables_propuestos });
+  }
+
+  // 2026-10-16 (Bloque 2): el Bloque 2 sigue el orden de la ruta — 3.1 Solicitud web · 3.2 Prefiltro por WhatsApp · 3.3 Entrevista
+  const pasosRuta = rutaGeneracion && "pasos" in rutaGeneracion ? rutaGeneracion.pasos ?? [] : [];
+  const conTipo = (...tipos: string[]) => !pasosRuta.length || pasosRuta.some((x) => tipos.includes(x.tipo) && !x.heredado);
+  const conSolicitud = conTipo("solicitud_web", "prefiltro_web");
+  const conPrefiltroWa = conTipo("prefiltro_whatsapp");
+  const conEntrevista = conTipo("entrevista_whatsapp", "entrevista_agente", "llamada_agente");
+  const seccionesRuta = [conSolicitud && "solicitud", conPrefiltroWa && "whatsapp", conEntrevista && "entrevista"].filter(Boolean) as string[];
+  const numero = (s: string) => `3.${seccionesRuta.indexOf(s) + 1}`;
+  const vistaPrevia = (canal: "web" | "whatsapp") => (
+    <VistaPreviaPreguntas canal={canal} requisitos={value.requisitos} filtro={value.filtro} propuestos={value.indispensables_propuestos}
+      onChange={cambiarPreguntas} onRegenerar={conIA ? regenerarPreguntas : undefined} regenerando={regenerando} error={errorPreguntas} />
+  );
+
   const sueldo = { desde: value.sueldo_desde, hasta: value.sueldo_hasta, moneda: value.sueldo_moneda, periodicidad: value.sueldo_periodicidad };
 
   const setPub = (canal: string, page: string) =>
@@ -808,6 +860,13 @@ export function FormularioContenidoVacante({
                 monedas={MONEDAS_SUELDO}
               />
               {value.sueldo_periodicidad === "a_convenir" && <ErrorLinea>Sin capturar: no se publica el sueldo.</ErrorLinea>}
+              {/* 2026-10-16 (Bloque 2): desmarcado → la publicación y la página del candidato dicen «Sueldo competitivo» */}
+              <label className="mt-2 flex items-center gap-2 text-sm text-ink-2">
+                <input type="checkbox" checked={value.mostrar_sueldo} onChange={(e) => set("mostrar_sueldo")(e.target.checked)}
+                  className="h-4 w-4 rounded border-border-soft text-brand" />
+                Mostrar sueldo en la publicación
+              </label>
+              {!value.mostrar_sueldo && <ErrorLinea tono="info">La publicación dirá «Sueldo competitivo».</ErrorLinea>}
             </div>
           </div>
         </Seccion>
@@ -824,11 +883,11 @@ export function FormularioContenidoVacante({
             placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
           />
           <div>
-            <ListaEditable label={reqRuta.minIndispensables ? `Requisitos indispensables (mínimo ${reqRuta.minIndispensables} para publicar)` : "Requisitos indispensables"}
+            <ListaEditable label="Requisitos indispensables"
               items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Licencia de manejo tipo B"
               ayuda="Opcional. Máximo 5, verificables; las tareas del puesto no son requisitos." />
-            {!value.requisitos.length && (
-              <ErrorLinea tono="info">Sin capturar: Red Human los propone desde la descripción (o «Disponibilidad para trabajar…»).</ErrorLinea>
+            {value.requisitos.length < 3 && (
+              <ErrorLinea tono="info">Red Human completa hasta 3 preguntas con lo que diga tu descripción; puedes llegar a 5.</ErrorLinea>
             )}
           </div>
           <PropuestosRedHuman requisitos={value.requisitos} propuestos={value.indispensables_propuestos} />
@@ -895,19 +954,30 @@ export function FormularioContenidoVacante({
               placeholder="Una responsabilidad por renglón" ayuda="Son tareas del puesto, no requisitos." />
           </Seccion>
 
-          {conGuiones && (
-            <Seccion titulo="Requisitos" ayuda="Requisito · Pregunta · Descarta si. Una pregunta por requisito indispensable (formulario web y chat).">
-              <EditorPreguntasFiltro modo="requisitos" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+          {conGuiones && conSolicitud && (
+            <Seccion titulo={`${numero("solicitud")} Solicitud web`} ayuda="Vista previa de «Unas preguntas»: una pregunta Sí/No por requisito.">
+              {vistaPrevia("web")}
             </Seccion>
           )}
-          {conGuiones && (
-            <Seccion titulo="Preguntas base" ayuda="Se hacen a todos y solo se registran (no descartan, salvo un requisito de edad o traslado).">
-              <EditorPreguntasFiltro modo="base" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+          {conGuiones && conPrefiltroWa && (
+            <Seccion titulo={`${numero("whatsapp")} Prefiltro por WhatsApp`} ayuda="Vista previa del chat: Red Human retoma cada requisito conversando.">
+              {vistaPrevia("whatsapp")}
+              <details className="rounded-xl border border-border-soft px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-ink-2">Ajustes avanzados: tipo de respuesta y regla de descarte</summary>
+                <div className="mt-2">
+                  <EditorPreguntasFiltro modo="requisitos" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+                </div>
+              </details>
+            </Seccion>
+          )}
+          {conGuiones && !conSolicitud && !conPrefiltroWa && (
+            <Seccion titulo="Preguntas filtro" ayuda="La ruta no trae solicitud web ni prefiltro por WhatsApp; se guardan para cuando los tenga.">
+              {vistaPrevia("whatsapp")}
             </Seccion>
           )}
 
-          {conGuiones && (
-            <Seccion titulo="Entrevista" ayuda={`Enfoque: ${TEXTO_ENFOQUE[value.enfoque_entrevista] ?? "Profesional"}. Se cambia en la actividad de entrevista del proceso.`}>
+          {conGuiones && conEntrevista && (
+            <Seccion titulo={`${numero("entrevista")} Entrevista`} ayuda={`Enfoque: ${TEXTO_ENFOQUE[value.enfoque_entrevista] ?? "Profesional"}. Se cambia en la actividad de entrevista del proceso.`}>
               {enfoquePorRuta && (
                 <EntrevistaWhatsappBase
                   value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
@@ -946,7 +1016,7 @@ function ErrorLinea({ children, tono = "warn" }: { children: React.ReactNode; to
 export function firmaBloque1(c: ContenidoVacante) {
   // Cambio 43: el «Enfoque» de la entrevista (de la ruta) también cuenta: cambiarlo después de generar → «Volver a generar»
   return JSON.stringify([c.titulo, c.area, c.seniority, c.ubicacion_estado, c.ubicacion_municipio, c.modalidad, c.sueldo_desde,
-    c.sueldo_hasta, c.sueldo_periodicidad, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios, c.enfoque_entrevista]);
+    c.sueldo_hasta, c.sueldo_periodicidad, c.mostrar_sueldo, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios, c.enfoque_entrevista]);
 }
 
 const TEXTO_ENFOQUE: Record<string, string> = { operativo: "Operativo", profesional: "Profesional", profesional_personal: "Profesional + personal" };
@@ -973,7 +1043,7 @@ function PropuestosRedHuman({ requisitos, propuestos }: { requisitos: string[]; 
 function EditorPreguntasFiltro({ requisitos, items, onChange, modo }: {
   requisitos: string[]; items: PreguntaFiltroU[]; onChange: (x: PreguntaFiltroU[]) => void; modo: "requisitos" | "base";
 }) {
-  const vigentes = items.filter((q) => (modo === "base" ? q.base && !q.indispensable
+  const vigentes = items.filter((q) => (modo === "base" ? q.base && !q.indispensable && !q.quitada
     : q.indispensable && requisitos.some((r) => clave(r) === clave(q.requisito))));
   const sinPregunta = modo === "requisitos" ? requisitos.filter((r) => r.trim() && !items.some((q) => q.indispensable && clave(q.requisito) === clave(r))) : [];
   const set = (id: string, cambios: Partial<PreguntaFiltroU>) =>
@@ -1060,8 +1130,7 @@ export function requisitosDeRuta(pasos: PasoProceso[]) {
 
 export function avisosPublicacion(c: Pick<ContenidoVacante, "requisitos" | "documentos_solicitados">, r: ReturnType<typeof requisitosDeRuta>): string[] {
   const avisos: string[] = [];
-  const n = c.requisitos.filter((x) => x.trim()).length;
-  if (r.minIndispensables && n < r.minIndispensables) avisos.push(`Captura al menos ${r.minIndispensables} requisito indispensable (hoy ${n}): la ruta incluye prefiltro.`);
+  // 2026-10-16 (Bloque 2): sin «mínimo 1 para publicar» — Red Human siempre propone 3 preguntas
   if (r.documentosObligatorios && !c.documentos_solicitados.length) avisos.push("Indica qué documentos se piden: la ruta incluye «Documentos».");
   return avisos;
 }

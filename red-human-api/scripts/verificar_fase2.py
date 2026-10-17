@@ -128,13 +128,7 @@ with TestClient(app) as client:
     # ---------- 3. Misma persona, dos vacantes → dos postulaciones ----------
     v1 = db.query(Vacante).filter_by(codigo="VAC-1042").one()
     v2 = db.query(Vacante).filter_by(codigo="VAC-1041").one()
-    # 2026-10-16: sin sueldo publicado la vacante 2 sigue preguntando la expectativa (su prefiltro queda esperando respuesta)
-    v2.sueldo_desde = v2.sueldo_hasta = None
-    v2.sueldo_periodicidad, v2.sueldo = "a_convenir", "A convenir"
-    from app.services import preguntas_filtro as _pfu
-
-    _pfu.sincronizar(v2)
-    db.commit()
+    # 2026-10-16 (QA): la vacante 2 publica su sueldo → «El sueldo es… ¿Te interesa?» (su prefiltro queda esperando respuesta)
     TEL = "5591234567"
     # retro 2026-10-09: ruta Masivos (prefiltro y Entrevista Red Human en el mismo chat de WhatsApp)
     from app.services import proceso as _sproc

@@ -5,13 +5,15 @@ Flujo (una pregunta por mensaje, siempre en este orden):
   A. Situación actual: «¿Trabajas actualmente?» → sí: el primer trabajo del historial es el actual (en presente) ·
      no: «¿Cuánto tiempo llevas sin trabajar?» (historial: fila «Sin empleo actual» + su último empleo) · nunca: bloque C
      directo y el resumen dice «Sin experiencia laboral» (Cambio 52).
-  B. Historial laboral: hasta 3 trabajos — empresa, puesto, qué hacía, duración y motivo de salida. Un despido o una
-     renuncia sin motivo se REPREGUNTA una vez («¿Por qué te despidieron?» / «¿Por qué renunciaste?»). Después de cada
-     trabajo: «¿Tuviste otro trabajo antes de ese?».
+  B. Historial laboral: hasta 2 trabajos (2026-10-16, QA) — empresa, puesto, qué hacía, duración y motivo de salida; el
+     segundo con OTRAS palabras (`SEGUNDA_VUELTA`). Un despido o una renuncia sin motivo se REPREGUNTA una vez («¿Por qué te
+     despidieron?» / «¿Por qué renunciaste?»). Después del primero: «¿Tuviste otro trabajo antes de ese?». Al final:
+     «¿En cuántos trabajos has estado en los últimos 3 años?».
   C. Preguntas propias que RH agregó a la vacante.
-  D. Confirmación de puesto, sueldo, traslado (SOLO lo que no se dijo antes en la solicitud o el prefiltro — Cambio 52) e
-     inicio → cierre EXACTO. Lo que contradiga al prefiltro va a Puntos por
-     validar (nunca descarta).
+  D. (2026-10-16, QA) UNA confirmación: «Antes de terminar, te confirmo: puesto, empresa, ubicación, sueldo. ¿Sigues
+     interesado?» → sí: «¿Cuándo podrías empezar?» y cierre EXACTO · no: el motivo (Sueldo, Ubicación, Horario u Otro),
+     «No interesado» (detiene la ruta para RH; NUNCA descarta) y cierre sin prometer entrevista. Lo que contradiga al
+     prefiltro va a Puntos por validar (nunca descarta). Al terminar, `ficha` = resumen A · B · C · D · alertas para RH.
 La vacante guarda su ajuste en `Vacante.guiones["entrevista_whatsapp_base"] = {quitadas: [ids], propias: [textos]}`: RH
 puede quitar preguntas base o agregar propias (van al bloque C); «Restaurar base» = vacío. La recomendación se calcula
 sobre el historial laboral (`evaluar`). Un solo nombre de empresa en toda la conversación: `serial.nombre_empresa_candidato`.
@@ -23,7 +25,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
-MAX_TRABAJOS = 3
+MAX_TRABAJOS = 2  # 2026-10-16 (QA): máximo 2 trabajos; el segundo con otras palabras («segunda vuelta»)
 MAX_PROPIAS = 10
 CLAVE_CONFIG = "entrevista_whatsapp_base"
 
@@ -36,14 +38,15 @@ BASE = [
     {"id": "tareas", "bloque": "B", "texto": "¿Qué hacías ahí?"},
     {"id": "duracion", "bloque": "B", "texto": "¿Cuánto tiempo trabajaste ahí?"},
     {"id": "motivo", "bloque": "B", "texto": "¿Por qué saliste? (despido o renuncia se repregunta)"},
-    {"id": "otro", "bloque": "B", "texto": "¿Tuviste otro trabajo antes de ese? (hasta 3 trabajos)"},
-    {"id": "conf_puesto", "bloque": "D", "texto": "Para confirmar, el puesto es [puesto] en [empresa]. ¿Te interesa?"},
-    {"id": "conf_sueldo", "bloque": "D", "texto": "El sueldo es [sueldo]. ¿Estás de acuerdo?"},
-    {"id": "conf_traslado", "bloque": "D", "texto": "El trabajo es en [ubicación]. ¿Puedes trasladarte?"},
+    {"id": "otro", "bloque": "B", "texto": "¿Tuviste otro trabajo antes de ese? (hasta 2 trabajos)"},
+    {"id": "cuantos", "bloque": "B", "texto": "¿En cuántos trabajos has estado en los últimos 3 años?"},
+    {"id": "conf_final", "bloque": "D", "texto": "Antes de terminar, te confirmo: puesto [puesto], empresa [empresa], ubicación [ubicación], sueldo [sueldo]. ¿Sigues interesado?"},
     {"id": "inicio", "bloque": "D", "texto": "¿Cuándo podrías empezar?"},
 ]
+# Preguntas del bloque D anteriores al 2026-10-16 (conversaciones en curso y ajustes guardados en vacantes)
+IDS_D_LEGADO = ("conf_puesto", "conf_sueldo", "conf_traslado")
 IDS_BASE = [b["id"] for b in BASE]
-QUITABLES = [b["id"] for b in BASE if not b.get("fija")]
+QUITABLES = [b["id"] for b in BASE if not b.get("fija")] + list(IDS_D_LEGADO)
 BLOQUES = {"A": "Situación actual", "B": "Historial laboral", "C": "Preguntas de RH", "D": "Confirmación y cierre"}
 
 
@@ -128,11 +131,64 @@ def cierre(p) -> str:
             f"Humanos de {d['empresa']} te contactará {siguiente}.")
 
 
+def cierre_no_interesado(p) -> str:
+    """2026-10-16 (QA): cierre cuando ya no le interesa — sin prometer entrevista; RH decide con su motivo a la vista."""
+    d = _datos(p)
+    return (f"Con esto terminamos{', ' + d['nombre'] if d['nombre'] else ''}. Gracias por tu tiempo y por tu sinceridad. "
+            f"Compartiré tus comentarios con el equipo de Recursos Humanos de {d['empresa']}.")
+
+
 def _texto_sueldo(sueldo: str) -> str:
     t = " ".join(str(sueldo or "").split()).strip().rstrip(".")
     if not t or _n(t) in ("a convenir", "por definir"):
         return ""
     return t[0].lower() + t[1:] if t.lower().startswith("desde ") else f"de {t}"
+
+
+# 2026-10-16 (QA): el segundo trabajo se pregunta con OTRAS palabras (nunca se repiten textualmente las del primero)
+SEGUNDA_VUELTA = {
+    "empresa": "¿Y antes de ese, en qué empresa estuviste?",
+    "puesto": "¿Qué cargo tenías en ese lugar?",
+    "tareas": "¿A qué te dedicabas en ese empleo?",
+    "duracion": "¿Cuánto duraste en ese empleo?",
+    "motivo": "¿Qué te hizo dejar ese empleo?",
+}
+PREGUNTA_CUANTOS = "¿En cuántos trabajos has estado en los últimos 3 años?"
+PREGUNTA_MOTIVO_NO = "Entiendo. ¿Qué es lo que no te convence: el sueldo, la ubicación, el horario u otra cosa?"
+MOTIVOS_NO_INTERES = ("Sueldo", "Ubicación", "Horario", "Otro")
+_RE_MOTIVO = (
+    ("Sueldo", re.compile(r"\b(sueldo|salario|pago|paga|pagan|dinero|lana|varo|poco|bajo|mas dinero|gano mas|ganar mas|prestaciones)\b")),
+    ("Ubicación", re.compile(r"\b(lejos|ubicacion|distancia|traslado|transporte|zona|queda lejos|me queda|camion|pasaje|ciudad|mudar\w*)\b")),
+    ("Horario", re.compile(r"\b(horario|turno|turnos|hora|horas|noche|nocturno|fin de semana|fines de semana|sabado|domingo|rolar|dias)\b")),
+)
+
+
+def motivo_no_interes(texto: str) -> Optional[str]:
+    """Clasifica por qué ya no le interesa (Sueldo, Ubicación, Horario u Otro). None = la respuesta no dice el motivo."""
+    t = _n(texto)
+    for motivo, rx in _RE_MOTIVO:
+        if rx.search(t):
+            return motivo
+    if re.search(r"\b(otr[oa]|otra cosa|personal|familia|ya encontre|ya tengo|no me interesa)\b", t) or len(t.split()) >= 4:
+        return "Otro"
+    return None
+
+
+def texto_confirmacion_final(p) -> str:
+    """Bloque D en UN solo mensaje (2026-10-16, QA): «Antes de terminar, te confirmo: puesto [x], empresa [y], ubicación
+    [z], sueldo [s]. ¿Sigues interesado?» — sin los datos que la vacante no tiene (el sueldo solo si está publicado)."""
+    from .prefiltro_conversacional import sueldo_publicado
+
+    d = _datos(p)
+    partes = [f"puesto {d['titulo']}", f"empresa {d['empresa']}"]
+    if d["ubicacion"]:
+        partes.append(f"ubicación {d['ubicacion']}")
+    v = p.vacante
+    if v is not None and sueldo_publicado(v) and _texto_sueldo(d["sueldo"]):
+        from .oferta import sueldo_exacto
+
+        partes.append(f"sueldo {sueldo_exacto(d['sueldo']) or d['sueldo']}")
+    return f"Antes de terminar, te confirmo: {', '.join(partes)}. ¿Sigues interesado?"
 
 
 def texto_pregunta(pid: str, est: dict, p) -> str:
@@ -142,6 +198,14 @@ def texto_pregunta(pid: str, est: dict, p) -> str:
     actual = bool(est.get("actual")) and k == 0
     if pid.startswith("propia:"):
         return config_de(p.vacante)["propias"][int(pid.split(":")[1])]
+    if k >= 1 and pid in SEGUNDA_VUELTA:
+        return SEGUNDA_VUELTA[pid]
+    if pid == "conf_final":
+        return texto_confirmacion_final(p)
+    if pid == "motivo_no":
+        return PREGUNTA_MOTIVO_NO
+    if pid == "cuantos":
+        return PREGUNTA_CUANTOS
     return {
         "trabaja": "¿Trabajas actualmente?",
         "sin_trabajo": "¿Cuánto tiempo llevas sin trabajar?",
@@ -192,17 +256,15 @@ def ya_dicho(p) -> Dict[str, bool]:
             or any(d.get(k) not in (None, "") for k in ("traslado", "traslado_min", "puede_trasladarse", "reubicacion"))}
 
 
-def _secuencia_d(p, quitadas: List[str]) -> List[str]:
-    """Bloque D: puesto, sueldo y ubicación SOLO si no se dijeron antes; si ya se dijeron, solo «¿Cuándo podrías empezar?»."""
-    d = _datos(p)
-    dicho = ya_dicho(p)
-    ids = [] if dicho["conf_puesto"] else ["conf_puesto"]
-    if _texto_sueldo(d["sueldo"]) and not dicho["conf_sueldo"]:
-        ids.append("conf_sueldo")
-    if d["ubicacion"] and not dicho["conf_traslado"]:
-        ids.append("conf_traslado")
-    ids.append("inicio")
-    return [x for x in ids if x not in quitadas]
+def _secuencia_d(p, quitadas: List[str], est: Optional[dict] = None) -> List[str]:
+    """Bloque D (2026-10-16, QA): UNA confirmación con puesto, empresa, ubicación y sueldo («¿Sigues interesado?») → si ya
+    no le interesa, el motivo (Sueldo, Ubicación, Horario u Otro) y el cierre; si sigue interesado, la fecha de inicio."""
+    est = est or {}
+    ids = [] if "conf_final" in quitadas else ["conf_final"]
+    ni = est.get("no_interesado")
+    if ni:
+        return ids + ([] if ni.get("motivo") else ["motivo_no"])
+    return ids + ([] if "inicio" in quitadas else ["inicio"])
 
 
 def _respondidas_antes(p) -> set:
@@ -244,10 +306,12 @@ def siguiente(est: dict, p) -> Optional[str]:
             return trabajo["repregunta"]
         if "otro" not in q and k + 1 < MAX_TRABAJOS and f"otro{k}" not in r:
             return "otro"
+    if "cuantos" not in q and "cuantos" not in r and not est.get("sin_experiencia"):
+        return "cuantos"  # 2026-10-16 (QA)
     for i, texto in enumerate(cfg["propias"]):
         if f"propia:{i}" not in r and not propia_ya_respondida(p, texto):
             return f"propia:{i}"
-    for x in _secuencia_d(p, q):
+    for x in _secuencia_d(p, q, est):
         if x not in r:
             return x
     return None
@@ -334,8 +398,23 @@ def registrar_respuesta(est: dict, pid: str, texto: str, p) -> None:
             est["historial_cerrado"] = True
         return
     r[pid] = texto
-    if pid in ("conf_puesto", "conf_sueldo", "conf_traslado"):
+    if pid in IDS_D_LEGADO:
         est.setdefault("confirmaciones", {})[pid] = si_no
+    if pid == "conf_final":
+        # «no» = ya no le interesa: se marca «No interesado» (NUNCA se descarta en automático; RH decide)
+        motivo = motivo_no_interes(texto) if si_no == "no" or _RE_NO_INTERESA.search(_n(texto)) else None
+        if si_no == "no" or _RE_NO_INTERESA.search(_n(texto)):
+            est["no_interesado"] = {"motivo": motivo or "", "texto": texto}
+            est.setdefault("confirmaciones", {})["conf_final"] = "no"
+        else:
+            est.setdefault("confirmaciones", {})["conf_final"] = "si" if si_no == "si" else "sin_dato"
+    if pid == "motivo_no":
+        ni = est.setdefault("no_interesado", {"texto": ""})
+        ni["motivo"] = "Otro" if texto == SIN_RESPUESTA else (motivo_no_interes(texto) or "Otro")
+        ni["detalle"] = texto
+
+
+_RE_NO_INTERESA = re.compile(r"\b(ya no me interesa|no me interesa|no estoy interesad\w*|ya no|mejor no|paso)\b")
 
 
 def _sin_experiencia(est: dict) -> None:
@@ -392,6 +471,9 @@ ALTERNATIVAS = {
     "motivo": "¿Qué pasó para que dejaras ese trabajo?",
     "otro": "Antes de ese empleo, ¿trabajaste en otro lugar?",
     "inicio": "¿En qué fecha podrías comenzar a trabajar?",
+    "cuantos": "En los últimos 3 años, ¿cuántos empleos has tenido?",
+    "conf_final": "¿Sigues interesado en el puesto con esas condiciones? Respóndeme sí o no.",
+    "motivo_no": "¿Es por el sueldo, por la ubicación, por el horario o por otra razón?",
 }
 
 
@@ -412,6 +494,12 @@ def turno(e, texto: str) -> Tuple[str, bool]:
         # Cambio 59: una pregunta sobre la vacante NUNCA se registra como respuesta — el dato y la MISMA pregunta pendiente
         return rva.con_pendiente(p, tema, texto_pregunta(pid, est, p)), False
     no_contesta = bool(pid) and (no_entiende(texto) or no_es_dato(texto))
+    if pid == "conf_final" and not no_contesta:
+        from .prefiltro_conversacional import clasificar
+
+        # «¿Sigues interesado?» necesita un sí o un no: una respuesta ambigua se repregunta UNA vez
+        no_contesta = (clasificar({"criterio": "", "pregunta": "", "chat": ""}, texto) not in ("si", "no")
+                       and not _RE_NO_INTERESA.search(_n(texto)) and motivo_no_interes(texto) is None)
     if no_contesta and (est.get("refraseada") or {}).get(pid):
         # Cambio 59: ya se repreguntó UNA vez y sigue sin contestar → «Sin respuesta» y se avanza
         texto = SIN_RESPUESTA
@@ -431,7 +519,7 @@ def turno(e, texto: str) -> Tuple[str, bool]:
     if nxt is None:
         est["terminada_en"] = datetime.now(timezone.utc).isoformat()
         _guardar(e, est)
-        return cierre(p), True
+        return (cierre_no_interesado(p) if est.get("no_interesado") else cierre(p)), True
     _guardar(e, est)
     return texto_pregunta(nxt, est, p), False
 
@@ -490,6 +578,11 @@ def contradicciones(est: dict, p) -> List[str]:
                           f"{'sí' if ahora == 'si' else 'no'}")
         elif ahora == "no" and antes is None:
             salida.append(f"En la entrevista dijo que no {texto}")
+    ni = est.get("no_interesado") or {}
+    if ni.get("motivo") == "Sueldo" and d.get("sueldo_acepta") is True:
+        salida.append("Inconsistencia: en el prefiltro aceptó el sueldo y en la entrevista dijo que no le interesa por el sueldo")
+    if ni.get("motivo") == "Ubicación" and (d.get("puede_trasladarse") is True or d.get("ubicacion_elegida")):
+        salida.append("Inconsistencia: en el prefiltro aceptó la ubicación y en la entrevista dijo que no le interesa por la ubicación")
     return salida
 
 
@@ -520,8 +613,51 @@ def evaluar(e, p, v) -> dict:
     prefiltro = eop.contexto_prefiltro(p)
     puntos = eop.puntos_de(criterios, [], prefiltro, extra)
     puntos += [x for x in ((p.analisis or {}).get("puntos_validar_prefiltro") or []) if x not in puntos]
+    ni = est.get("no_interesado")
+    if ni:
+        punto = f"No interesado (motivo: {ni.get('motivo') or 'sin dato'})"
+        if punto not in puntos:
+            puntos.insert(0, punto)
     reqs = eop.requisitos_de(criterios, [], {}, prefiltro, puntos)
     op = eop.resultado(criterios, puntos, None, reqs)
+    if ni:
+        # 2026-10-16 (QA): «No interesado» detiene la ruta para RH (como «No avanzar») pero NUNCA descarta
+        op["recomendacion"] = "no_recomendable"
+        op["recomendacion_texto"] = "No interesado"
+        op["no_interesado"] = {"motivo": ni.get("motivo") or "", "texto": ni.get("detalle") or ni.get("texto") or ""}
     op["historial_laboral"] = historial(e)
+    op["ficha"] = ficha(e)
     op["fija"] = True
     return op
+
+
+def ficha(e) -> dict:
+    """«Ficha de candidato» (2026-10-16, QA): resumen estructurado de la entrevista para RH — A situación actual, B historial
+    (máx. 2 trabajos + cuántos trabajos en 3 años), C preguntas de RH, D confirmación final, y alertas de contradicciones."""
+    est = _estado(e)
+    p = e.postulacion
+    r = est.get("respuestas") or {}
+    trabaja = r.get("trabaja", "")
+    a = {"trabajaActualmente": ("Sí" if est.get("actual") else "No") if "trabaja" in r else SIN_RESPUESTA,
+         "respuesta": trabaja, "tiempoSinTrabajar": r.get("sin_trabajo", "") if est.get("actual") is False else "",
+         "sinExperiencia": bool(est.get("sin_experiencia"))}
+    b = {"trabajos": [t for t in historial(e) if t.get("empresa") not in (SIN_EMPLEO_ACTUAL,)],
+         "trabajosUltimos3Anios": r.get("cuantos", "")}
+    propias = config_de(p.vacante)["propias"] if p is not None else []
+    c = [{"pregunta": t, "respuesta": r.get(f"propia:{i}", "")} for i, t in enumerate(propias) if f"propia:{i}" in r]
+    conf = (est.get("confirmaciones") or {}).get("conf_final")
+    ni = est.get("no_interesado") or {}
+    d = {"confirmacion": texto_confirmacion_final(p) if p is not None else "",
+         "respuesta": r.get("conf_final", ""),
+         "interesado": None if conf in (None, "sin_dato") and not ni else not ni,
+         "motivoNoInteres": ni.get("motivo") or "", "detalleNoInteres": ni.get("detalle") or "",
+         "fechaInicio": r.get("inicio", "")}
+    alertas = contradicciones(est, p) if p is not None else []
+    if ni:
+        alertas.insert(0, f"No interesado (motivo: {ni.get('motivo') or 'sin dato'})")
+    for t in est.get("trabajos") or []:
+        from . import entrevista_operativa as eop
+
+        if t.get("motivo") and eop.es_salida_conflictiva(t["motivo"]):
+            alertas.append(f"{t['motivo']} ({t.get('empresa') or 'trabajo anterior'})")
+    return {"A": a, "B": b, "C": c, "D": d, "alertas": alertas, "terminada": bool(est.get("terminada_en"))}

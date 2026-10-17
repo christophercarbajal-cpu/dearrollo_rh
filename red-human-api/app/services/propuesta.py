@@ -98,12 +98,12 @@ def texto(p: Postulacion) -> str:
         d = fechas.dia(e.fecha_ingreso)
         meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
         fecha = f"{d.day} de {meses[d.month - 1]} de {d.year}"
-    filas = [("Puesto", e.puesto if e else ""), ("Sueldo", e.sueldo if e else ""), ("Ubicación", e.ubicacion if e else ""),
-             ("Jefe directo", e.jefe_directo if e else ""), ("Tipo de contratación", e.tipo_contratacion if e else ""),
-             ("Fecha de ingreso", fecha)]
-    lineas = "\n".join(f"• {k}: {val}" for k, val in filas if (val or "").strip())
-    return (f"Hola{(' ' + nombre) if nombre else ''}, esta es la propuesta de trabajo{f' de {empresa}' if empresa else ''}:\n"
-            f"{lineas}\n\n{PREGUNTA}")
+    # 2026-10-16 (QA): Mensaje 2 — mismo texto que la oferta laboral, sueldo con la cifra exacta (sin «Desde»)
+    from .oferta import sueldo_exacto, texto_propuesta_formal
+
+    return texto_propuesta_formal(nombre, empresa, (e.puesto if e else "") or "", sueldo_exacto(e.sueldo if e else ""),
+                                  (e.ubicacion if e else "") or "", fecha, (e.tipo_contratacion if e else "") or "",
+                                  (e.jefe_directo if e else "") or "")
 
 
 async def enviar(db: Session, p: Postulacion, actor: str) -> dict:
@@ -194,10 +194,13 @@ async def turno(db: Session, p: Postulacion, texto_candidato: str, canal: str) -
     from . import agenda_chat
     from ..routers.candidatos import _enviar_whatsapp, guardar_mensaje
 
-    if agenda_chat.es_no(texto_candidato):
+    from .oferta import clasificar_respuesta
+
+    decision = clasificar_respuesta(texto_candidato)
+    if agenda_chat.es_no(texto_candidato) or decision is False:
         r = await responder(db, p, False, p.nombre or "candidato", canal, texto_candidato)
         return {"respuesta": "", "propuesta": r["estado"], "clasificacion": None, "ia": False}
-    if agenda_chat.es_si_explicito(texto_candidato):
+    if agenda_chat.es_si_explicito(texto_candidato) or decision is True:
         r = await responder(db, p, True, p.nombre or "candidato", canal, texto_candidato)
         return {"respuesta": "", "propuesta": r["estado"], "clasificacion": None, "ia": False}
     msg = f"Para continuar necesito tu respuesta a la propuesta de trabajo. {PREGUNTA}"

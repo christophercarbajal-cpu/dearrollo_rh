@@ -312,8 +312,9 @@ def validar(db, v: Vacante) -> list:
         if sim in db:
             db.expunge(sim)  # simulación: nunca se guarda
         sim.vacante = None
-    if secuencia != ["inicio"]:
-        problemas.append(f"el cierre repite puesto/sueldo/ubicación ya dichos: {secuencia}")
+    # 2026-10-16 (QA): el cierre es UNA confirmación («Antes de terminar… ¿Sigues interesado?») y después la fecha de inicio
+    if secuencia != ["conf_final", "inicio"]:
+        problemas.append(f"el cierre no es la confirmación única + inicio: {secuencia}")
     faltan = ssv.faltantes_publicacion(db, v)
     if faltan:
         nota(f"Para publicar falta: {' '.join(faltan)}")

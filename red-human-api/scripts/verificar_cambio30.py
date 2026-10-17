@@ -207,7 +207,7 @@ with TestClient(app) as client:
     check(x["accion"] and x["accion"]["clave"] == "enviar_oferta" and x["estadoUnificadoTexto"] == "Pendiente: enviar oferta",
           "en Contratación la actividad pide «Enviar oferta»")
     r = client.get(f"/candidatos/{po.codigo}/oferta").json()
-    check(r["enRuta"] and r["datos"]["puesto"] == vo.titulo and r["datos"]["sueldo"] == "Desde $12,000 MXN mensuales"
+    check(r["enRuta"] and r["datos"]["puesto"] == vo.titulo and r["datos"]["sueldo"] == "$12,000 MXN mensuales"
           and r["datos"]["ubicacion"] == "Zapopan, Jalisco" and "Vales de despensa" in r["datos"]["prestaciones"],
           "la carta oferta se genera con los datos de la vacante")
     desde = len(ENVIADOS)
@@ -217,7 +217,9 @@ with TestClient(app) as client:
     check(r.status_code == 200 and t and t[0]["template"]["name"] == "oferta_laboral_rh"
           and [y["text"] for y in t[0]["template"]["components"][0]["parameters"]] == ["Oscar", liga] and "/oferta/" in liga,
           "«Enviar oferta» → plantilla de WhatsApp ({{1}} nombre, {{2}} liga)")
-    check(r.json()["texto"] == f"Oscar, tenemos una oferta para ti. Revísala aquí: {liga}", "texto exacto del aviso")
+    # 2026-10-16 (QA): «Mensaje 1» definido por el usuario
+    check(r.json()["texto"] == (f"¡Buenas noticias, Oscar! Fuiste seleccionado para el puesto. Revisa aquí tu sueldo, horario y fecha "
+                                f"de inicio para confirmar tu contratación: {liga} ¡Gracias!"), "texto exacto del aviso (mensaje 1)")
     check(paso_oferta(po)["estado"] == "en_curso", "esperando la respuesta del candidato")
     token = liga.rsplit("/", 1)[1]
     r = client.get(f"/ofertas/publica/{token}")

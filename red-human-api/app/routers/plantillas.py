@@ -34,6 +34,7 @@ def _plantilla_dict(p: Plantilla) -> dict:
         "sueldoHasta": p.sueldo_hasta,
         "sueldoMoneda": p.sueldo_moneda or "MXN",
         "sueldoPeriodicidad": p.sueldo_periodicidad or "",
+        "mostrarSueldo": getattr(p, "mostrar_sueldo", True) is not False,  # 2026-10-16 (Bloque 2)
         "requisitos": p.requisitos,
         "descripcion": p.descripcion,
         "resumen": p.resumen,
@@ -110,6 +111,7 @@ class PlantillaIn(BaseModel):
     sueldo_hasta: Optional[int] = None
     sueldo_moneda: str = "MXN"
     sueldo_periodicidad: str = ""
+    mostrar_sueldo: bool = True  # 2026-10-16 (Bloque 2)
     requisitos: str = ""
     descripcion: str = ""
     resumen: str = ""
@@ -249,6 +251,7 @@ class ActualizarIn(BaseModel):
     sueldo_hasta: Optional[int] = None
     sueldo_moneda: Optional[str] = None
     sueldo_periodicidad: Optional[str] = None
+    mostrar_sueldo: Optional[bool] = None  # 2026-10-16 (Bloque 2)
     requisitos: Optional[str] = None
     descripcion: Optional[str] = None
     resumen: Optional[str] = None

@@ -157,7 +157,8 @@ with TestClient(app) as client:
     check("Licencia de manejo tipo B" in g["requisitos_indispensables"] and "Licencia de manejo tipo B" in g["indispensables_propuestos"],
           "«licencia tipo B» en la descripción → indispensable «Propuesto por Red Human»")
     lic = next(q for q in g["filtro"] if q.get("requisito") == "Licencia de manejo tipo B")
-    check(lic["etiqueta"] == "Propuesto por Red Human" and lic["descarta"] and lic["tipo"] == "si_no",
+    # 2026-10-16 (Bloque 2): lo propuesto que menciona la descripción se etiqueta «De tu descripción»
+    check(lic["etiqueta"] in ("Propuesto por Red Human", "De tu descripción") and lic["descarta"] and lic["tipo"] == "si_no",
           f"su pregunta trae la etiqueta, tipo Sí/No y regla de descarte («{lic['pregunta']}» · {lic['regla']})")
     check(any("Experiencia en almac" in x for x in g["requisitos_deseables"]), f"«preferentemente…» → deseables ({g['requisitos_deseables']})")
     check(len(g["requisitos_indispensables"]) <= 5, "máximo 5")
@@ -168,8 +169,10 @@ with TestClient(app) as client:
         "descripcion": "Limpieza de oficinas.", "requisitos_indispensables": [], "proceso": {"pasos": MASIVOS}})
     g2 = r.json()
     defecto = "Disponibilidad para trabajar presencial en Zapopan, Jalisco"
-    check(g2["requisitos_indispensables"] == [defecto] and g2["indispensables_propuestos"] == [defecto],
-          f"sin indispensables ni condiciones → «{defecto}»")
+    # 2026-10-16 (Bloque 2): siempre 3 propuestas (entre ellas la de disponibilidad)
+    check(defecto in g2["requisitos_indispensables"] and len(g2["requisitos_indispensables"]) == 3
+          and g2["indispensables_propuestos"] == g2["requisitos_indispensables"],
+          f"sin indispensables ni condiciones → «{defecto}» + 2 propuestas más ({g2['requisitos_indispensables']})")
 
     # ===================================================== 2. Entidad única
     print("\n--- 2. «Preguntas filtro»: una sola entidad ---")
@@ -180,10 +183,12 @@ with TestClient(app) as client:
     check(all(not q["descarta"] for q in todas if q["base"] and not q.get("indispensable")), "las base no descartan")
     # 2026-10-16: sin edad ni «¿Te interesa?» (la edad solo si la vacante la pide); el sueldo es la expectativa
     # 2026-10-16 (bug del tester): la vacante publica su sueldo ($9,000) → sin pregunta de expectativa
-    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"zona", "traslado"}
-          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes", "sueldo"}
+    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» (base, nunca la expectativa)
+    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"zona", "traslado", "sueldo"}
+          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes"}
+          and not any(q.get("expectativa") for q in g["filtro"])
           and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]),
-          "base: colonia y traslado con etiqueta «Base» (sueldo publicado: sin expectativa)")
+          "base: sueldo, colonia y traslado con etiqueta «Base» (sin expectativa)")
     check(len(g2["preguntas_filtro"]) >= 3 and g2["preguntas_filtro_whatsapp"] == [], "web derivado con ≥ 3 preguntas; sin prefiltro de WhatsApp aparte")
     abierta = pfu.normalizar_item({"pregunta": "¿Qué hiciste?", "tipo": "abierta", "descarta": True})
     check(abierta["descarta"] is False and abierta["regla"] == pfu.REGLA_NO_DESCARTA, "una abierta marcada «descarta» se corrige en código")

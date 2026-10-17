@@ -158,11 +158,13 @@ with TestClient(app) as client:
     sys.argv = ["seed", "--aplicar"]
     check(sf.main() == 0, "seed Fletes México")
     from app.models import Cuenta, Ubicacion, Vacante
+    from app.services import ubicaciones as subic
 
     cu_f = db.query(Cuenta).filter_by(slug="fletes-mexico").one()
     va = next(v for v in db.query(Vacante).filter(Vacante.cuenta_id == cu_f.id) if vacante_dict(v)["procesoNombre"] == sf.PROCESO_A)
     resp_a = {c["pregunta"]: ("Terminal Monterrey" if c["tipo"] == "opcion" else "25000" if c.get("expectativa") else "Sí")
               for c in vacante_dict(va)["criterios"]}  # 2026-10-16: la expectativa de sueldo se contesta en la solicitud
+    resp_a[subic.PREGUNTA_TERMINAL] = "Terminal Monterrey"  # 2026-10-16 (QA): la terminal ya elegida (la pregunta el chat)
     p_a = postular(va, "Mario Operador", "5559000001", resp_a)
     primera = ultimo("5559000001", "Sí, empezar ahora")
     check(primera == sf.PREGUNTAS_CHAT[sf.EXPERIENCIA], f"primera pregunta → «{primera}»")
@@ -175,7 +177,8 @@ with TestClient(app) as client:
     t = ultimo("5559000001", "¿Cuánto pagan?")
     check(t.startswith("El sueldo es ") and "25,000" in t and t.endswith(primera), f"«¿Cuánto pagan?» → «{t}»")
     seguidas = []
-    for resp in ("6 años", "Transportes del Norte", "LFB-123456", "diciembre de 2030", "15/06/2031", "Col. Centro, Monterrey"):  # 2026-10-16: sin edad
+    # 2026-10-16: sin edad · 2026-10-16 (QA): «El sueldo es… ¿Te interesa?» antes de la colonia
+    for resp in ("6 años", "Transportes del Norte", "LFB-123456", "diciembre de 2030", "15/06/2031", "Sí", "Col. Centro, Monterrey"):
         seguidas.append(ultimo("5559000001", resp))
     traslado = seguidas[-1]
     check("¿Cuánto tiempo harías de tu casa?" in traslado, f"llega a la pregunta del traslado → «{traslado}»")

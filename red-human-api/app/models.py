@@ -93,6 +93,9 @@ class Vacante(Base):
     sueldo_hasta: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sueldo_moneda: Mapped[str] = mapped_column(String(5), default="MXN")
     sueldo_periodicidad: Mapped[str] = mapped_column(String(15), default="")  # ver PERIODICIDADES_SUELDO
+    # 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación». False → lo público dice «Sueldo competitivo» (RH sigue
+    # viendo el monto). Ver `sueldo_publicado` / `serial.sueldo_publico`.
+    mostrar_sueldo: Mapped[bool] = mapped_column(Boolean, default=True)
     # Cambio 47: cuántas personas se van a contratar en esta vacante (None = no se capturó)
     posiciones: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     estado: Mapped[str] = mapped_column(String(30), default="Borrador")  # Publicada | Borrador | En revisión | Cerrada | Eliminada
@@ -436,6 +439,9 @@ class Postulacion(Base):
         saber entre qué postulaciones tendría que elegir un mensaje entrante."""
         if not self.activa:
             return False
+        a = self.analisis or {}
+        if ((a.get("oferta") or {}).get("enviada_en") and not (a.get("oferta") or {}).get("respuesta")) or                 (a.get("propuesta") or {}).get("estado") == "enviada":
+            return True  # 2026-10-16 (QA): oferta / propuesta enviada esperando el «Sí» del candidato
         if self.etapa == "Entrevista IA" and any(e.tipo == "whatsapp" and e.estado in ("programada", "en_curso") for e in (self.entrevistas or [])):
             return True  # 2026-10-09: Entrevista Red Human por WhatsApp en curso (o esperando el «Sí» para comenzar)
         if self.etapa == "Onboarding":
@@ -1304,6 +1310,7 @@ class Plantilla(Base):
     sueldo_hasta: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sueldo_moneda: Mapped[str] = mapped_column(String(5), default="MXN")
     sueldo_periodicidad: Mapped[str] = mapped_column(String(15), default="")
+    mostrar_sueldo: Mapped[bool] = mapped_column(Boolean, default=True)  # 2026-10-16 (Bloque 2)
     requisitos: Mapped[str] = mapped_column(Text, default="")
     descripcion: Mapped[str] = mapped_column(Text, default="")
     resumen: Mapped[str] = mapped_column(Text, default="")
@@ -1342,6 +1349,7 @@ CAMPOS_PLANTILLA = [
     "sueldo_desde", "sueldo_hasta", "sueldo_moneda", "sueldo_periodicidad",  # Parte 3
     "preguntas_filtro_whatsapp", "ubicacion_estado", "ubicacion_municipio",  # Fase 4
     "documentos_solicitados",  # Cambio 25
+    "mostrar_sueldo",  # 2026-10-16 (Bloque 2)
 ]
 
 
@@ -1359,6 +1367,19 @@ def texto_ubicacion(estado: str, municipio: str, libre: str = "") -> str:
 PERIODICIDADES_SUELDO = ["semanal", "quincenal", "mensual", "anual", "a_convenir"]
 NOMBRE_PERIODICIDAD = {"semanal": "semanales", "quincenal": "quincenales", "mensual": "mensuales", "anual": "anuales"}
 MONEDAS_SUELDO = ["MXN", "USD"]
+
+
+SUELDO_COMPETITIVO = "Sueldo competitivo"
+
+
+def sueldo_publicado(v) -> bool:
+    """2026-10-16 (Bloque 2): la vacante PUBLICA su sueldo = «Mostrar sueldo en la publicación» marcado y hay una cifra
+    (no «A convenir»). Es lo que debe leer el agente para decidir si menciona el sueldo."""
+    import re as _re
+
+    if v is None or getattr(v, "mostrar_sueldo", True) is False:
+        return False
+    return bool(getattr(v, "sueldo_desde", None) or getattr(v, "sueldo_hasta", None) or _re.search(r"\d", getattr(v, "sueldo", "") or ""))
 
 
 def texto_sueldo(desde: Optional[int], hasta: Optional[int], moneda: str = "MXN", periodicidad: str = "") -> str:

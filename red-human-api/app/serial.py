@@ -116,7 +116,7 @@ def _filtro(v) -> list:
     from .services import preguntas_filtro as pfu
 
     try:
-        return [pfu.normalizar_item(q) for q in pfu.de_vacante(v)] if pfu.aplica(v) else []
+        return [pfu.normalizar_item(q) for q in pfu.de_vacante(v, con_quitadas=True)] if pfu.aplica(v) else []
     except Exception:  # noqa: BLE001 — nunca tumba el detalle de la vacante
         return []
 
@@ -155,9 +155,18 @@ def _criterios_solicitud(v) -> list:
 def _con_pregunta_ubicacion(criterios: list, v) -> list:
     """2026-10-16: la pregunta de ubicación va UNA vez — si un requisito de la vacante ya es la elección de sede (en su
     lugar), no se agrega otra al final."""
-    if any(q.get("dato") == "terminal" or q.get("ubicacion") for q in criterios):
+    # 2026-10-16 (QA, decisión del usuario): la solicitud web SOLO registra los requisitos — con «Prefiltro por WhatsApp»
+    # en la ruta la sede la pregunta el chat (y propone la más cercana). Sin él (p. ej. Fletes B: solicitud → avatar) la
+    # web la sigue preguntando: sin sede no hay autoagenda. Un requisito de sede de la vacante sigue en su lugar.
+    if any(q.get("dato") == "terminal" or q.get("ubicacion") for q in criterios) or _ruta_con_prefiltro_whatsapp(v):
         return criterios
     return criterios + _pregunta_terminal(v)
+
+
+def _ruta_con_prefiltro_whatsapp(v) -> bool:
+    pasos = ((v.proceso or {}).get("pasos") or []) if v is not None else []
+    # sin proceso propio la vacante recibe la predeterminada / el respaldo (Masivos), que traen el prefiltro por WhatsApp
+    return not pasos or any(x.get("tipo") == "prefiltro_whatsapp" and not x.get("heredado") for x in pasos)
 
 
 def _pregunta_terminal(v) -> list:
@@ -186,6 +195,16 @@ def nombre_proceso(v) -> str:
         return f"{nombre} (predeterminado)"
     except Exception:  # noqa: BLE001 — nunca tumba el listado
         return ""
+
+
+def sueldo_publico(v) -> str:
+    """2026-10-16 (Bloque 2): el sueldo que ve el candidato — con «Mostrar sueldo en la publicación» desmarcado,
+    «Sueldo competitivo» (RH sigue viendo `sueldo`)."""
+    from .models import SUELDO_COMPETITIVO
+
+    if getattr(v, "mostrar_sueldo", True) is False:
+        return SUELDO_COMPETITIVO
+    return v.sueldo or ""
 
 
 def vacante_dict(
@@ -217,6 +236,9 @@ def vacante_dict(
         "sueldoHasta": v.sueldo_hasta,
         "sueldoMoneda": v.sueldo_moneda or "MXN",
         "sueldoPeriodicidad": v.sueldo_periodicidad or "",
+        # 2026-10-16 (Bloque 2): «Mostrar sueldo en la publicación»; lo público lo lee de `sueldoPublico`
+        "mostrarSueldo": getattr(v, "mostrar_sueldo", True) is not False,
+        "sueldoPublico": sueldo_publico(v),
         "estado": v.estado,
         "enfoqueEntrevista": v.enfoque_entrevista or "profesional",
         # Proceso configurable (2026-10-06): COPIA personalizable del proceso (vacío = sin proceso)
@@ -357,6 +379,18 @@ def historial_laboral(p) -> List[dict]:
         return ewf.historial(e) if e is not None else []
     except Exception:  # noqa: BLE001 — la ficha nunca se cae por el historial
         return []
+
+
+def ficha_entrevista(p) -> Optional[dict]:
+    """2026-10-16 (QA): «Ficha de candidato» de la entrevista fija por WhatsApp más reciente (A · B · C · D · alertas)."""
+    try:
+        from .services import entrevista_whatsapp_fija as ewf
+
+        e = next((x for x in reversed(list(p.entrevistas or [])) if x.tipo == "whatsapp" and (x.guion or {}).get("fija")), None)
+        return ewf.ficha(e) if e is not None else None
+    except Exception as ex:  # noqa: BLE001 — la ficha nunca se cae por esto
+        print(f"[serial] ficha de entrevista de {getattr(p, 'codigo', '?')}: {ex}")
+        return None
 
 
 def _comparativo(p) -> List[dict]:
@@ -884,6 +918,7 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         "onboarding": _onboarding(p),
         # Cambio 29: historial laboral de la entrevista fija por WhatsApp (Masivos)
         "historialLaboral": historial_laboral(p),
+        "fichaEntrevista": ficha_entrevista(p),
         # 2026-10-11 (tarde): zona, traslado y transporte que dio en el prefiltro de WhatsApp (la ficha los muestra)
         "prefiltroDatos": prefiltro_datos(p),
         # Cambio 22: por indispensable, CV (acreditado / no) contra la respuesta del candidato («Inconsistencia» si difieren)

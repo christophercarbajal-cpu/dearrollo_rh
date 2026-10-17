@@ -1832,6 +1832,13 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     else:
         historial = mensajes_db + [{"rol": "user", "texto": texto}]
 
+    # 2026-10-16 (QA): oferta laboral enviada → su «Sí» la acepta y la ruta sigue a «Contrato y firma» (antes caía en la
+    # agenda / liga de entrevista porque nada en Contratación atendía el chat)
+    from ..services import oferta as soferta
+
+    if soferta.esperando_respuesta(p):
+        return await soferta.turno(db, p, texto, canal)
+
     # 2026-10-10 (Cambio 3): propuesta de trabajo enviada → el chat espera «sí» o «no» (nada más)
     from ..services import propuesta as sprop
 

@@ -848,6 +848,12 @@ def _fecha_larga(dt: Optional[datetime]) -> str:
     return f"{dt.day} de {_MESES_LARGO[dt.month - 1]} de {dt.year}"
 
 
+def _sueldo_exacto(texto: Optional[str]) -> str:
+    from ..services.oferta import sueldo_exacto
+
+    return sueldo_exacto(texto or "")
+
+
 def _datos_carta_intencion(e: Expediente) -> dict:
     """Datos reales + fallback «por definir» que comparten el PDF y la vista HTML."""
     c = e.candidato
@@ -857,7 +863,8 @@ def _datos_carta_intencion(e: Expediente) -> dict:
         # B2: la empresa contratante es la razón social elegida en las condiciones; fallback a la visible de la vacante
         "empresa": e.empresa or (nombre_empresa_candidato(vac) if vac else "") or "la empresa",
         "puesto": e.puesto or (vac.titulo if vac else "") or "el puesto",
-        "sueldo": e.sueldo or "por definir",
+        # 2026-10-17: carta y contrato con la cifra exacta, sin «Desde» («$5,000 MXN mensuales»), igual que la oferta
+        "sueldo": _sueldo_exacto(e.sueldo) or "por definir",
         "tipo_contratacion": e.tipo_contratacion or "por definir",
         "ubicacion": e.ubicacion or (c.ubicacion if c else "") or "por definir",
         "jefe": e.jefe_directo or "por definir",

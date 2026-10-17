@@ -442,6 +442,8 @@ class Postulacion(Base):
         a = self.analisis or {}
         if ((a.get("oferta") or {}).get("enviada_en") and not (a.get("oferta") or {}).get("respuesta")) or                 (a.get("propuesta") or {}).get("estado") == "enviada":
             return True  # 2026-10-16 (QA): oferta / propuesta enviada esperando el «Sí» del candidato
+        if (a.get("agenda_cita") or {}).get("cuando") and not self.videollamada_liga:
+            return True  # 2026-10-17: el bot preguntó «¿Cuándo te queda bien?» (agenda de la entrevista con avatar)
         if self.etapa == "Entrevista IA" and any(e.tipo == "whatsapp" and e.estado in ("programada", "en_curso") for e in (self.entrevistas or [])):
             return True  # 2026-10-09: Entrevista Red Human por WhatsApp en curso (o esperando el «Sí» para comenzar)
         if self.etapa == "Onboarding":

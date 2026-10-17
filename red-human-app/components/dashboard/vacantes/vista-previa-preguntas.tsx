@@ -88,6 +88,15 @@ function Origen({ origen }: { origen: OrigenPregunta }) {
   );
 }
 
+/** 2026-10-17: cuántas preguntas ve el candidato en cada canal (misma regla que la vista previa) — resumen de la Sección 3. */
+export function contarPreguntas(canal: "web" | "whatsapp", requisitos: string[], filtro: PreguntaFiltroU[]): number {
+  const delRequisito = (q: PreguntaFiltroU) => requisitos.some((r) => clave(r) === clave(q.requisito));
+  const preguntas = filtro.filter((q) => q.indispensable && delRequisito(q)).length;
+  const sinPregunta = requisitos.filter((r) => r.trim() && !filtro.some((q) => q.indispensable && clave(q.requisito) === clave(r))).length;
+  const bases = filtro.filter((q) => q.base && !q.indispensable && !q.quitada && (canal === "whatsapp" || q.tipo !== "abierta")).length;
+  return preguntas + sinPregunta + bases;
+}
+
 export function VistaPreviaPreguntas({
   canal,
   requisitos,
@@ -175,7 +184,11 @@ export function VistaPreviaPreguntas({
                 {canal === "web" && <p className="text-[11px] text-ink-3">Respuestas: Sí · No</p>}
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
                   <Origen origen={origenDe(q, propuestos)} />
-                  <span>Requisito: {q.requisito}</span>
+                  {/* 2026-10-17: cada pregunta dice de qué indispensable nace (web y WhatsApp) + su tipo, si el servidor lo trae */}
+                  <span className="font-medium text-ink-2">Nace de: {q.requisito}</span>
+                  {q.tipo_indispensable && (
+                    <span className="rounded-full border border-border-soft px-2 py-0.5 text-[10px] font-medium text-ink-2">{q.tipo_indispensable}</span>
+                  )}
                   {canal === "whatsapp" && <span>· {q.seguimiento ? "Continúa la pregunta web · Se registra" : textoDescartaSi(q) === "No descarta" ? "No descarta" : `Descarta si: ${textoDescartaSi(q)}`}</span>}
                 </div>
               </div>

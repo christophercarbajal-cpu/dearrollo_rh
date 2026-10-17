@@ -202,6 +202,108 @@ def main():
         check(not pconv._falta(crit[i_lic + 1], {padre: {"valor": "no", "fuente": "web"}}), "«No» en la web → se confirma, no se pide detalle")
         check(pconv._falta(crit[i_lic + 1], {padre: {"valor": "si", "fuente": "whatsapp", "confirmacion_web": "corregida"}}),
               "corrigió en el chat el «No» de la web → sigue con la continuación")
+        # ===================================================== 5. Ficha de Nueva vacante (2026-10-17)
+        print("\n--- 5. Tipos, validación por sección con reintentos y respaldo ---")
+        from app.services import validacion_preguntas as vpr
+
+        esperados = {"3 años de experiencia en almacén": "Experiencia", "Vivir en Apodaca": "Ubicación",
+                     "Disponibilidad para iniciar de inmediato": "Fecha de inicio", "Disponibilidad para rolar turnos": "Horario",
+                     "Secundaria terminada": "Escolaridad", "Licencia de manejo tipo B": "Licencia",
+                     "Manejo de Excel intermedio": "Herramienta", "Inglés avanzado": "Idioma", "Saber leer y escribir": "Otro"}
+        check(all(vpr.clasificar(r) == t for r, t in esperados.items()) and set(esperados.values()) == set(vpr.TIPOS_INDISPENSABLE),
+              "cada indispensable se clasifica en uno de los 9 tipos")
+        check(all(vpr.menciona(vpr.respaldo(r, t, s), r, t) for r, t in esperados.items() for s in vpr.SECCIONES),
+              "cada tipo tiene su pregunta de respaldo fija (web y WhatsApp) y nombra el concepto")
+        check(vpr.problemas([("Licencia de manejo tipo B", "Licencia", "¿Tienes licencia tipo B?"),
+                             ("Disponibilidad para rolar turnos", "Horario", "¿Tienes licencia tipo B?")]) == {1: "repite la pregunta de «Licencia de manejo tipo B»"}
+              or 1 in vpr.problemas([("Licencia de manejo tipo B", "Licencia", "¿Tienes licencia tipo B?"),
+                                     ("Disponibilidad para rolar turnos", "Horario", "¿Tienes licencia tipo B?")]),
+              "dos preguntas iguales/traslapadas = problema")
+        check(1 in vpr.problemas([("Licencia de manejo tipo B", "Licencia", "¿Tienes licencia tipo B?"),
+                                  ("Saber usar montacargas", "Herramienta", "¿Tienes buena actitud?")]),
+              "una pregunta que no menciona el concepto de su indispensable = problema")
+        check("CONTEXTO ÚNICO" in ia._REGLAS and "nada automotriz en una vacante de software" in ia._REGLAS,
+              "prompt: sin mezcla de contextos (el nombre de la empresa no define la industria)")
+        check("SUELDO EXACTO" in ia._REGLAS and "«El sueldo es… ¿te interesa?», «El puesto es… ¿te interesa?» están prohibidas" in ia._REGLAS,
+              "prompt: sueldo exacto de la vacante y sin «¿te interesa?» en el prefiltro")
+
+        class ClienteSecciones(ClienteFalso):
+            """La generación regresa preguntas MALAS (repetidas / sin concepto); cada reintento de sección también."""
+
+            def __init__(self, respuesta, reintento):
+                super().__init__(respuesta)
+                self.reintento = reintento
+                self.secciones = []
+
+            def parse(self, model, instructions, input, text_format):  # noqa: A002
+                if text_format.__name__ == "_SeccionRegenerada":
+                    self.secciones.append(instructions)
+                    return SimpleNamespace(output_parsed=self.reintento(len(self.secciones)))
+                return super().parse(model, instructions, input, text_format)
+
+        def generacion_mala():
+            g = respuesta_ia(con_monto=False)()
+            g.preguntas_requisitos = [ia.PreguntaRequisito(requisito=r, pregunta="¿Tienes buena actitud?", pregunta_web="¿Tienes buena actitud?",
+                                                           pregunta_whatsapp="¿Cuál es tu color favorito?", tipo="")
+                                      for r in reqs]
+            return g
+
+        def reintento_malo(n):
+            return ia._SeccionRegenerada(preguntas=[ia._PreguntaSeccion(requisito=r, pregunta="¿Te gusta trabajar?") for r in reqs])
+
+        malo = ClienteSecciones(generacion_mala, reintento_malo)
+        ia._client = lambda: malo
+        try:
+            r = client.post("/vacantes/generar", json={**ficha, "mostrar_sueldo": True})
+        finally:
+            ia._client = original
+        ind = [q for q in r.json()["filtro"] if q.get("indispensable")]
+        check(r.status_code == 200 and len(malo.secciones) == 2 * vpr.MAX_REINTENTOS,
+              f"máximo {vpr.MAX_REINTENTOS} reintentos por sección (web y WhatsApp) en batch ({len(malo.secciones)} llamadas)")
+        web_f = [q.get("pregunta_web") or q["pregunta"] for q in ind]
+        check(web_f == [vpr.respaldo(q["requisito"], q["tipo_indispensable"], "web") for q in ind],
+              f"tras los reintentos fallidos → la pregunta web de respaldo de cada tipo ({web_f})")
+        check([q["seguimiento"] for q in ind] == [vpr.respaldo(q["requisito"], q["tipo_indispensable"], "whatsapp") for q in ind],
+              "… y la de WhatsApp de respaldo")
+        check([q["tipo_indispensable"] for q in ind] == ["Licencia", "Horario", "Herramienta"], f"cada pregunta lleva el tipo de su indispensable ({[q['tipo_indispensable'] for q in ind]})")
+
+        def reintento_bueno(n):
+            return ia._SeccionRegenerada(preguntas=[ia._PreguntaSeccion(requisito=r, pregunta=q) for r, q in zip(reqs, (
+                "¿Tienes licencia de manejo tipo B vigente?", "¿Puedes rolar turnos cada semana?", "¿Sabes operar un montacargas?"))])
+
+        bien = ClienteSecciones(generacion_mala, reintento_bueno)
+        ia._client = lambda: bien
+        try:
+            r = client.post("/vacantes/generar", json={**ficha, "mostrar_sueldo": True, "instrucciones": "Tono más formal, enfocado en seguridad."})
+        finally:
+            ia._client = original
+        ind = [q for q in r.json()["filtro"] if q.get("indispensable")]
+        check((ind[2].get("pregunta_web") or ind[2]["pregunta"]) == "¿Sabes operar un montacargas?",
+              f"un reintento que corrige la sección se usa tal cual ({ind[2].get('pregunta_web') or ind[2]['pregunta']})")
+        check("Instrucciones adicionales de RH" in bien.llamadas[0]["input"] and "Tono más formal, enfocado en seguridad." in bien.llamadas[0]["input"],
+              "«Da más instrucciones a Red Human» llega al prompt de la generación")
+
+        print("\n--- 5b. El sueldo de los textos = el de la vacante ---")
+
+        def con_sueldo_ajeno():
+            g = respuesta_ia(con_monto=False)()
+            g.descripcion = "Buscamos operador. Ofrecemos $15,000 mensuales. Turnos rotativos."
+            g.resumen = "Operador con sueldo de $12,000 MXN mensuales."
+            return g
+
+        ajeno = ClienteFalso(con_sueldo_ajeno)
+        ia._client = lambda: ajeno
+        try:
+            s2 = client.post("/vacantes/generar", json={**ficha, "mostrar_sueldo": True}).json()
+        finally:
+            ia._client = original
+        check("15,000" not in s2["descripcion"] and "Turnos rotativos." in s2["descripcion"], f"un sueldo distinto al de la vacante se quita ({s2['descripcion']!r})")
+        check("12,000" in s2["resumen"], "el sueldo capturado ($12,000) se conserva")
+        vq = SimpleNamespace(guiones={pfu.CLAVE: s2["filtro"]}, preguntas_filtro=s2["preguntas_filtro"], preguntas_filtro_whatsapp=[],
+                             sueldo_periodicidad="mensual", sueldo="$12,000 MXN mensual", mostrar_sueldo=True, modalidad="Presencial",
+                             ubicaciones=[], ubicacion_estado="", ubicacion_municipio="", ubicacion="", titulo="Operador de montacargas")
+        check(not any(q.get("dato") == "sueldo" for q in s2["filtro"]) and not any(c.get("dato") in ("sueldo", "interes") for c in pfu.criterios(vq)),
+              "el prefiltro de WhatsApp ya no trae «El sueldo es… ¿te interesa?» ni «El puesto es… ¿te interesa?»")
         db.close()
     print(f"\nTodo OK ({OK} comprobaciones)")
 

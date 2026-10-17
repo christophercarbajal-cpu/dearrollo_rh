@@ -189,7 +189,7 @@ def _pregunta_indispensable_base(i: int, req: str) -> dict:
     if _RE_LICENCIA.search(t):
         varias = _RE_LETRAS_LICENCIA.search(t)
         letra = _RE_LETRA_LICENCIA.search(t)
-        letras = "".join(re.findall(r"[a-e]", re.sub(r"(?:o|y)", " ", varias.group(1)))) if varias else (
+        letras = "".join(re.findall(r"[a-e]", re.sub(r"\b(?:o|y)\b", " ", varias.group(1)))) if varias else (
             (letra.group(1) or letra.group(2)) if letra else "")
         return _criterio(cid, "licencia", r, "¿Qué tipo de licencia tienes?", True, letra=letras)
     if _RE_DISPONIBILIDAD.search(t):
@@ -234,11 +234,7 @@ def base(titulo: str, sueldo: str, ubicacion: str, indispensables: List[str], na
     if edad is not None:
         salida.append(_criterio("dato-edad", "edad", edad_req, "¿Cuántos años tienes?", True,
                                 edad_min=edad[0], edad_max=edad[1]))
-    if _texto_sueldo(sueldo):
-        # 2026-10-16 (QA, decisión del usuario): ya no hay expectativa — con sueldo publicado «El sueldo es… ¿Te interesa?»;
-        # un «no» se confirma y, confirmado, descarta (`prefiltro_conversacional.turno`)
-        salida.append({**_criterio("dato-sueldo", "sueldo", "Sueldo", _texto_sueldo(sueldo)),
-                       "operativo": False, "base_operativa": False, "confirma_descarte": True})
+    # 2026-10-17 (Ficha de Nueva vacante): ya no se pregunta «El sueldo es… ¿te interesa?» en el prefiltro de WhatsApp
     salida.append({**_criterio("dato-zona", "zona", "Colonia y municipio", "¿En qué colonia y municipio vives?"), "operativo": False})
     # Cambio 51 (2026-10-15): orden Indispensables → Edad → Puesto («El puesto es [puesto] en [ciudad, estado]. ¿Te
     # interesa?», la ciudad la pone `prefiltro_conversacional.criterios_de`) → Sueldo → Colonia → Tiempo. Ya no se pregunta

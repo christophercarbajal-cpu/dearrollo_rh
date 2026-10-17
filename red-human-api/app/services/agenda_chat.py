@@ -221,11 +221,201 @@ def texto_liga(nombre: str, liga: str, ahora: bool, limite: Optional[datetime] =
     return (f"Sin problema{quien}. Tienes {DIAS_PLAZO} días para hacerla{hasta}. Entra cuando puedas desde esta liga:\n\n{liga}")
 
 
+# ============================================================ Agendamiento inteligente (especificación 2026-10-17)
+# Al pasar a la Entrevista Red Human con avatar el bot ya NO manda la liga de inmediato: invita y pregunta cuándo. «Ahora»
+# → la liga; una fecha/hora → queda agendada (con recordatorio, `services/agenda.recordar_videollamadas`); algo vago →
+# pide una hora concreta. Sin cupos (disponibilidad 24/7: no usa la autoagenda de citas presenciales).
+PREGUNTA_CUANDO = "¿Cuándo te queda bien? Si quieres, puede ser ahora mismo."
+TEXTO_INVITACION_AGENDA = f"¡Pasaste a la siguiente etapa! Es una entrevista por videollamada de unos 10 minutos. {PREGUNTA_CUANDO}"
+CLAVE_AGENDADA = "entrevista_agendada"
+_RE_AHORA_MISMO = re.compile(r"\b(ahora mismo|ahorita mismo|ahora|ahorita|de una vez|en este momento|ya mismo|de inmediato|"
+                             r"inmediatamente|enseguida|en seguida|ya)\b")
+_RE_AHORA_NO = re.compile(r"\b(ahora no|ahorita no|ya no|no puedo ahora|no ahorita|ahora mismo no|ahorita estoy|ahora estoy)\b")
+_RE_DIA_MES = re.compile(r"\b(?:el |dia |el dia )?(\d{1,2})(?: de (" + "|".join(_MESES) + r"))?\b")
+
+
+def invitacion_agenda(p: Postulacion) -> str:
+    """Primer mensaje de la etapa (sin liga): «¡Pasaste a la siguiente etapa! … ¿Cuándo te queda bien? Si quieres, puede ser
+    ahora mismo.». Deja vigente la pregunta en `analisis["agenda_cita"]["cuando"]`."""
+    a = dict(p.analisis or {})
+    a[CLAVE] = {"cuando": True, "en": datetime.now(timezone.utc).isoformat()}
+    p.analisis = a
+    flag_modified(p, "analisis")
+    return TEXTO_INVITACION_AGENDA
+
+
+def esperando_cuando(p: Postulacion) -> bool:
+    return bool(((p.analisis or {}).get(CLAVE) or {}).get("cuando"))
+
+
+def _dia_del_mes(t: str, ahora: datetime):
+    """«el martes 20», «el 20», «20 de octubre» → la fecha (el mes actual o el siguiente si ese día ya pasó)."""
+    for m in _RE_DIA_MES.finditer(t):
+        n = int(m.group(1))
+        antes = t[:m.start()].rstrip()
+        despues = t[m.end():].lstrip()
+        if not 1 <= n <= 31:
+            continue
+        # un número que es la HORA («a las 6», «6 pm», «6:30») no es el día
+        if re.search(r"(a las|a la|las|la)$", antes) or re.match(r"(:|am\b|pm\b|a\.?m|p\.?m|hrs?\b|horas\b|de la (manana|tarde|noche))", despues):
+            continue
+        dia_semana = any(antes.endswith(d) for d in _DIAS)
+        if not (m.group(2) or dia_semana or m.group(0).startswith(("el ", "dia "))):
+            continue
+        mes = _MESES.index(m.group(2)) + 1 if m.group(2) else ahora.month
+        anio = ahora.year
+        try:
+            fecha = datetime(anio, mes, n, tzinfo=TZ_ORG).date()
+        except ValueError:
+            continue
+        if fecha < ahora.date():
+            if m.group(2):
+                fecha = fecha.replace(year=anio + 1)
+            else:
+                mes2, anio2 = (1, anio + 1) if mes == 12 else (mes + 1, anio)
+                try:
+                    fecha = datetime(anio2, mes2, n, tzinfo=TZ_ORG).date()
+                except ValueError:
+                    continue
+        return fecha
+    return None
+
+
+def partes_horario(texto: str, ahora: Optional[datetime] = None) -> dict:
+    """{"dia": date | None, "hora": (h, m) | None} de lo que escribió el candidato (sin inventar la parte que falta)."""
+    ahora = (ahora or _ahora()).astimezone(TZ_ORG)
+    t = _norm(texto)
+    dia = _dia_del_mes(t, ahora)
+    if dia is None:
+        if "pasado manana" in t:
+            dia = ahora.date() + timedelta(days=2)
+        elif re.search(r"\bmanana\b", t.replace("de la manana", "")):
+            dia = ahora.date() + timedelta(days=1)
+        elif re.search(r"\bhoy\b", t):
+            dia = ahora.date()
+        else:
+            for i, nombre in enumerate(_DIAS):
+                if re.search(rf"\b{nombre}\b", t):
+                    dia = ahora.date() + timedelta(days=(i - ahora.weekday()) % 7 or 7)
+                    break
+    hora = None
+    for m in _RE_HORA.finditer(t):
+        h, mi, marca = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").replace(" ", "").replace(".", "")
+        prefijo = m.group(0).startswith(("a las", "a la", "las ", "la "))
+        if not (marca or prefijo or m.group(2)) or h > 23 or mi > 59:
+            continue
+        if marca in ("pm", "delatarde", "delanoche") and h < 12:
+            h += 12
+        elif marca in ("am", "delamanana") and h == 12:
+            h = 0
+        elif not marca and 1 <= h <= 7:
+            h += 12
+        hora = (h, mi)
+        break
+    return {"dia": dia, "hora": hora}
+
+
+def texto_cita(dt: datetime, ahora: Optional[datetime] = None) -> str:
+    """«hoy a las 6:00 p.m.», «mañana a las 10:00 a.m.», «el martes 20 a las 6:00 p.m.»."""
+    ahora = (ahora or _ahora()).astimezone(TZ_ORG)
+    dt = dt.astimezone(TZ_ORG)
+    dias = (dt.date() - ahora.date()).days
+    cuando = "hoy" if dias == 0 else "mañana" if dias == 1 else f"el {_DIAS_TEXTO[dt.weekday()]} {dt.day}"
+    h12 = dt.hour % 12 or 12
+    return f"{cuando} a las {h12}:{dt.minute:02d} {'a.m.' if dt.hour < 12 else 'p.m.'}"
+
+
+def texto_estado_agendada(dt: datetime) -> str:
+    """Estado del pipeline: «Entrevista agendada · martes 20 6:00 p.m.»."""
+    dt = dt.astimezone(TZ_ORG)
+    h12 = dt.hour % 12 or 12
+    return f"Entrevista agendada · {_DIAS_TEXTO[dt.weekday()]} {dt.day} {h12}:{dt.minute:02d} {'a.m.' if dt.hour < 12 else 'p.m.'}"
+
+
+def _con_dia_pendiente(p: Postulacion, partes: dict) -> dict:
+    """Si antes dijo solo el día («el jueves») y ahora solo la hora («a las 5»), se juntan."""
+    previo = ((p.analisis or {}).get(CLAVE) or {}).get("dia")
+    if partes["dia"] is None and partes["hora"] is not None and previo:
+        try:
+            return {**partes, "dia": datetime.fromisoformat(previo).date()}
+        except (TypeError, ValueError):
+            pass
+    return partes
+
+
+def _guardar_dia(p: Postulacion, dia) -> None:
+    a = dict(p.analisis or {})
+    estado = dict(a.get(CLAVE) or {})
+    estado["dia"] = dia.isoformat() if dia else None
+    a[CLAVE] = estado
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def interpretar_cuando(p: Postulacion, texto: str, ahora: Optional[datetime] = None) -> dict:
+    """Respuesta a «¿Cuándo te queda bien?»: {"accion": "ahora"} | {"accion": "registrar", "cuando": dt} | {"accion":
+    "responder", "texto": str}. Primero la lectura determinista; si no se entiende, el modelo (`ia.interpretar_agenda`)."""
+    ahora = (ahora or _ahora()).astimezone(TZ_ORG)
+    t = _norm(texto)
+    partes = _con_dia_pendiente(p, partes_horario(texto, ahora))
+    if _RE_AHORA_MISMO.search(t) and not _RE_AHORA_NO.search(t) and partes["dia"] is None and partes["hora"] is None:
+        return {"accion": "ahora"}
+    if partes["dia"] is None and partes["hora"] is None:
+        from . import ia
+
+        lectura = ia.interpretar_agenda(texto, ahora)
+        if lectura.get("accion") == "ahora":
+            return {"accion": "ahora"}
+        if lectura.get("cuando"):
+            partes = {"dia": lectura["cuando"].date(), "hora": (lectura["cuando"].hour, lectura["cuando"].minute)}
+    if partes["hora"] is not None:
+        dia = partes["dia"] or ahora.date()
+        dt = datetime(dia.year, dia.month, dia.day, partes["hora"][0], partes["hora"][1], tzinfo=TZ_ORG)
+        if partes["dia"] is None and dt <= ahora + timedelta(minutes=10):
+            dt += timedelta(days=1)  # «a las 9» cuando ya pasaron las 9 → mañana
+        if dt <= ahora:
+            return {"accion": "responder", "texto": "Esa hora ya pasó. ¿Qué otro día y hora te queda bien? Si quieres, puede ser ahora mismo."}
+        return {"accion": "registrar", "cuando": dt}
+    if partes["dia"] is not None:
+        _guardar_dia(p, partes["dia"])
+        dia_dt = datetime(partes["dia"].year, partes["dia"].month, partes["dia"].day, tzinfo=TZ_ORG)
+        cuando = texto_cita(dia_dt.replace(hour=12), ahora).split(" a las ")[0]
+        return {"accion": "responder", "texto": f"Va. ¿A qué hora te queda bien {cuando}?"}
+    return {"accion": "responder",
+            "texto": "¿Qué día y a qué hora te queda bien? Por ejemplo: «mañana a las 11 a.m.». Si quieres, puede ser ahora mismo."}
+
+
+def texto_agendada(nombre: str, dt: datetime, liga: str) -> str:
+    quien = f", {nombre}" if nombre and not nombre.startswith("Candidato") else ""
+    return (f"Listo{quien}, quedó {texto_cita(dt)} ({ETIQUETA_ZONA}). Te mando un recordatorio antes. A esa hora entra desde "
+            f"esta liga:\n\n{liga}")
+
+
+def marcar_agendada(p: Postulacion, dt: datetime, token: str) -> None:
+    a = dict(p.analisis or {})
+    a.pop(CLAVE, None)
+    a[CLAVE_AGENDADA] = {"cuando": dt.astimezone(timezone.utc).isoformat(), "entrevista": token, "recordatorio_enviado": None}
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def agendada(p: Postulacion) -> Optional[datetime]:
+    valor = ((p.analisis or {}).get(CLAVE_AGENDADA) or {}).get("cuando")
+    try:
+        return datetime.fromisoformat(valor) if valor else None
+    except (TypeError, ValueError):
+        return None
+
+
 def decidir(p: Postulacion, texto: str) -> dict:
     """Qué hacer con la respuesta del candidato. Regresa {"accion": "registrar", "cuando": dt} | {"accion": "ahora" |
     "plazo"} | {"accion": "responder", "texto": str}. Con la pregunta «¿La quieres hacer ahora?» vigente decide
-    `decidir_ahora`; las propuestas de horario anteriores al Cambio 24 siguen funcionando."""
+    `decidir_ahora`; las propuestas de horario anteriores al Cambio 24 siguen funcionando.
+    2026-10-17: con «¿Cuándo te queda bien?» vigente decide `interpretar_cuando` (la cita queda con lo que diga, sin «Sí»)."""
     estado = (p.analisis or {}).get(CLAVE) or {}
+    if estado.get("cuando"):
+        d = interpretar_cuando(p, texto)
+        return {**d, "agenda_nueva": True}
     if estado.get("pregunta_ahora") and estado.get("liga_enviada"):
         # 2026-10-16: la liga ya salió en el mensaje único del motor — «no puedo ahora» → la liga con 3 días; cualquier
         # otra cosa («ok, gracias», «sí») → se le recuerda la liga (nunca se vuelve a preguntar ni a proponer horario)

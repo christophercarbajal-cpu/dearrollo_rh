@@ -262,6 +262,19 @@ async def _disparar_entrevista(db: Session, p: Postulacion, paso: dict) -> Tuple
         return ok, detalle, entregado
     if paso["tipo"] == "entrevista_agente" and _directo_de_solicitud(p, paso):
         return await _invitar_video(db, p, paso)
+    if paso["tipo"] == "entrevista_agente" and p.telefono:
+        # (sin teléfono no hay chat donde contestar: sigue la liga por correo como antes)
+        # 2026-10-17 (agenda inteligente): ya NO se manda la liga de inmediato — «¡Pasaste a la siguiente etapa! Es una
+        # entrevista por videollamada de unos 10 minutos. ¿Cuándo te queda bien? Si quieres, puede ser ahora mismo.». Su
+        # respuesta la atiende `candidatos._procesar_turno_agenda` (`agenda_chat.interpretar_cuando`): «ahora» → la liga;
+        # día y hora → cita agendada con recordatorio. Sin cupos (24/7).
+        from . import agenda_chat
+
+        texto = agenda_chat.invitacion_agenda(p)
+        db.flush()
+        vacante = p.vacante.titulo if p.vacante else "la vacante"
+        entregado, detalle = await _avisar(db, p, texto, f"Tu entrevista para {vacante}", "", motivo="entrevista", paso_id=paso["id"])
+        return True, (f"Invitación enviada por {detalle}" if entregado else f"La invitación no salió ({detalle})"), entregado
     e, _ = crear_entrevista_para_candidato(db, p, ACTOR, paso_tipo=paso["tipo"])
     liga = f"{settings.app_url}/entrevista/{e.token}"
     if paso["tipo"] == "llamada_agente":

@@ -128,7 +128,7 @@ with TestClient(app) as client:
     # ---------- 3. Misma persona, dos vacantes → dos postulaciones ----------
     v1 = db.query(Vacante).filter_by(codigo="VAC-1042").one()
     v2 = db.query(Vacante).filter_by(codigo="VAC-1041").one()
-    # 2026-10-16 (QA): la vacante 2 publica su sueldo → «El sueldo es… ¿Te interesa?» (su prefiltro queda esperando respuesta)
+    # 2026-10-17: el prefiltro ya no pregunta el sueldo — el de la vacante 2 puede terminar antes (ver §4 y §6)
     TEL = "5591234567"
     # retro 2026-10-09: ruta Masivos (prefiltro y Entrevista Red Human en el mismo chat de WhatsApp)
     from app.services import proceso as _sproc
@@ -189,9 +189,20 @@ with TestClient(app) as client:
     check(persona.postulacion_conversacion_id == p2.id, "B1: guardar_mensaje(rol=assistant) no mueve el puntero")
 
     persona.postulacion_conversacion_id = None
+    db.refresh(p2)
+    estado_p2 = None
+    if not p2.espera_respuesta:
+        # 2026-10-17: sin la pregunta de sueldo el prefiltro de P2 puede terminar con las respuestas de arriba; el caso que se
+        # prueba es «P2 todavía en prefiltro» (se restaura justo después)
+        estado_p2 = (p2.etapa, p2.prefiltro_completo)
+        p2.etapa, p2.prefiltro_completo = "Prefiltro", False
     db.commit()
     r = client.post("/webhooks/whatsapp", json=meta_texto(WA, "Sigo interesado"))
     check(r.json().get("accion") == "elegir_postulacion", "webhook: puntero perdido y 2 esperando (P1 en agenda, P2 en prefiltro) → vuelve a preguntar")
+    if estado_p2 is not None:
+        db.refresh(p2)
+        p2.etapa, p2.prefiltro_completo = estado_p2
+        db.commit()
     r = client.post("/webhooks/whatsapp", json=meta_lista(WA, P1, v1.titulo[:24]))
     check(r.json().get("postulacion") == P1, f"webhook: eligió {P1} → el turno se procesa ahí")
     db.expire_all()
@@ -212,6 +223,14 @@ with TestClient(app) as client:
     check(client.get(f"/candidatos/{P1}").json()["activa"] is False, "la postulación cerrada sigue consultable")
 
     # ---------- 6. Un expediente por postulación (P5) ----------
+    # 2026-10-17: sin la pregunta de sueldo el prefiltro de P2 ya terminó (en revisión): una actividad completada que no
+    # cumple no se «omite» — RH la libera con «Continuar por decisión de RH» (camino de siempre) y después avanza
+    db.expire_all()
+    p2 = db.get(Postulacion, p2.id)
+    for x in _sproc.faltantes(_sproc.estado_pasos(p2), _sproc.desde_compuerta(p2), "Contratación"):
+        if x["estado"] == "completada":
+            _sproc.excepcion_rh(db, p2, x["id"], admin, "Prueba: continuar por decisión de RH")
+    db.commit()
     r = client.patch(f"/candidatos/{P2}/etapa", json={"etapa": "Contratación", "omitir_obligatorios": True, "comentario": "Prueba: omisión autorizada de la ruta"})
     check(r.status_code == 200 and r.json()["expedienteId"], f"{P2} → Contratación abre expediente")
     exp_p2 = r.json()["expedienteId"]

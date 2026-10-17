@@ -42,7 +42,7 @@
      solo complementa lo vacío. `contenidoDesdeGenerado` aplica exactamente eso del lado del cliente. */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, MessageSquareText, RefreshCw, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, MessageSquareText, Pencil, Plus, RefreshCw, Sparkles, X } from "lucide-react";
 import { Button, Eyebrow } from "@/components/ui";
 import { Area, CampoSueldo, Field, ListaEditable, Selector } from "@/components/dashboard/campos";
 import { ESTADOS_MX, municipiosDe, parsearUbicacion, textoUbicacion } from "@/lib/ubicacion";
@@ -52,7 +52,7 @@ import { PestanasTextoPlataforma } from "@/components/dashboard/vacantes/texto-p
 import { ligaCanal, markdownATexto, slugificar } from "@/lib/markdown-texto";
 import { EntrevistaWhatsappBase } from "@/components/dashboard/vacantes/entrevista-whatsapp-base";
 import { CampoUbicaciones } from "@/components/dashboard/vacantes/campo-ubicaciones";
-import { VistaPreviaPreguntas, type CambioPreguntas } from "@/components/dashboard/vacantes/vista-previa-preguntas";
+import { VistaPreviaPreguntas, contarPreguntas, type CambioPreguntas } from "@/components/dashboard/vacantes/vista-previa-preguntas";
 import {
   ETAPAS_PIPELINE,
   nombreEtapa,
@@ -199,6 +199,15 @@ export const MODALIDADES = ["Presencial", "Híbrido", "Remoto"];
 
 const SEPARADOR_REQUISITOS = " · ";
 
+/** 2026-10-17: «Indispensables» — mínimo 3 renglones visibles (para generar) y máximo 5. */
+export const MIN_INDISPENSABLES = 3;
+export const MAX_INDISPENSABLES = 5;
+
+/** Renglones con texto (sin los vacíos que muestra el campo). */
+export function llenos(items: string[]): string[] {
+  return items.map((x) => x.trim()).filter(Boolean);
+}
+
 /** `requisitos` legado es texto separado por « · » (o saltos/;) → lista de indispensables. */
 export function requisitosLista(texto: string | undefined): string[] {
   return (texto ?? "")
@@ -342,8 +351,8 @@ export function contenidoDesdeVacante(v: Vacante): ContenidoVacante {
 /** Vuelca lo que generó Red Human sobre el contenido actual RESPETANDO lo capturado: nunca toca
  * sueldo, seniority ni prestaciones; indispensables/deseables capturados quedan literal, en su
  * categoría y primero; la descripción breve se expande (decisión 3); lo demás solo rellena vacíos. */
-export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerada): ContenidoVacante {
-  return {
+export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerada, reemplazar = false): ContenidoVacante {
+  const salida: ContenidoVacante = {
     ...base,
     descripcion: g.descripcion || base.descripcion,
     responsabilidades: base.responsabilidades.length ? base.responsabilidades : g.responsabilidades ?? [],
@@ -364,6 +373,18 @@ export function contenidoDesdeGenerado(base: ContenidoVacante, g: VacanteGenerad
     avisos_cumplimiento: g.avisos_cumplimiento ?? [],
     texto_whatsapp: base.texto_whatsapp || (g.texto_whatsapp ?? ""),
     texto_bolsa: base.texto_bolsa || (g.portal?.page ?? ""),
+  };
+  // 2026-10-17: «Regenerar» de la Sección 1 (con instrucciones de RH) reescribe lo generado de la Publicación y, en
+  // cascada, los textos por plataforma. Lo capturado por RH (sueldo, prestaciones, indispensables) sigue intacto.
+  if (!reemplazar) return salida;
+  return {
+    ...salida,
+    resumen: g.resumen || salida.resumen,
+    responsabilidades: g.responsabilidades?.length ? g.responsabilidades : salida.responsabilidades,
+    perfil_ideal: g.perfil_ideal || salida.perfil_ideal,
+    palabras_clave: g.palabras_clave?.length ? g.palabras_clave : salida.palabras_clave,
+    texto_whatsapp: g.texto_whatsapp || salida.texto_whatsapp,
+    texto_bolsa: g.portal?.page || salida.texto_bolsa,
   };
 }
 
@@ -443,6 +464,8 @@ export function faltantesDatosPrincipales(c: ContenidoVacante): string[] {
 
 /** Cuerpo snake_case para POST /plantillas, PATCH /plantillas/{id}, POST /vacantes y /vacantes/generar. */
 export function contenidoComoPayload(c: ContenidoVacante) {
+  // 2026-10-17: el campo «Indispensables» muestra 3 renglones aunque estén vacíos; al servidor solo viajan los llenos
+  const requisitos = llenos(c.requisitos);
   const desde = c.sueldo_desde ? Number(c.sueldo_desde) : null;
   const hasta = c.sueldo_hasta ? Number(c.sueldo_hasta) : null;
   return {
@@ -458,8 +481,8 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     sueldo_moneda: c.sueldo_moneda || "MXN",
     sueldo_periodicidad: c.sueldo_periodicidad,
     mostrar_sueldo: c.mostrar_sueldo,
-    requisitos: c.requisitos.join(SEPARADOR_REQUISITOS),
-    requisitos_indispensables: c.requisitos,
+    requisitos: requisitos.join(SEPARADOR_REQUISITOS),
+    requisitos_indispensables: requisitos,
     descripcion: c.descripcion,
     responsabilidades: c.responsabilidades,
     requisitos_deseables: c.requisitos_deseables,
@@ -470,7 +493,7 @@ export function contenidoComoPayload(c: ContenidoVacante) {
     ...(c.posiciones && Number(c.posiciones) > 0 ? { posiciones: Number(c.posiciones) } : {}),
     // Cambio 37: la entidad única «Preguntas filtro» (el servidor deriva el formulario web y la pregunta de cada requisito)
     filtro: c.filtro,
-    indispensables_propuestos: c.indispensables_propuestos.filter((x) => c.requisitos.some((r) => clave(r) === clave(x))),
+    indispensables_propuestos: c.indispensables_propuestos.filter((x) => requisitos.some((r) => clave(r) === clave(x))),
     ...(Object.keys(c.publicaciones).length
       ? { publicaciones: { ...c.publicaciones, whatsapp: { titulo: c.titulo, copy: c.texto_whatsapp, page: c.texto_whatsapp, etiquetas: [] } } }
       : {}),
@@ -703,6 +726,15 @@ export function FormularioContenidoVacante({
   const desactualizado = generado && firmaGen !== null && firmaGen !== firmaBloque1(value);
   // Cambio 36: el proceso manda — el campo de documentos solo existe si la ruta trae «Documentos»
   const conDocumentos = !conGuiones || reqRuta.etapasDocumentos.length > 0;
+  // 2026-10-17: «Generar» exige al menos 3 indispensables llenos (Red Human no los inventa; el servidor responde 400)
+  const puedeGenerar = llenos(value.requisitos).length >= MIN_INDISPENSABLES;
+  // Sección 1 «Publicación»: lectura por defecto; «Editar» guarda un respaldo para «Cancelar»
+  const [editando1, setEditando1] = useState(false);
+  const [respaldo1, setRespaldo1] = useState<{ valor: ContenidoVacante; firma: string | null } | null>(null);
+  const [instrucciones, setInstrucciones] = useState("");
+  const instrRef = useRef("");
+  const desdeSeccion1 = useRef(false);
+  const [abierta3, setAbierta3] = useState(false);
 
   async function generar(decision?: "conservar" | "sobrescribir") {
     // «Volver a generar»: las secciones editadas por RH nunca se pisan sin preguntar
@@ -721,7 +753,10 @@ export function FormularioContenidoVacante({
     setGenerando(true);
     setErrorIA("");
     const p = contenidoComoPayload(value);
+    const instr = instrRef.current.trim();
+    const reemplazar = desdeSeccion1.current;
     const r = await generarVacanteIA({
+      ...(instr ? { instrucciones: instr } : {}),
       titulo: p.titulo,
       area: p.area,
       seniority: p.seniority,
@@ -755,7 +790,7 @@ export function FormularioContenidoVacante({
       setErrorIA(r.error);
       return;
     }
-    const base = contenidoDesdeGenerado(value, r.data);
+    const base = contenidoDesdeGenerado(value, r.data, reemplazar);
     const nuevo = conGuiones ? aplicarGuionesGenerados(base, r.data) : base;
     onChange(nuevo);
     // Cambio 43: la firma es la del contenido YA generado (lo que propone Red Human en el Bloque 1 —indispensables— no
@@ -764,8 +799,63 @@ export function FormularioContenidoVacante({
     onGenerado?.(r.data);
     setGenerado(true);
     setMostrarFaltantes(true);
-    setBajar(true);
+    if (!reemplazar) setBajar(true);
     if (r.data.empresa) setEmpresaIA(r.data.empresa);
+    if (reemplazar) {
+      // «Regenerar» de la Sección 1: vuelve a lectura (la cascada ya llegó a preguntas y textos por plataforma)
+      setEditando1(false);
+      setRespaldo1(null);
+      setInstrucciones("");
+    }
+    instrRef.current = "";
+    desdeSeccion1.current = false;
+  }
+
+  /** Botones de generar fuera de la Sección 1: sin instrucciones y con la regla de siempre (solo rellena lo vacío). */
+  function generarNormal() {
+    instrRef.current = "";
+    desdeSeccion1.current = false;
+    generar();
+  }
+
+  /** Sección 1: cambios en modo edición — no son «cambiaste los datos de arriba» (como la vista previa de preguntas). */
+  function cambiarPublicacion(c: Partial<ContenidoVacante>) {
+    const alDia = firmaGen !== null && firmaGen === firmaBloque1(value);
+    const nuevo = { ...value, ...c };
+    onChange(nuevo);
+    if (alDia) setFirmaGen(firmaBloque1(nuevo));
+  }
+  function editarPublicacion() {
+    setRespaldo1({ valor: value, firma: firmaGen });
+    setInstrucciones("");
+    setEditando1(true);
+  }
+  function cancelarPublicacion() {
+    if (respaldo1) {
+      onChange(respaldo1.valor);
+      setFirmaGen(respaldo1.firma);
+    }
+    setRespaldo1(null);
+    setInstrucciones("");
+    setEditando1(false);
+  }
+  function listoPublicacion() {
+    // sin renglones vacíos al salir de la edición
+    cambiarPublicacion({
+      responsabilidades: llenos(value.responsabilidades),
+      requisitos: llenos(value.requisitos),
+      requisitos_deseables: llenos(value.requisitos_deseables),
+      beneficios: llenos(value.beneficios),
+      palabras_clave: llenos(value.palabras_clave),
+    });
+    setRespaldo1(null);
+    setInstrucciones("");
+    setEditando1(false);
+  }
+  function regenerarPublicacion() {
+    instrRef.current = instrucciones;
+    desdeSeccion1.current = true;
+    generar();
   }
 
   /** 2026-10-16 (Bloque 2): editar, borrar o agregar en la vista previa de las preguntas NO es «cambiaste los datos de arriba». */
@@ -810,6 +900,18 @@ export function FormularioContenidoVacante({
       onChange={cambiarPreguntas} onRegenerar={conIA ? regenerarPreguntas : undefined} regenerando={regenerando} error={errorPreguntas} />
   );
 
+  // Sección 3 (colapsada): «Solicitud web: X preguntas · Prefiltro WhatsApp: Y · Entrevista: Z» — solo lo que trae la ruta
+  const reqLlenos = llenos(value.requisitos);
+  const preguntasEntrevista = ORDEN_GUIONES.filter((k) => value.guiones.aplican.includes(k) && !k.startsWith("prefiltro"))
+    .reduce((n, k) => n + (value.guiones.secciones[k]?.preguntas?.length ?? 0), 0);
+  const propiasBase = value.guiones.entrevista_base?.propias?.length ?? 0;
+  const resumenIntervencion = [
+    conSolicitud && `Solicitud web: ${contarPreguntas("web", reqLlenos, value.filtro)} preguntas`,
+    conPrefiltroWa && `Prefiltro WhatsApp: ${contarPreguntas("whatsapp", reqLlenos, value.filtro)}`,
+    !conSolicitud && !conPrefiltroWa && `Preguntas filtro: ${contarPreguntas("whatsapp", reqLlenos, value.filtro)}`,
+    conEntrevista && `Entrevista: ${enfoquePorRuta ? `base${propiasBase ? ` + ${propiasBase} propias` : ""}` : preguntasEntrevista}`,
+  ].filter(Boolean).join(" · ");
+
   const sueldo = { desde: value.sueldo_desde, hasta: value.sueldo_hasta, moneda: value.sueldo_moneda, periodicidad: value.sueldo_periodicidad };
 
   const setPub = (canal: string, page: string) =>
@@ -823,7 +925,7 @@ export function FormularioContenidoVacante({
       <div className="mt-2 flex flex-wrap gap-2">
         <Button type="button" size="sm" onClick={() => generar("conservar")}>Conservar mis ediciones</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => generar("sobrescribir")}>Sobrescribirlas</Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => setConfirmar(null)}>Cancelar</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => { setConfirmar(null); instrRef.current = ""; desdeSeccion1.current = false; }}>Cancelar</Button>
       </div>
     </div>
   );
@@ -882,29 +984,13 @@ export function FormularioContenidoVacante({
             rows={3}
             placeholder="Una o dos líneas: qué hace el puesto y para quién. Red Human la expande."
           />
-          <div>
-            <ListaEditable label="Requisitos indispensables"
-              items={value.requisitos} onChange={set("requisitos")} placeholder="Ej. Licencia de manejo tipo B"
-              ayuda="Opcional. Máximo 5, verificables; las tareas del puesto no son requisitos." />
-            {value.requisitos.length < 3 && (
-              <ErrorLinea tono="info">Red Human completa hasta 3 preguntas con lo que diga tu descripción; puedes llegar a 5.</ErrorLinea>
-            )}
-          </div>
-          <PropuestosRedHuman requisitos={value.requisitos} propuestos={value.indispensables_propuestos} />
+          {/* 2026-10-17: Red Human NO inventa indispensables — RH escribe de 3 a 5 antes de generar */}
+          <CampoIndispensables items={value.requisitos} onChange={set("requisitos")} />
           <ListaEditable label="Requisitos deseables" items={value.requisitos_deseables} onChange={set("requisitos_deseables")} placeholder="Ej. Inglés básico" ayuda="Opcional." />
           <div>
             <ListaEditable label="Prestaciones" items={value.beneficios} onChange={set("beneficios")} placeholder="Ej. Vales de despensa" ayuda="Opcional. Solo se publican las que captures aquí." />
             {!value.beneficios.some((b) => b.trim()) && <ErrorLinea>Sin capturar: no se publican prestaciones.</ErrorLinea>}
           </div>
-          {conDocumentos && (
-            <div>
-              <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
-                obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
-              {reqRuta.documentosObligatorios && !value.documentos_solicitados.length && (
-                <ErrorLinea>Sin capturar: la ruta incluye «Documentos»; indica cuáles se piden.</ErrorLinea>
-              )}
-            </div>
-          )}
           {mostrarFaltantes && avisosRuta.length > 0 && (
             <div className="rounded-xl border border-warn/40 bg-warn-soft px-3.5 py-2.5 text-xs text-ink-2" role="alert">
               <p className="font-semibold text-ink">Falta para publicar (lo pide la ruta):</p>
@@ -916,78 +1002,174 @@ export function FormularioContenidoVacante({
         {conIA && !generado && (
           <div className="flex flex-col gap-2 rounded-xl border border-dashed border-brand/40 bg-brand-soft/30 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-ink-2">Red Human completa responsabilidades, requisitos con su pregunta, entrevista y textos por plataforma.</p>
-              <Button type="button" onClick={() => generar()} disabled={generando}>
-                <Sparkles className="h-4 w-4" /> {generando ? "Generando…" : "Generar con Red Human"}
-              </Button>
+              <p className="text-sm text-ink-2">Red Human completa la publicación, las preguntas de cada indispensable, la entrevista y los textos por plataforma.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {!puedeGenerar && <span className="text-xs text-warn">Escribe al menos 3</span>}
+                <Button type="button" onClick={generarNormal} disabled={generando || !puedeGenerar}>
+                  <Sparkles className="h-4 w-4" /> {generando ? "Generando…" : "Generar con Red Human"}
+                </Button>
+              </div>
             </div>
             {errorIA && <p className="text-xs text-bad">{errorIA}</p>}
           </div>
         )}
       </section>
 
-      {/* ===================== BLOQUE 2 · lo que genera Red Human (solo después de generar) ===================== */}
+      {/* ===================== BLOQUE 2 · lo que genera Red Human (solo después de generar) =====================
+          2026-10-17: cuatro secciones en LECTURA por defecto — 1 Publicación · 2 Documentos (si la ruta los trae) ·
+          3 Intervención de Red Human (colapsada) · 4 Textos por plataforma. */}
       {generado && (
-        <section ref={bloque2} className="flex scroll-mt-4 flex-col gap-6 rounded-2xl border border-brand/25 bg-brand-soft/10 p-4"
-          aria-label="Bloque 2: generado por Red Human" data-bloque="2">
+        <section ref={bloque2} className="flex scroll-mt-4 flex-col gap-5" aria-label="Bloque 2: generado por Red Human" data-bloque="2">
           <div className="flex flex-wrap items-center justify-between gap-3" data-desactualizado={desactualizado ? "si" : "no"}>
             <div>
-              <p className="flex items-center gap-1.5 text-sm font-semibold text-ink"><Sparkles className="h-4 w-4 text-brand" /> Generado por Red Human</p>
-              {empresaIA && <p className="text-xs text-ink-3">A nombre de <b className="text-ink">{empresaIA}</b>. Todo es editable.</p>}
+              {empresaIA && <p className="text-xs text-ink-3">A nombre de <b className="text-ink">{empresaIA}</b>.</p>}
+              {conIA && desactualizado && (
+                <p className="flex items-center gap-1.5 text-xs text-warn">
+                  <AlertTriangle className="h-3.5 w-3.5" /> Cambiaste los datos de arriba después de generar.
+                </p>
+              )}
             </div>
             {conIA && desactualizado && (
-              <Button type="button" size="sm" onClick={() => generar()} disabled={generando}>
-                <RefreshCw className="h-4 w-4" /> {generando ? "Generando…" : "Volver a generar"}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {!puedeGenerar && <span className="text-xs text-warn">Escribe al menos 3</span>}
+                <Button type="button" size="sm" onClick={generarNormal} disabled={generando || !puedeGenerar}>
+                  <RefreshCw className="h-4 w-4" /> {generando ? "Generando…" : "Volver a generar"}
+                </Button>
+              </div>
             )}
           </div>
-          {conIA && desactualizado && (
-            <p className="-mt-3 flex items-center gap-1.5 text-xs text-warn">
-              <AlertTriangle className="h-3.5 w-3.5" /> Cambiaste los datos de arriba después de generar.
-            </p>
-          )}
           {errorIA && <p className="-mt-3 text-xs text-bad">{errorIA}</p>}
           {avisoConfirmar}
 
-          <Seccion titulo="Responsabilidades">
-            <ListaEditable label="Responsabilidades principales" items={value.responsabilidades} onChange={set("responsabilidades")}
-              placeholder="Una responsabilidad por renglón" ayuda="Son tareas del puesto, no requisitos." />
-          </Seccion>
-
-          {conGuiones && conSolicitud && (
-            <Seccion titulo={`${numero("solicitud")} Solicitud web`} ayuda="Vista previa de «Unas preguntas»: una pregunta Sí/No por requisito.">
-              {vistaPrevia("web")}
-            </Seccion>
-          )}
-          {conGuiones && conPrefiltroWa && (
-            <Seccion titulo={`${numero("whatsapp")} Prefiltro por WhatsApp`} ayuda="Vista previa del chat: Red Human retoma cada requisito conversando.">
-              {vistaPrevia("whatsapp")}
-              <details className="rounded-xl border border-border-soft px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium text-ink-2">Ajustes avanzados: tipo de respuesta y regla de descarte</summary>
-                <div className="mt-2">
-                  <EditorPreguntasFiltro modo="requisitos" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+          {/* ---------- Sección 1 · Publicación ---------- */}
+          <TarjetaSeccion
+            titulo="Publicación"
+            etiqueta={<span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand"><Sparkles className="h-3 w-3" /> Generado por Red Human</span>}
+            accion={!editando1 && (
+              <Button type="button" size="sm" variant="outline" onClick={editarPublicacion}><Pencil className="h-3.5 w-3.5" /> Editar</Button>
+            )}
+          >
+            {!editando1 ? (
+              <div className="flex flex-col gap-5">
+                <Lectura titulo="Lead" texto={value.resumen} />
+                <Lectura titulo="Descripción breve" texto={value.descripcion} />
+                <div className="grid gap-5 md:grid-cols-2">
+                  <Seccion titulo="Responsabilidades"><ListaLectura items={value.responsabilidades} /></Seccion>
+                  <Seccion titulo="Indispensables"><ListaLectura items={value.requisitos} /></Seccion>
                 </div>
-              </details>
-            </Seccion>
-          )}
-          {conGuiones && !conSolicitud && !conPrefiltroWa && (
-            <Seccion titulo="Preguntas filtro" ayuda="La ruta no trae solicitud web ni prefiltro por WhatsApp; se guardan para cuando los tenga.">
-              {vistaPrevia("whatsapp")}
-            </Seccion>
-          )}
+                <Seccion titulo="Deseables"><ListaLectura items={value.requisitos_deseables} /></Seccion>
+                <Seccion titulo="Compensación">
+                  <p className="text-sm font-medium text-ink">{textoCompensacion(value)}</p>
+                  <ListaLectura items={value.beneficios} vacio="Sin prestaciones capturadas." />
+                </Seccion>
+                <Seccion titulo="Etiquetas">
+                  {llenos(value.palabras_clave).length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {llenos(value.palabras_clave).map((k) => (
+                        <span key={k} className="rounded-full border border-border-soft bg-surface-2 px-2.5 py-0.5 text-[12px] text-ink-2">{k}</span>
+                      ))}
+                    </div>
+                  ) : <p className="text-sm text-ink-3">Sin etiquetas.</p>}
+                </Seccion>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-5">
+                <CampoAuto titulo="Lead" value={value.resumen} onChange={(resumen) => cambiarPublicacion({ resumen })} />
+                <CampoAuto titulo="Descripción breve" value={value.descripcion} onChange={(descripcion) => cambiarPublicacion({ descripcion })} />
+                <div className="grid gap-5 md:grid-cols-2">
+                  <ListaAuto titulo="Responsabilidades" items={value.responsabilidades} onChange={(responsabilidades) => cambiarPublicacion({ responsabilidades })} />
+                  <ListaAuto titulo="Indispensables" items={value.requisitos} max={MAX_INDISPENSABLES} onChange={(requisitos) => cambiarPublicacion({ requisitos })} />
+                </div>
+                <ListaAuto titulo="Deseables" items={value.requisitos_deseables} onChange={(requisitos_deseables) => cambiarPublicacion({ requisitos_deseables })} />
+                <div className="flex flex-col gap-2">
+                  <Eyebrow>Compensación</Eyebrow>
+                  <p className="text-sm text-ink-2">{textoCompensacion(value)} <span className="text-xs text-ink-3">· el sueldo se cambia en Datos principales</span></p>
+                  <ListaAuto titulo="Prestaciones" items={value.beneficios} onChange={(beneficios) => cambiarPublicacion({ beneficios })} />
+                </div>
+                <ListaAuto titulo="Etiquetas" items={value.palabras_clave} onChange={(palabras_clave) => cambiarPublicacion({ palabras_clave })} />
+                <div className="flex flex-col gap-2 rounded-xl border border-brand/30 bg-brand-soft/20 p-3">
+                  <label className="text-sm font-medium text-ink-2" htmlFor="instrucciones-red-human">Da más instrucciones a Red Human</label>
+                  <TextareaAuto id="instrucciones-red-human" value={instrucciones} onChange={setInstrucciones}
+                    placeholder="Ej. Usa un tono más cercano y destaca el horario fijo." />
+                  <div className="flex flex-wrap items-center gap-2">
+                    {conIA && (
+                      <Button type="button" size="sm" onClick={regenerarPublicacion} disabled={generando || !puedeGenerar}>
+                        <RefreshCw className="h-3.5 w-3.5" /> {generando ? "Regenerando…" : "Regenerar"}
+                      </Button>
+                    )}
+                    <Button type="button" size="sm" variant="outline" onClick={cancelarPublicacion} disabled={generando}>Cancelar</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={listoPublicacion} disabled={generando}><Check className="h-3.5 w-3.5" /> Listo</Button>
+                    {!puedeGenerar && <span className="text-xs text-warn">Escribe al menos 3</span>}
+                  </div>
+                  <p className="text-[11px] text-ink-3">«Regenerar» también actualiza las preguntas y los textos por plataforma.</p>
+                </div>
+              </div>
+            )}
+          </TarjetaSeccion>
 
-          {conGuiones && conEntrevista && (
-            <Seccion titulo={`${numero("entrevista")} Entrevista`} ayuda={`Enfoque: ${TEXTO_ENFOQUE[value.enfoque_entrevista] ?? "Profesional"}. Se cambia en la actividad de entrevista del proceso.`}>
-              {enfoquePorRuta && (
-                <EntrevistaWhatsappBase
-                  value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
-                  onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
-                />
+          {/* ---------- Sección 2 · Documentos (solo si el proceso trae «Documentos») ---------- */}
+          {conDocumentos && (
+            <TarjetaSeccion titulo="Documentos">
+              <CampoDocumentos valor={value.documentos_solicitados} onChange={set("documentos_solicitados")}
+                obligatorio={reqRuta.documentosObligatorios} etapas={reqRuta.etapasDocumentos} />
+              {reqRuta.documentosObligatorios && !value.documentos_solicitados.length && (
+                <ErrorLinea>Sin capturar: la ruta incluye «Documentos»; indica cuáles se piden.</ErrorLinea>
               )}
-              {!enfoquePorRuta && <PlantillasConversacion value={value} onChange={onChange} />}
-            </Seccion>
+            </TarjetaSeccion>
           )}
 
+          {/* ---------- Sección 3 · Intervención de Red Human (colapsada; sin barra de instrucciones) ---------- */}
+          {conGuiones && (
+            <section className="rounded-2xl border border-border-soft bg-surface" data-seccion="intervencion">
+              <button type="button" onClick={() => setAbierta3((x) => !x)} aria-expanded={abierta3}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-sm font-semibold text-ink">Intervención de Red Human</span>
+                  <span className="text-xs text-ink-3">{resumenIntervencion}</span>
+                </span>
+                <ChevronDown className={cn("h-4 w-4 shrink-0 text-ink-3 transition", abierta3 && "rotate-180")} />
+              </button>
+              {abierta3 && (
+                <div className="flex flex-col gap-6 border-t border-border-faint px-4 py-4">
+                  {conSolicitud && (
+                    <Seccion titulo={`${numero("solicitud")} Solicitud web`} ayuda="Vista previa de «Unas preguntas»: una pregunta Sí/No por requisito.">
+                      {vistaPrevia("web")}
+                    </Seccion>
+                  )}
+                  {conPrefiltroWa && (
+                    <Seccion titulo={`${numero("whatsapp")} Prefiltro por WhatsApp`} ayuda="Vista previa del chat: Red Human retoma cada requisito conversando.">
+                      {vistaPrevia("whatsapp")}
+                      <details className="rounded-xl border border-border-soft px-3 py-2">
+                        <summary className="cursor-pointer text-xs font-medium text-ink-2">Ajustes avanzados: tipo de respuesta y regla de descarte</summary>
+                        <div className="mt-2">
+                          <EditorPreguntasFiltro modo="requisitos" requisitos={value.requisitos} items={value.filtro} onChange={set("filtro")} />
+                        </div>
+                      </details>
+                    </Seccion>
+                  )}
+                  {!conSolicitud && !conPrefiltroWa && (
+                    <Seccion titulo="Preguntas filtro" ayuda="La ruta no trae solicitud web ni prefiltro por WhatsApp; se guardan para cuando los tenga.">
+                      {vistaPrevia("whatsapp")}
+                    </Seccion>
+                  )}
+                  {conEntrevista && (
+                    <Seccion titulo={`${numero("entrevista")} Entrevista`} ayuda={`Enfoque: ${TEXTO_ENFOQUE[value.enfoque_entrevista] ?? "Profesional"}. Se cambia en la actividad de entrevista del proceso.`}>
+                      {enfoquePorRuta && (
+                        <EntrevistaWhatsappBase
+                          value={value.guiones.entrevista_base ?? { quitadas: [], propias: [] }}
+                          onChange={(cfg) => onChange({ ...value, guiones: { ...value.guiones, entrevista_base: cfg } })}
+                        />
+                      )}
+                      {!enfoquePorRuta && <PlantillasConversacion value={value} onChange={onChange} />}
+                    </Seccion>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ---------- Sección 4 · Textos por plataforma ---------- */}
+          <div className="rounded-2xl border border-border-soft bg-surface p-4">
           <Seccion titulo="Textos por plataforma" ayuda="«Copiar» lleva el texto limpio y la liga de postulación de ese canal.">
             {/* Cambio 43: Markdown pintado (sin #, ** ni símbolos crudos); WhatsApp siempre sin Markdown */}
             {/* Cambio 45: pestañas horizontales; WhatsApp activa al cargar y solo se ve el texto de la pestaña elegida */}
@@ -1001,6 +1183,7 @@ export function FormularioContenidoVacante({
               })),
             ]} />
           </Seccion>
+          </div>
         </section>
       )}
     </div>
@@ -1016,22 +1199,141 @@ function ErrorLinea({ children, tono = "warn" }: { children: React.ReactNode; to
 export function firmaBloque1(c: ContenidoVacante) {
   // Cambio 43: el «Enfoque» de la entrevista (de la ruta) también cuenta: cambiarlo después de generar → «Volver a generar»
   return JSON.stringify([c.titulo, c.area, c.seniority, c.ubicacion_estado, c.ubicacion_municipio, c.modalidad, c.sueldo_desde,
-    c.sueldo_hasta, c.sueldo_periodicidad, c.mostrar_sueldo, c.descripcion, c.requisitos, c.requisitos_deseables, c.beneficios, c.enfoque_entrevista]);
+    c.sueldo_hasta, c.sueldo_periodicidad, c.mostrar_sueldo, c.descripcion, llenos(c.requisitos), llenos(c.requisitos_deseables), llenos(c.beneficios), c.enfoque_entrevista]);
 }
 
 const TEXTO_ENFOQUE: Record<string, string> = { operativo: "Operativo", profesional: "Profesional", profesional_personal: "Profesional + personal" };
 
-/** Cambio 37: los indispensables que NO capturó RH los propone Red Human — se marcan para que RH los confirme o quite. */
-function PropuestosRedHuman({ requisitos, propuestos }: { requisitos: string[]; propuestos: string[] }) {
-  const vigentes = propuestos.filter((p) => requisitos.some((r) => clave(r) === clave(p)));
-  if (!vigentes.length) return null;
+/** 2026-10-17: «Indispensables» antes de generar — mínimo 3 renglones visibles (aunque vacíos), máximo 5; la X solo
+ *  quita renglones arriba de 3. Red Human NO inventa indispensables: «Generar» pide al menos 3 llenos. */
+function CampoIndispensables({ items, onChange }: { items: string[]; onChange: (v: string[]) => void }) {
+  const filas = items.length >= MIN_INDISPENSABLES ? items : [...items, ...Array(MIN_INDISPENSABLES - items.length).fill("")];
   return (
-    <div className="-mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
-      {vigentes.map((p) => (
-        <span key={p} className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand-soft/60 px-2 py-0.5 text-brand">
-          <Sparkles className="h-3 w-3" /> {p} · Propuesto por Red Human
-        </span>
-      ))}
+    <div>
+      <span className="text-sm font-medium text-ink-2">Indispensables *</span>
+      <ul className="mt-1.5 flex flex-col gap-1.5">
+        {filas.map((it, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <span className="w-4 shrink-0 text-right text-xs font-semibold text-ink-3">{i + 1}.</span>
+            <input value={it} onChange={(e) => onChange(filas.map((x, j) => (j === i ? e.target.value : x)))}
+              placeholder={i === 0 ? "Ej. Licencia de manejo tipo B" : "Requisito indispensable"} aria-label={`Indispensable ${i + 1}`}
+              className="h-10 min-w-0 flex-1 rounded-xl border border-border-soft bg-surface px-3 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20" />
+            {filas.length > MIN_INDISPENSABLES ? (
+              <button type="button" aria-label={`Quitar indispensable ${i + 1}`} onClick={() => onChange(filas.filter((_, j) => j !== i))}
+                className="text-ink-3 hover:text-bad"><X className="h-4 w-4" /></button>
+            ) : <span className="w-4 shrink-0" />}
+          </li>
+        ))}
+      </ul>
+      {filas.length < MAX_INDISPENSABLES && (
+        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={() => onChange([...filas, ""])}>
+          <Plus className="h-3.5 w-3.5" /> Agregar
+        </Button>
+      )}
+      <p className="mt-1.5 text-xs leading-relaxed text-ink-3">De 3 a 5, verificables; las tareas del puesto no son requisitos.</p>
+    </div>
+  );
+}
+
+/** Tarjeta de una sección del Bloque 2 (título + etiqueta + acción a la derecha). */
+function TarjetaSeccion({ titulo, etiqueta, accion, children }: {
+  titulo: string; etiqueta?: React.ReactNode; accion?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-border-soft bg-surface p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-ink">{titulo}</h3>
+          {etiqueta}
+        </div>
+        {accion}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Lectura({ titulo, texto }: { titulo: string; texto: string }) {
+  return (
+    <Seccion titulo={titulo}>
+      {texto.trim() ? <p className="whitespace-pre-line text-sm leading-relaxed text-ink">{texto}</p> : <p className="text-sm text-ink-3">Sin texto.</p>}
+    </Seccion>
+  );
+}
+
+function ListaLectura({ items, vacio = "Sin elementos." }: { items: string[]; vacio?: string }) {
+  const xs = llenos(items);
+  if (!xs.length) return <p className="text-sm text-ink-3">{vacio}</p>;
+  return (
+    <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-relaxed text-ink">
+      {xs.map((x, i) => <li key={`${i}-${x}`}>{x}</li>)}
+    </ul>
+  );
+}
+
+/** Sueldo visible (respeta «Mostrar sueldo en la publicación»). */
+function textoCompensacion(c: ContenidoVacante): string {
+  if (!c.mostrar_sueldo) return "Sueldo competitivo";
+  if (!c.sueldo_periodicidad || c.sueldo_periodicidad === "a_convenir" || !c.sueldo_desde) return "A convenir";
+  const fmt = (x: string) => `$${Number(x).toLocaleString("es-MX")}`;
+  const per = PERIODICIDADES_SUELDO.find((p) => p.valor === c.sueldo_periodicidad)?.texto.toLowerCase() ?? "";
+  const rango = c.sueldo_hasta && Number(c.sueldo_hasta) > Number(c.sueldo_desde) ? `${fmt(c.sueldo_desde)} – ${fmt(c.sueldo_hasta)}` : fmt(c.sueldo_desde);
+  return `${rango} ${c.sueldo_moneda || "MXN"}${per ? ` · ${per}` : ""}`;
+}
+
+/** Textarea que crece con su contenido (sin textos cortados ni scroll interno). */
+function TextareaAuto({ value, onChange, placeholder, id, ariaLabel }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; id?: string; ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const ajustar = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(ajustar, [value]);
+  useEffect(() => {
+    window.addEventListener("resize", ajustar);
+    return () => window.removeEventListener("resize", ajustar);
+  }, []);
+  return (
+    <textarea ref={ref} id={id} rows={1} value={value} placeholder={placeholder} aria-label={ariaLabel}
+      onChange={(e) => { onChange(e.target.value); ajustar(); }}
+      className="block w-full resize-none overflow-hidden rounded-xl border border-border-soft bg-surface px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20" />
+  );
+}
+
+function CampoAuto({ titulo, value, onChange }: { titulo: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Eyebrow>{titulo}</Eyebrow>
+      <TextareaAuto value={value} onChange={onChange} ariaLabel={titulo} />
+    </div>
+  );
+}
+
+/** Lista editable de la Sección 1: un textarea auto-ajustable por elemento, X para quitar y «+ Agregar». */
+function ListaAuto({ titulo, items, onChange, max }: { titulo: string; items: string[]; onChange: (v: string[]) => void; max?: number }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Eyebrow>{titulo}</Eyebrow>
+      <ul className="flex flex-col gap-1.5">
+        {items.map((it, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <TextareaAuto value={it} onChange={(t) => onChange(items.map((x, j) => (j === i ? t : x)))} ariaLabel={`${titulo} ${i + 1}`} />
+            </div>
+            <button type="button" aria-label={`Quitar ${titulo.toLowerCase()} ${i + 1}`} onClick={() => onChange(items.filter((_, j) => j !== i))}
+              className="mt-2.5 text-ink-3 hover:text-bad"><X className="h-4 w-4" /></button>
+          </li>
+        ))}
+      </ul>
+      {(!max || items.length < max) && (
+        <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => onChange([...items, ""])}>
+          <Plus className="h-3.5 w-3.5" /> Agregar
+        </Button>
+      )}
     </div>
   );
 }

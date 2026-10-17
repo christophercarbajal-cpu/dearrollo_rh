@@ -131,13 +131,13 @@ def _sincronizar_ruta(db: Session, v: Vacante, publicar: bool = False) -> None:
 
 
 def _sincronizar_filtro(v: Vacante, entrada=None, propuestos: Optional[List[str]] = None, webs: Optional[dict] = None,
-                        seguimientos: Optional[dict] = None) -> None:
+                        seguimientos: Optional[dict] = None, tipos: Optional[dict] = None) -> None:
     """Cambio 37: «Preguntas filtro» — la entidad única se recalcula contra los indispensables vigentes (conserva lo que
     RH ajustó) y DERIVA el formulario web; el prefiltro de WhatsApp separado deja de existir. 2026-10-17: `webs` /
     `seguimientos` = las preguntas web (Sí/No) y de WhatsApp (continuación) que acaba de proponer la generación."""
     from ..services import preguntas_filtro as pfu
 
-    pfu.sincronizar(v, entrada=entrada, propuestos=propuestos, webs=webs, seguimientos=seguimientos)
+    pfu.sincronizar(v, entrada=entrada, propuestos=propuestos, webs=webs, seguimientos=seguimientos, tipos=tipos)
 
 
 def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
@@ -322,6 +322,7 @@ class GenerarIn(BaseModel):
     filtro: Optional[List[dict]] = None
     indispensables_propuestos: Optional[List[str]] = None
     perfil_operativo: Optional[dict] = None  # 2026-10-10: oficio de la Biblioteca (ajustado para esta vacante), enfoque operativo
+    instrucciones: str = ""  # 2026-10-17 (Ficha de Nueva vacante): «Da más instrucciones a Red Human» (Regenerar)
 
     def ubicacion_texto(self) -> str:
         return texto_ubicacion(self.ubicacion_estado, self.ubicacion_municipio, self.ubicacion)
@@ -375,6 +376,7 @@ def _ficha(datos: GenerarIn, empresa: str) -> ia.FichaVacante:
         descripcion_breve=datos.descripcion, requisitos_indispensables=datos.indispensables(),
         requisitos_deseables=[x for x in datos.requisitos_deseables if x.strip()],
         beneficios=[x for x in datos.beneficios if x.strip()], mostrar_sueldo=datos.mostrar_sueldo,
+        instrucciones=(datos.instrucciones or "").strip(),
     )
 
 
@@ -486,7 +488,8 @@ def _web_y_whatsapp(resultado) -> dict:
     """2026-10-17: la pregunta del PREFILTRO WEB (Sí/No) y la del PREFILTRO WHATSAPP (continuación que nunca repite la web)
     que propuso la generación para cada requisito."""
     return {"webs": {ia._norm_req(x.requisito): x.pregunta_web for x in resultado.preguntas_requisitos if x.pregunta_web},
-            "seguimientos": {ia._norm_req(x.requisito): x.pregunta_whatsapp for x in resultado.preguntas_requisitos if x.pregunta_whatsapp}}
+            "seguimientos": {ia._norm_req(x.requisito): x.pregunta_whatsapp for x in resultado.preguntas_requisitos if x.pregunta_whatsapp},
+            "tipos": {ia._norm_req(x.requisito): x.tipo for x in resultado.preguntas_requisitos if x.tipo}}
 
 
 def _pasos_de_formulario(db: Session, cuenta_id: int, proceso: Optional[dict]) -> list:

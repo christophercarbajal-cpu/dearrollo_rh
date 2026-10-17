@@ -52,6 +52,50 @@ def transcribir_audio(contenido: bytes, mime: str = "") -> str:
         return ""
 
 
+class LecturaAgenda(BaseModel):
+    """2026-10-17: lo que quiso decir el candidato al contestar «¿Cuándo te queda bien?»."""
+
+    accion: Literal["ahora", "horario", "vago"] = Field(description=(
+        "«ahora» si quiere hacerla en este momento; «horario» si dio un día Y una hora concretos; «vago» si no dio una hora "
+        "concreta («en la tarde», «luego», «no sé», solo el día)."))
+    fecha_hora: str = Field(default="", description="Solo con «horario»: fecha y hora en formato ISO 8601 (AAAA-MM-DDTHH:MM), hora de la Ciudad de México.")
+
+
+def interpretar_agenda(texto: str, ahora: Optional[datetime] = None) -> dict:
+    """NLP de respaldo para la agenda (cuando la lectura determinista no encontró día ni hora). {"accion": "ahora"} |
+    {"accion": "horario", "cuando": datetime} | {"accion": "vago"}. Sin clave o si falla → vago (se pide una hora)."""
+    from ..fechas import TZ_ORG
+
+    cli = _client()
+    if cli is None or not str(texto or "").strip():
+        return {"accion": "vago"}
+    ahora = (ahora or datetime.now(TZ_ORG)).astimezone(TZ_ORG)
+    try:
+        r = cli.responses.parse(
+            model=MODEL,
+            instructions=("Interpreta la respuesta de un candidato a «¿Cuándo te queda bien tu entrevista por videollamada? Si "
+                          "quieres, puede ser ahora mismo.». Entiende modismos mexicanos («ahorita», «al rato», «en la noche»). "
+                          "Nunca inventes una hora que no dijo."),
+            input=f"Ahora es {ahora.strftime('%A %Y-%m-%d %H:%M')} (hora de la Ciudad de México).\nRespuesta: «{texto.strip()[:300]}»",
+            text_format=LecturaAgenda,
+        )
+        lectura = r.output_parsed
+    except Exception as ex:  # noqa: BLE001 — sin lectura se pide una hora concreta
+        print(f"[ia] lectura de agenda falló: {str(ex)[:200]}", flush=True)
+        return {"accion": "vago"}
+    if lectura.accion == "ahora":
+        return {"accion": "ahora"}
+    if lectura.accion == "horario" and lectura.fecha_hora:
+        try:
+            dt = datetime.fromisoformat(lectura.fecha_hora[:16])
+            dt = dt.replace(tzinfo=TZ_ORG) if dt.tzinfo is None else dt.astimezone(TZ_ORG)
+            if dt > ahora:
+                return {"accion": "horario", "cuando": dt}
+        except ValueError:
+            pass
+    return {"accion": "vago"}
+
+
 # ============================================================
 # 1) Generador de publicaciones de vacante (módulo 3.5)
 # ============================================================
@@ -95,6 +139,10 @@ class PreguntaRequisito(BaseModel):
         "la pregunta web: asume que el candidato ya cumple el requisito y pide detalles, contexto, tamaño de la operación o "
         "un ejemplo concreto (ej. web «¿Tienes licencia tipo B?» → WhatsApp «¿Qué tipo de unidades has manejado con tu "
         "licencia?»)."))
+    # 2026-10-17 (Ficha de Nueva vacante): tipo del indispensable (si no es uno válido, lo decide `validacion_preguntas`)
+    tipo: str = Field(default="", description=(
+        "Tipo del requisito: exactamente uno de «Experiencia», «Ubicación», «Fecha de inicio», «Horario», «Escolaridad», "
+        "«Licencia», «Herramienta», «Idioma» u «Otro»."))
 
 
 class PreguntaFiltro(BaseModel):
@@ -253,7 +301,16 @@ _REGLAS = (
     "7. Todo lo que escribas en `copy` y `page` lo lee el candidato. Nunca uses etiquetas internas como "
     "«indicado por RH», «según RH» o «no especificado»: escribe el sueldo directo («$10,500 mensuales») solo "
     "si viene en la ficha; si es «A convenir» o no viene, simplemente no menciones cifras.\n"
-    "8. `rango_salarial_sugerido` es solo una referencia informativa para RH: nunca lo uses en los textos."
+    "8. `rango_salarial_sugerido` es solo una referencia informativa para RH: nunca lo uses en los textos.\n"
+    "9. CONTEXTO ÚNICO (2026-10-17): el giro, la industria y las actividades salen SOLO del puesto, el área, la descripción y "
+    "los requisitos de ESTA ficha. El nombre de la empresa es solo un nombre: nunca deduzcas de él la industria ni mezcles "
+    "contextos de otras empresas o vacantes (p. ej. nada automotriz en una vacante de software).\n"
+    "10. SUELDO EXACTO: si mencionas el sueldo, es EXACTAMENTE la cifra y periodicidad de la ficha (ni redondeado, ni otro "
+    "rango, ni el sugerido). Las preguntas del prefiltro NUNCA preguntan por el sueldo ni por el interés en el puesto "
+    "(«El sueldo es… ¿te interesa?», «El puesto es… ¿te interesa?» están prohibidas).\n"
+    "11. Clasifica cada requisito indispensable en `preguntas_requisitos[].tipo`: Experiencia, Ubicación, Fecha de inicio, "
+    "Horario, Escolaridad, Licencia, Herramienta, Idioma u Otro. Cada pregunta (web y WhatsApp) nombra el concepto de SU "
+    "requisito y ninguna se parece a otra de su misma sección."
 )
 
 
@@ -280,6 +337,8 @@ class FichaVacante(BaseModel):
     pide_cv: Optional[bool] = None
     # 2026-10-17: «Mostrar sueldo en la publicación». False = «Sueldo competitivo»: ninguna cifra de dinero en lo generado
     mostrar_sueldo: bool = True
+    # 2026-10-17 (Ficha de Nueva vacante): «Da más instrucciones a Red Human» (barra de la Sección 1, al regenerar)
+    instrucciones: str = ""
 
 
 def _clave_texto(t: str) -> str:
@@ -517,6 +576,8 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
         _quitar_cv(salida)
     if not ficha.mostrar_sueldo:
         _quitar_montos(salida, ficha.titulo)  # 2026-10-17: «Sueldo competitivo» — ninguna cifra aunque el modelo la escriba
+    else:
+        _quitar_montos_ajenos(salida, ficha.sueldo_texto)  # 2026-10-17: el sueldo de los textos = el de la vacante
     if not salida.preguntas_filtro_whatsapp:
         salida.preguntas_filtro_whatsapp = puntos_criticos_whatsapp(salida.preguntas_filtro)
     salida.preguntas_filtro = cerrar_preguntas_web(salida.preguntas_filtro)
@@ -524,6 +585,7 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
     # Cambio 31: cada indispensable trae su pregunta natural (la de la IA si sirve; si no, la determinista)
     salida.preguntas_requisitos = [PreguntaRequisito(**x) for x in asegurar_preguntas_requisitos(
         salida.requisitos_indispensables, [q.model_dump() for q in salida.preguntas_requisitos])]
+    asegurar_secciones(salida, ficha)  # 2026-10-17: validación por sección (traslapes / concepto) con reintentos y respaldo
     for p in salida.preguntas_filtro_whatsapp:
         if p.tipo == "numero" and not p.opciones:
             p.opciones = _RANGO_ANOS_GENERICO
@@ -866,6 +928,8 @@ def generar_vacante(ficha: FichaVacante) -> Tuple[VacanteGenerada, bool]:
             f"- Prestaciones capturadas (las únicas que puedes mencionar):{lista(ficha.beneficios)}\n"
             + ("- La ruta de esta vacante NO pide CV: nunca escribas «envía tu CV» ni nada parecido; invita a postularse en la "
                "liga respondiendo unas preguntas rápidas.\n" if ficha.pide_cv is False else "")
+            + (f"- Instrucciones adicionales de RH (aplícalas a TODO lo generado, sin romper las reglas): "
+               f"{ficha.instrucciones.strip()[:1500]}\n" if (ficha.instrucciones or "").strip() else "")
             + "\n"
             "Genera la publicación completa a partir de esta ficha, complementando SOLO lo que falte."
         ),
@@ -919,10 +983,12 @@ def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optiona
     ni «Para confirmar»); si no, `pregunta_natural_requisito`. La escolaridad siempre con su pregunta fija."""
     por_req = {_norm_req(x.get("requisito") or ""): str(x.get("pregunta") or "").strip() for x in propuestas or [] if isinstance(x, dict)}
     # 2026-10-17: PREFILTRO WEB (Sí/No) y PREFILTRO WHATSAPP (continuación) — la primera propuesta que traiga cada uno
-    webs, segs = {}, {}
+    webs, segs, tipos = {}, {}, {}
     for x in propuestas or []:
         if isinstance(x, dict):
             k = _norm_req(x.get("requisito") or "")
+            if str(x.get("tipo") or "").strip():
+                tipos.setdefault(k, str(x["tipo"]).strip())
             if str(x.get("pregunta_web") or "").strip():
                 webs.setdefault(k, str(x["pregunta_web"]).strip())
             if str(x.get("pregunta_whatsapp") or "").strip():
@@ -936,7 +1002,8 @@ def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optiona
         web_q = sin_relleno(webs.get(_norm_req(req), ""))
         web_q = web_q if es_pregunta_si_no_web(web_q) else ""
         seg = seguimiento_whatsapp(req, segs.get(_norm_req(req), ""), web_q or pregunta)
-        salida.append({"requisito": req.strip(), "pregunta": pregunta, "pregunta_web": web_q, "pregunta_whatsapp": seg})
+        salida.append({"requisito": req.strip(), "pregunta": pregunta, "pregunta_web": web_q, "pregunta_whatsapp": seg,
+                       "tipo": tipos.get(_norm_req(req), "")})
     return salida
 
 
@@ -963,23 +1030,139 @@ def repite_pregunta(a: str, b: str) -> bool:
 
 
 def seguimiento_natural(req: str) -> str:
-    """Sin IA: la continuación conversacional de un requisito (asume que lo cumple y pide un detalle concreto)."""
-    k = _clave_texto(req)
-    if RE_NIVEL_ESTUDIOS.search(req or ""):
-        return "¿En qué escuela terminaste tus estudios?"
-    if re.search(r"\bcedula\b", k):
-        return "¿En qué año obtuviste tu cédula profesional?"
-    if re.search(r"\blicencia\b", k):
-        return "¿Qué tipo de unidades has manejado con tu licencia?"
-    if es_de_experiencia(req):
-        return "¿En qué empresa ganaste esa experiencia?"
-    if re.search(r"\b(cargar|carga|peso|pesad\w*|kilos?|esfuerzo)\b", k):
-        return "¿Qué tanto peso cargabas en tu último trabajo?"
-    if re.search(r"\b(turnos?|horario\w*|fines? de semana|nocturn\w*|rolar|disponibilidad)\b", k):
-        return "¿En qué trabajo anterior tuviste un horario así?"
-    if re.search(r"\b(manejo|conocimiento\w*|dominio|excel|office|sistema\w*|software|ingles)\b", k):
-        return "¿Para qué tareas lo usabas en tu último trabajo?"
-    return "¿Me cuentas un ejemplo concreto de cuándo lo has necesitado en un trabajo?"
+    """Sin IA: la continuación conversacional de un requisito (asume que lo cumple y pide un detalle concreto).
+    2026-10-17: la pregunta de RESPALDO del tipo del indispensable (`validacion_preguntas.respaldo`, nombra su concepto)."""
+    from . import validacion_preguntas as vpr
+
+    return vpr.respaldo(req, vpr.clasificar(req), "whatsapp")
+
+
+class _PreguntaSeccion(BaseModel):
+    requisito: str = Field(description="El requisito indispensable, copiado literal.")
+    pregunta: str = Field(description="La pregunta de ESTA sección para ese requisito.")
+
+
+class _SeccionRegenerada(BaseModel):
+    preguntas: List[_PreguntaSeccion]
+
+
+_REGLA_SECCION = {
+    "web": "PREFILTRO WEB: una pregunta directa de Sí/No por requisito, para formulario web; solo registra la respuesta.",
+    "whatsapp": ("PREFILTRO WHATSAPP: una pregunta en tono de conversación por requisito, continuación natural de la pregunta "
+                 "web. NO repitas la web: asume que ya cumplió el requisito y pide detalles, contexto, tamaño de operaciones o "
+                 "ejemplos concretos."),
+}
+
+
+def _regenerar_seccion(client, seccion: str, items: List[dict], ficha: FichaVacante, fallas: Dict[int, str]) -> Dict[str, str]:
+    """Vuelve a generar EN BATCH todas las preguntas de una sección, con los problemas detectados como retroalimentación.
+    {requisito normalizado: pregunta}; {} si falla."""
+    renglones = "\n".join(f"- {x['requisito']} (tipo: {x['tipo']}) → «{x['pregunta']}»"
+                          + (f"  ✗ {fallas[i]}" if i in fallas else "") for i, x in enumerate(items))
+    try:
+        resp = client.responses.parse(
+            model=MODEL,
+            instructions=(f"{_REGLAS}\n\n{_REGLA_SECCION[seccion]}\nCada pregunta nombra el concepto de SU requisito y ninguna "
+                          "se parece a otra de la sección. Regresa UNA pregunta por requisito, en el mismo orden."),
+            input=(f"Puesto: {ficha.titulo} · Área: {ficha.area or '(sin dato)'}\nDescripción: {ficha.descripcion_breve or '(sin dato)'}\n\n"
+                   f"Preguntas actuales de la sección (las marcadas con ✗ tienen el problema indicado):\n{renglones}"),
+            text_format=_SeccionRegenerada,
+        )
+        return {_norm_req(x.requisito): " ".join(x.pregunta.split()) for x in resp.output_parsed.preguntas if x.pregunta.strip()}
+    except Exception as ex:  # noqa: BLE001 — sin reintento se usa el respaldo
+        print(f"[ia] reintento de la sección {seccion} falló: {str(ex)[:200]}", flush=True)
+        return {}
+
+
+def asegurar_secciones(salida: VacanteGenerada, ficha: FichaVacante, client=None) -> None:
+    """2026-10-17 (Ficha de Nueva vacante): cada indispensable lleva su `tipo`; las preguntas de cada sección (web y WhatsApp)
+    se validan en batch — normalizadas y comparadas —: iguales/traslapadas o sin el concepto de su indispensable → hasta
+    `MAX_REINTENTOS` reintentos de la sección completa con la IA y, si sigue fallando, la pregunta de RESPALDO fija del tipo
+    SOLO en las que fallan. Modifica `salida.preguntas_requisitos` en su lugar."""
+    from . import validacion_preguntas as vpr
+
+    lista = salida.preguntas_requisitos
+    if not lista:
+        return
+    for x in lista:
+        x.tipo = vpr.tipo_valido(x.tipo) or vpr.clasificar(x.requisito)
+        if not x.pregunta_web and es_pregunta_si_no_web(x.pregunta):
+            x.pregunta_web = x.pregunta  # la pregunta natural ya es un Sí/No directo («¿Puedes cargar material pesado?»)
+    client = client if client is not None else _client()
+    for seccion in vpr.SECCIONES:
+        campo = "pregunta_web" if seccion == "web" else "pregunta_whatsapp"
+
+        def items() -> List[dict]:
+            return [{"requisito": x.requisito, "tipo": x.tipo, "pregunta": getattr(x, campo) or ""} for x in lista]
+
+        fallas = vpr.problemas([(i["requisito"], i["tipo"], i["pregunta"]) for i in items()])
+        intentos = 0
+        while fallas and client is not None and intentos < vpr.MAX_REINTENTOS:
+            intentos += 1
+            nuevas = _regenerar_seccion(client, seccion, items(), ficha, fallas)
+            for x in lista:
+                q = nuevas.get(_norm_req(x.requisito))
+                if q and (seccion != "web" or es_pregunta_si_no_web(q)):
+                    setattr(x, campo, sin_relleno(q) if seccion == "web" else q)
+            fallas = vpr.problemas([(i["requisito"], i["tipo"], i["pregunta"]) for i in items()])
+        for i in sorted(fallas):
+            setattr(lista[i], campo, vpr.respaldo(lista[i].requisito, lista[i].tipo, seccion))
+        # el WhatsApp nunca repite la web de su propio requisito
+        if seccion == "whatsapp":
+            for x in lista:
+                if repite_pregunta(x.pregunta_whatsapp, x.pregunta_web or x.pregunta):
+                    x.pregunta_whatsapp = vpr.respaldo(x.requisito, x.tipo, "whatsapp")
+
+
+def _monto_int(texto: str) -> Optional[int]:
+    """«$12,000.00» → 12000; «12 mil» → 12000; «$8k» → 8000."""
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", texto or "")
+    if not m:
+        return None
+    try:
+        n = float(m.group(0).replace(",", ""))
+    except ValueError:
+        return None
+    if re.search(r"\bmil\b|\dk\b|\sk\b", texto or "", re.IGNORECASE):
+        n *= 1000
+    return int(round(n))
+
+
+def _numeros_sueldo(texto: str) -> set:
+    return {n for n in (_monto_int(x) for x in re.findall(r"\d[\d,]*(?:\.\d+)?(?:\s*mil\b)?", texto or "")) if n}
+
+
+def _quitar_montos_ajenos(salida: VacanteGenerada, sueldo_texto: str) -> None:
+    """2026-10-17: el sueldo de los textos coincide con el de la vacante — una oración con un monto que NO es el capturado
+    (otro rango, el sugerido, una cifra inventada) se quita. Sin sueldo capturado, ninguna cifra."""
+    permitidos = _numeros_sueldo(sueldo_texto) if sueldo_texto and sueldo_texto != "A convenir" else set()
+
+    def limpio(texto: str) -> str:
+        if not tiene_monto(texto):
+            return str(texto or "")
+        renglones = []
+        for linea in str(texto).split("\n"):
+            if not tiene_monto(linea):
+                renglones.append(linea)
+                continue
+            m = re.match(r"^(\s*(?:[-*+•]\s+|\d+[.)]\s+)?)", linea)
+            prefijo = m.group(1) if m else ""
+            partes = re.split(r"(?<=[.!?])\s+", linea[len(prefijo):])
+            quedan = []
+            for x in partes:
+                montos = [n for n in (_monto_int(y.group(0)) for y in _RE_MONTO.finditer(x)) if n]
+                if not montos or all(n in permitidos for n in montos):
+                    quedan.append(x)
+            texto_l = " ".join(q for q in quedan if q.strip()).strip()
+            if texto_l and texto_l.strip("*_ ").strip():
+                renglones.append(prefijo + texto_l)
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(renglones)).strip()
+
+    for campo in ("descripcion", "resumen", "perfil_ideal", "texto_whatsapp"):
+        setattr(salida, campo, limpio(getattr(salida, campo)))
+    for nombre in ("occ", "linkedin", "portal"):
+        b = getattr(salida, nombre)
+        b.titulo, b.texto_copy, b.page = limpio(b.titulo), limpio(b.texto_copy), limpio(b.page)
 
 
 def seguimiento_whatsapp(req: str, propuesta: str, web: str) -> str:

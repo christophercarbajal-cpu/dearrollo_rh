@@ -150,7 +150,8 @@ with TestClient(app) as client:
     g = generar(client, CONTADOR, ruta(AVATAR("operativo")))
     check(g["guiones"]["secciones"]["entrevista_avatar"].get("base_fija") is True, "avatar Operativo también usa SOLO la base, sin guion de IA")
     form = (APP_DIR / "components/dashboard/vacantes/formulario-contenido.tsx").read_text(encoding="utf-8")
-    check("{!enfoquePorRuta && <PlantillasConversacion" in form and "{enfoquePorRuta && (\n                <EntrevistaWhatsappBase" in form,
+    # 2026-10-17: el bloque vive ahora dentro de la Sección 3 colapsable (otra sangría)
+    check("{!enfoquePorRuta && <PlantillasConversacion" in form and re.search(r"\{enfoquePorRuta && \(\s*<EntrevistaWhatsappBase", form),
           "la vacante muestra UNA sola entrevista: la base (Operativo) o el guion (Profesional), nunca las dos")
 
     # ===================================================== 3. Profesional: guion ≤ 10, técnico y de casos reales
@@ -186,16 +187,15 @@ with TestClient(app) as client:
     base_prof = {q.get("dato"): q for q in ga["filtro"] if q.get("base") and not q.get("indispensable")}
     check("zona" not in base_prof, "Profesional: OMITE la colonia")
     check("traslado" not in base_prof, "Profesional: sin indispensable de traslado, no pregunta el traslado")
-    # 2026-10-16 (QA): la expectativa ya no existe; con sueldo publicado ($45,000) «El sueldo es… ¿Te interesa?»
-    check("sueldo" in base_prof and not base_prof["sueldo"].get("expectativa") and base_prof["sueldo"]["pregunta"].endswith("¿Te interesa?"),
-          f"Profesional con sueldo publicado: «El sueldo es… ¿Te interesa?», sin expectativa ({base_prof.get('sueldo', {}).get('pregunta')})")
+    # 2026-10-17 (Ficha de Nueva vacante): ni «El sueldo es… ¿Te interesa?» ni expectativa
+    check("sueldo" not in base_prof, f"Profesional con sueldo publicado: sin pregunta de sueldo ({base_prof.get('sueldo', {}).get('pregunta')})")
     gt = generar(client, {**ABOGADO, "requisitos_indispensables": ["Traslado máximo de 60 minutos"]}, ruta(AVATAR("profesional")))
     check(any(q.get("dato") == "traslado" and q.get("indispensable") for q in gt["filtro"]),
           "Profesional con indispensable de traslado: SÍ pregunta el traslado")
     go = generar(client, CONTADOR, ruta(WHATS("operativo")))
     base_op = {q.get("dato"): q for q in go["filtro"] if q.get("base")}
     check("zona" in base_op and "traslado" in base_op, "Operativo: pregunta colonia y traslado")
-    check("sueldo" in base_op and not base_op["sueldo"].get("expectativa"), "Operativo con sueldo publicado: «El sueldo es… ¿Te interesa?» (sin expectativa)")
+    check("sueldo" not in base_op, "Operativo con sueldo publicado: sin pregunta de sueldo (2026-10-17)")
     gs = generar(client, {**CONTADOR, "sueldo_desde": None, "sueldo_periodicidad": "a_convenir"}, ruta(WHATS("operativo")))
     base_sin = {q.get("dato"): q for q in gs["filtro"] if q.get("base")}
     # 2026-10-16 (QA): la expectativa ya no existe — sin sueldo publicado no hay pregunta de sueldo

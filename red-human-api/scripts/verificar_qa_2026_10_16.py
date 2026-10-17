@@ -168,15 +168,14 @@ with TestClient(app) as client:
           f"sin correo, el firmante se identifica con un identificador técnico del expediente ({ident})")
 
     # ================= Bloque 3 · prefiltro =================
-    print("\n--- 6. Prefiltro: web solo requisitos; sueldo «¿Te interesa?» con confirmación ---")
+    print("\n--- 6. Prefiltro: web solo requisitos; el chat no pregunta el sueldo ---")
     web = ssw.criterios_web(vp)
     check(not any(q.get("dato") == "sueldo" or q.get("expectativa") or "sueldo" in (q.get("pregunta") or "").lower()
                   or "terminal" in (q.get("pregunta") or "").lower() or (q.get("pregunta") or "").startswith("El puesto es") for q in web),
           f"la solicitud web no pregunta sueldo, puesto ni ubicación → {[q.get('pregunta') for q in web]}")
     crit = pconv.criterios_de(vp)
-    sueldo_c = next((x for x in crit if x.get("dato") == "sueldo"), None)
-    check(sueldo_c is not None and not sueldo_c.get("expectativa") and sueldo_c["chat"].startswith("El sueldo es")
-          and sueldo_c["chat"].endswith("¿Te interesa?"), "con sueldo publicado el chat dice «El sueldo es… ¿Te interesa?»")
+    # 2026-10-17 (Ficha de Nueva vacante): el prefiltro de WhatsApp ya no pregunta «El sueldo es… ¿Te interesa?»
+    check(not any(x.get("dato") in ("sueldo", "interes") for x in crit), "con sueldo publicado el chat ya NO pregunta el sueldo")
     check(not any(x.get("expectativa") for x in crit), "la expectativa de sueldo ya no existe")
     vp.mostrar_sueldo = False
     db.flush()
@@ -195,35 +194,20 @@ with TestClient(app) as client:
         pp = db.get(Postulacion, pp.id)
         return asyncio.run(procesar_prefiltro(db, pp, t, "whatsapp")).get("respuesta") or ""
 
-    def hasta_sueldo(pp):
+    def hasta_colonia(pp):
         r = chat(pp, "Hola")
         for _ in range(8):
-            if r.endswith("¿Te interesa?"):
+            if "colonia" in r.lower():
                 return r
+            check("¿Te interesa?" not in r, f"el chat nunca pregunta «… ¿Te interesa?» → «{r}»")
             r = chat(pp, "Terminé la secundaria" if "estudios" in r.lower() else "Sí puedo")
         return r
 
-    pd = nuevo("Daniel Descarte", "5530400002")
-    r = hasta_sueldo(pd)
-    check(r.endswith("¿Te interesa?"), f"llega a la pregunta del sueldo → «{r}»")
-    r = chat(pd, "No")
-    check(r == pconv.PREGUNTA_CONFIRMA_SUELDO, f"un «no» al sueldo se CONFIRMA → «{r}»")
-    r = chat(pd, "Sí")
-    db.expire_all()
-    pd = db.get(Postulacion, pd.id)
-    desc = next((h for h in pd.historial or [] if h.get("evento") == "descartado"), {})
-    check(not pd.activa and pd.motivo_cierre == "descartado" and (desc.get("motivo") or "").startswith("No le interesa el sueldo ofrecido")
-          and "no continuaremos" in r,
-          f"confirmado → descartado con motivo (mensaje genérico) → «{desc.get('motivo')}»")
-
     pc = nuevo("Carla Continúa", "5530400003")
-    hasta_sueldo(pc)
-    chat(pc, "No")
-    r = chat(pc, "No, sí me interesa")
+    r = hasta_colonia(pc)
     db.expire_all()
     pc = db.get(Postulacion, pc.id)
-    check(pc.activa and "colonia" in r.lower() and any("Dudó con el sueldo" in x for x in pc.analisis.get("puntos_validar_prefiltro") or []),
-          f"si al confirmar dice que sí sigue → continúa (Puntos por validar) → «{r}»")
+    check(pc.activa and "colonia" in r.lower(), f"de los requisitos pasa directo a la colonia (sin sueldo) → «{r}»")
 
     print("\n--- 6. Un «No» de la web se retoma con una pregunta abierta ---")
     conf = {"tipo": "excluyente", "respuesta": "No", "pregunta": "¿Puedes rolar turnos?"}

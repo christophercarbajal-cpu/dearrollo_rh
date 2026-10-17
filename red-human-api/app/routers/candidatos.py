@@ -1237,7 +1237,9 @@ def _texto_apto(p: Postulacion) -> str:
     promesas («Tu perfil es compatible» está prohibido). Deja la propuesta vigente en la postulación."""
     from ..services import agenda_chat
 
-    return agenda_chat.invitacion(p)
+    # 2026-10-17 (agenda inteligente): «¡Pasaste a la siguiente etapa! … ¿Cuándo te queda bien? Si quieres, puede ser ahora
+    # mismo.» — sin liga; la liga sale con «ahora» o con la cita agendada
+    return agenda_chat.invitacion_agenda(p)
 
 
 async def _avisar_apto_e_iniciar_agenda(db: Session, p: Postulacion) -> dict:
@@ -1455,7 +1457,10 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
             e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=ahora_utc)
             db.flush()
         liga = f"{settings.app_url}/entrevista/{e.token}"
-        if not (token_previo and d["accion"] == "ahora"):
+        if d.get("agenda_nueva"):
+            limite = ahora_utc  # 2026-10-17: «ahora mismo» — la entrevista es en este momento (sin plazo de 3 días)
+            p.videollamada_agendada_en = ahora_utc
+        elif not (token_previo and d["accion"] == "ahora"):
             p.videollamada_agendada_en = limite  # un simple recordatorio de la liga del motor no fija plazo
         p.videollamada_liga = liga
         if ETAPAS_CANDIDATO.index(p.etapa) < ETAPAS_CANDIDATO.index("Entrevista IA"):
@@ -1479,8 +1484,13 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         registrar(db, "agente-ia", "videollamada_agendada", "postulacion", p.codigo,
                   {"fecha_hora": cuando.isoformat(), "liga": liga, "confirmada_por_candidato": texto[:120]})
         nombre = nombre_ficha(p).split(" ")[0]
-        respuesta_final = (f"Listo, {nombre}. Tu entrevista con Red Human quedó agendada {agenda_chat.texto_horario(cuando)} "
-                           f"({ETIQUETA_ZONA}). Entra a esa hora desde esta liga:\n\n{liga}")  # una sola liga (2026-09-17)
+        if d.get("agenda_nueva"):
+            # 2026-10-17 (agenda inteligente): «Listo, quedó el martes 20 a las 6:00 p.m. …» + recordatorio antes de la cita
+            agenda_chat.marcar_agendada(p, cuando, e.token)
+            respuesta_final = agenda_chat.texto_agendada(nombre, cuando, liga)
+        else:
+            respuesta_final = (f"Listo, {nombre}. Tu entrevista con Red Human quedó agendada {agenda_chat.texto_horario(cuando)} "
+                               f"({ETIQUETA_ZONA}). Entra a esa hora desde esta liga:\n\n{liga}")  # una sola liga (2026-09-17)
         cita = {"fechaHora": cuando.isoformat(), "liga": liga}
     else:
         respuesta_final = d["texto"]
@@ -1657,7 +1667,7 @@ def _pregunta_en_curso(p: Postulacion) -> bool:
 
     if pconv.aplica(p) and not pconv.estado(p).get("resultado"):
         return True
-    if ((p.analisis or {}).get(agenda_chat.CLAVE) or {}).get("pregunta_ahora"):
+    if ((p.analisis or {}).get(agenda_chat.CLAVE) or {}).get("pregunta_ahora") or agenda_chat.esperando_cuando(p):
         return True
     return bool(sprop.esperando_respuesta(p))
 
@@ -1902,7 +1912,9 @@ async def procesar_prefiltro(db: Session, p: Postulacion, texto: str, canal: str
     # su respuesta la atiende la agenda (liga ya / liga con 3 días)
     from ..services import agenda_chat as _agc
 
-    if _agc.esperando_ahora(p) and not p.videollamada_liga and sproc.agente_puede_actuar(p, "entrevista_agente")[0]:
+    if ((_agc.esperando_ahora(p) or _agc.esperando_cuando(p)) and not p.videollamada_liga
+            and sproc.agente_puede_actuar(p, "entrevista_agente")[0]):
+        # 2026-10-17: también «¿Cuándo te queda bien? Si quieres, puede ser ahora mismo.» (agenda inteligente)
         return await _procesar_turno_agenda(db, p, historial, canal)
 
     # Zero-Touch fase 1: apto y sin videollamada agendada -> herramienta de agendamiento (nunca con entrevista por liga).

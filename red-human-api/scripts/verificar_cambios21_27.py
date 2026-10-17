@@ -153,10 +153,9 @@ with TestClient(app) as client:
     cs = pconv.criterios_de(v, p1)
     datos = [c.get("dato") for c in cs if c.get("dato")]
     check("zona" not in datos and "transporte" not in datos, f"ruta corporativa: sin colonia ni transporte ({datos})")
-    # 2026-10-16 (QA): la expectativa ya no existe; con sueldo publicado el chat dice «El sueldo es… ¿Te interesa?»
-    check(not any(c.get("dato") == "sueldo" and c.get("expectativa") for c in cs)
-          and any(c.get("dato") == "sueldo" and "¿Te interesa?" in (c.get("chat") or "") for c in cs),
-          "sueldo publicado: el prefiltro corporativo pregunta «El sueldo es… ¿Te interesa?» (nunca la expectativa)")
+    # 2026-10-17 (Ficha de Nueva vacante): el prefiltro de WhatsApp ya no pregunta el sueldo (ni la expectativa)
+    check(not any(c.get("dato") in ("sueldo", "interes") for c in cs),
+          "sueldo publicado: el prefiltro ya no pregunta «El sueldo es… ¿te interesa?» ni la expectativa")
     # Cambio 42: el Análisis de CV ya no agrega preguntas (omisión = «No lo menciona el CV»; contradicción → Puntos por validar)
     check(not any(c.get("por_brecha") or c.get("brecha") for c in cs), "Cambio 42: las brechas del CV ya NO se vuelven preguntas del prefiltro")
     lic = next(c for c in cs if c["indispensable"] and "licencia" in c["criterio"].lower())
@@ -283,20 +282,60 @@ with TestClient(app) as client:
         respuestas.append(responder(p4, texto))
     db.refresh(p4)
     check(pconv.estado(p4).get("resultado") == "cumple", "expectativa dentro del rango → cumple")
-    ultimo = respuestas[-1]["respuesta"]
-    # Cambio 42: la siguiente actividad inicia SOLA — la liga de la sala sale en el mismo turno (sin proponer horario)
-    check("/entrevista/" in ultimo and "¿Te confirmo" not in ultimo,
-          f"entrevista con avatar: inicia sola con su liga (sin proponer horario): {ultimo!r}")
-    r = responder(p4, "Ahorita no puedo")
+    # 2026-10-17 (agenda inteligente): la siguiente actividad inicia SOLA, pero el bot ya NO manda la liga de inmediato
     db.refresh(p4)
-    check("Tienes 3 días para hacerla" in r["respuesta"] and "/entrevista/" in r["respuesta"] and p4.videollamada_liga,
-          f"«no» → la liga con 3 días: {r['respuesta']!r}")
+    salidos = [m.texto for m in p4.mensajes if m.rol == "assistant"]
+    check(agenda_chat.TEXTO_INVITACION_AGENDA in salidos and not any("/entrevista/" in t for t in salidos),
+          f"entrevista con avatar: invita y pregunta cuándo, sin liga ({salidos[-1]!r})")
+    check(agenda_chat.TEXTO_INVITACION_AGENDA == ("¡Pasaste a la siguiente etapa! Es una entrevista por videollamada de unos 10 "
+                                                  "minutos. ¿Cuándo te queda bien? Si quieres, puede ser ahora mismo."), "texto exacto de la invitación")
+    r = responder(p4, "en la tarde")
+    check(r["respuesta"].startswith("¿Qué día y a qué hora te queda bien?") and "/entrevista/" not in r["respuesta"],
+          f"respuesta vaga → pide hora concreta: {r['respuesta']!r}")
+    r = responder(p4, "mañana")
+    check(r["respuesta"] == "Va. ¿A qué hora te queda bien mañana?", f"solo el día → pide la hora: {r['respuesta']!r}")
+    r = responder(p4, "a las 11 am")
+    db.refresh(p4)
+    check(r["respuesta"].startswith("Listo, Rosa, quedó mañana a las 11:00 a.m.") and "/entrevista/" in r["respuesta"]
+          and "recordatorio" in r["respuesta"] and p4.videollamada_liga, f"día + hora → queda agendada con su liga: {r['respuesta']!r}")
+    cita = agenda_chat.agendada(p4)
+    from app.fechas import TZ_ORG as _TZ
+    from app.services import proceso as _sproc
+
+    paso_av = next(x for x in _sproc.estado_pasos(p4) if x["tipo"] == "entrevista_agente")
+    check(cita is not None and cita.astimezone(_TZ).hour == 11 and paso_av["estadoUnificadoTexto"].startswith("Entrevista agendada · ")
+          and paso_av["estadoUnificadoTexto"].endswith("11:00 a.m."), f"pipeline: «{paso_av['estadoUnificadoTexto']}»")
+    # recordatorio 1 h antes (una sola vez)
+    import asyncio as _aio
+    from datetime import timedelta as _td
+
+    from app.services import agenda as _agenda
+    import app.services.agenda as _agenda_mod
+
+    _enviados = []
+
+    async def _wa_rec(tel, texto, *a, **k):
+        _enviados.append(texto)
+        return {"enviado": True, "proveedor": "meta"}
+
+    _agenda_mod.enviar_mensaje = _wa_rec
+    check(_aio.run(_agenda.recordar_videollamadas(ahora=cita - _td(hours=3))) == 0, "3 h antes: todavía no sale el recordatorio")
+    n1 = _aio.run(_agenda.recordar_videollamadas(ahora=cita - _td(minutes=50)))
+    n2 = _aio.run(_agenda.recordar_videollamadas(ahora=cita - _td(minutes=40)))
+    check(n1 == 1 and n2 == 0 and _enviados and "te recuerdo tu entrevista por videollamada" in _enviados[0] and "/entrevista/" in _enviados[0],
+          f"recordatorio 1 h antes, una sola vez ({_enviados})")
     p5 = postular("Iván Pérez", "8111000005", ANALISIS)
-    agenda_chat.invitacion(p5)
+    agenda_chat.invitacion_agenda(p5)
     p5.prefiltro_completo, p5.estado, p5.etapa = True, "cumple", "Entrevista IA"
     db.commit()
-    check(agenda_chat.decidir(p5, "Sí, de una vez") == {"accion": "ahora"} and agenda_chat.decidir(p5, "mejor luego")["accion"] == "plazo"
-          and agenda_chat.decidir(p5, "¿cuánto dura?")["accion"] == "responder", "sí → ahora · no → plazo · otra cosa → repregunta")
+    check(agenda_chat.decidir(p5, "ahorita mismo")["accion"] == "ahora" and agenda_chat.decidir(p5, "Sí, ahora")["accion"] == "ahora"
+          and agenda_chat.decidir(p5, "ahorita no, mejor el lunes a las 10")["accion"] == "registrar"
+          and agenda_chat.decidir(p5, "no sé")["accion"] == "responder", "«ahora» → liga · día y hora → agenda · vago → repregunta")
+    p6 = postular("Inés Prado", "8111000006", ANALISIS)
+    agenda_chat.invitacion(p6)  # una invitación ANTERIOR («¿La quieres hacer ahora?») sigue funcionando igual
+    db.commit()
+    check(agenda_chat.decidir(p6, "Sí, de una vez") == {"accion": "ahora"} and agenda_chat.decidir(p6, "mejor luego")["accion"] == "plazo",
+          "invitaciones anteriores: sí → ahora · no → plazo")
 
     # ================= Bloque 2 (Cambios 21 y 26) · citas y avisos al entrevistador =================
     print("\n--- Cambios 21/26 · aviso al entrevistador ---")

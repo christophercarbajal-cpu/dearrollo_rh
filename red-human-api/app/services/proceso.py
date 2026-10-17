@@ -1400,6 +1400,19 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
                 "espera": "" if regla["tipo"] == "ninguna" else "Falta la revisión de RH (evaluación sin afinidad)",
                 "detalle": "Evaluada", "revisadoPor": "Revisado por: Red Human", "terminado_en": _aware(evaluada.finalizada_en)}
     ultima = entrevistas[-1] if entrevistas else None
+    if tipo == "entrevista_agente":
+        # 2026-10-17 (agenda inteligente): «Entrevista agendada · martes 20 6:00 p.m.» mientras la cita no llega; antes de
+        # agendar, el bot espera a que el candidato diga cuándo
+        from . import agenda_chat
+
+        cita = agenda_chat.agendada(p)
+        if cita is not None and ultima is not None and ultima.estado == "programada":
+            texto_cita = agenda_chat.texto_estado_agendada(cita)
+            return {**base, "estado": "en_curso", "espera": texto_cita,
+                    "cuello": {"clave": "esperando_candidato", "texto": texto_cita, "quien": None}}
+        if ultima is None and agenda_chat.esperando_cuando(p):
+            return {**base, "estado": "en_curso", "espera": "Esperando que el candidato diga cuándo le queda bien",
+                    "cuello": {"clave": "esperando_candidato", "texto": "Esperando que el candidato elija horario", "quien": None}}
     if ultima is not None:
         espera = {"interrumpida": "Se interrumpió: falta reanudar o reintentar", "parcial": "Quedó parcial: falta reintentar",
                   "programada": "Falta que el candidato realice la entrevista", "en_curso": "En curso con el candidato",
@@ -2103,7 +2116,9 @@ def _con_cuello(paso: dict, r: dict, ev: Optional[Evaluacion], env: Optional[dic
     elif r["estado"] == "en_curso" and (tipo in ("solicitud_documentos", "prefiltro_whatsapp", "prefiltro_web", "solicitud_web")
                                         or tipo in TIPOS_PASO_ENTREVISTA_IA):
         motivos = MOTIVOS_PASO.get(tipo)
-        cuello = {"clave": "esperando_candidato", "texto": "Esperando candidato", "quien": "candidato",
+        # 2026-10-17: el texto que ya derivó la actividad («Entrevista agendada · martes 20 6:00 p.m.») se conserva
+        texto_previo = (r.get("cuello") or {}).get("texto") if (r.get("cuello") or {}).get("clave") == "esperando_candidato" else None
+        cuello = {"clave": "esperando_candidato", "texto": texto_previo or "Esperando candidato", "quien": "candidato",
                   "motivos": motivos, "que": (motivos or ("",))[0], "legado": True}
     if not cuello:
         return r

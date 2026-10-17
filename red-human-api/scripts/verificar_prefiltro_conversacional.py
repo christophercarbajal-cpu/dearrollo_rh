@@ -232,20 +232,21 @@ with TestClient(app) as client:
     # retro 2026-10-09: el chat SOLO pregunta indispensables — ubicación, NSS y experiencia no se preguntan
     check(pa.activa and pa.analisis["prefiltro_web"]["resultado"] == "cumple" and pa.prefiltro_completo,
           "prepa cumple secundaria y turnos venía «Sí» del formulario → aprobado al vuelo; lo no indispensable NO se pregunta")
-    check(pa.etapa == "Entrevista IA" and len(pa.entrevistas) == 1, "avanza solo a Filtro Red Human y se crea la sala de la entrevista")
-    liga = f"{settings.app_url}/entrevista/{pa.entrevistas[0].token}"
-    check(len(salida) == 1 and salida[0].endswith(liga) and "compatible" not in salida[0].lower(),
-          f"UN mensaje con la liga de la entrevista, sin «Tu perfil es compatible» ni promesas: «{salida[0][:90]}…»")
+    # 2026-10-17 (agenda inteligente): ya no sale la liga de inmediato — UN mensaje que invita y pregunta cuándo
+    from app.services import agenda_chat as _agc
+
+    check(pa.etapa == "Entrevista IA" and len(pa.entrevistas) == 0, "avanza solo a Filtro Red Human (la sala nace con la respuesta)")
+    check(len(salida) == 1 and salida[0] == _agc.TEXTO_INVITACION_AGENDA and "compatible" not in salida[0].lower(),
+          f"UN mensaje: invitación a la videollamada y «¿Cuándo te queda bien?», sin «Tu perfil es compatible»: «{salida[0][:90]}…»")
     ent = pa.analisis[pconv.ENTIDAD]["respuestas"]
     check(ent["turnos"]["fuente"] == "web" and ent["secundaria"]["fuente"] == "whatsapp" and "nss_fiscal" not in ent
           and "experiencia" not in ent, "web y chat alimentan la MISMA entidad (con su fuente)")
     check(paso(seg(PA), "prefiltro")["estadoUnificado"] == "aprobada", "Prefiltro «Aprobada» en la ruta")
-    salida = wa("ok, gracias")
-    check(len(salida) == 1 and liga in salida[0], "si escribe de nuevo, se le recuerda la liga de su entrevista")
-    todos = textos_wa("5512349001")
-    check(not any("videollamada" in t.lower() or "agendar" in t.lower() or "disponibilidad tienes" in t.lower() for t in todos),
-          "con entrevista por liga NUNCA se pide agendar videollamada")
-    check(recargar(PA).videollamada_agendada_en is None and not recargar(PA).espera_respuesta, "sin agenda que coordinar por chat")
+    salida = wa("ahorita mismo")
+    pa = recargar(PA)
+    liga = f"{settings.app_url}/entrevista/{pa.entrevistas[0].token}" if pa.entrevistas else "(sin sala)"
+    check(len(salida) == 1 and salida[0].endswith(liga), f"«ahora» → la liga de la entrevista: «{salida[0][:90]}…»")
+    check(not recargar(PA).espera_respuesta, "con la liga enviada ya no hay agenda que coordinar por chat")
 
     # ------------------------------------------------------------------ 3. Telegram: ambigua + reconexión + cierre
     print("\n--- 3. Telegram (mismo flujo): aclaración, /start y cierre por indispensable ---")
@@ -313,9 +314,9 @@ with TestClient(app) as client:
     check(pt.analisis[pconv.ENTIDAD]["respuestas"]["turnos"]["respuesta"] == "No"
           and pt.analisis["prefiltro_web"]["resultado"] == "no_cumple", "las respuestas y el resultado originales se CONSERVAN")
     nuevos = textos_tg(CHAT, antes)
-    liga = f"{settings.app_url}/entrevista/{pt.entrevistas[0].token}" if pt.entrevistas else "¿sin entrevista?"
-    check(len(pt.entrevistas) == 1 and len(nuevos) == 1 and liga in nuevos[0] and "continúa" in nuevos[0],
-          "la liga de la entrevista sale SOLA por el canal conectado (Telegram), sin esperas")
+    # 2026-10-17 (agenda inteligente): sale SOLA la invitación (sin liga) por el canal conectado; la liga, con su respuesta
+    check(len(pt.entrevistas) == 0 and len(nuevos) == 1 and nuevos[0] == _agc.TEXTO_INVITACION_AGENDA,
+          f"la invitación a la entrevista sale SOLA por el canal conectado (Telegram), sin esperas ({nuevos[:1]})")
     check(paso(seg(pt.codigo), "prefiltro")["estadoUnificado"] == "aprobada_excepcion", "Prefiltro «Continúa por decisión de RH»")
     check(db.query(Bitacora).filter(Bitacora.accion == "postulacion_reactivada", Bitacora.entidad_id == pt.codigo).count() == 1
           and any(h.get("evento") == "reactivada" for h in recargar(pt.codigo).historial), "queda en la bitácora y en el historial")

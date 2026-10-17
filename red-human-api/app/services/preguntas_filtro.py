@@ -272,7 +272,8 @@ def _compatible(pregunta: str, tipo: str, dato: str) -> bool:
 
 
 def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str = "", previa: Optional[dict] = None,
-                        propuesto: bool = False, descripcion: str = "", web_ia: str = "", seguimiento: str = "") -> dict:
+                        propuesto: bool = False, descripcion: str = "", web_ia: str = "", seguimiento: str = "",
+                        tipo_ia: str = "") -> dict:
     from . import ia
 
     info = tipo_requisito(req)
@@ -330,6 +331,10 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
         item["seguimiento"] = ia.seguimiento_whatsapp(req, seguimiento, texto_web)
     if tipo == "numero":
         item["unidad"] = {"experiencia": "años", "transportes": "transportes", "edad": "años", "traslado": "minutos"}.get(d, "")
+    # 2026-10-17 (Ficha de Nueva vacante): tipo del indispensable (el de la generación si es válido; si no, el determinista)
+    from . import validacion_preguntas as vpr
+
+    item["tipo_indispensable"] = vpr.tipo_valido(tipo_ia) or (previa or {}).get("tipo_indispensable") or vpr.clasificar(req)
     if propuesto:
         item["propuesto"] = True
     # 2026-10-16 (Bloque 2): origen visible en la vista previa (se conserva el que ya tenía)
@@ -366,12 +371,8 @@ def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Opt
     solo si un indispensable lo pide (esa pregunta ya es la del requisito)."""
     ya = ya or set()
     salida = []
-    if _texto_sueldo(sueldo):
-        # 2026-10-16 (QA, decisión del usuario): la expectativa de sueldo ya NO existe. Con sueldo publicado el chat dice
-        # «El sueldo es… ¿Te interesa?»; un «no» se confirma y, confirmado, descarta (`prefiltro_conversacional`). Sin
-        # sueldo publicado no se pregunta nada de sueldo. Nunca entra al formulario web.
-        salida.append({"id": "base-sueldo", "requisito": "Sueldo", "pregunta": _texto_sueldo(sueldo), "tipo": "si_no",
-                       "dato": "sueldo", "confirma_descarte": True})
+    # 2026-10-17 (Ficha de Nueva vacante): ya no hay pregunta base de sueldo («El sueldo es… ¿te interesa?» era redundante:
+    # el candidato ya lo vio en la publicación). La expectativa automática tampoco existe (2026-10-16).
     if not es_profesional(enfoque):
         salida.append({"id": "base-zona", "requisito": "Colonia y municipio", "pregunta": "¿En qué colonia y municipio vives?",
                        "tipo": "abierta", "dato": "zona"})
@@ -383,26 +384,14 @@ def bases(titulo: str, sueldo: str, ubicacion: str, modalidad: str = "", ya: Opt
 
 
 # 2026-10-16: base que ya no se preguntan (las listas guardadas antes las traen) y el sueldo afirmativo → expectativa
-BASES_RETIRADAS = ("edad", "interes")
+BASES_RETIRADAS = ("edad", "interes", "sueldo")  # 2026-10-17: también el sueldo
 
 
 def vigentes(lista: List[dict], periodicidad: str = "", sueldo: str = "") -> List[dict]:
-    """La lista guardada con las base de HOY: sin edad ni interés (salvo que sean un indispensable de la vacante) y el
-    sueldo como «El sueldo es… ¿Te interesa?» (2026-10-16, QA: la expectativa ya no existe; sin sueldo publicado no hay
-    pregunta de sueldo). Nunca toca indispensables ni preguntas propias de RH."""
-    salida = []
-    for q in lista:
-        if q.get("base") and not q.get("indispensable") and q.get("dato") in BASES_RETIRADAS:
-            continue
-        if q.get("base") and not q.get("indispensable") and q.get("dato") == "sueldo":
-            texto = _texto_sueldo(sueldo)
-            if not texto:
-                continue
-            q = {**q, "requisito": "Sueldo", "pregunta": texto, "tipo": "si_no", "confirma_descarte": True, "opciones": ["Sí", "No"]}
-            q.pop("expectativa", None)
-            q.pop("unidad", None)
-        salida.append(q)
-    return salida
+    """La lista guardada con las base de HOY: sin edad, interés ni sueldo (salvo que sean un indispensable de la vacante).
+    2026-10-17 (Ficha de Nueva vacante): la base de sueldo («El sueldo es… ¿te interesa?») ya no existe; las listas guardadas
+    antes la traen y aquí se quita. Nunca toca indispensables ni preguntas propias de RH."""
+    return [q for q in lista if not (q.get("base") and not q.get("indispensable") and q.get("dato") in BASES_RETIRADAS)]
 
 
 def quitadas_de(previas: Optional[List[dict]]) -> set:
@@ -429,13 +418,13 @@ def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubic
           seniority: str = "", naturales: Optional[Dict[str, str]] = None, previas: Optional[List[dict]] = None,
           propuestos: Optional[List[str]] = None, enfoque: str = "", periodicidad: str = "", descripcion: str = "",
           quitadas: Optional[set] = None, webs: Optional[Dict[str, str]] = None,
-          seguimientos: Optional[Dict[str, str]] = None) -> List[dict]:
+          seguimientos: Optional[Dict[str, str]] = None, tipos: Optional[Dict[str, str]] = None) -> List[dict]:
     """La lista completa: una pregunta por indispensable (en su orden) y después las base. `naturales` = {requisito
     normalizado: pregunta propuesta por la IA}; `previas` = la lista guardada (se conservan los ajustes de RH).
     2026-10-17: `webs` / `seguimientos` = {requisito normalizado: pregunta} del PREFILTRO WEB (Sí/No) y del PREFILTRO
     WHATSAPP (continuación que asume que cumple y pide detalle; nunca repite la web)."""
     naturales = naturales or {}
-    webs, seguimientos = webs or {}, seguimientos or {}
+    webs, seguimientos, tipos = webs or {}, seguimientos or {}, tipos or {}
     por_req = {_norm_req(q.get("requisito") or ""): q for q in previas or [] if isinstance(q, dict) and q.get("indispensable")}
     prop = {_norm_req(x) for x in propuestos or []}
     sin_exp = (seniority or "").strip().lower() == "sin experiencia"
@@ -444,7 +433,8 @@ def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubic
     for i, req in enumerate(reqs):
         it = _item_indispensable(i, req, sin_experiencia=sin_exp, natural=naturales.get(_norm_req(req), ""),
                                  previa=por_req.get(_norm_req(req)), propuesto=_norm_req(req) in prop, descripcion=descripcion,
-                                 web_ia=webs.get(_norm_req(req), ""), seguimiento=seguimientos.get(_norm_req(req), ""))
+                                 web_ia=webs.get(_norm_req(req), ""), seguimiento=seguimientos.get(_norm_req(req), ""),
+                                 tipo_ia=tipos.get(_norm_req(req), ""))
         if it["dato"] in ("edad", "traslado"):
             ya.add(it["dato"])
         salida.append(it)
@@ -582,7 +572,7 @@ def guardar(v, lista: List[dict], propuestos: Optional[List[str]] = None) -> Lis
 
 
 def sincronizar(v, entrada=None, propuestos: Optional[List[str]] = None, webs: Optional[Dict[str, str]] = None,
-                seguimientos: Optional[Dict[str, str]] = None) -> List[dict]:
+                seguimientos: Optional[Dict[str, str]] = None, tipos: Optional[Dict[str, str]] = None) -> List[dict]:
     """Recalcula la entidad contra los indispensables vigentes de la vacante (conservando lo que RH ajustó) y la guarda."""
     from ..routers.vacantes import requisitos_lista
 
@@ -591,7 +581,7 @@ def sincronizar(v, entrada=None, propuestos: Optional[List[str]] = None, webs: O
     lista = armar(requisitos_lista(getattr(v, "requisitos", "") or ""), previas=previas, propuestos=prop,
                   naturales={_norm_req(x.get("requisito") or ""): x.get("pregunta") or ""
                              for x in ((getattr(v, "guiones", None) or {}).get("preguntas_requisitos") or []) if isinstance(x, dict)},
-                  descripcion=getattr(v, "descripcion", "") or "", webs=webs, seguimientos=seguimientos, **kw_de_vacante(v))
+                  descripcion=getattr(v, "descripcion", "") or "", webs=webs, seguimientos=seguimientos, tipos=tipos, **kw_de_vacante(v))
     return guardar(v, lista, prop)
 
 

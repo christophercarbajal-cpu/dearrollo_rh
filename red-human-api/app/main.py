@@ -23,7 +23,7 @@ from .seed import rellenar_slugs_cuentas, sembrar, sembrar_admin
 from .models import TABLAS_CONOCIMIENTO, TABLAS_MODULOS_RH
 from .services.avisos_estado import revisar_inactividad
 from .services import modulos_rh, rag
-from .services.agenda import revisar_videollamadas_noshow
+from .services.agenda import recordar_videollamadas, revisar_videollamadas_noshow
 from .services.recordatorios import revisar_recordatorios_documentos
 from .services.recordatorios_entrevista import revisar_recordatorios_entrevista
 from .services.recordatorios_psicometria import revisar_recordatorios_psicometria
@@ -285,6 +285,12 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         revisar_videollamadas_noshow, "interval", minutes=5,
         id="noshow_videollamadas", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=120,
+    )
+    # 2026-10-17 (agenda inteligente): recordatorio de la entrevista con avatar que el candidato agendó por chat
+    scheduler.add_job(
+        recordar_videollamadas, "interval", minutes=5,
+        id="recordatorio_videollamadas", replace_existing=True,
         max_instances=1, coalesce=True, misfire_grace_time=120,
     )
     # Fase 3 (2026-09-15): recordatorios automáticos de documentos (cada hora decide si toca).

@@ -259,9 +259,8 @@ with TestClient(app) as client:
     # 2026-10-16 (QA): con más de una terminal el WhatsApp la pregunta (la web ya no)
     check("terminal" in seguidas[-1].lower(), f"después de los requisitos, la terminal → «{seguidas[-1]}»")
     t = ultimo("5560000002", "Monterrey")
-    check(t.endswith("¿Te interesa?") and "El sueldo es" in t and "expectativa" not in t.lower(),
-          f"sueldo publicado → «El sueldo es… ¿Te interesa?» (nunca la expectativa) → «{t}»")
-    t = ultimo("5560000002", "Sí")
+    # 2026-10-17 (Ficha de Nueva vacante): ya no se pregunta el sueldo — de la terminal a la colonia
+    check("El sueldo es" not in t and "expectativa" not in t.lower(), f"sueldo publicado: ya no se pregunta → «{t}»")
     seguidas.append(t)
     check("colonia" in t.lower() and not any("años tienes" in x for x in seguidas), f"sin preguntar la edad: la colonia → «{t}»")
     t = ultimo("5560000002", "Col. Centro, Hermosillo, Sonora")

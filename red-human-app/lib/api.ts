@@ -743,7 +743,12 @@ export interface PreguntaFiltroU {
   seguimiento?: string;
   /** Pregunta base que RH quitó con la «X» (se conserva para poder restaurarla). */
   quitada?: boolean;
+  /** 2026-10-17: tipo del indispensable del que nace la pregunta (lo calcula el servidor). */
+  tipo_indispensable?: TipoIndispensable;
 }
+/** 2026-10-17 (ficha de Nueva vacante): clasificación del indispensable del que nace cada pregunta. */
+export type TipoIndispensable =
+  | "Experiencia" | "Ubicación" | "Fecha de inicio" | "Horario" | "Escolaridad" | "Licencia" | "Herramienta" | "Idioma" | "Otro";
 /** 2026-10-16 (Bloque 2): origen de una pregunta de requisito en la vista previa. */
 export type OrigenPregunta = "descripcion" | "red_human" | "rh";
 export const ETIQUETA_ORIGEN: Record<OrigenPregunta, string> = {
@@ -858,6 +863,8 @@ export interface DatosVacante extends SueldoEstructurado {
   preguntas_requisitos?: PreguntaRequisito[];
   /** Cambio 37: indispensables que propuso Red Human (los demás son «Agregado por ti»). */
   indispensables_propuestos?: string[];
+  /** 2026-10-17: «Da más instrucciones a Red Human» al regenerar la Publicación (texto libre de RH). */
+  instrucciones?: string;
 }
 
 export function fetchVacantes(filtros?: {

@@ -129,7 +129,11 @@ with TestClient(app) as client:
     check(paso(s, "prefiltro")["estadoUnificado"] == "aprobada", "Prefiltro → «Aprobada»")
     evs = db.query(Evaluacion).filter(Evaluacion.postulacion_id == pa.id, Evaluacion.tipo == "psicometrica").all()
     check(len(evs) == 1 and evs[0].paso_id == "bateria", "la psicometría se disparó sola, ligada a su actividad")
-    check(len(pa.entrevistas) == 1, "la Entrevista Red Human se creó sola (liga para el candidato)")
+    # 2026-10-17 (agenda inteligente): el motor invita y pregunta CUÁNDO; la sala nace con la respuesta del candidato
+    from app.services import agenda_chat as _agc
+
+    check(len(pa.entrevistas) == 0 and _agc.esperando_cuando(pa),
+          "la Entrevista Red Human se disparó sola: invita y pregunta cuándo (sin liga todavía)")
     check(paso(s, "entrevista_red_human")["estadoUnificado"] == "error",
           "sin WhatsApp ni correo configurados la liga no llegó → la actividad queda en «Error» (nunca silencioso)")
     envios = pa.analisis["motor_ruta"]["envios"]
@@ -138,15 +142,18 @@ with TestClient(app) as client:
     asyncio.run(motor_ruta.barrido())
     db.expire_all()
     pa = db.query(Postulacion).filter(Postulacion.codigo == PA).first()
-    check(db.query(Evaluacion).filter(Evaluacion.postulacion_id == pa.id).count() == 1 and len(pa.entrevistas) == 1,
-          "el job vuelve a correr: no duplica la psicometría ni la entrevista")
+    check(db.query(Evaluacion).filter(Evaluacion.postulacion_id == pa.id).count() == 1 and len(pa.entrevistas) == 0,
+          "el job vuelve a correr: no duplica la psicometría ni la invitación")
     lider = paso(s, "entrevista-lider")
     check(not lider["disponible"] and lider["espera"].startswith("Falta completar:") and "Se habilita" not in lider["espera"],
           "la siguiente etapa dice qué actividad falta (no «Se habilita en …»)")
     check(lider["automatica"] is False and paso(s, "bateria")["automatica"] is True, "automáticas vs. manuales marcadas")
 
     print("\n--- 2. Entrevista Red Human: score PROPIO y mínimo excluyente ---")
-    e = pa.entrevistas[0]
+    from app.services.entrevistas import crear_entrevista_para_candidato
+
+    e, _ = crear_entrevista_para_candidato(db, pa, "prueba")  # el candidato contestó «ahora» (agenda inteligente)
+    db.flush()
     e.estado = "evaluada"
     e.evaluacion = {"score_entrevista": 68, "match_perfil": 95, "calif_experiencia": 9, "calif_comunicacion": 9,
                     "fortalezas": ["Comunicación clara"], "riesgos": [], "recomendacion": "revision"}
@@ -196,8 +203,8 @@ with TestClient(app) as client:
     r = client.post(f"/candidatos/{PB}/reactivar", headers=HG, json={"motivo": "Acordó turno fijo matutino con el supervisor"})
     db.expire_all()
     pb = db.query(Postulacion).filter(Postulacion.codigo == PB).first()
-    check(r.status_code == 200 and pb.activa and pb.etapa == "Entrevista IA" and len(pb.entrevistas) == 1,
-          "«Reactivar»: vuelve activa, retoma la ruta (avanza sola y sale la liga de la entrevista)")
+    check(r.status_code == 200 and pb.activa and pb.etapa == "Entrevista IA" and _agc.esperando_cuando(pb),
+          "«Reactivar»: vuelve activa, retoma la ruta (avanza sola e invita a la entrevista)")
     check(any(h.get("evento") == "reactivada" and h.get("usuario") == admin.nombre for h in pb.historial)
           and paso(seg(PB), "prefiltro")["estadoUnificado"] == "aprobada_excepcion", "queda en el historial; el prefiltro continúa por decisión de RH")
     check(client.post(f"/candidatos/{PB}/reactivar", headers=HG, json={"motivo": "Segunda vez sin sentido"}).status_code == 409,

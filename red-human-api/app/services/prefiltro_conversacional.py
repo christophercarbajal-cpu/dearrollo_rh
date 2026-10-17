@@ -86,8 +86,9 @@ def criterios_de(v, p: Optional[Postulacion] = None) -> List[dict]:
     # PUBLICADO («El sueldo es… ¿Te interesa?»); con «Mostrar sueldo» apagado o sin cifra, no se pregunta.
     salida = [c for c in salida if not (c.get("dato") == "sueldo" and c.get("expectativa")
                                         and (c.get("base") or c.get("id") == "dato-sueldo"))]
-    if not sueldo_publicado(v):
-        salida = [c for c in salida if not (c.get("dato") == "sueldo" and not c.get("expectativa") and not c.get("indispensable"))]
+    # 2026-10-17 (Ficha de Nueva vacante): el prefiltro de WhatsApp ya NO pregunta «El sueldo es… ¿te interesa?» ni «El puesto
+    # es… ¿te interesa?» (redundantes: ya los vio en la publicación), en ninguna ruta. Un requisito de RH sobre sueldo se respeta.
+    salida = [c for c in salida if not (c.get("dato") in ("sueldo", "interes") and not c.get("expectativa") and not c.get("indispensable"))]
     return salida
 
 

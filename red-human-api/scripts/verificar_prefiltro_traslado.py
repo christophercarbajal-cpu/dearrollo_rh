@@ -187,10 +187,9 @@ with TestClient(app) as client:
     r = turno(p, "como 2 horas y media")
     check(r["respuesta"].endswith("¿En qué transporte llegarías?"), "4) al final el medio de transporte; el traslado largo NO descarta")
     r = turno(p, "En camión y metro")
-    # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» (nunca la expectativa)
-    check("esperas ganar" not in r["respuesta"] and "expectativa" not in r["respuesta"] and r["respuesta"].endswith("¿Te interesa?"),
-          "5) sueldo publicado: «El sueldo es… ¿Te interesa?» (sin expectativa)")
-    r = turno(p, "Sí")
+    # 2026-10-17 (Ficha de Nueva vacante): ya no se pregunta el sueldo — el transporte es el último dato
+    check("sueldo" not in r["respuesta"].lower() and "¿Te interesa?" not in r["respuesta"],
+          f"5) sueldo publicado: ya no se pregunta «El sueldo es… ¿Te interesa?» ({r['respuesta'][:80]!r})")
     p = fresca(p)
     d = p.analisis.get("prefiltro_datos") or {}
     check(p.activa and (p.analisis.get("prefiltro_web") or {}).get("resultado") == "cumple", "con la escolaridad cumplida el prefiltro aprueba")

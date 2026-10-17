@@ -184,11 +184,12 @@ with TestClient(app) as client:
     # 2026-10-16: sin edad ni «¿Te interesa?» (la edad solo si la vacante la pide); el sueldo es la expectativa
     # 2026-10-16 (bug del tester): la vacante publica su sueldo ($9,000) → sin pregunta de expectativa
     # 2026-10-16 (QA): sueldo publicado → «El sueldo es… ¿Te interesa?» (base, nunca la expectativa)
-    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"zona", "traslado", "sueldo"}
-          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes"}
+    # 2026-10-17 (Ficha de Nueva vacante): ya no hay pregunta base de sueldo
+    check({q["dato"] for q in g["filtro"] if q["base"]} >= {"zona", "traslado"}
+          and not {q["dato"] for q in g["filtro"] if q["base"]} & {"edad", "interes", "sueldo"}
           and not any(q.get("expectativa") for q in g["filtro"])
           and all(q["etiqueta"] == "Base" for q in g["filtro"] if q["base"]),
-          "base: sueldo, colonia y traslado con etiqueta «Base» (sin expectativa)")
+          "base: colonia y traslado con etiqueta «Base» (sin sueldo ni expectativa)")
     check(len(g2["preguntas_filtro"]) >= 3 and g2["preguntas_filtro_whatsapp"] == [], "web derivado con ≥ 3 preguntas; sin prefiltro de WhatsApp aparte")
     abierta = pfu.normalizar_item({"pregunta": "¿Qué hiciste?", "tipo": "abierta", "descarta": True})
     check(abierta["descarta"] is False and abierta["regla"] == pfu.REGLA_NO_DESCARTA, "una abierta marcada «descarta» se corrige en código")

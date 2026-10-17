@@ -81,8 +81,10 @@ def marcar_solicitud_documentos(e: Expediente, resultados, actor: str, tipo: str
     if not canal:
         return ""
     ahora = datetime.now(timezone.utc)
-    for d in e.documentos:
-        if d.entregado:
+    from .documentos_vacante import de_snapshot
+
+    for d in de_snapshot(e):  # 2026-10-17: solo lo que pide el snapshot de la postulación
+        if d.entregado or d.interno:
             continue
         if not d.solicitado_en:
             d.solicitado_en = ahora

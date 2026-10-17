@@ -150,6 +150,19 @@ async def lifespan(app: FastAPI):
         except Exception as ex:  # noqa: BLE001
             db.rollback()
             print(f"[documentos] ⚠️ migración del catálogo de documentos no aplicada: {ex}", flush=True)
+        # 2026-10-17 («Documentos alineados a la vacante»): las postulaciones activas sin snapshot de documentos lo fijan con
+        # lo que pide su vacante hoy. Una sola vez (marca en bitácora), NO fatal.
+        try:
+            from .services import documentos_vacante as _sdv
+
+            with db.begin_nested():
+                snap = _sdv.fijar_faltantes(db, aplicar=True)
+            db.commit()
+            if snap.get("postulaciones"):
+                print(f"[documentos] snapshot fijado en {snap['postulaciones']} postulación(es)", flush=True)
+        except Exception as ex:  # noqa: BLE001
+            db.rollback()
+            print(f"[documentos] ⚠️ snapshot de documentos no aplicado: {ex}", flush=True)
         # 2026-10-16 (bug del tester): la CLABE de la configuración base ya no bloquea. Una sola vez, NO fatal.
         try:
             from .services import catalogo_documentos as _scat

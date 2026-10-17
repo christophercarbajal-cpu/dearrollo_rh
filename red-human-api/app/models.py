@@ -1005,11 +1005,29 @@ class Expediente(Base):
         back_populates="expediente", order_by="Documento.id", cascade="all, delete-orphan"
     )
 
+    def _claves_snapshot(self) -> Optional[set]:
+        """2026-10-17 («Documentos alineados a la vacante»): las claves de los documentos que pide el SNAPSHOT de la
+        postulación; None sin postulación (expedientes sueltos conservan la regla anterior)."""
+        if self.postulacion is None:
+            return None
+        from .services.documentos_vacante import claves_requeridas
+
+        return claves_requeridas(self.postulacion)
+
     @property
     def obligatorios(self) -> List["Documento"]:
         """Obligatorios que SÍ aplican a esta persona (RH puede marcar uno «No aplica» con motivo). Los
-        documentos INTERNOS (contrato firmado) nunca cuentan."""
-        return [d for d in self.documentos if d.obligatorio and d.estado != "no_aplica" and not d.interno]
+        documentos INTERNOS (contrato firmado) nunca cuentan. 2026-10-17: solo los del snapshot de la postulación (lo que
+        pidió la vacante), nunca los del catálogo base que no pidió."""
+        claves = self._claves_snapshot()
+        return [d for d in self.documentos if d.obligatorio and d.estado != "no_aplica" and not d.interno
+                and (claves is None or clave_documento(d.tipo) in claves)]
+
+    @property
+    def sin_documentos_requeridos(self) -> bool:
+        """La vacante no pidió documentos (o la ruta no los trae): nada que entregar, nada que bloquee."""
+        claves = self._claves_snapshot()
+        return claves is not None and not claves
 
     @property
     def progreso(self) -> int:
@@ -1019,7 +1037,7 @@ class Expediente(Base):
         Prueba la subida se aprueba sola («Modo Prueba» en `revisado_por`)."""
         docs = self.obligatorios
         if not docs:
-            return 0
+            return 100 if self.sin_documentos_requeridos else 0
         aprobados = sum(1 for d in docs if d.aprobado)
         return round(aprobados / len(docs) * 100)
 

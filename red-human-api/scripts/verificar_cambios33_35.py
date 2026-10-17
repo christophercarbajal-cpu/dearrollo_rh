@@ -41,6 +41,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_admin, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
+import _documentos_prueba  # noqa: E402 — 2026-10-17: la vacante de prueba pide los documentos base
+_documentos_prueba.documentos_base_si_la_vacante_no_pide()
 from app.models import (Colaborador, Cuenta, Documento, Expediente, Postulacion, Usuario, UsuarioCuenta, Vacante,  # noqa: E402
                         clave_documento, documento_catalogo, normalizar_documentos_vacante)
 from app.routers.candidatos import _abrir_expediente, _crear_candidato, crear_postulacion  # noqa: E402
@@ -117,8 +119,9 @@ with TestClient(app) as client:
     e = _abrir_expediente(db, p, admin)
     db.commit()
     tipos = [d.tipo for d in e.documentos if not d.interno]
-    check(tipos == [INE, "CURP", "Licencia de conducir"],
-          f"expediente = Cuenta (INE, CURP) + vacante (INE, Licencia) sin repetir → {tipos}")
+    # 2026-10-17 («Documentos alineados a la vacante», decisión del usuario): SOLO lo que pide la vacante — la configuración
+    # de la Cuenta (INE, CURP) ya no se suma al expediente
+    check(tipos == [INE, "Licencia de conducir"], f"expediente = SOLO la vacante (INE, Licencia), sin la Cuenta → {tipos}")
 
     # ================= Cambio 33: sin actividades de Onboarding =================
     print("\n--- Cambio 33 · ruta sin actividades de Onboarding ---")
@@ -142,37 +145,37 @@ with TestClient(app) as client:
     onb = ficha.get("onboarding") or {}
     check(onb.get("estado") == "listo_colaborador" and onb.get("texto") == "Listo para pasar a colaborador",
           f"la ficha dice «Listo para pasar a colaborador» ({onb})")
-    check(onb.get("documentosPendientes") == 2 and set(onb.get("documentosPendientesLista")) == {"CURP", "Licencia de conducir"},
-          "«Documentos pendientes: 2» (lo aprobado no cuenta)")
+    check(onb.get("documentosPendientes") == 1 and set(onb.get("documentosPendientesLista")) == {"Licencia de conducir"},
+          f"«Documentos pendientes: 1» (lo aprobado no cuenta) ({onb.get('documentosPendientesLista')})")
     s = client.get(f"/procesos/postulaciones/{p.codigo}").json()
     check(s["siguienteAccion"]["tipo"] == "pasar_colaborador", "acción principal: «Pasar a colaborador»")
 
     print("\n--- Cambio 33 · «Solicitar documentos pendientes» ---")
     r = client.post(f"/onboarding/expedientes/{e.id}/solicitar-pendientes")
-    check(r.status_code == 200 and r.json()["documentos"] == ["CURP", "Licencia de conducir"],
+    check(r.status_code == 200 and r.json()["documentos"] == ["Licencia de conducir"],
           f"pide SOLO los no aprobados ({r.status_code} {r.json().get('documentos') if r.status_code == 200 else r.text[:120]})")
     db.expire_all()
     p = db.get(Postulacion, p.id)
     adhoc = next((x for x in p.proceso["pasos"] if x.get("adhoc") and x["tipo"] == "documentos"), None)
-    check(adhoc is not None and adhoc["etapa"] == "Onboarding" and adhoc["documentos"] == ["CURP", "Licencia de conducir"]
+    check(adhoc is not None and adhoc["etapa"] == "Onboarding" and adhoc["documentos"] == ["Licencia de conducir"]
           and p.etapa == "Onboarding", "crea la actividad «Documentos» solo para esta persona, en Onboarding (no cambia la etapa)")
     check(v.proceso == db.get(Vacante, v.id).proceso and not any(x.get("adhoc") for x in db.get(Vacante, v.id).proceso["pasos"]),
           "la ruta de la vacante no cambia")
     estado_adhoc = next(x for e_ in client.get(f"/procesos/postulaciones/{p.codigo}").json()["etapas"] for x in e_["pasos"] if x["id"] == adhoc["id"])
-    check("CURP" in (estado_adhoc.get("espera") or "") and INE not in (estado_adhoc.get("espera") or ""),
+    check("licencia" in (estado_adhoc.get("espera") or "").lower() and INE not in (estado_adhoc.get("espera") or ""),
           f"la actividad espera solo lo pedido («{estado_adhoc.get('espera')}»)")
-    check(client.get(f"/candidatos/{p.codigo}").json()["onboarding"]["documentosPendientes"] == 2, "el contador sigue en 2 hasta que se aprueben")
+    check(client.get(f"/candidatos/{p.codigo}").json()["onboarding"]["documentosPendientes"] == 1, "el contador sigue en 1 hasta que se apruebe")
 
     print("\n--- Cambio 33 · «Pasar a colaborador» con pendientes ---")
     r = client.post(f"/onboarding/expedientes/{e.id}/pasar-colaborador", json={"comentario": "Ingresa hoy; entrega luego"})
-    check(r.status_code == 200 and set(r.json()["pendientes"]["documentos"]) == {"CURP", "Licencia de conducir"},
+    check(r.status_code == 200 and set(r.json()["pendientes"]["documentos"]) == {"Licencia de conducir"},
           f"pasa a Colaboradores aunque falten documentos ({r.status_code} {r.text[:160]})")
     db.expire_all()
     p = db.get(Postulacion, p.id)
     check(not p.activa and p.motivo_cierre == "contratado" and p.expediente.estado == "alta"
           and db.query(Colaborador).filter(Colaborador.expediente_id == e.id).count() == 1, "queda como Colaborador (alta sobre el mismo expediente)")
     pend = {d.tipo: d.estado for d in p.expediente.documentos if not d.interno}
-    check(pend["CURP"] == "pendiente" and pend["Licencia de conducir"] == "pendiente" and pend[INE] == "recibido",
+    check("CURP" not in pend and pend["Licencia de conducir"] == "pendiente" and pend[INE] == "recibido",
           f"lo pendiente se mantiene «Pendiente» en su expediente ({pend})")
     check(any(h.get("evento") == "pasado_a_colaborador" for h in p.historial or []), "queda en el historial con sus pendientes")
 

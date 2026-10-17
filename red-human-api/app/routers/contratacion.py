@@ -379,7 +379,10 @@ def documento_para_adjunto(db: Session, e: Expediente, pie: str, nombre_archivo:
     obligatorio pendiente/rechazado; (3) si no falta ninguno, el primer opcional pendiente; (4) si
     tampoco, se agrega como documento adicional (RH lo reclasifica desde el expediente)."""
     pista = _norm(f"{pie} {nombre_archivo}")
-    docs = sorted((d for d in e.documentos if d.estado != "no_aplica" and not d.interno), key=lambda d: d.id)
+    from ..services.documentos_vacante import de_snapshot
+
+    # 2026-10-17: un adjunto solo puede caer en un documento del snapshot (lo que pidió la vacante)
+    docs = sorted((d for d in de_snapshot(e) if d.estado != "no_aplica" and not d.interno), key=lambda d: d.id)
     if pista.strip():
         for d in docs:
             if _norm(d.tipo) in pista:
@@ -399,6 +402,10 @@ def documento_para_adjunto(db: Session, e: Expediente, pie: str, nombre_archivo:
     nuevo = Documento(expediente_id=e.id, tipo=f"Documento WhatsApp {n}", obligatorio=False)
     db.add(nuevo)
     db.flush()
+    if e.postulacion is not None:
+        from ..services.documentos_vacante import agregar_a_snapshot
+
+        agregar_a_snapshot(e.postulacion, nuevo.tipo, obligatorio=False, origen="whatsapp")  # el archivo recibido no se esconde
     return nuevo
 
 
@@ -604,10 +611,21 @@ def agregar_documento(
     tipo = nombre_documento(datos.tipo.strip()) if datos.tipo.strip() else ""  # Cambio 34: nombre del catálogo único
     if not tipo:
         raise HTTPException(400, "Indica el nombre del documento.")
-    if any(clave_documento(d.tipo) == clave_documento(tipo) for d in e.documentos if not d.interno):
-        raise HTTPException(409, f"El expediente ya incluye '{tipo}'.")
+    from ..services.documentos_vacante import agregar_a_snapshot, claves_requeridas
 
-    db.add(Documento(expediente_id=e.id, tipo=tipo, obligatorio=datos.obligatorio))
+    existente = next((d for d in e.documentos if not d.interno and clave_documento(d.tipo) == clave_documento(tipo)), None)
+    visibles = claves_requeridas(e.postulacion) if e.postulacion is not None else None
+    if existente is not None and (visibles is None or clave_documento(tipo) in visibles):
+        raise HTTPException(409, f"El expediente ya incluye '{tipo}'.")
+    if e.postulacion is not None:
+        # 2026-10-17: lo que RH agrega a mano entra al snapshot de la postulación (se pide, cuenta y se muestra)
+        agregar_a_snapshot(e.postulacion, tipo, obligatorio=datos.obligatorio, origen="rh")
+    if existente is not None:
+        existente.obligatorio = datos.obligatorio  # existía del catálogo base (oculto): ahora sí se pide
+        if existente.estado == "no_aplica":
+            existente.estado = "pendiente"
+    else:
+        db.add(Documento(expediente_id=e.id, tipo=tipo, obligatorio=datos.obligatorio))
     _sincronizar_estado(e)
     registrar(db, u.nombre, "documento_agregado", "expediente", str(e.id), {"tipo": tipo, "obligatorio": datos.obligatorio})
     db.commit()
@@ -759,7 +777,8 @@ async def ejecutar_alta(db: Session, e: Expediente, datos: AltaIn, u, cuenta: Cu
     prueba = modo_prueba_activo(db) or ignorar_pendientes
     if e.no_ingreso_en:
         raise HTTPException(409, "Esta persona quedó como «No ingresó»; no se puede dar de alta.")
-    if not prueba and not any(d.archivo for d in e.documentos):
+    # 2026-10-17: si la vacante no pidió documentos (snapshot vacío), no hay adjuntos que exigir
+    if not prueba and not e.sin_documentos_requeridos and not any(d.archivo for d in e.documentos):
         raise HTTPException(400, "No se puede dar de alta al colaborador: El expediente no tiene documentos adjuntos.")
     # 2026-09-19 (Bloque 3, alta perfecta): el alta toma ESTRICTAMENTE las condiciones finales guardadas —
     # sin ellas no hay alta (salvo Modo Prueba).

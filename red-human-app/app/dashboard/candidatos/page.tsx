@@ -2400,7 +2400,9 @@ function PestanaDocumentos({
       {/* Cambio 25 (2026-10-12): revisión de documentos en cualquier etapa con expediente — un renglón por documento
           pedido (con cada archivo) y «Aprobar» · «Pedir corrección» · «Marcar excepción»; la actividad de la ruta se
           actualiza sola. */}
-      {c.expedienteId != null && expediente && (
+      {/* 2026-10-17 («Documentos alineados a la vacante»): solo los documentos del snapshot de la postulación; sin
+          documentos pedidos (o sin la actividad en la ruta) la sección no existe */}
+      {c.expedienteId != null && expediente && c.documentosVisibles !== false && expediente.documentosVisibles !== false && (
         <div>
           <Eyebrow>Documentos</Eyebrow>
           <div className="mt-2">
@@ -2412,7 +2414,7 @@ function PestanaDocumentos({
       )}
 
       {/* 2026-09-20 (B3): trazabilidad de los documentos requeridos del expediente */}
-      {c.expedienteId != null && (
+      {c.expedienteId != null && c.documentosVisibles !== false && expediente?.documentosVisibles !== false && (
         <div>
           <Eyebrow>Documentos requeridos · trazabilidad</Eyebrow>
           {!expediente ? (
@@ -3452,6 +3454,8 @@ function PanelContratacion({
         </div>
       )}
 
+      {/* 2026-10-17: solo los documentos del snapshot; sin documentos pedidos la sección no existe */}
+      {c.documentosVisibles !== false && expediente?.documentosVisibles !== false && (
       <div className="mt-5 border-t border-border-faint pt-4">
         <div className="flex items-center justify-between gap-3">
           <Eyebrow>Expediente · {c.expedienteProgreso ?? 0}% aprobado</Eyebrow>
@@ -3471,6 +3475,7 @@ function PanelContratacion({
           ))}
         </div>
       </div>
+      )}
 
       {live && (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-border-faint pt-4">

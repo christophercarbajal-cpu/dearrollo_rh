@@ -38,6 +38,8 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
+import _documentos_prueba  # noqa: E402 — 2026-10-17: la vacante de prueba pide los documentos base
+_documentos_prueba.documentos_base_si_la_vacante_no_pide()
 from app.models import Cuenta, Documento, Evaluacion, EventoEvaluacion, Expediente, FirmaDocumento, Postulacion, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import dropbox_sign as dsign  # noqa: E402
 from app.services import psicometricas as psi  # noqa: E402

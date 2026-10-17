@@ -950,6 +950,8 @@ def postulacion_dict(p: Postulacion, detalle: bool = False, n_mensajes: Optional
         # --- Expediente (Contratación) — pertenece a ESTA postulación (decisión P5) ---
         "expedienteId": exp.id if exp else None,
         "expedienteProgreso": exp.progreso if exp else None,
+        # 2026-10-17: la sección «Documentos» solo existe si el snapshot pide algo y la ruta trae la actividad de documentos
+        "documentosVisibles": _documentos_visibles(p),
         # 2026-10-09: «Firmar documentos» completo (PDF interno «Contrato firmado», cualquier modo)
         "contratoFirmado": bool(exp and any(d.interno and d.tipo == TIPO_CONTRATO_FIRMADO for d in exp.documentos)),
         "recordatorioNivel": exp.nivel_recordatorio if exp else None,
@@ -1331,6 +1333,15 @@ def documento_dict(d: Documento, archivos: Optional[list] = None) -> dict:
     }
 
 
+def _documentos_visibles(p) -> bool:
+    from .services.documentos_vacante import documentos_visibles
+
+    try:
+        return documentos_visibles(p)
+    except Exception:  # noqa: BLE001 — ante la duda se muestran
+        return True
+
+
 def expediente_dict(e: Expediente) -> dict:
     p = e.postulacion
     c = e.candidato
@@ -1344,6 +1355,7 @@ def expediente_dict(e: Expediente) -> dict:
     # documentos que la IA aprobó pero que nadie de RH ha confirmado todavía (bloquean el alta)
     sin_confirmar = e.sin_confirmar  # 2026-09-15: incluye digitales en revisión (cuentan para el %)
     por_doc = _archivos_por_documento(e)
+    from .services.documentos_vacante import de_snapshot, documentos_visibles
     from .services.documentos_vacante import estado_expediente as estado_expediente_documentos
 
     return {
@@ -1367,7 +1379,10 @@ def expediente_dict(e: Expediente) -> dict:
         "progreso": _progreso_expediente(e),  # Cambio 42: sobre los documentos requeridos (antes de Contratación, los de la vacante)
         "tono": (e.id or 0) % 4,
         "estado": estado,
-        "documentos": [documento_dict(d, por_doc.get(d.id, [])) for d in e.documentos],
+        # 2026-10-17 («Documentos alineados a la vacante»): SOLO los del snapshot de la postulación (+ internos de RH);
+        # lo del catálogo base que no pidió la vacante es invisible
+        "documentos": [documento_dict(d, por_doc.get(d.id, [])) for d in de_snapshot(e)],
+        "documentosVisibles": documentos_visibles(p) if p is not None else True,
         # Cambio 25: Pendiente · Por revisar · Corrección pedida · Documentos aprobados · Excepción
         "estadoDocumentos": estado_expediente_documentos(e),
         "excepcionDocumentos": dict(e.documentos_excepcion or {}) or None,

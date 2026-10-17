@@ -29,7 +29,6 @@ from ..database import get_db
 from ..deps import cuenta_actual, usuario_actual, usuario_admin, usuario_decisor
 from ..models import (
     TIPO_CONTRATACION_DETERMINADO, UNIDADES_DURACION, calcular_fecha_termino,
-    documentos_base_requeridos,
     ETAPAS_CANDIDATO,
     nombre_etapa,
     normalizar_etapa,
@@ -2437,14 +2436,16 @@ def _abrir_expediente(db: Session, p: Postulacion, u: Usuario) -> Expediente:
     p.expediente = exp
     db.add(exp)
     db.flush()
-    # Cambio 34: UN expediente con los documentos de la Cuenta («Documentos de contratación») + los de la vacante,
-    # del catálogo único y sin duplicados
+    # 2026-10-17 («Documentos alineados a la vacante»): el expediente nace SOLO con los documentos del snapshot de la
+    # postulación (lo que pedía la vacante); nunca con el catálogo base de la Cuenta
     from ..services.onboarding import documentos_requeridos
 
     try:
         requeridos = documentos_requeridos(db, p)
-    except Exception:  # noqa: BLE001 — sin tablas de módulos: la base del catálogo
-        requeridos = documentos_base_requeridos()
+    except Exception:  # noqa: BLE001 — sin tablas de módulos: el snapshot directo
+        from ..services.documentos_vacante import requeridos as _req
+
+        requeridos = [{"tipo": d["nombre"], "obligatorio": True} for d in _req(p)]
     for d in requeridos:  # por la relación: quien lea `exp.documentos` en esta misma sesión ya los ve (sin duplicar)
         exp.documentos.append(Documento(expediente_id=exp.id, tipo=d["tipo"], obligatorio=d["obligatorio"]))
     registrar(db, u.nombre, "expediente_abierto", "postulacion", p.codigo, {"candidato": p.candidato.codigo, "expediente": exp.id, "puesto": exp.puesto})
@@ -2991,7 +2992,7 @@ async def solicitar_documentos(
     p = _por_codigo(db, codigo, cuenta.id)
     from ..services import documentos_vacante as sdv
 
-    if p.etapa not in ("Contratación", "Onboarding") and sdv.paso_de(p) is not None and sdv.de_vacante(p.vacante):
+    if p.etapa not in ("Contratación", "Onboarding") and sdv.paso_de(p) is not None and sdv.requeridos(p, tempranos=True):
         # Cambio 25: la actividad «Documentos» de la vacante pide SUS documentos (no el checklist de ingreso)
         if not p.consentimiento:
             raise HTTPException(409, "El candidato no tiene consentimiento registrado (LFPDPPP): no se le pueden pedir documentos.")

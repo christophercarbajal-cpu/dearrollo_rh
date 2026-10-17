@@ -45,6 +45,8 @@ from app.fechas import TZ_ORG  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import usuario_actual, usuario_admin, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
+import _documentos_prueba  # noqa: E402 — 2026-10-17: la vacante de prueba pide los documentos base
+_documentos_prueba.documentos_base_si_la_vacante_no_pide()
 from app.models import (  # noqa: E402
     TIPO_CONTRATO_FIRMADO, Bitacora, Colaborador, Cuenta, Expediente, FirmaDocumento, Postulacion, Usuario, UsuarioCuenta, Vacante,
 )

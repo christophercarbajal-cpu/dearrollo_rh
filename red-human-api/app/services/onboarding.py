@@ -28,7 +28,6 @@ from ..models import (
     TareaOnboarding,
     clave_documento,
     nombre_documento,
-    normalizar_documentos_vacante,
 )
 
 CLAVES_FIJAS = {c for c, _ in TAREAS_FIJAS_ONBOARDING}
@@ -96,13 +95,13 @@ def documentos_requeridos(db: Session, p) -> List[dict]:
     """Cambio 34 — los documentos que se le piden a la persona salen de DOS fuentes con el MISMO catálogo: la
     Configuración de la Cuenta («Documentos de contratación» = plantilla de Onboarding que aplica, o la base) + los de la
     VACANTE. Se suman sin duplicados (la Cuenta primero). [{tipo, obligatorio}]"""
-    e = getattr(p, "expediente", None)
-    v = getattr(p, "vacante", None)
-    puesto = (e.puesto if e is not None else "") or (v.titulo if v is not None else "")
-    empresa = e.empresa if e is not None else ""
-    cuenta = configuracion_para(db, p.cuenta_id, puesto, empresa).get("documentos") or []
-    vacante = [{"tipo": d["nombre"], "obligatorio": True} for d in normalizar_documentos_vacante(getattr(v, "documentos_solicitados", None) or [])]
-    return normalizar_documentos([*cuenta, *vacante])
+    # 2026-10-17 («Documentos alineados a la vacante», REEMPLAZA el Cambio 34 en este punto): SOLO el snapshot de la
+    # postulación (lo que pedía la vacante al nacer). La configuración base de la Cuenta ya no se suma al expediente.
+    from . import documentos_vacante as sdv
+
+    if getattr(p, "vacante", None) is not None:
+        sdv.fijar_snapshot(p)
+    return normalizar_documentos([{"tipo": d["nombre"], "obligatorio": bool(d.get("obligatorio", True))} for d in sdv.requeridos(p)])
 
 
 def normalizar_recursos(recursos: List[dict]) -> List[dict]:
@@ -349,6 +348,12 @@ def aplicar_seleccion_documentos(db: Session, e: Expediente, documentos: List[di
     un documento del expediente que RH quitó de la selección pasa a «No aplica» con motivo (nunca se borra).
     Uno ya entregado se conserva tal cual. Regresa (agregados, no_aplica, conservados)."""
     seleccion = {clave_documento(d["tipo"]): d for d in normalizar_documentos(documentos)}
+    if e.postulacion is not None:
+        # 2026-10-17: lo que RH deja seleccionado al iniciar el Onboarding entra al snapshot de la postulación
+        from .documentos_vacante import agregar_a_snapshot
+
+        for d in seleccion.values():
+            agregar_a_snapshot(e.postulacion, d["tipo"], obligatorio=bool(d["obligatorio"]), origen="rh")
     agregados = aplicar_documentos(db, e, list(seleccion.values()))
     no_aplica, conservados = [], []
     ahora = datetime.now(timezone.utc)
@@ -382,9 +387,18 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
+def _de_snapshot(e: Expediente) -> List[Documento]:
+    from .documentos_vacante import de_snapshot
+
+    return de_snapshot(e)
+
+
 def documentos_aplicables(e: Expediente) -> List[Documento]:
-    """Los documentos que cuentan para el avance y el cierre: todos menos los internos y los «No aplica»."""
-    return [d for d in e.documentos if not d.interno and d.estado != "no_aplica"]
+    """Los documentos que cuentan para el avance y el cierre: los del snapshot de la postulación (2026-10-17), menos los
+    internos y los «No aplica»."""
+    from .documentos_vacante import de_snapshot
+
+    return [d for d in de_snapshot(e) if not d.interno and d.estado != "no_aplica"]
 
 
 def pendientes_cierre(e: Expediente, tareas: List[TareaOnboarding]) -> List[str]:
@@ -415,7 +429,7 @@ def resumen_tablero(e: Expediente, tareas: List[TareaOnboarding]) -> dict:
         "documentos": {
             "aprobados": [d.tipo for d in aprobados],
             "faltantes": [{"tipo": d.tipo, "estado": estado_documento_onboarding(d), "obligatorio": d.obligatorio} for d in aplicables if not d.aprobado],
-            "noAplica": [{"tipo": d.tipo, "motivo": d.motivo_no_aplica or "", "por": d.no_aplica_por or ""} for d in e.documentos if d.estado == "no_aplica" and not d.interno],
+            "noAplica": [{"tipo": d.tipo, "motivo": d.motivo_no_aplica or "", "por": d.no_aplica_por or ""} for d in _de_snapshot(e) if d.estado == "no_aplica" and not d.interno],
             "total": len(aplicables),
             # 2026-10-08: UN solo porcentaje en tablero, Onboarding y ficha = `Expediente.progreso` (obligatorios Aprobados)
             "pct": e.progreso,

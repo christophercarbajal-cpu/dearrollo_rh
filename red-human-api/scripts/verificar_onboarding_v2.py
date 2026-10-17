@@ -39,7 +39,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.deps import cuenta_actual, usuario_actual, usuario_decisor  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Cliente, Cuenta, Curso, Expediente, PlantillaOnboarding, TareaOnboarding, Usuario, UsuarioCuenta, Vacante  # noqa: E402
+import _documentos_prueba  # noqa: E402 — 2026-10-17: la vacante de prueba pide los documentos base
+_documentos_prueba.documentos_base_si_la_vacante_no_pide()
+from app.models import Cliente, Cuenta, Curso, Expediente, PlantillaOnboarding, Postulacion, TareaOnboarding, Usuario, UsuarioCuenta, Vacante  # noqa: E402
 from app.services import onboarding as onb  # noqa: E402
 from app.services.configuracion import obtener  # noqa: E402
 
@@ -305,8 +307,14 @@ with TestClient(app) as client:
     res = client.get(f"/onboarding/expedientes/{EXP2}/resumen").json()
     check(res["puedeIniciar"] and res["requisitos"]["completos"], "puesto + sueldo + tipo + fecha + consentimiento → habilitado")
     cfg = res["configuracion"]
-    check(cfg["origen"] == "puesto" and cfg["plantilla"] == "Chofer" and [d["tipo"] for d in cfg["documentos"]] == ["INE (frente y reverso)", "Licencia de conducir", "Carta de no antecedentes"],
-          "el resumen viene PRECARGADO con la plantilla del puesto")
+    # 2026-10-17 («Documentos alineados a la vacante»): la plantilla del puesto sigue mandando en tareas, responsables y
+    # plazos, pero los documentos precargados son SOLO los del snapshot de la postulación (lo que pidió su vacante)
+    from app.services import documentos_vacante as _sdv
+
+    _p2 = db.query(Postulacion).filter(Postulacion.codigo == P2).first()
+    check(cfg["origen"] == "puesto" and cfg["plantilla"] == "Chofer"
+          and [d["tipo"] for d in cfg["documentos"]] == [d["nombre"] for d in _sdv.requeridos(_p2)],
+          f"el resumen viene PRECARGADO con la plantilla del puesto y los documentos del snapshot ({[d['tipo'] for d in cfg['documentos']]})")
 
     print("\n--- 10. «Cambiar selección» (solo para esta persona) + Iniciar ---")
     admin_nombre = admin.nombre

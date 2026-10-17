@@ -52,6 +52,12 @@ def _plantilla(db: Session, pid: int, cuenta_id: int) -> PlantillaOnboarding:
     return p
 
 
+def _de_snapshot(e):
+    from ..services.documentos_vacante import de_snapshot
+
+    return de_snapshot(e)
+
+
 def _curso_titulo(db: Session, curso_id: Optional[int], cuenta_id: int) -> str:
     if not curso_id:
         return ""
@@ -377,7 +383,7 @@ def resumen_inicio(exp_id: int, db: Session = Depends(get_db), _: Usuario = Depe
     cfg = onb.configuracion_para(db, cuenta.id, e.puesto, e.empresa)
     cfg["cursoInduccion"] = _curso_titulo(db, cfg.get("cursoInduccionId"), cuenta.id)
     if e.postulacion is not None:
-        cfg["documentos"] = onb.documentos_requeridos(db, e.postulacion)  # Cambio 34: Cuenta + vacante, sin duplicados
+        cfg["documentos"] = onb.documentos_requeridos(db, e.postulacion)  # 2026-10-17: SOLO el snapshot (lo que pidió la vacante)
     req = onb.requisitos_inicio(e)
     prueba = modo_prueba_activo(db)
     p = e.postulacion
@@ -392,7 +398,7 @@ def resumen_inicio(exp_id: int, db: Session = Depends(get_db), _: Usuario = Depe
         "configuracion": cfg,
         "documentosExpediente": [
             {"tipo": d.tipo, "obligatorio": d.obligatorio, "estado": d.estado, "tieneArchivo": bool(d.archivo)}
-            for d in e.documentos if not d.interno
+            for d in _de_snapshot(e) if not d.interno  # 2026-10-17: solo los del snapshot de la postulación
         ],
         "usuarios": [{"id": x.id, "nombre": x.nombre, "correo": x.correo} for x in _usuarios_cuenta(db, cuenta.id)],
         "cursos": [{"id": c.id, "titulo": c.titulo} for c in cursos],
@@ -477,7 +483,8 @@ async def iniciar_onboarding(exp_id: int, datos: IniciarOnboardingIn, db: Sessio
         return {"candidato": postulacion_dict(p, detalle=True), "tareas": [], "documentosAgregados": [], "documentosNoAplica": [],
                 "documentosConservados": [], "solicitudDocumentos": [], "documentosPorSolicitar": [], "bienvenida": [],
                 "avisosResponsables": [], "cursoInduccion": None, "estadoOnboarding": ocol.LISTO}
-    if not onb.normalizar_documentos(datos.documentos):
+    # 2026-10-17 («Documentos alineados a la vacante»): si la vacante no pidió documentos, el Onboarding inicia sin ellos
+    if not onb.normalizar_documentos(datos.documentos) and not e.sin_documentos_requeridos:
         raise HTTPException(400, "Selecciona al menos un documento.")
     if datos.curso_induccion_id and not _curso_titulo(db, datos.curso_induccion_id, cuenta.id):
         raise HTTPException(400, "El curso de inducción no existe en esta Cuenta.")
@@ -556,7 +563,7 @@ async def iniciar_automatico(db: Session, p) -> bool:
         return False
     cfg = onb.configuracion_para(db, cuenta.id, e.puesto, e.empresa)
     datos = IniciarOnboardingIn(
-        documentos=onb.documentos_requeridos(db, p),  # Cambio 34: Cuenta + vacante, sin duplicados recursos=cfg.get("recursos") or [], responsables=cfg.get("responsables") or {},
+        documentos=onb.documentos_requeridos(db, p),  # 2026-10-17: el snapshot de la postulación (lo que pidió la vacante) recursos=cfg.get("recursos") or [], responsables=cfg.get("responsables") or {},
         plazos=cfg.get("plazos") or {}, curso_induccion_id=cfg.get("cursoInduccionId"), plantilla_id=cfg.get("plantillaId"),
     )
     actor = SimpleNamespace(nombre=ACTOR_AUTOMATICO, correo="", id=None, rol="Sistema", puede_autorizar_omisiones=lambda: False)

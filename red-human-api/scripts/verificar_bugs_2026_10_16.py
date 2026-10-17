@@ -35,6 +35,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
+import _documentos_prueba  # noqa: E402 — 2026-10-17: la vacante de prueba pide los documentos base
+_documentos_prueba.documentos_base_si_la_vacante_no_pide()
 from app.models import Documento, Expediente, Postulacion, Vacante, clave_documento, documentos_base_requeridos  # noqa: E402
 
 OK = 0

@@ -49,6 +49,160 @@ def de_vacante(v, pasos: Optional[list] = None, tempranos: Optional[bool] = None
     return [d for d in docs if (_indice(etapa_doc(d, pasos)) < _indice("Contratación")) == tempranos]
 
 
+# ============================================================ snapshot de la postulación (2026-10-17)
+# «Documentos alineados a la vacante»: cada postulación guarda una COPIA FIJA de los documentos que pedía su vacante en el
+# momento en que nació (o entró a la etapa de documentos, si es anterior a este cambio). Si la vacante se edita después, a
+# los candidatos en curso no se les altera nada. TODO lo que evalúa, pide (WhatsApp / liga) o muestra el expediente del
+# candidato sale de este snapshot — nunca del catálogo global ni de la configuración base de la Cuenta.
+CLAVE_SNAPSHOT = "documentos_requeridos"
+
+
+def _calcular_snapshot(p: Postulacion, v=None) -> List[dict]:
+    v = v if v is not None else p.vacante
+    if v is None:
+        return []
+    pasos = list(((p.proceso or {}).get("pasos")) or []) or list(((getattr(v, "proceso", None) or {}).get("pasos")) or [])
+    from .proceso import _indice
+
+    etapas = etapas_documentos(pasos)
+    tempranas = [e for e in etapas if _indice(e) < _indice("Contratación")]
+
+    def etapa(d: dict) -> str:
+        e = etapa_doc(d, pasos)
+        # sin «Documentos» antes de Contratación en la ruta, se piden donde la ruta sí los trae (Contratación/Onboarding)
+        if _indice(e) < _indice("Contratación") and not tempranas and etapas:
+            return etapas[0]
+        return e
+
+    return [{"nombre": d["nombre"], "cantidad": int(d.get("cantidad") or 1), "foto": bool(d.get("foto")), "etapa": etapa(d)}
+            for d in de_vacante(v)]
+
+
+def fijar_snapshot(p: Postulacion, forzar: bool = False, v=None) -> List[dict]:
+    """Fija (una sola vez) la copia de los documentos que pide la vacante AHORA. Idempotente; `forzar` solo lo usa una
+    acción explícita de RH. Sin vacante todavía (menú de WhatsApp) no fija nada."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    a = dict(p.analisis or {})
+    if not forzar and isinstance(a.get(CLAVE_SNAPSHOT), dict):
+        return list(a[CLAVE_SNAPSHOT].get("docs") or [])
+    v = v if v is not None else p.vacante
+    if v is None:
+        return []
+    docs = _calcular_snapshot(p, v)
+    a[CLAVE_SNAPSHOT] = {"docs": docs, "fijado_en": datetime.now(timezone.utc).isoformat(), "vacante": getattr(v, "codigo", "")}
+    p.analisis = a
+    try:
+        flag_modified(p, "analisis")
+    except Exception:  # noqa: BLE001 — objeto aún sin sesión
+        pass
+    return docs
+
+
+def agregar_a_snapshot(p: Postulacion, nombre: str, obligatorio: bool = True, origen: str = "rh") -> None:
+    """Una acción EXPLÍCITA del proceso (RH agrega un documento a mano, la selección al iniciar el Onboarding o un adjunto
+    adicional recibido por WhatsApp) suma ese documento al snapshot de ESTA postulación. Nunca toca la vacante."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from .proceso import _indice
+
+    docs = fijar_snapshot(p) if p.vacante is not None else snapshot(p)
+    if any(clave_documento(d["nombre"]) == clave_documento(nombre) for d in docs):
+        return
+    etapa = p.etapa if _indice(p.etapa or "") >= 0 else "Contratación"
+    a = dict(p.analisis or {})
+    previo = dict(a.get(CLAVE_SNAPSHOT) or {"fijado_en": datetime.now(timezone.utc).isoformat(), "vacante": ""})
+    previo["docs"] = [*docs, {"nombre": nombre, "cantidad": 1, "foto": False, "etapa": etapa, "origen": origen,
+                              "obligatorio": bool(obligatorio)}]
+    a[CLAVE_SNAPSHOT] = previo
+    p.analisis = a
+    try:
+        flag_modified(p, "analisis")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def snapshot(p: Optional[Postulacion]) -> List[dict]:
+    """Los documentos fijados de la postulación (sin fijar todavía: lo que pide la vacante hoy, sin guardarlo)."""
+    if p is None:
+        return []
+    fijado = (p.analisis or {}).get(CLAVE_SNAPSHOT)
+    if isinstance(fijado, dict):
+        return list(fijado.get("docs") or [])
+    return _calcular_snapshot(p)
+
+
+def ruta_con_documentos(p: Optional[Postulacion]) -> bool:
+    """¿La ruta del candidato trae la actividad de documentos? (sin ruta congelada: sí, como siempre)."""
+    if p is None:
+        return False
+    pasos = ((p.proceso or {}).get("pasos")) or []
+    if not pasos:
+        return True
+    return any(x.get("tipo") in ("documentos", "solicitud_documentos") and not x.get("heredado") for x in pasos)
+
+
+def requeridos(p: Optional[Postulacion], tempranos: Optional[bool] = None) -> List[dict]:
+    """Los documentos que se le piden a ESTA postulación: su snapshot (vacío si la ruta no trae documentos). `tempranos`
+    True = solo los de antes de Contratación; False = los de Contratación/Onboarding; None = todos."""
+    if p is None:
+        return []
+    docs = snapshot(p)
+    if not ruta_con_documentos(p):
+        # sin la actividad de documentos en la ruta no se pide nada de la vacante; solo lo que RH agregó a mano
+        docs = [d for d in docs if d.get("origen") in ("rh", "whatsapp")]
+    if tempranos is None:
+        return docs
+    from .proceso import _indice
+
+    return [d for d in docs if (_indice(d.get("etapa") or "Prefiltro") < _indice("Contratación")) == tempranos]
+
+
+def claves_requeridas(p: Optional[Postulacion], solo_etapa_actual: bool = False) -> set:
+    """Claves (catálogo) de los documentos requeridos. Con `solo_etapa_actual`, antes de Contratación solo los tempranos."""
+    if p is None:
+        return set()
+    tempranos = True if solo_etapa_actual and p.etapa not in ("Contratación", "Onboarding") else None
+    return {clave_documento(d["nombre"]) for d in requeridos(p, tempranos)}
+
+
+def documentos_visibles(p: Optional[Postulacion]) -> bool:
+    """La sección «Documentos» del expediente solo existe si el snapshot pide algo Y la ruta trae documentos."""
+    return bool(requeridos(p))
+
+
+def de_snapshot(e: Expediente) -> List[Documento]:
+    """Los documentos del expediente que pertenecen al snapshot (más los INTERNOS de RH: contrato firmado). Lo que se
+    creó del catálogo base y no pidió la vacante queda invisible."""
+    p = e.postulacion
+    if p is None:
+        return list(e.documentos or [])
+    claves = claves_requeridas(p)
+    return [d for d in (e.documentos or []) if d.interno or clave_documento(d.tipo) in claves]
+
+
+MARCA_SNAPSHOT = "documentos_snapshot_2026_10_17"
+
+
+def fijar_faltantes(db: Session, aplicar: bool = True) -> dict:
+    """UNA vez al arrancar (marca en bitácora): las postulaciones ACTIVAS sin snapshot lo fijan con lo que pide su vacante
+    hoy. No toca documentos ni archivos (lo que no pidió la vacante solo deja de mostrarse y de contar). No hace commit."""
+    from ..models import Bitacora
+
+    if aplicar and db.query(Bitacora.id).filter(Bitacora.accion == MARCA_SNAPSHOT).first():
+        return {"postulaciones": 0, "yaAplicada": True}
+    n = 0
+    for p in db.query(Postulacion).filter(Postulacion.activa.is_(True), Postulacion.vacante_id.isnot(None)).all():
+        if isinstance((p.analisis or {}).get(CLAVE_SNAPSHOT), dict):
+            continue
+        n += 1
+        if aplicar:
+            fijar_snapshot(p)
+    if aplicar:
+        registrar(db, "sistema", MARCA_SNAPSHOT, "sistema", "documentos", {"postulaciones": n})
+    return {"postulaciones": n}
+
+
 def etapas_documentos(pasos: Optional[list]) -> List[str]:
     """Etapas de la ruta con actividad «Documentos» (opciones de «Se pide en:»)."""
     from .proceso import _indice
@@ -76,7 +230,8 @@ def asegurar_finales(db: Session, p: Postulacion) -> List[Documento]:
     entran al expediente como obligatorios. Idempotente."""
     if p.expediente is None or p.vacante is None:
         return []
-    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=False)
+    fijar_snapshot(p)  # 2026-10-17: entra a la etapa de documentos → su copia fija (si es anterior a este cambio)
+    docs = requeridos(p, tempranos=False)
     return asegurar_documentos(db, p.expediente, docs) if docs else []
 
 
@@ -206,19 +361,15 @@ def conteo(db: Session, doc: Documento) -> int:
 
 
 def docs_en_juego(e: Expediente) -> List[Documento]:
-    """Antes de Contratación: los documentos que pide la VACANTE (Cambio 42); si la vacante no define ninguno, los que se
-    le pidieron al candidato (o que ya entregó) y, si a nada se le ha mandado la liga, todos los aplicables. En
-    Contratación/Onboarding: todo el expediente. Los internos de RH y los «No aplica» nunca cuentan."""
+    """2026-10-17 («Documentos alineados a la vacante»): SOLO los documentos del SNAPSHOT de la postulación — antes de
+    Contratación, los que se piden antes de Contratación; en Contratación/Onboarding, todos los del snapshot. Nunca el
+    catálogo global ni la configuración base de la Cuenta. Los internos de RH y los «No aplica» nunca cuentan."""
     docs = [d for d in (e.documentos or []) if not d.interno and d.estado != "no_aplica"]
     p = e.postulacion
-    if p is None or p.etapa in ("Contratación", "Onboarding"):
-        return docs  # el expediente de ingreso completo
-    vac = {clave_documento(d["nombre"]) for d in de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)} if p.vacante else set()
-    de_la_vacante = [d for d in docs if clave_documento(d.tipo) in vac]
-    if de_la_vacante:
-        return de_la_vacante
-    pedidos = [d for d in docs if d.solicitado_en or d.entregado or d.correccion_en or d.archivo]
-    return pedidos or docs
+    if p is None:
+        return docs
+    claves = claves_requeridas(p, solo_etapa_actual=True)
+    return [d for d in docs if clave_documento(d.tipo) in claves]
 
 
 def progreso(e: Optional[Expediente]) -> int:
@@ -292,7 +443,8 @@ async def preparar_web(db: Session, p: Postulacion) -> Optional[dict]:
 
     from ..routers.candidatos import _abrir_expediente
 
-    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
+    fijar_snapshot(p)  # 2026-10-17: la solicitud web ES la entrada a los documentos → su copia fija
+    docs = requeridos(p, tempranos=True)
     if not docs or not p.consentimiento:
         return None
     if p.expediente is None:
@@ -482,7 +634,7 @@ async def revisar(db: Session, p: Optional[Postulacion]) -> Optional[str]:
     if p is None or not p.activa or not p.consentimiento or _pausado(p) or p.etapa in ("Contratación", "Onboarding"):
         return None
     paso = paso_de(p)
-    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
+    docs = requeridos(p, tempranos=True)  # 2026-10-17: el snapshot de la postulación, nunca la vacante en vivo
     analisis = dict(p.analisis or {})
     if paso is None or not docs or (analisis.get("documentos_vacante") or {}).get("solicitado_en"):
         return None
@@ -507,7 +659,8 @@ async def enviar_solicitud(db: Session, p: Postulacion, actor: str) -> dict:
     from .motor_ruta import _avisar
 
     paso = paso_de(p)
-    docs = de_vacante(p.vacante, (p.proceso or {}).get("pasos") or [], tempranos=True)
+    fijar_snapshot(p)  # 2026-10-17: entra a la etapa de documentos → su copia fija
+    docs = requeridos(p, tempranos=True)
     if p.expediente is None:
         exp = _abrir_expediente(db, p, SimpleNamespace(nombre=actor, correo="", id=None))
         registrar(db, actor, "expediente_anticipado", "postulacion", p.codigo, {"expediente": exp.id, "etapa": p.etapa, "motivo": "documentos_vacante"})
@@ -540,6 +693,6 @@ def liga_si_intercepta(p: Postulacion) -> str:
     (los archivos se suben ahí, un renglón por documento). Regresa la liga o ""."""
     if p is None or p.etapa in ("Contratación", "Onboarding") or paso_de(p) is None or p.expediente is None:
         return ""
-    nombres = {clave_documento(d["nombre"]) for d in de_vacante(p.vacante)}
+    nombres = claves_requeridas(p)  # 2026-10-17: el snapshot de la postulación
     faltan = [d for d in p.expediente.documentos if clave_documento(d.tipo) in nombres and not d.aprobado]
     return liga(p) if faltan else ""

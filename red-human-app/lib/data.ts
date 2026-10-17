@@ -496,6 +496,8 @@ export interface Candidato {
   /* puentes hacia los otros módulos */
   expedienteId?: number | null;
   expedienteProgreso?: number | null;
+  /** 2026-10-17: la sección «Documentos» solo existe si el snapshot de la postulación pide algo y la ruta trae documentos. */
+  documentosVisibles?: boolean;
   /** 2026-10-09: «Firmar documentos» completo (contrato firmado en cualquier modo). */
   contratoFirmado?: boolean;
   /** 2026-09-18: empresa que ve el candidato (Cliente o nombre comercial de la Cuenta) — vista previa de correos. */

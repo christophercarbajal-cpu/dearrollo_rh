@@ -1044,6 +1044,12 @@ def congelar(p: Postulacion, v=None, db: Optional[Session] = None) -> bool:
     proc["congelado_en"] = _ahora().isoformat()
     proc["etapa_base"] = p.etapa if p.etapa in ETAPAS_CANDIDATO else ETAPAS_CANDIDATO[0]
     p.proceso = proc
+    if v is not None:
+        # 2026-10-17 («Documentos alineados a la vacante»): junto con la ruta, la COPIA FIJA de los documentos que pide la
+        # vacante en este momento (si la vacante se edita después, a esta postulación no le cambia nada)
+        from .documentos_vacante import fijar_snapshot
+
+        fijar_snapshot(p, v=v)
     return True
 
 

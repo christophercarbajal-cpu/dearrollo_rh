@@ -97,6 +97,8 @@ export interface NuevoIngreso {
   documentos: DocExpediente[];
   /** Cambio 25: Pendiente · Por revisar · Corrección pedida · Documentos aprobados · Excepción */
   estadoDocumentos?: { clave: ClaveEstadoDocumentos; texto: string };
+  /** 2026-10-17: `documentos` ya viene filtrado al snapshot de la postulación; false = no hay documentos que pedir. */
+  documentosVisibles?: boolean;
   excepcionDocumentos?: { por: string; motivo: string; en: string } | null;
   /* --- presentes cuando vienen de la API --- */
   expedienteId?: number;

@@ -1,9 +1,9 @@
 "use client";
 
 /* Cambio 29 (2026-10-12): «Entrevista por WhatsApp» de las rutas Masivos. La entrevista es FIJA (sin IA generativa):
-   A. situación actual → B. historial laboral (hasta 3 trabajos, repregunta de despido/renuncia) → C. preguntas propias de
-   RH → D. confirmación de puesto, sueldo, traslado e inicio y cierre exacto. RH puede quitar preguntas base o agregar
-   las suyas (van al bloque C) SOLO para esta vacante; «Restaurar base» regresa a la etiqueta «Base». */
+   A. situación actual → B. historial laboral (hasta 2 trabajos, repregunta de despido/renuncia) → C. preguntas propias de
+   RH → D. fecha de inicio (2026-10-17: ya no confirma puesto, sueldo ni ubicación) y cierre según la ruta. RH puede quitar
+   preguntas base o agregar las suyas (van al bloque C) SOLO para esta vacante; «Restaurar base» regresa a la etiqueta «Base». */
 
 import { useState } from "react";
 import { Plus, RotateCcw, X } from "lucide-react";
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui";
 import { PREGUNTAS_BASE_ENTREVISTA, type EntrevistaBaseConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const BLOQUES: Record<string, string> = { A: "A. Situación actual", B: "B. Historial laboral", C: "C. Preguntas de RH", D: "D. Confirmación y cierre" };
+const BLOQUES: Record<string, string> = { A: "A. Situación actual", B: "B. Historial laboral", C: "C. Preguntas de RH", D: "D. Inicio y cierre" };
 
 export function EntrevistaWhatsappBase({ value, onChange }: { value: EntrevistaBaseConfig; onChange: (v: EntrevistaBaseConfig) => void }) {
   const [nueva, setNueva] = useState("");
@@ -37,7 +37,7 @@ export function EntrevistaWhatsappBase({ value, onChange }: { value: EntrevistaB
           </button>
         )}
       </div>
-      <p className="mt-0.5 text-xs text-ink-3">Preguntas fijas, una por mensaje (sin IA). Quita las que no apliquen o agrega las tuyas: van en el bloque C.</p>
+      <p className="mt-0.5 text-xs text-ink-3">Una pregunta por mensaje. Red Human las adapta a lo que responde el candidato. Quita las que no apliquen o agrega las tuyas en el bloque C.</p>
       {(["A", "B", "C", "D"] as const).map((b) => (
         <div key={b} className="mt-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">{BLOQUES[b]}</p>

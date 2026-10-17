@@ -236,7 +236,7 @@ with TestClient(app) as client:
     from app.services import agenda_chat as _agc
 
     check(pa.etapa == "Entrevista IA" and len(pa.entrevistas) == 0, "avanza solo a Filtro Red Human (la sala nace con la respuesta)")
-    check(len(salida) == 1 and salida[0] == _agc.TEXTO_INVITACION_AGENDA and "compatible" not in salida[0].lower(),
+    check(len(salida) == 1 and salida[0] == _agc.texto_invitacion_agenda("Ana") and "compatible" not in salida[0].lower(),
           f"UN mensaje: invitación a la videollamada y «¿Cuándo te queda bien?», sin «Tu perfil es compatible»: «{salida[0][:90]}…»")
     ent = pa.analisis[pconv.ENTIDAD]["respuestas"]
     check(ent["turnos"]["fuente"] == "web" and ent["secundaria"]["fuente"] == "whatsapp" and "nss_fiscal" not in ent
@@ -315,7 +315,8 @@ with TestClient(app) as client:
           and pt.analisis["prefiltro_web"]["resultado"] == "no_cumple", "las respuestas y el resultado originales se CONSERVAN")
     nuevos = textos_tg(CHAT, antes)
     # 2026-10-17 (agenda inteligente): sale SOLA la invitación (sin liga) por el canal conectado; la liga, con su respuesta
-    check(len(pt.entrevistas) == 0 and len(nuevos) == 1 and nuevos[0] == _agc.TEXTO_INVITACION_AGENDA,
+    check(len(pt.entrevistas) == 0 and len(nuevos) == 1 and nuevos[0].startswith("¡Pasaste a la siguiente etapa")
+          and nuevos[0].endswith(_agc.PREGUNTA_CUANDO) and "/entrevista/" not in nuevos[0],
           f"la invitación a la entrevista sale SOLA por el canal conectado (Telegram), sin esperas ({nuevos[:1]})")
     check(paso(seg(pt.codigo), "prefiltro")["estadoUnificado"] == "aprobada_excepcion", "Prefiltro «Continúa por decisión de RH»")
     check(db.query(Bitacora).filter(Bitacora.accion == "postulacion_reactivada", Bitacora.entidad_id == pt.codigo).count() == 1

@@ -1410,6 +1410,10 @@ def _paso_red_human(paso: dict, p: Postulacion) -> dict:
             texto_cita = agenda_chat.texto_estado_agendada(cita)
             return {**base, "estado": "en_curso", "espera": texto_cita,
                     "cuello": {"clave": "esperando_candidato", "texto": texto_cita, "quien": None}}
+        if agenda_chat.link_enviado(p) and ultima is not None and ultima.estado == "programada":
+            # 2026-10-17: «ahora mismo» o respuesta vaga → la liga ya salió en la conversación
+            return {**base, "estado": "en_curso", "espera": "Link enviado",
+                    "cuello": {"clave": "esperando_candidato", "texto": "Link enviado", "quien": None}}
         if ultima is None and agenda_chat.esperando_cuando(p):
             return {**base, "estado": "en_curso", "espera": "Esperando que el candidato diga cuándo le queda bien",
                     "cuello": {"clave": "esperando_candidato", "texto": "Esperando que el candidato elija horario", "quien": None}}

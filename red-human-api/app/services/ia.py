@@ -2060,6 +2060,7 @@ def prompt_entrevistador(
         "compatible», «vas muy bien», «seguro pasas» o que avanzará en el proceso — la decisión la toma una persona "
         "de RH; (8) cuando ya tengas suficiente de un tema, cambia de tema sin anunciarlo.\n\n"
         + TONO_CORPORATIVO.format(nombre=candidato_nombre) + "\n\n"
+        + (reglas_entrevista_whatsapp(candidato_nombre) + "\n\n" if canal == "whatsapp" else "")
         + reglas_comprension_y_limites(empresa_txt) + "\n\n"
         + bloque_ya_respondido(ya_respondido or [])
         + f"CUMPLIMIENTO (NO NEGOCIABLE): nunca preguntes, insinúes ni registres datos sobre {DATOS_SENSIBLES_PROHIBIDOS}. "
@@ -2168,6 +2169,24 @@ _RE_GRACIAS_INICIAL = re.compile(r"^\s*[¡!]?\s*(perfecto|muy bien|excelente|gen
                                  r"( por [^.!?\n]*)?\s*[.!,]*\s*(🙌|🙂|😊|👍)?\s*", re.IGNORECASE)
 # Cambio 31: agradecimientos BREVES y VARIADOS, nunca elogios ni calificaciones («¡Excelente!», «Muy bien»)
 VARIANTES_GRACIAS = ("Gracias, {nombre}.", "Entendido.", "Gracias.", "Anotado.")
+def reglas_entrevista_whatsapp(nombre: str) -> str:
+    """2026-10-17 (Cambios WhatsApp · entrevista operativa): las mismas reglas que aplica en código la entrevista fija
+    (`entrevista_whatsapp_fija.turno`)."""
+    n = nombre or "el candidato"
+    return (
+        "REGLAS DE LA ENTREVISTA POR WHATSAPP (NO NEGOCIABLE): (1) antes de cada pregunta pon UNA palabra de acuse breve y "
+        f"variada («Gracias.», «Entendido.», «Perfecto.»); tutea, sin tecnicismos; usa el nombre ({n}) al inicio y al cambiar "
+        "de tema; (2) NUNCA digas «ese trabajo», «ese empleo» ni «ahí»: usa el NOMBRE de la empresa o del puesto que dijo "
+        "(«¿Qué hacías en Oxxo?»); (3) historial laboral: MÁXIMO 2 trabajos; si trabaja actualmente, ESE es el primero "
+        "(nunca le preguntes por su «último trabajo»); (4) si el candidato te hace una pregunta, respóndela primero y luego "
+        "repite tu pregunta con contexto («Te preguntaba: …»); (5) si su respuesta es ambigua («5», «Benito Juárez»), aclárala "
+        "UNA sola vez con opciones («¿5 años o 5 meses?», «¿Benito Juárez en la Ciudad de México o en Nuevo León?»); (6) si "
+        f"notas frustración («ya te dije», «son muchas preguntas»), discúlpate («Una disculpa, {n}…»), NO preguntes por un "
+        "segundo trabajo y pasa directo a las preguntas de la vacante; (7) no confirmes puesto, sueldo ni ubicación al "
+        "final: la única pregunta de cierre es «¿Cuándo podrías empezar?»."
+    )
+
+
 def reglas_comprension_y_limites(empresa: str) -> str:
     """Cambio 51 (2026-10-15): comprensión y límites del agente — las mismas reglas que aplica el código del prefiltro y de
     la entrevista fija (`prefiltro_conversacional.no_entiende` / `es_negociacion`)."""

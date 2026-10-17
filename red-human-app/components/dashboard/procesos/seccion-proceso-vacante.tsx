@@ -173,7 +173,7 @@ export function SeccionProcesoVacante({ value, onChange, codigoVacante, bloquead
                 {opciones.enfoquesEntrevistaAgente.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
               </select>
               <span className="text-[11px] text-ink-3">
-                {enfoquePaso(x, efectivo.pasos) === "operativo" ? "Entrevista base fija (situación actual e historial de hasta 3 trabajos)."
+                {enfoquePaso(x, efectivo.pasos) === "operativo" ? "Entrevista base fija (situación actual e historial de hasta 2 trabajos)."
                   : "Guion de Red Human de hasta 10 preguntas técnicas y de casos reales."}
               </span>
             </label>

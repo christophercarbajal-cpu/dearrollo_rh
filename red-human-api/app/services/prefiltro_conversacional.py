@@ -181,6 +181,41 @@ ESTADOS_MX = {
 }
 
 
+# 2026-10-17: municipios / alcaldías con el mismo nombre en varios estados (la respuesta se aclara UNA vez con opciones)
+LUGARES_AMBIGUOS = {
+    "benito juarez": ("Ciudad de México", "Nuevo León", "Quintana Roo"),
+    "juarez": ("Nuevo León", "Chihuahua"),
+    "guadalupe": ("Nuevo León", "Zacatecas"),
+    "san nicolas": ("Nuevo León", "Jalisco"),
+    "cuauhtemoc": ("Ciudad de México", "Chihuahua"),
+    "miguel hidalgo": ("Ciudad de México", "Veracruz"),
+    "san pedro": ("Nuevo León", "Coahuila"),
+    "santa catarina": ("Nuevo León", "Guanajuato"),
+    "emiliano zapata": ("Morelos", "Veracruz"),
+}
+
+
+def aclaracion_lugar(texto: str, v=None) -> Optional[str]:
+    """«Benito Juárez» sin estado → «¿Te refieres a Benito Juárez en la Ciudad de México o en Nuevo León?» (primero el estado
+    de la vacante). None si no es ambiguo o ya dice el estado."""
+    t = f" {_norm(texto)} "
+    # ya trae otra referencia de estado o ciudad que lo desambigua («Juárez, Chihuahua», «Benito Juárez, CDMX»)
+    if any(f" {k} " in t for claves in ESTADOS_MX.values() for k in claves if k not in LUGARES_AMBIGUOS):
+        return None
+    clave = next((k for k in sorted(LUGARES_AMBIGUOS, key=len, reverse=True) if f" {k} " in t), None)
+    if clave is None:
+        return None
+    opciones = list(LUGARES_AMBIGUOS[clave])
+    propio = _estado_vacante(v) if v is not None else ""
+    if propio:
+        opciones = [o for o in opciones if _norm(o) == _norm(propio)] + [o for o in opciones if _norm(o) != _norm(propio)]
+    nombre = " ".join(w.capitalize() for w in clave.split()).replace("Juarez", "Juárez").replace("Nicolas", "Nicolás").replace(
+        "Cuauhtemoc", "Cuauhtémoc")
+    def con_articulo(o: str) -> str:
+        return f"la {o}" if o == "Ciudad de México" else o
+    return f"¿Te refieres a {nombre} en {con_articulo(opciones[0])} o en {con_articulo(opciones[1])}?"
+
+
 def estado_de_texto(texto: str) -> Optional[str]:
     """Estado de México mencionado en una respuesta libre («Col. Centro, Apodaca» → «Nuevo León»). None si no se reconoce."""
     t = f" {_norm(texto)} "
@@ -2090,6 +2125,21 @@ async def turno(db: Session, p: Postulacion, texto: str, canal: str, reconexion:
             if re.search(r"\bmes", t_u) or re.search(r"\bano", t_u):
                 texto_eval = f"{unidad.pop(pendiente['id'])} {'meses' if re.search(r'\bmes', t_u) else 'años'}"
                 e["unidad_pendiente"] = unidad
+        if pendiente.get("dato") == "zona":
+            # 2026-10-17: un municipio que existe en varios estados («Benito Juárez») se aclara UNA vez con opciones
+            lugares = dict(e.get("lugar_pendiente") or {})
+            if pendiente["id"] in lugares:
+                texto_eval = f"{lugares.pop(pendiente['id'])}, {texto.strip()}"
+                e["lugar_pendiente"] = lugares
+            elif pendiente["id"] not in (e.get("lugar_aclarado") or []):
+                pregunta_lugar = aclaracion_lugar(texto, p.vacante)
+                if pregunta_lugar:
+                    lugares[pendiente["id"]] = texto.strip()[:120]
+                    e["lugar_pendiente"] = lugares
+                    e["lugar_aclarado"] = list(e.get("lugar_aclarado") or []) + [pendiente["id"]]
+                    historial(p, "prefiltro_repregunta", f"Aclaración del municipio en «{pendiente['criterio']}» («{texto.strip()[:80]}»)",
+                              motivo="lugar_ambiguo", criterio=pendiente["criterio"])
+                    return await responder(pregunta_lugar, aclaracion=True)
         no_entiende_ = no_entiende(texto)
         valor, extra = (None, {}) if no_entiende_ else pfu.clasificar(pendiente, texto_eval)
         if no_entiende_ and aclaraciones.get(pendiente["id"], 0) < MAX_ACLARACIONES and pendiente.get("dato") != "sueldo":

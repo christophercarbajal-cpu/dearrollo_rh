@@ -294,7 +294,7 @@ function DetalleActividad({ p, pasos = [], catalogo = [], cursos = [], opciones,
             {opciones.enfoquesEntrevistaAgente.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
           </select>
           <span className="text-[11px] text-ink-3">
-            {enfoquePaso(p, pasos) === "operativo" ? "Entrevista base fija: situación actual e historial de hasta 3 trabajos."
+            {enfoquePaso(p, pasos) === "operativo" ? "Entrevista base fija: situación actual e historial de hasta 2 trabajos."
               : "Red Human genera un guion de hasta 10 preguntas técnicas y de casos reales."}
           </span>
         </label>

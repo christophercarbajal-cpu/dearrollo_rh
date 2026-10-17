@@ -40,14 +40,15 @@ BASE = [
     {"id": "motivo", "bloque": "B", "texto": "¿Por qué saliste? (despido o renuncia se repregunta)"},
     {"id": "otro", "bloque": "B", "texto": "¿Tuviste otro trabajo antes de ese? (hasta 2 trabajos)"},
     {"id": "cuantos", "bloque": "B", "texto": "¿En cuántos trabajos has estado en los últimos 3 años?"},
-    {"id": "conf_final", "bloque": "D", "texto": "Antes de terminar, te confirmo: puesto [puesto], empresa [empresa], ubicación [ubicación], sueldo [sueldo]. ¿Sigues interesado?"},
+    # 2026-10-17 (Cambios WhatsApp · entrevista operativa): el bloque D ya NO confirma puesto, sueldo ni ubicación («Antes de
+    # terminar, te confirmo…» salió de la base): solo sobrevive «¿Cuándo podrías empezar?»
     {"id": "inicio", "bloque": "D", "texto": "¿Cuándo podrías empezar?"},
 ]
-# Preguntas del bloque D anteriores al 2026-10-16 (conversaciones en curso y ajustes guardados en vacantes)
-IDS_D_LEGADO = ("conf_puesto", "conf_sueldo", "conf_traslado")
+# Preguntas del bloque D anteriores (conversaciones en curso y ajustes guardados en vacantes): ya no se hacen a nadie nuevo
+IDS_D_LEGADO = ("conf_puesto", "conf_sueldo", "conf_traslado", "conf_final")
 IDS_BASE = [b["id"] for b in BASE]
 QUITABLES = [b["id"] for b in BASE if not b.get("fija")] + list(IDS_D_LEGADO)
-BLOQUES = {"A": "Situación actual", "B": "Historial laboral", "C": "Preguntas de RH", "D": "Confirmación y cierre"}
+BLOQUES = {"A": "Situación actual", "B": "Historial laboral", "C": "Preguntas de RH", "D": "Inicio y cierre"}
 
 
 def _n(t: str) -> str:
@@ -153,6 +154,30 @@ SEGUNDA_VUELTA = {
     "duracion": "¿Cuánto duraste en ese empleo?",
     "motivo": "¿Qué te hizo dejar ese empleo?",
 }
+
+
+def _empresa_trabajo(trabajo: dict) -> str:
+    """El nombre de la empresa tal como lo dijo el candidato («En Oxxo» → «Oxxo»); "" si no es un nombre usable."""
+    t = " ".join(str((trabajo or {}).get("empresa") or "").split()).strip(" .,")
+    t = re.sub(r"^(?:en|con|para|trabajo en|trabajaba en|trabajé en|trabaje en|estoy en|estaba en|es|era|fue)\s+", "", t,
+               flags=re.IGNORECASE).strip(" .,")
+    if not t or len(t) > 40 or len(t.split()) > 5 or (trabajo or {}).get("informal") or t == SIN_RESPUESTA:
+        return ""
+    if re.match(r"^(si|no|claro|ok|okay|nel|simon|sale|va)\b", _n(t)):
+        return ""  # «Sí, sin problema» no es el nombre de una empresa
+    return t
+
+
+def _con_empresa(texto: str, emp: str, emp_ant: str) -> str:
+    """Segunda vuelta con nombres: «¿Y antes de Oxxo, en qué empresa estuviste?», «¿Qué cargo tenías en Bimbo?»…"""
+    if emp_ant:
+        texto = texto.replace("¿Y antes de ese,", f"¿Y antes de {emp_ant},")
+    if emp:
+        texto = (texto.replace("en ese lugar", f"en {emp}").replace("en ese empleo", f"en {emp}")
+                 .replace("dejar ese empleo", f"dejar {emp}"))
+    return texto
+
+
 PREGUNTA_CUANTOS = "¿En cuántos trabajos has estado en los últimos 3 años?"
 PREGUNTA_MOTIVO_NO = "Entiendo. ¿Qué es lo que no te convence: el sueldo, la ubicación, el horario u otra cosa?"
 MOTIVOS_NO_INTERES = ("Sueldo", "Ubicación", "Horario", "Otro")
@@ -198,8 +223,20 @@ def texto_pregunta(pid: str, est: dict, p) -> str:
     actual = bool(est.get("actual")) and k == 0
     if pid.startswith("propia:"):
         return config_de(p.vacante)["propias"][int(pid.split(":")[1])]
+    # 2026-10-17: el nombre de la EMPRESA que dijo el candidato en lugar de «ahí» / «ese trabajo» / «ese empleo»
+    trabajos = est.get("trabajos") or []
+    emp = _empresa_trabajo(trabajos[k]) if len(trabajos) > k else ""
+    emp_ant = _empresa_trabajo(trabajos[k - 1]) if k >= 1 and len(trabajos) >= k else ""
     if k >= 1 and pid in SEGUNDA_VUELTA:
-        return SEGUNDA_VUELTA[pid]
+        return _con_empresa(SEGUNDA_VUELTA[pid], emp, emp_ant)
+    if pid in ("puesto", "tareas", "duracion", "motivo", "otro") and emp:
+        return {
+            "puesto": f"¿Qué puesto tienes en {emp}?" if actual else f"¿Qué puesto tenías en {emp}?",
+            "tareas": f"¿Qué haces en {emp}?" if actual else f"¿Qué hacías en {emp}?",
+            "duracion": f"¿Cuánto tiempo llevas en {emp}?" if actual else f"¿Cuánto tiempo trabajaste en {emp}?",
+            "motivo": f"¿Por qué quieres dejar {emp}?" if actual else f"¿Por qué saliste de {emp}?",
+            "otro": f"¿Tuviste otro trabajo antes de {emp}?",
+        }[pid]
     if pid == "conf_final":
         return texto_confirmacion_final(p)
     if pid == "motivo_no":
@@ -257,10 +294,11 @@ def ya_dicho(p) -> Dict[str, bool]:
 
 
 def _secuencia_d(p, quitadas: List[str], est: Optional[dict] = None) -> List[str]:
-    """Bloque D (2026-10-16, QA): UNA confirmación con puesto, empresa, ubicación y sueldo («¿Sigues interesado?») → si ya
-    no le interesa, el motivo (Sueldo, Ubicación, Horario u Otro) y el cierre; si sigue interesado, la fecha de inicio."""
+    """Bloque D: solo «¿Cuándo podrías empezar?» (2026-10-17). La confirmación «Antes de terminar, te confirmo… ¿Sigues
+    interesado?» (2026-10-16) ya no se hace; solo sigue para una conversación que ya la tenía pendiente o contestada."""
     est = est or {}
-    ids = [] if "conf_final" in quitadas else ["conf_final"]
+    legado = est.get("pendiente") == "conf_final" or "conf_final" in (est.get("respuestas") or {})
+    ids = ["conf_final"] if legado and "conf_final" not in quitadas else []
     ni = est.get("no_interesado")
     if ni:
         return ids + ([] if ni.get("motivo") else ["motivo_no"])
@@ -306,7 +344,7 @@ def siguiente(est: dict, p) -> Optional[str]:
             return trabajo["repregunta"]
         if "otro" not in q and k + 1 < MAX_TRABAJOS and f"otro{k}" not in r:
             return "otro"
-    if "cuantos" not in q and "cuantos" not in r and not est.get("sin_experiencia"):
+    if "cuantos" not in q and "cuantos" not in r and not est.get("sin_experiencia") and not est.get("frustracion"):
         return "cuantos"  # 2026-10-16 (QA)
     for i, texto in enumerate(cfg["propias"]):
         if f"propia:{i}" not in r and not propia_ya_respondida(p, texto):
@@ -477,6 +515,144 @@ ALTERNATIVAS = {
 }
 
 
+# ============================================================ comportamiento cognitivo (2026-10-17)
+
+ACUSES = ("Gracias.", "Perfecto.", "Entendido.")
+_RE_FRUSTRACION = re.compile(
+    r"\b(ya te dije|ya lo dije|ya te lo dije|ya conteste|ya respondi|otra vez|cuantas preguntas|son muchas preguntas|muchas "
+    r"preguntas|tantas preguntas|que fastidio|ya basta|ya me canse|ya me harte|que flojera|que pesado|que lata|esto es eterno|"
+    r"ya no quiero contestar|ya estuvo|cuanto falta|no manches|ya acaba)\b")
+_EMOJIS_FRUSTRACION = ("😡", "😤", "🙄", "🤬", "😒")
+_RE_PARA_QUE = re.compile(r"\b(para que|por que (me )?(preguntas|quieres saber)|y eso que|que tiene que ver)\b")
+_RE_QUIEN = re.compile(r"\b(quien eres|eres (un )?(robot|bot|persona|humano|ia|inteligencia artificial)|con quien hablo)\b")
+_RE_DURA = re.compile(r"\b(cuanto (dura|tarda)|cuanto tiempo (dura|es)|cuantas preguntas son)\b")
+
+
+def _bloque(pid: Optional[str]) -> str:
+    if not pid:
+        return ""
+    if pid.startswith("propia:"):
+        return "C"
+    return next((b["bloque"] for b in BASE if b["id"] == pid), "D" if pid in ("conf_final", "motivo_no") + IDS_D_LEGADO else "B")
+
+
+def es_frustracion(texto: str) -> bool:
+    return bool(_RE_FRUSTRACION.search(_n(texto))) or any(x in (texto or "") for x in _EMOJIS_FRUSTRACION)
+
+
+def _es_pregunta(texto: str) -> bool:
+    crudo = (texto or "").strip()
+    return "?" in crudo or "¿" in crudo
+
+
+def respuesta_a_pregunta(p, texto: str) -> str:
+    """Lo que el candidato pregunta (que no sea un dato de la vacante, eso lo contesta `respuestas_vacante`)."""
+    from .ia import presentacion_bot
+    from .prefiltro_conversacional import empresa_de
+
+    t = _n(texto)
+    if _RE_QUIEN.search(t):
+        return presentacion_bot(empresa_de(p))
+    if _RE_PARA_QUE.search(t):
+        return "Es para conocer tu experiencia y ver cómo te puede ir en el puesto."
+    if _RE_DURA.search(t):
+        return "Son pocas preguntas; vamos rápido."
+    emp = empresa_de(p)
+    return f"Eso lo puedes platicar con el equipo de RH{' de ' + emp if emp else ''}."
+
+
+def _con_acuse(est: dict, p, previo: Optional[str], nxt: str, mensaje: str) -> str:
+    """Acuse breve y variado antes de la siguiente pregunta; con el NOMBRE al cambiar de bloque."""
+    if mensaje.startswith(("Entiendo.", "Gracias", "Perfecto", "Entendido")):
+        return mensaje  # la pregunta ya trae su propio acuse (p. ej. el motivo de no interés)
+    n = int(est.get("acuses") or 0)
+    est["acuses"] = n + 1
+    acuse = ACUSES[n % len(ACUSES)]
+    nombre = _datos(p)["nombre"]
+    if nombre and _bloque(previo) != _bloque(nxt):
+        acuse = f"{acuse[:-1]}, {nombre}."
+    return f"{acuse} {mensaje}"
+
+
+def _con_nombre_empresa(alt: str, est: dict) -> str:
+    k = int(est.get("k") or 0)
+    trabajos = est.get("trabajos") or []
+    emp = _empresa_trabajo(trabajos[k]) if len(trabajos) > k else ""
+    if not emp:
+        return alt
+    return (alt.replace("en ese trabajo", f"en {emp}").replace("ese trabajo", emp).replace("en ese empleo", f"en {emp}")
+            .replace("ese empleo", emp).replace(" ahí", f" en {emp}"))
+
+
+def _ambiguedad(pid: str, texto: str) -> Optional[Tuple[str, str]]:
+    """(valor, pregunta de aclaración) si la respuesta es un número suelto que admite dos lecturas. None si no."""
+    from .preguntas_filtro import numero_sin_unidad, pregunta_unidad
+
+    n = numero_sin_unidad(texto)
+    if n is None:
+        return None
+    if pid in ("duracion", "sin_trabajo"):
+        return n, pregunta_unidad(n)
+    if pid == "inicio":
+        return n, f"¿El día {n} o dentro de {n} días?"
+    return None
+
+
+def _resolver_ambiguedad(amb: dict, texto: str) -> str:
+    t = _n(texto)
+    v = amb.get("valor") or ""
+    if amb.get("pid") == "inicio":
+        if re.search(r"\b(dentro|dias)\b", t) and not re.search(r"\bel dia\b", t):
+            return f"Dentro de {v} días"
+        if re.search(r"\b(el dia|dia)\b", t):
+            return f"El día {v}"
+    else:
+        if re.search(r"\bmes", t):
+            return f"{v} meses"
+        if re.search(r"\bano", t):
+            return f"{v} años"
+    return f"{v} ({texto.strip()})"
+
+
+def _siguiente_es_automatico(p) -> bool:
+    """¿La actividad que sigue a la entrevista la hace el agente o el candidato solos (sin RH)?"""
+    from . import proceso as sproc
+
+    try:
+        pasos = [x for x in sproc.estado_pasos(p) if not x["heredado"] and x.get("tipo") != "entrevista_whatsapp"
+                 and x["estado"] not in ("omitida", "cancelada") and not sproc._satisfecho(x)]
+    except Exception:  # noqa: BLE001 — ante la duda, revisión humana
+        return False
+    pasos.sort(key=lambda x: sproc._indice(x["etapa"]))
+    x = pasos[0] if pasos else None
+    if x is None:
+        return False
+    # lo que el motor de la ruta DISPARA solo (no basta con que sea «automática»: los documentos de Contratación, p. ej.,
+    # salen hasta que se acepta la oferta)
+    if x.get("tipo") in sproc.TIPOS_DISPARABLES and not (x.get("tipo") == "psicometrica" and x.get("modalidad") == "fisica"):
+        return True
+    if x.get("tipo") == "documentos" and sproc._indice(x["etapa"]) < sproc._indice("Contratación"):
+        return True
+    crudo = next((y for y in (p.proceso or {}).get("pasos") or [] if y.get("id") == x["id"]), x)
+    return bool(sproc.es_presencial(crudo) and crudo.get("tipo_agenda") == "candidato")
+
+
+def cierre_dinamico(e, p) -> str:
+    """2026-10-17: el cierre depende de la RUTA. Siguiente actividad automática (y la entrevista no queda «No recomendable»)
+    → «Gracias, [nombre]. En un momento te envío el siguiente paso.» (el motor de la ruta la dispara al evaluar); si lo que
+    sigue es una revisión humana → «Gracias, [nombre]. Revisaremos tu información y te avisaremos por aquí.»"""
+    d = _datos(p)
+    quien = f", {d['nombre']}" if d["nombre"] else ""
+    automatico = False
+    try:
+        automatico = evaluar(e, p, p.vacante).get("recomendacion") != "no_recomendable" and _siguiente_es_automatico(p)
+    except Exception:  # noqa: BLE001
+        automatico = False
+    if automatico:
+        return f"Gracias{quien}. En un momento te envío el siguiente paso."
+    return f"Gracias{quien}. Revisaremos tu información y te avisaremos por aquí."
+
+
 def turno(e, texto: str) -> Tuple[str, bool]:
     """Registra la respuesta a la pregunta pendiente y regresa (siguiente mensaje, terminada)."""
     from .prefiltro_conversacional import es_negociacion, no_entiende, texto_negociacion
@@ -493,6 +669,36 @@ def turno(e, texto: str) -> Tuple[str, bool]:
     if tema:
         # Cambio 59: una pregunta sobre la vacante NUNCA se registra como respuesta — el dato y la MISMA pregunta pendiente
         return rva.con_pendiente(p, tema, texto_pregunta(pid, est, p)), False
+    if pid and es_frustracion(texto) and not est.get("frustracion"):
+        # 2026-10-17: frustración → disculpa, se omite el segundo trabajo (y el conteo) y se salta al bloque C
+        est["frustracion"] = True
+        est["historial_cerrado"] = True
+        nombre = _datos(p)["nombre"]
+        nxt = siguiente(est, p)
+        est["pendiente"] = nxt
+        disculpa = f"Una disculpa{', ' + nombre if nombre else ''}. Ya casi terminamos."
+        if nxt is None:
+            est["terminada_en"] = datetime.now(timezone.utc).isoformat()
+            _guardar(e, est)
+            return cierre_dinamico(e, p), True
+        _guardar(e, est)
+        return f"{disculpa} {texto_pregunta(nxt, est, p)}", False
+    conocida = bool(_RE_PARA_QUE.search(_n(texto)) or _RE_QUIEN.search(_n(texto)) or _RE_DURA.search(_n(texto)))
+    if pid and _es_pregunta(texto) and (conocida or not no_entiende(texto)):
+        # 2026-10-17: primero se responde lo que pregunta y luego se repite la pregunta con contexto (no cuenta como respuesta)
+        return f"{respuesta_a_pregunta(p, texto)} Te preguntaba: {texto_pregunta(pid, est, p)}", False
+    amb = est.get("ambigua") or {}
+    if pid and amb.get("pid") == pid:
+        texto = _resolver_ambiguedad(amb, texto)
+        est.pop("ambigua", None)
+    elif pid and not (est.get("aclarada") or {}).get(pid):
+        a = _ambiguedad(pid, texto)
+        if a is not None:
+            # 2026-10-17: una respuesta ambigua («5») se aclara UNA sola vez con opciones
+            est.setdefault("aclarada", {})[pid] = True
+            est["ambigua"] = {"pid": pid, "valor": a[0]}
+            _guardar(e, est)
+            return a[1], False
     no_contesta = bool(pid) and (no_entiende(texto) or no_es_dato(texto))
     if pid == "conf_final" and not no_contesta:
         from .prefiltro_conversacional import clasificar
@@ -510,7 +716,7 @@ def turno(e, texto: str) -> Tuple[str, bool]:
         if pid in ("empresa", "puesto", "tareas", "duracion", "motivo") and bool(est.get("actual")) and int(est.get("k") or 0) == 0:
             alt = (alt.replace("trabajaste", "trabajas").replace("estuviste", "llevas").replace("era tu", "es tu")
                    .replace("eran tus", "son tus").replace("dejaras ese", "quieras dejar ese"))
-        return f"Te lo pregunto de otra forma: {alt}", False
+        return f"Te lo pregunto de otra forma: {_con_nombre_empresa(alt, est)}", False
     if pid:
         registrar_respuesta(est, pid, texto, p)
         _cerrar_historial_si_toca(est, p)
@@ -519,9 +725,11 @@ def turno(e, texto: str) -> Tuple[str, bool]:
     if nxt is None:
         est["terminada_en"] = datetime.now(timezone.utc).isoformat()
         _guardar(e, est)
-        return (cierre_no_interesado(p) if est.get("no_interesado") else cierre(p)), True
+        # 2026-10-17: cierre según la ruta (el «No interesado» solo existe en conversaciones con la confirmación anterior)
+        return (cierre_no_interesado(p) if est.get("no_interesado") else cierre_dinamico(e, p)), True
+    mensaje = _con_acuse(est, p, pid, nxt, texto_pregunta(nxt, est, p))
     _guardar(e, est)
-    return texto_pregunta(nxt, est, p), False
+    return mensaje, False
 
 
 # ============================================================ evaluación sobre el historial

@@ -223,8 +223,8 @@ def texto_liga(nombre: str, liga: str, ahora: bool, limite: Optional[datetime] =
 
 # ============================================================ Agendamiento inteligente (especificación 2026-10-17)
 # Al pasar a la Entrevista Red Human con avatar el bot ya NO manda la liga de inmediato: invita y pregunta cuándo. «Ahora»
-# → la liga; una fecha/hora → queda agendada (con recordatorio, `services/agenda.recordar_videollamadas`); algo vago →
-# pide una hora concreta. Sin cupos (disponibilidad 24/7: no usa la autoagenda de citas presenciales).
+# → la liga; una fecha/hora → queda agendada y la liga va EN LA MISMA conversación; algo vago → pide día y hora UNA vez y,
+# si sigue vago, manda la liga («entra cuando puedas»). Sin recordatorios ni cupos (2026-10-17, «Cambios WhatsApp»).
 PREGUNTA_CUANDO = "¿Cuándo te queda bien? Si quieres, puede ser ahora mismo."
 TEXTO_INVITACION_AGENDA = f"¡Pasaste a la siguiente etapa! Es una entrevista por videollamada de unos 10 minutos. {PREGUNTA_CUANDO}"
 CLAVE_AGENDADA = "entrevista_agendada"
@@ -241,7 +241,16 @@ def invitacion_agenda(p: Postulacion) -> str:
     a[CLAVE] = {"cuando": True, "en": datetime.now(timezone.utc).isoformat()}
     p.analisis = a
     flag_modified(p, "analisis")
-    return TEXTO_INVITACION_AGENDA
+    return texto_invitacion_agenda((p.nombre or "").split(" ")[0])
+
+
+def texto_invitacion_agenda(nombre: str = "") -> str:
+    """2026-10-17: «¡Pasaste a la siguiente etapa, [nombre]! Es una entrevista por videollamada de unos 10 minutos. ¿Cuándo
+    te queda bien? Si quieres, puede ser ahora mismo.» (sin nombre usable, sin él)."""
+    nombre = "" if not nombre or nombre.startswith("Candidato") else nombre
+    if not nombre:
+        return TEXTO_INVITACION_AGENDA
+    return TEXTO_INVITACION_AGENDA.replace("¡Pasaste a la siguiente etapa!", f"¡Pasaste a la siguiente etapa, {nombre}!")
 
 
 def esperando_cuando(p: Postulacion) -> bool:
@@ -376,6 +385,10 @@ def interpretar_cuando(p: Postulacion, texto: str, ahora: Optional[datetime] = N
         if dt <= ahora:
             return {"accion": "responder", "texto": "Esa hora ya pasó. ¿Qué otro día y hora te queda bien? Si quieres, puede ser ahora mismo."}
         return {"accion": "registrar", "cuando": dt}
+    # 2026-10-17: lo vago se aclara UNA sola vez; si sigue vago, se manda la liga («entra cuando puedas»)
+    if ((p.analisis or {}).get(CLAVE) or {}).get("aclarado"):
+        return {"accion": "liga_vaga"}
+    _marcar_aclarado(p)
     if partes["dia"] is not None:
         _guardar_dia(p, partes["dia"])
         dia_dt = datetime(partes["dia"].year, partes["dia"].month, partes["dia"].day, tzinfo=TZ_ORG)
@@ -385,16 +398,45 @@ def interpretar_cuando(p: Postulacion, texto: str, ahora: Optional[datetime] = N
             "texto": "¿Qué día y a qué hora te queda bien? Por ejemplo: «mañana a las 11 a.m.». Si quieres, puede ser ahora mismo."}
 
 
+def _marcar_aclarado(p: Postulacion) -> None:
+    a = dict(p.analisis or {})
+    a[CLAVE] = {**(a.get(CLAVE) or {}), "aclarado": True}
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def texto_liga_vaga(liga: str) -> str:
+    """2026-10-17: siguió sin decir día y hora tras la aclaración → la liga para entrar cuando pueda."""
+    return f"Aquí está tu link; entra cuando puedas: {liga}"
+
+
+def texto_liga_ahora(liga: str) -> str:
+    return f"Aquí está tu link para entrar ahora mismo: {liga}"
+
+
+def marcar_link_enviado(p: Postulacion, token: str) -> None:
+    """Pipeline «Link enviado» (ahora mismo o tras una respuesta vaga). Sin recordatorios."""
+    a = dict(p.analisis or {})
+    a.pop(CLAVE, None)
+    a[CLAVE_AGENDADA] = {"link_enviado": True, "entrevista": token}
+    p.analisis = a
+    flag_modified(p, "analisis")
+
+
+def link_enviado(p: Postulacion) -> bool:
+    return bool(((p.analisis or {}).get(CLAVE_AGENDADA) or {}).get("link_enviado"))
+
+
 def texto_agendada(nombre: str, dt: datetime, liga: str) -> str:
-    quien = f", {nombre}" if nombre and not nombre.startswith("Candidato") else ""
-    return (f"Listo{quien}, quedó {texto_cita(dt)} ({ETIQUETA_ZONA}). Te mando un recordatorio antes. A esa hora entra desde "
-            f"esta liga:\n\n{liga}")
+    """2026-10-17: «Listo, quedó el martes 20 a las 6:00 p.m. Aquí está tu link…» — la liga va EN ESTA conversación y no hay
+    recordatorios."""
+    return f"Listo, quedó {texto_cita(dt)} ({ETIQUETA_ZONA}). Aquí está tu link para entrar a esa hora: {liga}"
 
 
 def marcar_agendada(p: Postulacion, dt: datetime, token: str) -> None:
     a = dict(p.analisis or {})
     a.pop(CLAVE, None)
-    a[CLAVE_AGENDADA] = {"cuando": dt.astimezone(timezone.utc).isoformat(), "entrevista": token, "recordatorio_enviado": None}
+    a[CLAVE_AGENDADA] = {"cuando": dt.astimezone(timezone.utc).isoformat(), "entrevista": token}
     p.analisis = a
     flag_modified(p, "analisis")
 

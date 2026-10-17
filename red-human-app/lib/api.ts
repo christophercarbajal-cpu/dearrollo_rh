@@ -655,10 +655,9 @@ export const PREGUNTAS_BASE_ENTREVISTA: { id: string; bloque: "A" | "B" | "D"; t
   { id: "tareas", bloque: "B", texto: "¿Qué hacías ahí?" },
   { id: "duracion", bloque: "B", texto: "¿Cuánto tiempo trabajaste ahí?" },
   { id: "motivo", bloque: "B", texto: "¿Por qué saliste? (despido o renuncia se repregunta)" },
-  { id: "otro", bloque: "B", texto: "¿Tuviste otro trabajo antes de ese? (hasta 3 trabajos)" },
-  { id: "conf_puesto", bloque: "D", texto: "Para confirmar, el puesto es [puesto] en [empresa]. ¿Te interesa?" },
-  { id: "conf_sueldo", bloque: "D", texto: "El sueldo es [sueldo]. ¿Estás de acuerdo?" },
-  { id: "conf_traslado", bloque: "D", texto: "El trabajo es en [ubicación]. ¿Puedes trasladarte?" },
+  { id: "otro", bloque: "B", texto: "¿Tuviste otro trabajo antes de ese? (hasta 2 trabajos)" },
+  { id: "cuantos", bloque: "B", texto: "¿En cuántos trabajos has estado en los últimos 3 años?" },
+  // 2026-10-17: el bloque D ya no confirma puesto, sueldo ni ubicación — solo la fecha de inicio
   { id: "inicio", bloque: "D", texto: "¿Cuándo podrías empezar?" },
 ];
 /** Lo que regresa «Generar»: solo las secciones de la ruta (los prefiltros viajan en preguntas_filtro*). */

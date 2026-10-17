@@ -78,8 +78,8 @@ PESADO = "Disponibilidad para cargar material pesado"
 FILTROS = {TURNOS: "¿Puedes rolar turnos?", PESADO: "¿Puedes cargar material pesado?"}
 EXTRAS_WEB = ["edad", "zona"]
 DESEABLE = "Secundaria terminada"
-CIERRE = ("Con esto terminamos, {nombre}. Gracias por tu tiempo. El equipo de Recursos Humanos de Grupak te contactará para "
-          "agendar una entrevista.")
+# 2026-10-17 (Cambios WhatsApp): el cierre depende de la ruta — en Grupak sigue la entrevista humana que agenda RH
+CIERRE = "Gracias, {nombre}. Revisaremos tu información y te avisaremos por aquí."
 
 # Solo si la VAC-1156 no existe en esta base: «Ayudante general» en Monterrey (datos de la demo Grupak)
 AYUDANTE = {
@@ -312,9 +312,9 @@ def validar(db, v: Vacante) -> list:
         if sim in db:
             db.expunge(sim)  # simulación: nunca se guarda
         sim.vacante = None
-    # 2026-10-16 (QA): el cierre es UNA confirmación («Antes de terminar… ¿Sigues interesado?») y después la fecha de inicio
-    if secuencia != ["conf_final", "inicio"]:
-        problemas.append(f"el cierre no es la confirmación única + inicio: {secuencia}")
+    # 2026-10-17 (Cambios WhatsApp): el bloque D ya no confirma nada — solo la fecha de inicio
+    if secuencia != ["inicio"]:
+        problemas.append(f"el bloque D no es solo la fecha de inicio: {secuencia}")
     faltan = ssv.faltantes_publicacion(db, v)
     if faltan:
         nota(f"Para publicar falta: {' '.join(faltan)}")

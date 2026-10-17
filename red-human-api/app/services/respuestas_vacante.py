@@ -248,6 +248,9 @@ def respuesta_post_cierre(p: Postulacion, texto: str) -> Optional[str]:
 
         nombre = nombre_ficha(p) or ""
         nombre = "" if not nombre or nombre.startswith("Candidato") else nombre.split(" ")[0]
+        if ((p.analisis or {}).get(CLAVE) or {}).get("actividad") == "entrevista_whatsapp":
+            # 2026-10-17: tras el cierre de la entrevista por WhatsApp, un «Ok» recibe UNA despedida simple (sin repetir el cierre)
+            return f"¡Gracias{', ' + nombre if nombre else ''}! Que tengas buen día."
         return f"Con gusto{', ' + nombre if nombre else ''}."
     return TEXTO_OTRO
 
@@ -262,11 +265,12 @@ async def turno_post_cierre(db, p: Postulacion, texto: str, canal: str) -> dict:
         db.commit()
         return {"respuesta": "", "clasificacion": None, "ia": False, "silencio": True, "post_cierre": True,
                 "whatsapp": {"enviado": False, "detalle": "Sin respuesta (chat pasivo después del cierre)"}}
-    if mensaje.startswith("Con gusto"):
+    despedida = mensaje.startswith("Con gusto") or (mensaje.startswith("¡Gracias") and mensaje.endswith("Que tengas buen día."))
+    if despedida:
         _marcar_con_gusto(p)
     envio = await _enviar_whatsapp(p, mensaje, canal)
     guardar_mensaje(db, p, "assistant", mensaje, canal, envio)
     _actualizar_ultima_actividad(p)
     db.commit()
     return {"respuesta": mensaje, "clasificacion": None, "ia": False, "whatsapp": envio, "post_cierre": True,
-            **({"con_gusto": True} if mensaje.startswith("Con gusto") else {})}
+            **({"con_gusto": True} if despedida else {})}

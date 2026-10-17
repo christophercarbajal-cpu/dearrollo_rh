@@ -417,15 +417,21 @@ with TestClient(app) as client:
     transicion = (e4.transcript or [{}])[0].get("texto", "")
     check(q4.etapa == "Entrevista IA" and transicion == "Listo, Mario. Ahora te haré unas preguntas sobre tu experiencia. ¿Trabajas actualmente?",
           f"transición exacta + A. situación actual → «{transicion[:90]}»")
-    pasos = [("No", "¿Cuánto tiempo llevas sin trabajar?"), ("2 meses", "¿Cuál fue tu último trabajo?"),
-             ("Bodega del Centro", "¿Qué puesto tenías?"), ("Almacenista", "¿Qué hacías ahí?"),
-             ("Surtía pedidos y acomodaba mercancía", "¿Cuánto tiempo trabajaste ahí?"), ("2 años", "¿Por qué saliste?"),
-             ("Me despidieron", "¿Por qué te despidieron?"), ("Por faltas", "¿Tuviste otro trabajo antes de ese?"),
-             # 2026-10-16 (QA): máximo 2 trabajos; el segundo con OTRAS palabras; después «¿En cuántos trabajos…?»
-             ("Sí", "¿Y antes de ese, en qué empresa estuviste?"), ("Tiendas Oxxo", "¿Qué cargo tenías en ese lugar?"),
-             ("Cajero", "¿A qué te dedicabas en ese empleo?"), ("Cobraba", "¿Cuánto duraste en ese empleo?"),
-             ("1 año", "¿Qué te hizo dejar ese empleo?"), ("Renuncié", "¿Por qué renunciaste?"),
-             ("Me cambié de ciudad", "¿En cuántos trabajos has estado en los últimos 3 años?"), ("2", "¿Has manejado montacargas?")]
+    # 2026-10-17 (Cambios WhatsApp): acuse breve y variado antes de cada pregunta (con el nombre al cambiar de bloque) y el
+    # NOMBRE de la empresa en lugar de «ahí» / «ese empleo»; máximo 2 trabajos; el bloque D solo pregunta el inicio
+    pasos = [("No", "Gracias. ¿Cuánto tiempo llevas sin trabajar?"), ("2 meses", "Perfecto, Mario. ¿Cuál fue tu último trabajo?"),
+             ("Bodega del Centro", "Entendido. ¿Qué puesto tenías en Bodega del Centro?"),
+             ("Almacenista", "Gracias. ¿Qué hacías en Bodega del Centro?"),
+             ("Surtía pedidos y acomodaba mercancía", "Perfecto. ¿Cuánto tiempo trabajaste en Bodega del Centro?"),
+             ("2 años", "Entendido. ¿Por qué saliste de Bodega del Centro?"),
+             ("Me despidieron", "Gracias. ¿Por qué te despidieron?"),
+             ("Por faltas", "Perfecto. ¿Tuviste otro trabajo antes de Bodega del Centro?"),
+             ("Sí", "Entendido. ¿Y antes de Bodega del Centro, en qué empresa estuviste?"),
+             ("Tiendas Oxxo", "Gracias. ¿Qué cargo tenías en Tiendas Oxxo?"),
+             ("Cajero", "Perfecto. ¿A qué te dedicabas en Tiendas Oxxo?"), ("Cobraba", "Entendido. ¿Cuánto duraste en Tiendas Oxxo?"),
+             ("1 año", "Gracias. ¿Qué te hizo dejar Tiendas Oxxo?"), ("Renuncié", "Perfecto. ¿Por qué renunciaste?"),
+             ("Me cambié de ciudad", "Entendido. ¿En cuántos trabajos has estado en los últimos 3 años?"),
+             ("2", "Gracias, Mario. ¿Has manejado montacargas?")]
     ok = True
     for resp, esperada in pasos:
         r = chat(q4, resp)
@@ -436,17 +442,14 @@ with TestClient(app) as client:
     check(ok, "A → B (hasta 2 trabajos, repregunta de despido y renuncia, cuántos trabajos) → C (pregunta propia de RH), una por mensaje")
     empresa = nombre_empresa_candidato(vo)
     r = chat(q4, "Un poco")
-    # 2026-10-16 (QA): D = UNA confirmación («Antes de terminar… ¿Sigues interesado?») y después el inicio
-    check(r.startswith("Antes de terminar, te confirmo: puesto ") and r.endswith("¿Sigues interesado?"), f"D. confirmación única → «{r}»")
-    r = chat(q4, "Sí")
-    check(r == "¿Cuándo podrías empezar?", f"D. sigue interesado → inicio → «{r}»")
+    check(r == "Perfecto, Mario. ¿Cuándo podrías empezar?", f"D. solo la fecha de inicio (sin «Antes de terminar, te confirmo…») → «{r}»")
     r = chat(q4, "El lunes")
-    check(r == f"Con esto terminamos, Mario. Gracias por tu tiempo. El equipo de Recursos Humanos de {empresa} te contactará para "
-              "agendar una entrevista.", f"cierre exacto → «{r}»")
+    # 2026-10-17: cierre según la ruta — después sigue la entrevista humana (la agenda RH)
+    check(r == "Gracias, Mario. Revisaremos tu información y te avisaremos por aquí.", f"cierre según la ruta → «{r}»")
     db.refresh(q4)
     textos = [m["texto"] for m in (next(x for x in q4.entrevistas if x.tipo == "whatsapp").transcript or []) if m.get("rol") == "assistant"]
-    check(all(cuenta.nombre not in t for t in textos) and sum(empresa in t for t in textos) >= 1,
-          "un solo nombre de empresa en toda la conversación (nunca el nombre interno de la Cuenta)")
+    check(all(cuenta.nombre not in t for t in textos) and empresa,
+          "nunca el nombre interno de la Cuenta en la conversación")
     e = next(x for x in q4.entrevistas if x.tipo == "whatsapp")
     op = (e.evaluacion or {}).get("operativa") or {}
     check(e.estado == "evaluada" and op.get("fija"), "la entrevista se cierra y se evalúa")
@@ -470,10 +473,11 @@ with TestClient(app) as client:
             break
         chat(q5, respuesta_pendiente(q5))
     r = chat(q5, "Sí, trabajo")
-    check(r == "¿En qué empresa trabajas?", "si trabaja actualmente, el historial arranca en presente")
+    check(r.endswith("¿En qué empresa trabajas?") and ", Sofía." in r, f"si trabaja actualmente, el historial arranca en presente («{r}»)")
     for t in ("Soriana", "Almacenista", "Recibo mercancía", "6 meses"):
         r = chat(q5, t)
-    check(r == "¿Por qué quieres cambiar de trabajo?", "motivo en presente para el trabajo actual")
+    # 2026-10-17: con el nombre de la empresa en lugar de «de trabajo» / «ahí»
+    check(r.endswith("¿Por qué quieres dejar Soriana?"), f"motivo en presente para el trabajo actual («{r}»)")
 
     seg = leer("components/dashboard/procesos/seguimiento-proceso.tsx")
     form = leer("components/dashboard/vacantes/entrevista-whatsapp-base.tsx")

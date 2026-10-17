@@ -333,49 +333,50 @@ with TestClient(app) as client:
               "Tienda La Esquina", "Cajero", "Cobraba", "1 año", "Me cambié de casa", "2"):
         msg, fin = ewf.turno(e1, t)
         preguntas.append(msg)
+    import re as _re
+
+    def sin_acuse(m):
+        # 2026-10-17: cada pregunta va precedida de un acuse breve («Gracias.», «Perfecto, Ernesto.»…)
+        return _re.sub(r"^(Gracias|Perfecto|Entendido)(, [^.]+)?\. ", "", m)
+
+    preguntas = [sin_acuse(x) for x in preguntas]
     check(preguntas[:3] == ["¿Trabajas actualmente?", "¿Cuánto tiempo llevas sin trabajar?", "¿Cuál fue tu último trabajo?"],
           f"A) situación actual → B) historial ({preguntas[:3]})")
     segunda = preguntas[8:13]
-    check(segunda == list(ewf.SEGUNDA_VUELTA.values()) and not set(segunda) & set(preguntas[2:7]),
-          f"segunda vuelta con OTRAS palabras (sin repetir las del primer trabajo) → {segunda}")
+    check(segunda == ["¿Y antes de Bodegas del Norte, en qué empresa estuviste?", "¿Qué cargo tenías en Tienda La Esquina?",
+                      "¿A qué te dedicabas en Tienda La Esquina?", "¿Cuánto duraste en Tienda La Esquina?",
+                      "¿Qué te hizo dejar Tienda La Esquina?"] and not set(segunda) & set(preguntas[2:7]),
+          f"segunda vuelta con OTRAS palabras y el nombre de la empresa (sin repetir las del primer trabajo) → {segunda}")
     check(preguntas[13] == ewf.PREGUNTA_CUANTOS, f"máximo 2 trabajos y después «¿En cuántos trabajos…?» → «{preguntas[13]}»")
-    check(preguntas[14].startswith("Antes de terminar, te confirmo: puesto Almacenista, empresa ") and "sueldo $10,000 MXN mensuales" in preguntas[14]
-          and preguntas[14].endswith("¿Sigues interesado?"), f"D) confirmación en UN solo mensaje → «{preguntas[14]}»")
-    msg, fin = ewf.turno(e1, "No, me queda muy lejos")
-    check(fin and msg == ewf.cierre_no_interesado(pe) and "entrevista" not in msg,
-          f"«No» con motivo → se clasifica y cierra sin fecha de inicio ni promesa de entrevista → «{msg}»")
-    ev = ewf.evaluar(e1, pe, vp)
-    check(ev["recomendacion"] == "no_recomendable" and ev["recomendacion_texto"] == "No interesado"
-          and ev["no_interesado"]["motivo"] == "Ubicación", f"«No interesado · Ubicación» (detiene la ruta para RH, nunca descarta) → {ev.get('no_interesado')}")
-    f = ev["ficha"]
+    # 2026-10-17: el bloque D ya no confirma puesto, sueldo ni ubicación — solo la fecha de inicio
+    check(preguntas[14] == "¿Cuándo podrías empezar?", f"D) solo «¿Cuándo podrías empezar?» → «{preguntas[14]}»")
+    msg, fin = ewf.turno(e1, "El lunes")
+    check(fin and msg in ("Gracias, Ernesto. Revisaremos tu información y te avisaremos por aquí.",
+                          "Gracias, Ernesto. En un momento te envío el siguiente paso."), f"cierre según la ruta → «{msg}»")
+    f = ewf.ficha(e1)
     check(f["A"]["trabajaActualmente"] == "No" and f["A"]["tiempoSinTrabajar"] == "3 meses" and len(f["B"]["trabajos"]) == 2
-          and f["B"]["trabajosUltimos3Anios"] == "2" and f["D"]["interesado"] is False and f["D"]["motivoNoInteres"] == "Ubicación"
-          and any("No interesado" in x for x in f["alertas"]), "Ficha de candidato: A, B (2 trabajos + cuántos), D y alertas")
-    db.refresh(pe)
-    check(pe.activa, "«No interesado» NO descarta")
+          and f["B"]["trabajosUltimos3Anios"] == "2" and f["D"]["fechaInicio"] == "El lunes",
+          "Ficha de candidato: A, B (2 trabajos + cuántos) y D (fecha de inicio)")
 
+    # conversación ANTERIOR con la confirmación final pendiente: sigue funcionando (motivo, «No interesado», nunca descarta)
     pf = nuevo("Fer Sueldo", "5530400005")
     e2 = entrevista(pf)
     ewf.primera(e2)
-    for t in ("Nunca he trabajado",):
-        msg, _ = ewf.turno(e2, t)
-    check(msg.startswith("Antes de terminar"), f"sin experiencia → directo a la confirmación → «{msg}»")
+    msg, _ = ewf.turno(e2, "Nunca he trabajado")
+    check(sin_acuse(msg) == "¿Cuándo podrías empezar?", f"sin experiencia → directo a la fecha de inicio → «{msg}»")
+    est = ewf._estado(e2)
+    est["pendiente"] = "conf_final"
+    ewf._guardar(e2, est)
+    db.commit()
     msg, fin = ewf.turno(e2, "No")
-    check(msg == ewf.PREGUNTA_MOTIVO_NO and not fin, f"«No» sin motivo → «¿Qué es lo que no te convence…?» → «{msg}»")
+    check(msg == ewf.PREGUNTA_MOTIVO_NO and not fin, f"legado: «No» a la confirmación anterior → el motivo → «{msg}»")
     msg, fin = ewf.turno(e2, "Pagan muy poco")
-    check(fin and ewf.ficha(e2)["D"]["motivoNoInteres"] == "Sueldo", "motivo clasificado: Sueldo")
-
-    pg = nuevo("Gaby Sigue", "5530400006")
-    e3 = entrevista(pg)
-    ewf.primera(e3)
-    ewf.turno(e3, "Nunca he trabajado")
-    msg, fin = ewf.turno(e3, "Pues depende")
-    check(msg.startswith("Te lo pregunto de otra forma") and not fin, f"ambigua → UNA repregunta → «{msg}»")
-    msg, fin = ewf.turno(e3, "Sí, claro")
-    check(msg == "¿Cuándo podrías empezar?", f"sigue interesado → fecha de inicio → «{msg}»")
-    msg, fin = ewf.turno(e3, "El lunes")
-    ficha3 = ewf.ficha(e3)
-    check(fin and ficha3["D"]["interesado"] is True and ficha3["D"]["fechaInicio"] == "El lunes", "cierre con la fecha de inicio")
+    check(fin and ewf.ficha(e2)["D"]["motivoNoInteres"] == "Sueldo" and msg == ewf.cierre_no_interesado(pf),
+          "legado: motivo clasificado (Sueldo) y cierre sin prometer entrevista")
+    ev = ewf.evaluar(e2, pf, vp)
+    check(ev["recomendacion"] == "no_recomendable" and ev["recomendacion_texto"] == "No interesado", "legado: «No interesado» (nunca descarta)")
+    db.refresh(pf)
+    check(pf.activa, "«No interesado» NO descarta")
 
     db.close()
 

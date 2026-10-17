@@ -240,10 +240,12 @@ with TestClient(app) as client:
     cierre = ""
     for _ in range(25):
         q = ultimo(tel, respuesta_para(q.split(". ")[-1] if q.startswith("El sueldo") else q))
-        if q.startswith("Con esto terminamos"):
+        if q.startswith("Gracias, Beto. En un momento") or q.startswith("Gracias, Beto. Revisaremos"):
             cierre = q
             break
-    check(cierre.startswith("Con esto terminamos, Beto."), f"cierre de la entrevista → «{cierre}»")
+    # 2026-10-17: cierre según la ruta (aquí sigue la psicometría digital, que dispara el motor)
+    check(cierre in ("Gracias, Beto. En un momento te envío el siguiente paso.",
+                     "Gracias, Beto. Revisaremos tu información y te avisaremos por aquí."), f"cierre de la entrevista → «{cierre}»")
     db.expire_all()
     p = db.get(Postulacion, p.id)
     check(rva.en_post_cierre(p), "después del cierre el chat queda pasivo")
@@ -265,7 +267,8 @@ with TestClient(app) as client:
     t1 = escribe(tel, "Gracias")
     t2 = escribe(tel, "Muchas gracias!")
     t3 = escribe(tel, "ok")
-    check(t1 == ["Con gusto, Beto."] and t2 == [] and t3 == [], f"«Gracias» → «Con gusto, Beto.» UNA vez → {t1} {t2} {t3}")
+    # 2026-10-17: después del cierre de la entrevista por WhatsApp la despedida es «¡Gracias, Beto! Que tengas buen día.»
+    check(t1 == ["¡Gracias, Beto! Que tengas buen día."] and t2 == [] and t3 == [], f"«Gracias» → despedida simple UNA vez → {t1} {t2} {t3}")
     t = escribe(tel, "Oye y el clima allá?")
     check(t == [rva.TEXTO_OTRO], f"otro mensaje → «{rva.TEXTO_OTRO}» → {t}")
     todos = textos(tel)

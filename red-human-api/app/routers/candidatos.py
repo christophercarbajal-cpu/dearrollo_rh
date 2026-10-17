@@ -1444,9 +1444,10 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         return {"respuesta": respuesta_final, "clasificacion": None, "ia": False, "whatsapp": envio, "cita": None, "detenido": motivo}
     d = agenda_chat.decidir(p, texto)
     cita = None
-    if d["accion"] in ("ahora", "plazo"):
+    if d["accion"] in ("ahora", "plazo", "liga_vaga"):
         # Cambio 24: «sí» → la liga ya; «no» → la misma liga con 3 días para hacerla. `videollamada_agendada_en` = el
-        # límite (el aviso de no-show sale si no la hizo en ese plazo).
+        # límite (el aviso de no-show sale si no la hizo en ese plazo). 2026-10-17: «liga_vaga» = siguió vago tras la
+        # aclaración → la liga para entrar cuando pueda (pipeline «Link enviado»).
         ahora_utc = datetime.now(timezone.utc)
         limite = ahora_utc + timedelta(days=agenda_chat.DIAS_PLAZO)
         # 2026-10-16: si el motor ya mandó la liga, se reutiliza ESA sala (nunca una segunda entrevista)
@@ -1458,8 +1459,10 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
             db.flush()
         liga = f"{settings.app_url}/entrevista/{e.token}"
         if d.get("agenda_nueva"):
-            limite = ahora_utc  # 2026-10-17: «ahora mismo» — la entrevista es en este momento (sin plazo de 3 días)
-            p.videollamada_agendada_en = ahora_utc
+            # 2026-10-17: «ahora mismo» — la entrevista es en este momento; «entra cuando puedas» (vago) conserva el plazo de
+            # 3 días para que el aviso de no-show no salga a los 15 minutos
+            limite = ahora_utc if d["accion"] == "ahora" else limite
+            p.videollamada_agendada_en = limite
         elif not (token_previo and d["accion"] == "ahora"):
             p.videollamada_agendada_en = limite  # un simple recordatorio de la liga del motor no fija plazo
         p.videollamada_liga = liga
@@ -1468,9 +1471,15 @@ async def _procesar_turno_agenda(db: Session, p: Postulacion, historial: List[di
         agenda_chat.fijar_propuesta(p, None)
         registrar(db, "agente-ia", "entrevista_avatar_liga_enviada", "postulacion", p.codigo,
                   {"ahora": d["accion"] == "ahora", "limite": limite.isoformat(), "liga": liga, "respuesta": texto[:120]})
-        respuesta_final = agenda_chat.texto_liga(nombre_ficha(p).split(" ")[0], liga, d["accion"] == "ahora",
-                                                 None if d["accion"] == "ahora" else limite)
-        cita = {"fechaHora": limite.isoformat(), "liga": liga, "ahora": d["accion"] == "ahora"}
+        if d.get("agenda_nueva"):
+            # 2026-10-17: la liga va en la MISMA conversación; pipeline «Link enviado» (sin recordatorios)
+            agenda_chat.marcar_link_enviado(p, e.token)
+            respuesta_final = (agenda_chat.texto_liga_vaga(liga) if d["accion"] == "liga_vaga"
+                               else agenda_chat.texto_liga_ahora(liga))
+        else:
+            respuesta_final = agenda_chat.texto_liga(nombre_ficha(p).split(" ")[0], liga, d["accion"] == "ahora",
+                                                     None if d["accion"] == "ahora" else limite)
+        cita = {"fechaHora": limite.isoformat(), "liga": liga, "ahora": d["accion"] in ("ahora", "liga_vaga")}
     elif d["accion"] == "registrar":
         cuando = d["cuando"].astimezone(timezone.utc)
         e, _ = crear_entrevista_para_candidato(db, p, "agente-ia", programada_para=cuando)

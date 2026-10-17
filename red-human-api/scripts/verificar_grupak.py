@@ -157,14 +157,13 @@ with TestClient(app) as client:
     print("\n--- 3. entrevista por WhatsApp ---")
     for t in ("Sí", "Bodegas del Norte", "Ayudante general", "Cargaba y acomodaba cajas", "2 años", "Quiero un mejor horario"):
         r = chat("5581110002", t)
-    check(r == "¿Tuviste otro trabajo antes de ese?", f"historial → «{r}»")
+    # 2026-10-17: acuse breve antes de cada pregunta y el nombre de la empresa en lugar de «ese»
+    check(r.endswith("¿Tuviste otro trabajo antes de Bodegas del Norte?"), f"historial → «{r}»")
     r = chat("5581110002", "No")
-    # 2026-10-16 (QA): «¿En cuántos trabajos…?» y la confirmación ÚNICA antes de la fecha de inicio
-    check(r == "¿En cuántos trabajos has estado en los últimos 3 años?", f"historial → cuántos trabajos («{r}»)")
+    check(r.endswith("¿En cuántos trabajos has estado en los últimos 3 años?"), f"historial → cuántos trabajos («{r}»)")
     r = chat("5581110002", "Solo en ese")
-    check(r.startswith("Antes de terminar, te confirmo: puesto ") and r.endswith("¿Sigues interesado?"), f"confirmación en un mensaje → «{r}»")
-    r = chat("5581110002", "Sí")
-    check(r == "¿Cuándo podrías empezar?", f"sigue interesado → la fecha de inicio («{r}»)")
+    # 2026-10-17: el bloque D ya no confirma puesto, sueldo ni ubicación — solo la fecha de inicio
+    check(r.endswith("¿Cuándo podrías empezar?") and "te confirmo" not in r, f"→ la fecha de inicio («{r}»)")
     antes = len(ENVIADOS)
     r = chat("5581110002", "El lunes")
     check(r == cg.CIERRE.format(nombre="Ana"), f"cierre exacto → «{r}»")
@@ -179,7 +178,7 @@ with TestClient(app) as client:
     textos = [c.get("text", {}).get("body", "") for c in ENVIADOS[antes:] if c.get("type") == "text"]
     check(not any("Siguiente paso" in t for t in textos), "sin un segundo aviso de estado después del cierre")
     r = chat("5581110002", "Gracias")
-    check(r == "Con gusto, Ana.", f"«Gracias» → «{r}»")
+    check(r == "¡Gracias, Ana! Que tengas buen día.", f"«Gracias» → «{r}»")
 
     print("\n--- 4. Sin experiencia y con puntos → No avanzar ---")
     pn = postular("Nora Nunca", "5581110003", {cg.FILTROS[cg.TURNOS]: "No"})
@@ -187,11 +186,9 @@ with TestClient(app) as client:
           "«No» a rolar turnos NO descarta: queda en Puntos por validar")
     chat("5581110003", "Sí, empezar ahora")
     r = chat("5581110003", "Nunca he trabajado")
-    check(r.startswith("Antes de terminar, te confirmo:"), f"«Nunca» → sin historial, directo a la confirmación → «{r}»")
-    r = chat("5581110003", "Sí")
-    check(r == "¿Cuándo podrías empezar?", f"→ la fecha de inicio («{r}»)")
+    check(r.endswith("¿Cuándo podrías empezar?"), f"«Nunca» → sin historial, directo a la fecha de inicio → «{r}»")
     r = chat("5581110003", "En un mes")
-    check(r == cg.CIERRE.format(nombre="Nora"), "mismo cierre exacto")
+    check(r == cg.CIERRE.format(nombre="Nora"), f"mismo cierre (revisión humana) → «{r}»")
     db.expire_all()
     pn = db.get(Postulacion, pn.id)
     op = (entrevista(pn).evaluacion or {}).get("operativa") or {}

@@ -1115,6 +1115,10 @@ def _sembrar_web(p: Postulacion, e: dict, criterios: List[dict]) -> dict:
             valor_w = web.get(_norm(c["pregunta_web"]))
             if valor_w and _norm(valor_w) == "no":
                 respuestas[c["id"]] = {"respuesta": valor_w, "valor": "no", "fuente": "web", "en": _ahora()}
+            elif valor_w and _norm(valor_w).startswith("si") and c.get("tiene_seguimiento") and c.get("dato") != "vigencia":
+                # 2026-10-17: con PREFILTRO WHATSAPP de continuación, el «Sí» de la web cumple el requisito y el chat ya no
+                # vuelve a pedir el dato: sigue con la continuación (detalle / contexto)
+                respuestas[c["id"]] = {"respuesta": valor_w, "valor": "si", "fuente": "web", "en": _ahora()}
             continue
         valor = web.get(_norm(c["pregunta"])) or web.get(_norm(c["criterio"]))
         if not valor:
@@ -1272,6 +1276,11 @@ def clasificar_confirmacion(conf: dict, texto: str) -> Optional[str]:
 def _falta(c: dict, respuestas: dict) -> bool:
     if c["id"] in respuestas:
         return False
+    if c.get("seguimiento_de"):
+        # 2026-10-17: PREFILTRO WHATSAPP — la continuación de un requisito solo se pregunta si el candidato ya dijo que lo
+        # cumple en la solicitud web (o lo confirmó / corrigió en el chat); si lo contestó solo en el chat, no se repite el tema
+        base = respuestas.get(c["seguimiento_de"]) or {}
+        return base.get("valor") == "si" and (base.get("fuente") == "web" or base.get("confirmacion_web") in ("confirmada", "corregida"))
     if c.get("por_brecha"):
         # Cambio 22: brecha del CV en un indispensable — se pregunta si el formulario dijo «Sí» (si no, ya lo cubre la
         # pregunta del indispensable)

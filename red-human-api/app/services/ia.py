@@ -86,6 +86,15 @@ class PreguntaRequisito(BaseModel):
         "llevas en derecho corporativo?», «¿Puedes cargar material pesado?», «¿Tienes disponibilidad para rolar turnos?»). "
         "Una sola idea, sin «Para confirmar», sin opciones. PROHIBIDO el relleno conversacional («Cuéntame,», «Platícame,», "
         "«Dime,») y PROHIBIDO pegar el requisito en una frase fija («Para esta vacante se pide: …»)."))
+    # 2026-10-17: dos bloques DISTINTOS por requisito — la web registra (Sí/No) y el WhatsApp CONTINÚA el tema (nunca repite)
+    pregunta_web: str = Field(default="", description=(
+        "PREFILTRO WEB: pregunta directa de Sí/No para el formulario web sobre este requisito (ej. «¿Tienes licencia de "
+        "manejo tipo B?», «¿Tienes al menos 2 años de experiencia en almacén?»). Solo registra la respuesta."))
+    pregunta_whatsapp: str = Field(default="", description=(
+        "PREFILTRO WHATSAPP: pregunta en tono de conversación que es la CONTINUACIÓN NATURAL de la pregunta web. NO repite "
+        "la pregunta web: asume que el candidato ya cumple el requisito y pide detalles, contexto, tamaño de la operación o "
+        "un ejemplo concreto (ej. web «¿Tienes licencia tipo B?» → WhatsApp «¿Qué tipo de unidades has manejado con tu "
+        "licencia?»)."))
 
 
 class PreguntaFiltro(BaseModel):
@@ -148,7 +157,8 @@ class VacanteGenerada(BaseModel):
             "tienes?», «¿Puedes cargar material pesado?»). Las de Sí/No son DIRECTAS, sin relleno («Cuéntame,», «Platícame,») "
             "y sin pegar el requisito en una frase fija («Para esta vacante se pide: …»). Nunca «¿Cuánto tiempo de "
             "experiencia en…?», nunca «Para confirmar…», nunca Sí/No con opciones. La escolaridad SIEMPRE es «¿Cuál es tu "
-            "último grado de estudios?»."
+            "último grado de estudios?». Cada una trae además `pregunta_web` (PREFILTRO WEB, Sí/No) y `pregunta_whatsapp` "
+            "(PREFILTRO WHATSAPP, continuación conversacional que NUNCA repite la web)."
         ),
     )
     # 2026-09-16 (prefiltro dual): la IA elige SOLO los puntos críticos que vale la pena confirmar por chat.
@@ -185,6 +195,28 @@ _PLANTILLAS = (
     "· etiquetas: palabras clave para SEO."
 )
 
+# 2026-10-17 (decisión del usuario): estructura EXACTA de los dos bloques de preguntas. La usan «Generar con Red Human» y
+# «Regenerar» de la vista previa (los dos pasan por `generar_vacante`); `asegurar_preguntas_requisitos` la garantiza en código.
+REGLAS_PREFILTRO_WEB_WHATSAPP = (
+    "A partir del puesto, los requisitos y la descripción de la vacante, genera dos bloques de preguntas:\n\n"
+    "1. PREFILTRO WEB (3 preguntas):\n"
+    "- Redacta 3 preguntas directas (Sí/No) para formulario web basadas en los requisitos o descripción de la vacante.\n"
+    "- Su función es registrar la respuesta del candidato.\n\n"
+    "2. PREFILTRO WHATSAPP (3 preguntas):\n"
+    "- Redacta 3 preguntas en tono de conversación para el chat de WhatsApp.\n"
+    "- Cada una debe ser la continuación natural de las preguntas del prefiltro web.\n"
+    "- REGLA OBLIGATORIA ESTRICTA: NO repitas las preguntas de la web. En WhatsApp no se vuelve a preguntar lo mismo; asume "
+    "que ya cumplió el requisito y continúa el tema pidiendo detalles, contexto, tamaño de operaciones o ejemplos concretos "
+    "de lo que ya contestó."
+)
+
+# 2026-10-17: «Mostrar sueldo en la publicación» apagado — se inyecta al prompt de la redacción (y se garantiza en código
+# con `sin_montos` dentro de `_asegurar_capturado`)
+REGLA_SUELDO_COMPETITIVO = (
+    "REGLA CRÍTICA: La vacante es de 'Sueldo competitivo'. TIENES ESTRICTAMENTE PROHIBIDO mencionar cifras, números o montos "
+    "exactos de dinero en la descripción. Omite el salario por completo o menciona únicamente que se ofrece 'sueldo competitivo'."
+)
+
 _REGLAS = (
     "Eres el redactor de vacantes de Red Human, plataforma de RH en México. Escribes en español mexicano, "
     "claro, inclusivo y concreto.\n"
@@ -214,6 +246,9 @@ _REGLAS = (
     "«¿Tienes disponibilidad para rolar turnos?». PROHIBIDO el relleno conversacional en preguntas cerradas o de opción "
     "(«Cuéntame,», «Platícame,», «Dime,»). PROHIBIDO copiar el requisito como pregunta («¿Cumples con…?») o pegarlo en una "
     "frase fija («Para esta vacante se pide: …»), y frases como «¿Cuál es tu caso?» o «Para confirmar». `preguntas_filtro` y `preguntas_filtro_whatsapp` déjalas vacías: el sistema arma la lista única.\n"
+    "5b. PREFILTRO WEB Y PREFILTRO WHATSAPP (2026-10-17) — en cada elemento de `preguntas_requisitos` llena `pregunta_web` "
+    "y `pregunta_whatsapp` siguiendo EXACTAMENTE esta estructura:\n"
+    f"{REGLAS_PREFILTRO_WEB_WHATSAPP}\n"
     "6. Cada plataforma tiene su propio tono y formato: no repitas el mismo texto en las tres.\n"
     "7. Todo lo que escribas en `copy` y `page` lo lee el candidato. Nunca uses etiquetas internas como "
     "«indicado por RH», «según RH» o «no especificado»: escribe el sueldo directo («$10,500 mensuales») solo "
@@ -243,6 +278,8 @@ class FichaVacante(BaseModel):
     beneficios: List[str] = Field(default_factory=list)
     # 2026-10-09: ¿la ruta de la vacante pide CV? (Análisis de CV o solicitud con CV). None = no se sabe → como siempre.
     pide_cv: Optional[bool] = None
+    # 2026-10-17: «Mostrar sueldo en la publicación». False = «Sueldo competitivo»: ninguna cifra de dinero en lo generado
+    mostrar_sueldo: bool = True
 
 
 def _clave_texto(t: str) -> str:
@@ -478,6 +515,8 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
     salida.avisos_cumplimiento = avisos_vigentes(avisos, sueldo=ficha.sueldo_texto, ubicacion=ficha.ubicacion, beneficios=ficha.beneficios)
     if ficha.pide_cv is False:
         _quitar_cv(salida)
+    if not ficha.mostrar_sueldo:
+        _quitar_montos(salida, ficha.titulo)  # 2026-10-17: «Sueldo competitivo» — ninguna cifra aunque el modelo la escriba
     if not salida.preguntas_filtro_whatsapp:
         salida.preguntas_filtro_whatsapp = puntos_criticos_whatsapp(salida.preguntas_filtro)
     salida.preguntas_filtro = cerrar_preguntas_web(salida.preguntas_filtro)
@@ -489,6 +528,51 @@ def _asegurar_capturado(salida: VacanteGenerada, ficha: FichaVacante) -> Vacante
         if p.tipo == "numero" and not p.opciones:
             p.opciones = _RANGO_ANOS_GENERICO
     return salida
+
+
+# 2026-10-17: montos de dinero («$12,000», «12 mil pesos», «15,000 MXN», «$8k») — se quitan si el sueldo no se publica
+_RE_MONTO = re.compile(
+    r"(?:\$\s?\d[\d.,]*(?:\s*(?:mil|k)\b)?(?:\s*(?:mxn|m\.?\s?n\.?|pesos(?:\s+mexicanos)?|usd|d[oó]lares))?"
+    r"|\b\d[\d.,]*\s*(?:mil\s+)?(?:mxn|m\.n\.|pesos(?:\s+mexicanos)?|usd|d[oó]lares)\b"
+    r"|\b\d[\d.,]*\s*(?:mil|k)\s+(?:al|por)\s+(?:mes|semana|quincena|a[nñ]o)\b)",
+    re.IGNORECASE)
+
+
+def tiene_monto(texto: str) -> bool:
+    return bool(_RE_MONTO.search(str(texto or "")))
+
+
+def sin_montos(texto: str) -> str:
+    """Quita cada ORACIÓN que menciona un monto de dinero (la frase entera, para no dejar «Ofrecemos un sueldo de
+    mensuales»); un renglón que se queda vacío (viñeta incluida) desaparece. Conserva saltos de línea y Markdown."""
+    if not tiene_monto(texto):
+        return str(texto or "")
+    renglones = []
+    for linea in str(texto).split("\n"):
+        if not tiene_monto(linea):
+            renglones.append(linea)
+            continue
+        m = re.match(r"^(\s*(?:[-*+•]\s+|\d+[.)]\s+)?)", linea)
+        prefijo = m.group(1) if m else ""
+        partes = re.split(r"(?<=[.!?])\s+", linea[len(prefijo):])
+        quedan = " ".join(x for x in partes if x.strip() and not tiene_monto(x)).strip()
+        if quedan and quedan.strip("*_ ").strip():
+            renglones.append(prefijo + quedan)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(renglones)).strip()
+
+
+def _quitar_montos(salida: VacanteGenerada, titulo: str = "") -> None:
+    """«Sueldo competitivo» (2026-10-17): sin cifras de dinero en ningún texto que lee el candidato."""
+    salida.descripcion = sin_montos(salida.descripcion)
+    if "sueldo competitivo" not in _clave_texto(salida.descripcion):
+        salida.descripcion = (salida.descripcion.rstrip() + "\n\nOfrecemos sueldo competitivo.").strip()
+    for campo in ("resumen", "perfil_ideal", "texto_whatsapp"):
+        setattr(salida, campo, sin_montos(getattr(salida, campo)))
+    if not salida.resumen.strip():
+        salida.resumen = f"Buscamos {titulo or 'talento'} para sumarse al equipo. Ofrecemos sueldo competitivo."
+    for nombre in ("occ", "linkedin", "portal"):
+        b = getattr(salida, nombre)
+        b.titulo, b.texto_copy, b.page = sin_montos(b.titulo), sin_montos(b.texto_copy), sin_montos(b.page)
 
 
 # 2026-10-09: avisos de cumplimiento UNA sola vez y solo mientras sigan vigentes (un dato capturado borra su aviso).
@@ -670,7 +754,7 @@ def _demo_vacante(f: FichaVacante) -> VacanteGenerada:
         "Cuidar el orden, la seguridad y la calidad en tu área de trabajo.",
         "Dar seguimiento a los indicadores del puesto.",
     ]
-    con_sueldo = bool(f.sueldo_texto) and f.sueldo_texto != "A convenir"
+    con_sueldo = bool(f.sueldo_texto) and f.sueldo_texto != "A convenir" and f.mostrar_sueldo
     linea_sueldo = f" Sueldo {f.sueldo_texto}." if con_sueldo else ""
     ofrecemos = list(f.beneficios) + ([f"Sueldo {f.sueldo_texto}"] if con_sueldo else [])
     lista_act = "\n".join(f"• {a}" for a in actividades)
@@ -770,7 +854,7 @@ def generar_vacante(ficha: FichaVacante) -> Tuple[VacanteGenerada, bool]:
 
     resp = client.responses.parse(
         model=MODEL,
-        instructions=f"{_REGLAS}\n\n{_PLANTILLAS}",
+        instructions=f"{_REGLAS}\n\n{_PLANTILLAS}" + ("" if ficha.mostrar_sueldo else f"\n\n{REGLA_SUELDO_COMPETITIVO}"),
         input=(
             "Ficha capturada por RH (insumo interno, no la cites literalmente):\n"
             f"- Puesto: {ficha.titulo}\n- Área: {ficha.area or '(sin dato)'}\n- Seniority: {ficha.seniority or '(sin dato)'}\n"
@@ -834,13 +918,78 @@ def asegurar_preguntas_requisitos(indispensables: List[str], propuestas: Optiona
     """Una pregunta natural por indispensable: la propuesta por la IA si es una sola pregunta natural (sin frases armadas
     ni «Para confirmar»); si no, `pregunta_natural_requisito`. La escolaridad siempre con su pregunta fija."""
     por_req = {_norm_req(x.get("requisito") or ""): str(x.get("pregunta") or "").strip() for x in propuestas or [] if isinstance(x, dict)}
+    # 2026-10-17: PREFILTRO WEB (Sí/No) y PREFILTRO WHATSAPP (continuación) — la primera propuesta que traiga cada uno
+    webs, segs = {}, {}
+    for x in propuestas or []:
+        if isinstance(x, dict):
+            k = _norm_req(x.get("requisito") or "")
+            if str(x.get("pregunta_web") or "").strip():
+                webs.setdefault(k, str(x["pregunta_web"]).strip())
+            if str(x.get("pregunta_whatsapp") or "").strip():
+                segs.setdefault(k, str(x["pregunta_whatsapp"]).strip())
     salida = []
     for req in [r for r in indispensables or [] if str(r or "").strip()]:
         propia = sin_relleno(por_req.get(_norm_req(req), ""))  # Cambio 48: sin «Cuéntame,» aunque la IA lo ponga
         valida = (propia.count("?") == 1 and propia.endswith("?") and not _RE_PREGUNTA_ARMADA.search(propia)
                   and not RE_NIVEL_ESTUDIOS.search(req) and len(propia.split()) <= 20)
-        salida.append({"requisito": req.strip(), "pregunta": propia if valida else pregunta_natural_requisito(req)})
+        pregunta = propia if valida else pregunta_natural_requisito(req)
+        web_q = sin_relleno(webs.get(_norm_req(req), ""))
+        web_q = web_q if es_pregunta_si_no_web(web_q) else ""
+        seg = seguimiento_whatsapp(req, segs.get(_norm_req(req), ""), web_q or pregunta)
+        salida.append({"requisito": req.strip(), "pregunta": pregunta, "pregunta_web": web_q, "pregunta_whatsapp": seg})
     return salida
+
+
+_RE_INTERROGATIVO = re.compile(r"^¿\s*(qu[eé]|cu[aá]l|cu[aá]nt|c[oó]mo|d[oó]nde|cu[aá]ndo|por qu[eé]|qui[eé]n)", re.IGNORECASE)
+
+
+def es_pregunta_si_no_web(q: str) -> bool:
+    """Una pregunta directa de Sí/No para el formulario web: una sola, sin interrogativo abierto ni frases armadas."""
+    q = " ".join(str(q or "").split())
+    return (q.count("?") == 1 and q.startswith("¿") and q.endswith("?") and not _RE_INTERROGATIVO.match(q)
+            and not _RE_PREGUNTA_ARMADA.search(q) and len(q.split()) <= 20)
+
+
+def _palabras_clave(t: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9]+", _clave_texto(t)) if len(w) >= 4}
+
+
+def repite_pregunta(a: str, b: str) -> bool:
+    """2026-10-17: ¿la pregunta del WhatsApp repite la de la web? Igual (normalizada) o casi las mismas palabras clave."""
+    ka, kb = _palabras_clave(a), _palabras_clave(b)
+    if not ka or not kb:
+        return _clave_texto(a).strip(" ¿?") == _clave_texto(b).strip(" ¿?")
+    return _clave_texto(a).strip(" ¿?") == _clave_texto(b).strip(" ¿?") or len(ka & kb) / len(ka | kb) >= 0.6
+
+
+def seguimiento_natural(req: str) -> str:
+    """Sin IA: la continuación conversacional de un requisito (asume que lo cumple y pide un detalle concreto)."""
+    k = _clave_texto(req)
+    if RE_NIVEL_ESTUDIOS.search(req or ""):
+        return "¿En qué escuela terminaste tus estudios?"
+    if re.search(r"\bcedula\b", k):
+        return "¿En qué año obtuviste tu cédula profesional?"
+    if re.search(r"\blicencia\b", k):
+        return "¿Qué tipo de unidades has manejado con tu licencia?"
+    if es_de_experiencia(req):
+        return "¿En qué empresa ganaste esa experiencia?"
+    if re.search(r"\b(cargar|carga|peso|pesad\w*|kilos?|esfuerzo)\b", k):
+        return "¿Qué tanto peso cargabas en tu último trabajo?"
+    if re.search(r"\b(turnos?|horario\w*|fines? de semana|nocturn\w*|rolar|disponibilidad)\b", k):
+        return "¿En qué trabajo anterior tuviste un horario así?"
+    if re.search(r"\b(manejo|conocimiento\w*|dominio|excel|office|sistema\w*|software|ingles)\b", k):
+        return "¿Para qué tareas lo usabas en tu último trabajo?"
+    return "¿Me cuentas un ejemplo concreto de cuándo lo has necesitado en un trabajo?"
+
+
+def seguimiento_whatsapp(req: str, propuesta: str, web: str) -> str:
+    """La pregunta del PREFILTRO WHATSAPP de un requisito: la de la IA si es una sola pregunta y NO repite la web; si no, la
+    continuación determinista (`seguimiento_natural`). Nunca regresa la misma pregunta de la web."""
+    q = " ".join(str(propuesta or "").split())
+    if (q and q.count("?") == 1 and q.endswith("?") and not _RE_PREGUNTA_ARMADA.search(q) and len(q.split()) <= 30
+            and not repite_pregunta(q, web) and not repite_pregunta(q, req)):
+        return q
+    return seguimiento_natural(req)
 
 
 def texto_preguntas(preguntas: Optional[list]) -> List[str]:

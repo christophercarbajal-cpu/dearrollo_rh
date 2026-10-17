@@ -272,7 +272,7 @@ def _compatible(pregunta: str, tipo: str, dato: str) -> bool:
 
 
 def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str = "", previa: Optional[dict] = None,
-                        propuesto: bool = False, descripcion: str = "") -> dict:
+                        propuesto: bool = False, descripcion: str = "", web_ia: str = "", seguimiento: str = "") -> dict:
     from . import ia
 
     info = tipo_requisito(req)
@@ -285,6 +285,10 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
     # 2026-10-16 (Bloque 2): la experiencia se pregunta en modo conversación («Háblame de tu experiencia…»), no con la de la IA
     pregunta = (natural if (natural and _pregunta_valida(natural) and d not in ("escolaridad", "edad", "traslado", "vigencia", "experiencia")
                             and _compatible(natural, tipo, d)) else pregunta_natural(req, info))
+    # 2026-10-17: un requisito de Sí/No se pregunta en la web con la pregunta del PREFILTRO WEB que propuso la generación
+    web_ia = ia.sin_relleno(web_ia) if web_ia and ia.es_pregunta_si_no_web(web_ia) else ""
+    if tipo == "si_no" and web_ia and _pregunta_valida(web_ia) and _compatible(web_ia, tipo, d) and d != "licencia":
+        pregunta = web_ia
     descarta = tipo != "abierta" and not (sin_experiencia and d == "experiencia")
     if previa:  # lo que RH ajustó (texto y si descarta) se conserva mientras el requisito siga
         if previa.get("tipo") in TIPOS:
@@ -308,11 +312,22 @@ def _item_indispensable(i: int, req: str, *, sin_experiencia: bool, natural: str
         item["pregunta_web"] = _texto(previa["pregunta_web"])
     elif previa and "pregunta_web" in previa:
         item["pregunta_web"] = ""  # RH pidió el DATO también en la web (p. ej. UVAQ: «¿Cuántos años…?» con filtro de revisión)
+    elif d == "licencia" and (web_ia or seguimiento):
+        # 2026-10-17: la licencia también va en la web como Sí/No directo (el chat sigue con la continuación)
+        item["pregunta_web"] = web_ia or f"¿Tienes {_min(req)}?"
     elif tipo != "si_no":
         # 2026-10-16 (Bloque 2): la solicitud web SOLO pregunta Sí/No por requisito; el chat retoma el dato conversando
-        web_q = pregunta_si_no_web(req, info)
+        # (2026-10-17: con la pregunta del PREFILTRO WEB de la generación si sirve)
+        web_q = web_ia if (web_ia and _pregunta_valida(web_ia)) else pregunta_si_no_web(req, info)
         if web_q and web_q != pregunta and not tiene_frase_prohibida(web_q):
             item["pregunta_web"] = web_q
+    # 2026-10-17: PREFILTRO WHATSAPP = la continuación natural de la pregunta web (nunca la repite). Lo ajustado por RH manda.
+    seg_previo = _texto((previa or {}).get("seguimiento"))
+    texto_web = item.get("pregunta_web") or pregunta
+    if seg_previo and not ia.repite_pregunta(seg_previo, texto_web):
+        item["seguimiento"] = seg_previo
+    elif seguimiento and d != "vigencia":
+        item["seguimiento"] = ia.seguimiento_whatsapp(req, seguimiento, texto_web)
     if tipo == "numero":
         item["unidad"] = {"experiencia": "años", "transportes": "transportes", "edad": "años", "traslado": "minutos"}.get(d, "")
     if propuesto:
@@ -413,10 +428,14 @@ def _marcar_quitadas(lista: List[dict], quitadas: set) -> List[dict]:
 def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubicacion: str = "", modalidad: str = "",
           seniority: str = "", naturales: Optional[Dict[str, str]] = None, previas: Optional[List[dict]] = None,
           propuestos: Optional[List[str]] = None, enfoque: str = "", periodicidad: str = "", descripcion: str = "",
-          quitadas: Optional[set] = None) -> List[dict]:
+          quitadas: Optional[set] = None, webs: Optional[Dict[str, str]] = None,
+          seguimientos: Optional[Dict[str, str]] = None) -> List[dict]:
     """La lista completa: una pregunta por indispensable (en su orden) y después las base. `naturales` = {requisito
-    normalizado: pregunta propuesta por la IA}; `previas` = la lista guardada (se conservan los ajustes de RH)."""
+    normalizado: pregunta propuesta por la IA}; `previas` = la lista guardada (se conservan los ajustes de RH).
+    2026-10-17: `webs` / `seguimientos` = {requisito normalizado: pregunta} del PREFILTRO WEB (Sí/No) y del PREFILTRO
+    WHATSAPP (continuación que asume que cumple y pide detalle; nunca repite la web)."""
     naturales = naturales or {}
+    webs, seguimientos = webs or {}, seguimientos or {}
     por_req = {_norm_req(q.get("requisito") or ""): q for q in previas or [] if isinstance(q, dict) and q.get("indispensable")}
     prop = {_norm_req(x) for x in propuestos or []}
     sin_exp = (seniority or "").strip().lower() == "sin experiencia"
@@ -424,7 +443,8 @@ def armar(indispensables: List[str], *, titulo: str = "", sueldo: str = "", ubic
     reqs = [r for r in indispensables or [] if str(r or "").strip()]
     for i, req in enumerate(reqs):
         it = _item_indispensable(i, req, sin_experiencia=sin_exp, natural=naturales.get(_norm_req(req), ""),
-                                 previa=por_req.get(_norm_req(req)), propuesto=_norm_req(req) in prop, descripcion=descripcion)
+                                 previa=por_req.get(_norm_req(req)), propuesto=_norm_req(req) in prop, descripcion=descripcion,
+                                 web_ia=webs.get(_norm_req(req), ""), seguimiento=seguimientos.get(_norm_req(req), ""))
         if it["dato"] in ("edad", "traslado"):
             ya.add(it["dato"])
         salida.append(it)
@@ -561,7 +581,8 @@ def guardar(v, lista: List[dict], propuestos: Optional[List[str]] = None) -> Lis
     return lista
 
 
-def sincronizar(v, entrada=None, propuestos: Optional[List[str]] = None) -> List[dict]:
+def sincronizar(v, entrada=None, propuestos: Optional[List[str]] = None, webs: Optional[Dict[str, str]] = None,
+                seguimientos: Optional[Dict[str, str]] = None) -> List[dict]:
     """Recalcula la entidad contra los indispensables vigentes de la vacante (conservando lo que RH ajustó) y la guarda."""
     from ..routers.vacantes import requisitos_lista
 
@@ -570,7 +591,7 @@ def sincronizar(v, entrada=None, propuestos: Optional[List[str]] = None) -> List
     lista = armar(requisitos_lista(getattr(v, "requisitos", "") or ""), previas=previas, propuestos=prop,
                   naturales={_norm_req(x.get("requisito") or ""): x.get("pregunta") or ""
                              for x in ((getattr(v, "guiones", None) or {}).get("preguntas_requisitos") or []) if isinstance(x, dict)},
-                  descripcion=getattr(v, "descripcion", "") or "", **kw_de_vacante(v))
+                  descripcion=getattr(v, "descripcion", "") or "", webs=webs, seguimientos=seguimientos, **kw_de_vacante(v))
     return guardar(v, lista, prop)
 
 
@@ -639,7 +660,17 @@ def criterios(v, corporativa: bool = False) -> List[dict]:
                 c[k] = q[k]
         if q.get("dato") == "escolaridad" and q.get("nivel") is not None:
             c["nivel_requerido"] = q["nivel"]
+        if q.get("indispensable") and _texto(q.get("seguimiento")):
+            c["tiene_seguimiento"] = True
         salida.append(c)
+        if q.get("indispensable") and _texto(q.get("seguimiento")):
+            # 2026-10-17: PREFILTRO WHATSAPP — la continuación del requisito. Solo se pregunta si el candidato ya dijo que
+            # cumple en la solicitud web (`prefiltro_conversacional._falta`); abierta: se registra y nunca descarta
+            seg = _texto(q["seguimiento"])
+            salida.append({"id": f"{q['id']}-seg", "clave": "seguimiento", "dato": "seguimiento", "seguimiento_de": q["id"],
+                           "criterio": f"Detalle: {q.get('requisito') or q['pregunta']}", "pregunta": seg, "chat": seg,
+                           "indispensable": False, "esperada": "si", "tipo": "abierta", "unificado": True, "registra": True,
+                           "base": False, "regla": REGLA_NO_DESCARTA})
     return salida
 
 
@@ -917,6 +948,10 @@ def registrar_datos(p, c: dict, texto: str, extra: dict) -> None:
         # 2026-10-15: preguntas propias de RH en el chat (solo se registran)
         d["respuestas_propias"] = {**(d.get("respuestas_propias") if isinstance(d.get("respuestas_propias"), dict) else {}),
                                    (c.get("criterio") or c.get("pregunta") or "")[:120]: texto.strip()[:200]}
+    elif dato == "seguimiento":
+        # 2026-10-17: lo que contó en el PREFILTRO WHATSAPP sobre un requisito que ya dijo cumplir (solo se registra)
+        d["detalles_requisitos"] = {**(d.get("detalles_requisitos") if isinstance(d.get("detalles_requisitos"), dict) else {}),
+                                    str(c.get("criterio") or "").removeprefix("Detalle: ")[:120]: texto.strip()[:300]}
     elif dato == "reubicacion":
         # Cambio 51: vive en otro estado — se registra en el resumen (nunca descarta)
         d["reubicacion"] = texto.strip()[:200]

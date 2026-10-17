@@ -130,12 +130,14 @@ def _sincronizar_ruta(db: Session, v: Vacante, publicar: bool = False) -> None:
             raise HTTPException(409, "No se puede publicar: " + " ".join(faltan))
 
 
-def _sincronizar_filtro(v: Vacante, entrada=None, propuestos: Optional[List[str]] = None) -> None:
+def _sincronizar_filtro(v: Vacante, entrada=None, propuestos: Optional[List[str]] = None, webs: Optional[dict] = None,
+                        seguimientos: Optional[dict] = None) -> None:
     """Cambio 37: «Preguntas filtro» — la entidad única se recalcula contra los indispensables vigentes (conserva lo que
-    RH ajustó) y DERIVA el formulario web; el prefiltro de WhatsApp separado deja de existir."""
+    RH ajustó) y DERIVA el formulario web; el prefiltro de WhatsApp separado deja de existir. 2026-10-17: `webs` /
+    `seguimientos` = las preguntas web (Sí/No) y de WhatsApp (continuación) que acaba de proponer la generación."""
     from ..services import preguntas_filtro as pfu
 
-    pfu.sincronizar(v, entrada=entrada, propuestos=propuestos)
+    pfu.sincronizar(v, entrada=entrada, propuestos=propuestos, webs=webs, seguimientos=seguimientos)
 
 
 def _validar_minimo_prefiltro(db: Session, v: Vacante, explicito: bool) -> None:
@@ -372,7 +374,7 @@ def _ficha(datos: GenerarIn, empresa: str) -> ia.FichaVacante:
         modalidad=datos.modalidad, sueldo_texto=datos.sueldo_texto() if datos.mostrar_sueldo else SUELDO_COMPETITIVO, empresa=empresa,
         descripcion_breve=datos.descripcion, requisitos_indispensables=datos.indispensables(),
         requisitos_deseables=[x for x in datos.requisitos_deseables if x.strip()],
-        beneficios=[x for x in datos.beneficios if x.strip()],
+        beneficios=[x for x in datos.beneficios if x.strip()], mostrar_sueldo=datos.mostrar_sueldo,
     )
 
 
@@ -435,6 +437,7 @@ def generar(
                        ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
                        modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
                        naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
+                       **_web_y_whatsapp(resultado),
                        previas=datos.filtro or (actuales.get("filtro") or []), propuestos=list(resultado.indispensables_propuestos),
                        enfoque=datos_g["enfoque_entrevista"], periodicidad=datos.sueldo_periodicidad or "", descripcion=datos.descripcion)
     salida["filtro"] = filtro
@@ -471,11 +474,19 @@ def regenerar_preguntas_filtro(
                        ubicacion="" if (datos.modalidad or "").lower().startswith("remot") else datos.ubicacion_texto(),
                        modalidad=datos.modalidad, seniority=datos.seniority or resultado.seniority,
                        naturales={ia._norm_req(x.requisito): x.pregunta for x in resultado.preguntas_requisitos},
+                       **_web_y_whatsapp(resultado),
                        previas=previas, propuestos=list(resultado.indispensables_propuestos), enfoque=enfoque,
                        periodicidad=datos.sueldo_periodicidad or "", descripcion=datos.descripcion)
     return {"ia": con_ia, "filtro": filtro, "requisitos": list(resultado.requisitos_indispensables),
             "indispensables_propuestos": list(resultado.indispensables_propuestos), "preguntas_filtro": pfu.web(filtro),
             "preguntas_requisitos": [x.model_dump() for x in resultado.preguntas_requisitos]}
+
+
+def _web_y_whatsapp(resultado) -> dict:
+    """2026-10-17: la pregunta del PREFILTRO WEB (Sí/No) y la del PREFILTRO WHATSAPP (continuación que nunca repite la web)
+    que propuso la generación para cada requisito."""
+    return {"webs": {ia._norm_req(x.requisito): x.pregunta_web for x in resultado.preguntas_requisitos if x.pregunta_web},
+            "seguimientos": {ia._norm_req(x.requisito): x.pregunta_whatsapp for x in resultado.preguntas_requisitos if x.pregunta_whatsapp}}
 
 
 def _pasos_de_formulario(db: Session, cuenta_id: int, proceso: Optional[dict]) -> list:
@@ -1088,9 +1099,10 @@ def regenerar(
     v = _no_eliminada(_por_codigo(db, codigo, cuenta.id))
     ficha = ia.FichaVacante(
         titulo=v.titulo, area=v.area, seniority=v.seniority or "", ubicacion=v.ubicacion, modalidad=v.modalidad,
-        sueldo_texto=v.sueldo or "", empresa=v.empresa or nombre_empresa_candidato(v),
+        sueldo_texto=(v.sueldo or "") if v.mostrar_sueldo is not False else SUELDO_COMPETITIVO, empresa=v.empresa or nombre_empresa_candidato(v),
         descripcion_breve=(datos.notas or "").strip(), requisitos_indispensables=requisitos_lista(v.requisitos),
         requisitos_deseables=list(v.requisitos_deseables or []), beneficios=list(v.beneficios or []),
+        mostrar_sueldo=v.mostrar_sueldo is not False,
     )
     from ..services import guiones as _sgui
 
@@ -1111,7 +1123,7 @@ def regenerar(
     g = sgui.generar_para_vacante(db, v, u.nombre, sobrescribir_editadas=datos.sobrescribir_guiones,
                                   solo=(guion_claves or ["-"]) if unificado else None)
     if unificado:
-        _sincronizar_filtro(v, propuestos=list(generado.indispensables_propuestos or []))
+        _sincronizar_filtro(v, propuestos=list(generado.indispensables_propuestos or []), **_web_y_whatsapp(generado))
     registrar(db, u.nombre, "vacante_regenerada", "vacante", v.codigo,
               {"ia": con_ia, "notas": datos.notas, "guiones": g["generadas"], "guiones_conservados": g["conservadas"]})
     db.commit()

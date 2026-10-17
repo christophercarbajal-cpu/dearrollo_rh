@@ -739,6 +739,8 @@ export interface PreguntaFiltroU {
   origen?: OrigenPregunta;
   /** Versión Sí/No para la solicitud web (sin ella, la web usa `pregunta`). */
   pregunta_web?: string;
+  /** 2026-10-17: PREFILTRO WHATSAPP — continuación de la pregunta web (pide detalle; nunca la repite). */
+  seguimiento?: string;
   /** Pregunta base que RH quitó con la «X» (se conserva para poder restaurarla). */
   quitada?: boolean;
 }

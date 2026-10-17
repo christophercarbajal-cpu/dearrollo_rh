@@ -50,6 +50,11 @@ export function preguntaWeb(q: PreguntaFiltroU): string {
   return q.pregunta_web || q.pregunta;
 }
 
+/** La pregunta del chat: la continuación de la web (`seguimiento`, nunca la repite) o, sin ella, la conversacional. */
+export function preguntaWhatsapp(q: PreguntaFiltroU): string {
+  return q.seguimiento || q.pregunta;
+}
+
 function minusculaInicial(t: string) {
   const x = t.trim().replace(/\.$/, "");
   return x.length > 1 && x.slice(0, 2) !== x.slice(0, 2).toUpperCase() ? x : x.charAt(0).toLowerCase() + x.slice(1);
@@ -119,12 +124,13 @@ export function VistaPreviaPreguntas({
   const emitir = (nuevoFiltro: PreguntaFiltroU[], nuevosReq = requisitos, nuevosProp = propuestos) =>
     onChange({ filtro: nuevoFiltro, requisitos: nuevosReq, indispensables_propuestos: nuevosProp });
 
-  const textoDe = (q: PreguntaFiltroU) => (canal === "web" ? preguntaWeb(q) : q.pregunta);
+  const textoDe = (q: PreguntaFiltroU) => (canal === "web" ? preguntaWeb(q) : preguntaWhatsapp(q));
   const guardarEdicion = (q: PreguntaFiltroU) => {
     const texto = borrador.trim();
     if (texto) {
       // en la web se edita la versión Sí/No (si la pregunta del chat es otra); en el chat, la conversacional
-      const campo: "pregunta" | "pregunta_web" = canal === "web" && (q.pregunta_web || q.tipo !== "si_no") ? "pregunta_web" : "pregunta";
+      const campo: "pregunta" | "pregunta_web" | "seguimiento" =
+        canal === "web" ? (q.pregunta_web || q.tipo !== "si_no" ? "pregunta_web" : "pregunta") : q.seguimiento ? "seguimiento" : "pregunta";
       emitir(filtro.map((x) => (x.id === q.id ? { ...x, [campo]: texto } : x)));
     }
     setEditando(null);
@@ -170,7 +176,7 @@ export function VistaPreviaPreguntas({
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
                   <Origen origen={origenDe(q, propuestos)} />
                   <span>Requisito: {q.requisito}</span>
-                  {canal === "whatsapp" && <span>· {textoDescartaSi(q) === "No descarta" ? "No descarta" : `Descarta si: ${textoDescartaSi(q)}`}</span>}
+                  {canal === "whatsapp" && <span>· {q.seguimiento ? "Continúa la pregunta web · Se registra" : textoDescartaSi(q) === "No descarta" ? "No descarta" : `Descarta si: ${textoDescartaSi(q)}`}</span>}
                 </div>
               </div>
               <div className="flex shrink-0 gap-1">

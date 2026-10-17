@@ -359,7 +359,7 @@ _EXT_POR_MIME = {"application/pdf": "pdf", "image/jpeg": "jpg", "image/jpg": "jp
 _MIME_POR_EXT = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
-async def descargar_archivo(file_id: str, mime: str = "") -> dict:
+async def descargar_archivo(file_id: str, mime: str = "", aceptar_audio: bool = False) -> dict:
     """getFile → binario. Mismo contrato que `whatsapp.descargar_media` ({ok, contenido, mime, extension, filename,
     tamano, detalle}); nunca lanza."""
     if not file_id:
@@ -376,8 +376,12 @@ async def descargar_archivo(file_id: str, mime: str = "") -> dict:
     if r.status_code >= 300:
         return {"ok": False, "detalle": f"descarga del archivo: HTTP {r.status_code}"}
     ext_ruta = ruta.rsplit(".", 1)[-1].lower() if "." in ruta else ""
-    mime = (mime or _MIME_POR_EXT.get(ext_ruta, "")).lower()
+    mime = (mime or _MIME_POR_EXT.get(ext_ruta, "") or ("audio/ogg" if aceptar_audio and ext_ruta in ("oga", "ogg") else "")).lower()
     ext = _EXT_POR_MIME.get(mime, "")
+    if not ext and aceptar_audio:
+        from .whatsapp import EXT_AUDIO_POR_MIME  # 2026-10-17: nota de voz para transcribir
+
+        ext = EXT_AUDIO_POR_MIME.get(mime.split(";")[0].strip(), "")
     if not ext:
         return {"ok": False, "detalle": f"formato no admitido ({mime or 'desconocido'}); acepta PDF, JPG o PNG"}
     return {"ok": True, "contenido": r.content, "mime": mime, "extension": ext, "filename": f"telegram_{file_id[-12:]}.{ext}", "tamano": len(r.content)}

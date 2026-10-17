@@ -89,28 +89,72 @@ _MXN = r"(?:MXN|M\.N\.|MN)\b"
 _RE_MONTO = re.compile(r"\$\s*(" + _NUM + r")(?:\s*(?:" + _MXN + r"|pesos(?:\s+mexicanos)?\b))?", re.IGNORECASE)
 _RE_MONTO_MXN = re.compile(r"(?<![\w$.,])(" + _NUM + r")\s*" + _MXN, re.IGNORECASE)
 _RE_RANGO = re.compile(r"(\d+) pesos mexicanos\s*(?:–|—|-|a)\s*(\d+ pesos mexicanos)")
-REGLA_VOZ_MONTOS = ("Cantidades de dinero (se dicen en voz alta): di siempre «[cantidad] pesos mexicanos» (por ejemplo «55000 "
-                    "pesos mexicanos mensuales»); nunca uses el símbolo $, «MXN», «dólares» ni centavos.")
+# 2026-10-17 (QA): el TTS DELETREABA las cifras («10000» → «uno, cero, cero, cero, cero»). Ahora todo monto se escribe con
+# PALABRAS: lo que mandamos (systemPrompt / initialMessage) se convierte en código y el LLM tiene la obligación estricta de
+# hacer lo mismo con lo que genera (Anam habla directo con OpenAI: ahí solo manda esta regla del prompt).
+REGLA_VOZ_MONTOS = (
+    "REGLA ESTRICTA DE VOZ (todo lo que escribes se lee en voz alta): escribe SIEMPRE las cantidades de dinero y cualquier "
+    "cantidad con PALABRAS, nunca con dígitos. Ejemplo: escribe «diez mil pesos mexicanos», NUNCA «10000 pesos mexicanos» "
+    "ni «$10,000 MXN»; «doce mil quinientos pesos mexicanos mensuales», NUNCA «12500». Prohibidos los dígitos, el símbolo $, "
+    "«MXN», «dólares» y los centavos.")
+
+_UNIDADES = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece",
+             "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidós",
+             "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"]
+_DECENAS = {30: "treinta", 40: "cuarenta", 50: "cincuenta", 60: "sesenta", 70: "setenta", 80: "ochenta", 90: "noventa"}
+_CENTENAS = {100: "ciento", 200: "doscientos", 300: "trescientos", 400: "cuatrocientos", 500: "quinientos", 600: "seiscientos",
+             700: "setecientos", 800: "ochocientos", 900: "novecientos"}
+
+
+def _menor_mil(n: int) -> str:
+    if n == 100:
+        return "cien"
+    if n < 30:
+        return _UNIDADES[n]
+    if n < 100:
+        d, u = n // 10 * 10, n % 10
+        return _DECENAS[d] + (f" y {_UNIDADES[u]}" if u else "")
+    c, resto = n // 100 * 100, n % 100
+    return _CENTENAS[c] + (f" {_menor_mil(resto)}" if resto else "")
+
+
+def numero_a_palabras(n: int) -> str:
+    """12500 → «doce mil quinientos»; 1000 → «mil»; 21000 → «veintiún mil»; 1500000 → «un millón quinientos mil»."""
+    n = int(n)
+    if n < 1000:
+        return _menor_mil(n)
+    if n < 1_000_000:
+        miles, resto = divmod(n, 1000)
+        txt = "mil" if miles == 1 else re.sub(r"uno$", "ún", _menor_mil(miles)) + " mil"
+        return txt + (f" {_menor_mil(resto)}" if resto else "")
+    millones, resto = divmod(n, 1_000_000)
+    txt = "un millón" if millones == 1 else re.sub(r"uno$", "ún", numero_a_palabras(millones)) + " millones"
+    return txt + (f" {numero_a_palabras(resto)}" if resto else "")
 
 
 def _cifra(texto: str) -> str:
-    limpio = re.sub(r"[,\s]", "", texto)
-    if "." in limpio:
-        entero, dec = limpio.split(".", 1)
-        limpio = entero if not dec.strip("0") else f"{entero} punto {dec}"
-    return limpio
+    """«55,000.00» → «55000» (sin separadores ni centavos: no se leen en voz); `texto_para_voz` lo pasa a palabras."""
+    return re.sub(r"[,\s]", "", texto).split(".", 1)[0]
+
+
+def _a_palabras(m) -> str:
+    try:
+        return numero_a_palabras(int(m.group(1)))
+    except ValueError:
+        return m.group(1)
 
 
 def texto_para_voz(texto: str) -> str:
-    """Sanitiza montos para el TTS: «$55,000 MXN» → «55000 pesos mexicanos»; «$8,000 – $10,000 MXN» → «8000 a 10000
-    pesos mexicanos». Lo demás queda igual."""
+    """Sanitiza montos para el TTS con PALABRAS: «$55,000 MXN» → «cincuenta y cinco mil pesos mexicanos»; «$8,000 – $10,000
+    MXN» → «ocho mil a diez mil pesos mexicanos». Lo demás queda igual."""
     if not texto:
         return texto or ""
     t = _RE_MONTO.sub(lambda m: f"{_cifra(m.group(1))} pesos mexicanos", texto)
     t = _RE_MONTO_MXN.sub(lambda m: f"{_cifra(m.group(1))} pesos mexicanos", t)
     t = _RE_RANGO.sub(lambda m: f"{m.group(1)} a {m.group(2)}", t)
     t = re.sub(r"pesos mexicanos(?:\s+" + _MXN + r")+", "pesos mexicanos", t, flags=re.IGNORECASE)
-    return t
+    # 2026-10-17: las cifras de dinero con PALABRAS («10000 pesos mexicanos» → «diez mil pesos mexicanos»)
+    return re.sub(r"\b(\d+)(?=(?: a \d+)? pesos mexicanos)", _a_palabras, t)
 
 
 def persona_config(nombre_persona: str, system_prompt: str, mensaje_inicial: str, extras: Optional[dict] = None) -> dict:

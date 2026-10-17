@@ -414,8 +414,9 @@ async def _transcribir_nota(msg: dict) -> str:
 
     media = msg.get("media") or {}
     try:
-        d = await descargar_media(media.get("id", ""), media.get("mime_type", ""))
+        d = await descargar_media(media.get("id", ""), media.get("mime_type", ""), aceptar_audio=True)
         if not d.get("ok") or not d.get("contenido"):
+            print(f"[webhook] nota de voz no descargada: {str(d.get('detalle', ''))[:200]}", flush=True)
             return ""
         return await _asyncio.to_thread(_ia.transcribir_audio, d["contenido"], d.get("mime") or media.get("mime_type", ""))
     except Exception as ex:  # noqa: BLE001 — nunca tumba el turno
@@ -1037,7 +1038,8 @@ async def procesar_entrante(db: Session, msg: dict) -> dict:
         from ..services import prefiltro_conversacional as _pconv
 
         pendiente = _pconv.pregunta_pendiente(p) if p.vacante_id and p.consentimiento else None
-        aviso_voz = "Por ahora no puedo escuchar mensajes de voz 🙏 ¿Me lo escribes?" + (f"\n\n{pendiente}" if pendiente else "")
+        # 2026-10-17: solo llega aquí si la transcripción falló (sin clave, descarga o Whisper)
+        aviso_voz = "No pude escuchar bien tu nota de voz 🙏 ¿Me escribes tu respuesta?" + (f"\n\n{pendiente}" if pendiente else "")
         envio_voz = await enviar_mensaje(telefono, aviso_voz)
         guardar_mensaje(db, p, "user", "[🎤 mensaje de voz]", "whatsapp", wa_id=msg.get("wa_id", ""))
         guardar_mensaje(db, p, "assistant", aviso_voz, "whatsapp", envio_voz)

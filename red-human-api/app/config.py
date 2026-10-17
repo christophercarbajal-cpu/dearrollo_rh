@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
     # 2026-10-16 (QA): transcripción de notas de voz del candidato (WhatsApp / Telegram)
-    openai_transcribe_model: str = "gpt-4o-mini-transcribe"
+    openai_transcribe_model: str = "whisper-1"  # 2026-10-17: notas de voz con Whisper (OPENAI_TRANSCRIBE_MODEL)
 
     # Fase F — agente global "Pregunta a Red Human" (punto 29): tope diario de mensajes por
     # usuario (Q7) — evita abuso/costo descontrolado, sin bloquear el uso normal.

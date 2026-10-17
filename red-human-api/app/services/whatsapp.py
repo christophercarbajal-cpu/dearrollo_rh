@@ -437,16 +437,24 @@ _EXT_POR_MIME = {
     "image/webp": "webp",
 }
 
+# 2026-10-17: notas de voz (solo para transcribir; nunca se adjuntan al expediente). WhatsApp manda «audio/ogg; codecs=opus»
+EXT_AUDIO_POR_MIME = {
+    "audio/ogg": "ogg", "audio/opus": "ogg", "audio/oga": "ogg", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/mp4": "m4a",
+    "audio/m4a": "m4a", "audio/x-m4a": "m4a", "audio/aac": "aac", "audio/amr": "amr", "audio/wav": "wav", "audio/x-wav": "wav",
+    "audio/webm": "webm",
+}
 
-async def descargar_media(media_id: str, mime: str = "") -> dict:
+
+async def descargar_media(media_id: str, mime: str = "", aceptar_audio: bool = False) -> dict:
     """Descarga un medio recibido por el webhook (2026-09-15): Graph `GET /{media_id}` regresa la URL
     temporal + mime; la URL se lee con el mismo Bearer. Regresa {ok, contenido, mime, filename,
     detalle} y nunca lanza — el webhook le explica al candidato si algo falla. Si el mensaje entrante llegó por
-    Telegram, `media_id` es el file_id y se descarga con getFile."""
+    Telegram, `media_id` es el file_id y se descarga con getFile. `aceptar_audio` (2026-10-17): la nota de voz que se va a
+    transcribir (sin él, solo PDF/imagen como siempre)."""
     from .mensajeria import canal_conversacion
 
     if canal_conversacion() == "telegram":
-        return await telegram.descargar_archivo(media_id, mime)
+        return await telegram.descargar_archivo(media_id, mime, aceptar_audio=aceptar_audio)
     if not media_id:
         return {"ok": False, "detalle": "sin media_id"}
     if settings.whatsapp_provider != "meta" or not settings.meta_whatsapp_token:
@@ -468,7 +476,7 @@ async def descargar_media(media_id: str, mime: str = "") -> dict:
     except Exception as e:  # red caída: no tumbar el webhook
         return {"ok": False, "detalle": f"error de red: {e}"}
     mime = (info.get("mime_type") or binario.headers.get("content-type") or "").split(";")[0].strip().lower()
-    ext = _EXT_POR_MIME.get(mime, "")
+    ext = _EXT_POR_MIME.get(mime, "") or (EXT_AUDIO_POR_MIME.get(mime, "") if aceptar_audio else "")
     if not ext:
         return {"ok": False, "detalle": f"formato no admitido ({mime or 'desconocido'}); acepta PDF, JPG o PNG"}
     return {"ok": True, "contenido": binario.content, "mime": mime, "extension": ext, "filename": f"whatsapp_{media_id}.{ext}", "tamano": len(binario.content)}

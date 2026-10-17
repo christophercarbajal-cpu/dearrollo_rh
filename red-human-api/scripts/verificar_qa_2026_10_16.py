@@ -238,19 +238,99 @@ with TestClient(app) as client:
     check(m and m["tipo"] == "audio" and (m.get("media") or {}).get("id") == "media-voz", "el webhook trae el medio de la nota de voz")
     from app.services import ia
 
-    async def _descarga(media_id, mime=""):
-        return {"ok": True, "contenido": b"OggS-falso", "mime": "audio/ogg"}
+    # 2026-10-17 (QA): la descarga REAL (`whatsapp.descargar_media`) contra un Graph simulado — antes la prueba sustituía la
+    # descarga completa y escondía que el formato de audio se rechazaba («formato no admitido»)
+    from app.config import settings as _cfg
 
-    webhooks.descargar_media = _descarga
-    ia.transcribir_audio = lambda contenido, mime="": "Vivo en la colonia Centro de Zapopan"
-    m["texto"] = ""
-    asyncio.run(webhooks.procesar_entrante(db, m))
+    llamadas_graph = []
+
+    class _Resp:
+        def __init__(self, status, datos=None, contenido=b"", cabeceras=None):
+            self.status_code, self._datos, self.content, self.headers = status, datos or {}, contenido, cabeceras or {}
+            self.text = ""
+
+        def json(self):
+            return self._datos
+
+    class _GraphFalso:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, headers=None, **k):
+            llamadas_graph.append((url, (headers or {}).get("Authorization", "")))
+            if url.endswith("/media-voz"):
+                return _Resp(200, {"url": "https://lookaside.fbsbx.com/voz.ogg", "mime_type": "audio/ogg; codecs=opus"})
+            return _Resp(200, contenido=b"OggS-audio-real", cabeceras={"content-type": "audio/ogg"})
+
+        async def post(self, url, **k):
+            return _Resp(200, {"messages": [{"id": "wamid.salida"}]})
+
+    previo = (_cfg.whatsapp_provider, _cfg.meta_whatsapp_token, whatsapp.httpx.AsyncClient)
+    recibido = {}
+    _transcribir_real = ia.transcribir_audio
+
+    def _transcribe(contenido, mime=""):
+        recibido.update({"contenido": contenido, "mime": mime})
+        return "Vivo en la colonia Centro de Zapopan"
+
+    _cfg.whatsapp_provider, _cfg.meta_whatsapp_token = "meta", "token-de-prueba"
+    whatsapp.httpx.AsyncClient = _GraphFalso
+    ia.transcribir_audio = _transcribe
+    try:
+        d = asyncio.run(whatsapp.descargar_media("media-voz", "audio/ogg; codecs=opus"))
+        check(not d.get("ok") and "formato no admitido" in d.get("detalle", ""), "sin `aceptar_audio` la descarga sigue siendo solo PDF/imagen")
+        m["texto"] = ""
+        asyncio.run(webhooks.procesar_entrante(db, m))
+    finally:
+        _cfg.whatsapp_provider, _cfg.meta_whatsapp_token, whatsapp.httpx.AsyncClient = previo
+    check(any(u.endswith("/media-voz") and a == "Bearer token-de-prueba" for u, a in llamadas_graph),
+          "se pide a Graph la URL del audio con el media_id y el token de acceso")
+    check(recibido.get("contenido") == b"OggS-audio-real" and recibido.get("mime") == "audio/ogg",
+          f"el audio REAL descargado llega a la transcripción ({recibido})")
     db.expire_all()
     pc = db.get(Postulacion, pc.id)
     ultimo_user = next((x.texto for x in reversed(pc.mensajes) if x.rol == "user"), "")
     check(ultimo_user == "Vivo en la colonia Centro de Zapopan", f"la nota de voz se transcribe y entra como respuesta → «{ultimo_user}»")
     check("colonia centro" in str(((pc.analisis or {}).get("prefiltro_datos") or {}).get("zona", "")).lower(),
           "la respuesta transcrita se registró (colonia)")
+
+    # Whisper: el modelo por defecto y el archivo que se manda a OpenAI (cliente simulado, sin red)
+    from types import SimpleNamespace
+
+    pedido = {}
+
+    def _crear(**kw):
+        pedido.update(kw)
+        return SimpleNamespace(text="  Tengo   la secundaria terminada ")
+
+    cliente_previo = ia._client
+    ia._client = lambda: SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=_crear)))
+    try:
+        texto_w = _transcribir_real(b"OggS-audio-real", "audio/ogg; codecs=opus")
+    finally:
+        ia._client = cliente_previo
+    check(_cfg.openai_transcribe_model == "whisper-1" and pedido.get("model") == "whisper-1",
+          f"se transcribe con Whisper ({pedido.get('model')})")
+    check(pedido.get("file") == ("nota.ogg", b"OggS-audio-real") and pedido.get("language") == "es" and texto_w == "Tengo la secundaria terminada",
+          f"Whisper recibe el audio como .ogg en español y regresa el texto limpio («{texto_w}»)")
+
+    # si la transcripción falla → se le pide que escriba su respuesta
+    ia.transcribir_audio = lambda contenido, mime="": ""
+
+    async def _descarga_ok(media_id, mime="", aceptar_audio=False):
+        return {"ok": True, "contenido": b"OggS", "mime": "audio/ogg"}
+
+    webhooks.descargar_media = _descarga_ok
+    m2 = {**m, "wa_id": "wamid.voz2", "texto": ""}
+    r = asyncio.run(webhooks.procesar_entrante(db, m2))
+    check(r.get("accion") == "audio_no_soportado" and "¿Me escribes tu respuesta?" in (r.get("respuesta") or ""),
+          f"transcripción fallida → se le pide escribir su respuesta ({r.get('respuesta')!r})")
 
     # ================= Bloque 3 · entrevista fija =================
     print("\n--- 7. Entrevista fija por WhatsApp ---")

@@ -82,20 +82,28 @@ def main():
 
         # ===================================================== 2. TTS del avatar
         print("\n--- 2. Montos para el TTS del avatar ---")
+        # 2026-10-17 (QA): el TTS deletreaba los dígitos — los montos van con PALABRAS
         casos = {
-            "El sueldo es $55,000 MXN mensuales.": "El sueldo es 55000 pesos mexicanos mensuales.",
-            "$8,000 – $10,000 MXN quincenales": "8000 a 10000 pesos mexicanos quincenales",
-            "Desde $12,500.00 MXN": "Desde 12500 pesos mexicanos",
-            "pagamos 9,500 MXN al mes": "pagamos 9500 pesos mexicanos al mes",
-            "$55,000": "55000 pesos mexicanos",
+            "El sueldo es $55,000 MXN mensuales.": "El sueldo es cincuenta y cinco mil pesos mexicanos mensuales.",
+            "$8,000 – $10,000 MXN quincenales": "ocho mil a diez mil pesos mexicanos quincenales",
+            "Desde $12,500.00 MXN": "Desde doce mil quinientos pesos mexicanos",
+            "pagamos 9,500 MXN al mes": "pagamos nueve mil quinientos pesos mexicanos al mes",
+            "$55,000": "cincuenta y cinco mil pesos mexicanos",
+            "Sueldo $10000 MXN": "Sueldo diez mil pesos mexicanos",
+            "$21,000 MXN": "veintiún mil pesos mexicanos",
+            "$1,250,000 MXN": "un millón doscientos cincuenta mil pesos mexicanos",
             "Tiene 3 años de experiencia": "Tiene 3 años de experiencia",
         }
         for crudo, esperado in casos.items():
             check(texto_para_voz(crudo) == esperado, f"«{crudo}» → «{texto_para_voz(crudo)}»")
+        from app.services.avatar import REGLA_VOZ_MONTOS
         pc = persona_config("Red Human", "Sueldo: $55,000 MXN mensuales", "El sueldo es $55,000 MXN.")
-        check("$" not in pc["systemPrompt"].split("\n\n")[0] and "55000 pesos mexicanos" in pc["systemPrompt"],
-              "systemPrompt sin «$» y con «pesos mexicanos»")
-        check(pc["initialMessage"] == "El sueldo es 55000 pesos mexicanos.", "initialMessage sanitizado")
+        check("$" not in pc["systemPrompt"].split("\n\n")[0] and "cincuenta y cinco mil pesos mexicanos" in pc["systemPrompt"]
+              and "55000" not in pc["systemPrompt"], "systemPrompt sin «$» ni dígitos en el monto")
+        check(pc["systemPrompt"].endswith(REGLA_VOZ_MONTOS) and "con PALABRAS" in REGLA_VOZ_MONTOS
+              and "«diez mil pesos mexicanos», NUNCA «10000 pesos mexicanos»" in REGLA_VOZ_MONTOS,
+              "el systemPrompt OBLIGA al LLM a escribir las cantidades con palabras")
+        check(pc["initialMessage"] == "El sueldo es cincuenta y cinco mil pesos mexicanos.", "initialMessage con el monto en palabras")
 
         # ===================================================== 3. tablero de candidatos
         print("\n--- 3. Tablero: «Todas las vacantes» por defecto ---")
